@@ -32,11 +32,11 @@ Clients:
 
 | claim | meaning |
 | --- | --- |
-| `sub` | Keycloak user id. becomes `user.id` |
+| `sub` | Keycloak user id: becomes `user.id` |
 | `preferred_username` | → `user.username` |
 | `email` | → `user.email` |
 | `name` | → `user.full_name` |
-| `org` (custom) | Organization slug. mapped to `user.org_id` at first login |
+| `org` (custom) | Organization slug: mapped to `user.org_id` at first login |
 | `org_role` (custom) | `viewer` \| `publisher` \| `admin` |
 
 Org assignment and org-role are set in Keycloak via user attributes; the

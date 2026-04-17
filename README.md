@@ -1,6 +1,6 @@
 # GratisGIS
 
-[![CI](https://github.com/matthew-palavido/gratis-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/matthew-palavido/gratis-gis/actions/workflows/ci.yml)
+[![CI](https://github.com/palavido-dev/gratis-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/palavido-dev/gratis-gis/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 [![PostgreSQL + PostGIS](https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-16%20%2F%203-336791?logo=postgresql&logoColor=white)](https://postgis.net/)

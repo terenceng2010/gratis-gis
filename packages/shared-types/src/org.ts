@@ -1,4 +1,4 @@
-import type { OrgId, ISODateString } from './ids.js';
+import type { OrgId, ISODateString } from './ids';
 
 export interface Organization {
   id: OrgId;

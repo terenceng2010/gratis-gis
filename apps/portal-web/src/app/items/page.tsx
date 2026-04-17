@@ -63,7 +63,7 @@ export default async function ItemsPage({ searchParams }: Props) {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
-            <ItemCard key={item.id} item={item} />
+            <ItemCard key={item.id} item={item} href={`/items/${item.id}`} />
           ))}
         </div>
       )}

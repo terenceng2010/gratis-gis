@@ -1,5 +1,5 @@
-import type { UserId, OrgId, ISODateString } from './ids.js';
-import type { OrgRole } from './sharing.js';
+import type { UserId, OrgId, ISODateString } from './ids';
+import type { OrgRole } from './sharing';
 
 export interface User {
   id: UserId;

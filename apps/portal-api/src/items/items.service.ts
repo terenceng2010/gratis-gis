@@ -5,27 +5,30 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { SharingService } from './sharing.service.js';
 
+// Optional fields use `| undefined` explicitly so class-validator DTOs
+// (which leave unset keys present-as-undefined) can satisfy these types
+// under `exactOptionalPropertyTypes: true`.
 export interface CreateItemInput {
   type: ItemType;
   title: string;
-  description?: string;
-  tags?: string[];
+  description?: string | undefined;
+  tags?: string[] | undefined;
   data: Prisma.InputJsonValue;
-  access?: ItemAccess;
+  access?: ItemAccess | undefined;
 }
 
 export interface UpdateItemInput {
-  title?: string;
-  description?: string;
-  tags?: string[];
-  data?: Prisma.InputJsonValue;
-  access?: ItemAccess;
+  title?: string | undefined;
+  description?: string | undefined;
+  tags?: string[] | undefined;
+  data?: Prisma.InputJsonValue | undefined;
+  access?: ItemAccess | undefined;
 }
 
 export interface ShareItemInput {
   principalType: PrincipalType;
   principalId: string;
-  permission?: SharePermission;
+  permission?: SharePermission | undefined;
 }
 
 @Injectable()

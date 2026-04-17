@@ -4,7 +4,7 @@
  *
  * Design goals:
  *   - JSON-serializable (safe to store as jsonb on Item.data_json)
- *   - Stable, versioned. `schemaVersion` lets us evolve without breaking forms
+ *   - Stable, versioned: `schemaVersion` lets us evolve without breaking forms
  *   - Renderer-agnostic (no React types in here)
  */
 

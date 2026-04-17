@@ -25,7 +25,37 @@
       "webOrigins": ["http://localhost:3000"],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "org_role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_role",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_role",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     },
     {
       "clientId": "portal-api",
@@ -46,7 +76,37 @@
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "org_role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_role",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_role",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "roles": {

@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { cn } from './cn.js';
+import { cn } from './cn';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 

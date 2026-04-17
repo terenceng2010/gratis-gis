@@ -6,10 +6,10 @@
  * breaking changes require coordinated updates across apps.
  */
 
-export * from './ids.js';
-export * from './item-types.js';
-export * from './sharing.js';
-export * from './org.js';
-export * from './group.js';
-export * from './user.js';
-export * from './item.js';
+export * from './ids';
+export * from './item-types';
+export * from './sharing';
+export * from './org';
+export * from './group';
+export * from './user';
+export * from './item';

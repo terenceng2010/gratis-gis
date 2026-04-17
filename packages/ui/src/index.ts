@@ -1,3 +1,3 @@
-export { Button } from './button.js';
-export { ItemCard } from './item-card.js';
-export { cn } from './cn.js';
+export { Button } from './button';
+export { ItemCard } from './item-card';
+export { cn } from './cn';

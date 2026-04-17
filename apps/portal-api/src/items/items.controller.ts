@@ -19,10 +19,11 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import type { ItemAccess, ItemType, PrincipalType, SharePermission } from '@prisma/client';
+import type { ItemAccess, ItemType, Prisma, PrincipalType, SharePermission } from '@prisma/client';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import type { CreateItemInput, UpdateItemInput } from './items.service.js';
 import { ItemsService } from './items.service.js';
 
 const ITEM_TYPE_VALUES = [
@@ -45,7 +46,8 @@ class CreateItemDto {
   @IsString() @MinLength(1) @MaxLength(200) title!: string;
   @IsOptional() @IsString() @MaxLength(5000) description?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
-  @IsObject() data!: Record<string, unknown>;
+  // Typed as JSON-compatible at the Prisma layer; validated at runtime by @IsObject.
+  @IsObject() data!: Prisma.InputJsonValue;
   @IsOptional() @IsEnum(['private', 'org', 'public']) access?: ItemAccess;
 }
 
@@ -53,7 +55,7 @@ class UpdateItemDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(200) title?: string;
   @IsOptional() @IsString() @MaxLength(5000) description?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
-  @IsOptional() @IsObject() data?: Record<string, unknown>;
+  @IsOptional() @IsObject() data?: Prisma.InputJsonValue;
   @IsOptional() @IsEnum(['private', 'org', 'public']) access?: ItemAccess;
 }
 
@@ -76,7 +78,13 @@ export class ItemsController {
     @Query('type') type?: ItemType,
     @Query('q') q?: string,
   ) {
-    return this.items.list(user, { mine: mine === 'true', type, q });
+    // Build opts without explicit-undefined keys so `exactOptionalPropertyTypes`
+    // is satisfied. Passing `{ type: undefined }` is not the same as omitting it.
+    const opts: { mine?: boolean; type?: ItemType; q?: string } = {};
+    if (mine === 'true') opts.mine = true;
+    if (type !== undefined) opts.type = type;
+    if (q !== undefined) opts.q = q;
+    return this.items.list(user, opts);
   }
 
   @Get(':id')

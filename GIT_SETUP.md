@@ -58,16 +58,15 @@ rmdir /s /q .git
 
 ### Then, regardless of OS, create the GitHub repo
 
+Option A, with the GitHub CLI:
+
 ```bash
-
-# Create the repo on GitHub (two options):
-
-# Option A, with the GitHub CLI:
 gh repo create gratis-gis --public --source=. --remote=origin --push
+```
 
-# Option B, manually:
-# 1. Create https://github.com/matthew-palavido/gratis-gis (or your preferred name)
-# 2. Then:
+Option B, manually: create https://github.com/palavido-dev/gratis-gis (or your preferred name), then:
+
+```bash
 git remote add origin git@github.com:<your-user>/gratis-gis.git
 git push -u origin main
 ```
@@ -78,15 +77,45 @@ Do this right after creating the repo so the About box and topics show up
 from day one. See [docs/discoverability.md](./docs/discoverability.md) for
 rationale.
 
+### macOS / Linux / WSL (bash)
+
 ```bash
-gh repo edit matthew-palavido/gratis-gis \
+gh repo edit palavido-dev/gratis-gis \
   --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." \
-  --homepage "https://github.com/matthew-palavido/gratis-gis" \
+  --homepage "https://github.com/palavido-dev/gratis-gis" \
   --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis \
   --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted \
   --add-topic postgis --add-topic maplibre --add-topic offline-first \
   --add-topic field-data-collection --add-topic form-builder --add-topic survey \
   --add-topic jupyter --add-topic keycloak --add-topic typescript \
+  --add-topic nextjs --add-topic nestjs --add-topic react-native --add-topic monorepo
+```
+
+### Windows (cmd.exe) - line continuation is `^`
+
+```cmd
+gh repo edit palavido-dev/gratis-gis ^
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." ^
+  --homepage "https://github.com/palavido-dev/gratis-gis" ^
+  --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis ^
+  --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted ^
+  --add-topic postgis --add-topic maplibre --add-topic offline-first ^
+  --add-topic field-data-collection --add-topic form-builder --add-topic survey ^
+  --add-topic jupyter --add-topic keycloak --add-topic typescript ^
+  --add-topic nextjs --add-topic nestjs --add-topic react-native --add-topic monorepo
+```
+
+### Windows (PowerShell) - line continuation is backtick `` ` ``
+
+```powershell
+gh repo edit palavido-dev/gratis-gis `
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." `
+  --homepage "https://github.com/palavido-dev/gratis-gis" `
+  --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis `
+  --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted `
+  --add-topic postgis --add-topic maplibre --add-topic offline-first `
+  --add-topic field-data-collection --add-topic form-builder --add-topic survey `
+  --add-topic jupyter --add-topic keycloak --add-topic typescript `
   --add-topic nextjs --add-topic nestjs --add-topic react-native --add-topic monorepo
 ```
 

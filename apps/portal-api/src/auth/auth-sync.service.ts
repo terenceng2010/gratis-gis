@@ -34,16 +34,23 @@ export class AuthSyncService {
       create: { slug: orgSlug, name: orgSlug },
     });
 
+    // We key on `username` rather than Keycloak's `sub`. The local user.id is
+    // our own stable identifier (possibly seeded or provisioned before the user
+    // ever touched Keycloak), while `sub` is the IdP's opaque id. Keying on
+    // username means a seeded `alice` and a Keycloak-authenticated `alice`
+    // resolve to the same row, and downstream FKs (items, group memberships)
+    // remain stable even if the IdP is swapped out or the sub changes.
     const user = await this.prisma.user.upsert({
-      where: { id: claims.sub },
+      where: { username: claims.preferred_username },
       update: {
-        username: claims.preferred_username,
         email: claims.email,
         fullName: claims.name,
         orgRole: claims.org_role ?? 'viewer',
         orgId: org.id,
       },
       create: {
+        // New users (not seeded) adopt Keycloak's sub as their local id, so
+        // the two systems stay aligned when there's no prior record.
         id: claims.sub,
         orgId: org.id,
         username: claims.preferred_username,

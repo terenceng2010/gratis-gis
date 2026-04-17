@@ -64,7 +64,7 @@ Every mode deploys the same set of services:
 
 - **portal-api**: the NestJS backend
 - **portal-web**: the Next.js portal UI
-- **postgres**. PostgreSQL 16 + PostGIS 3
+- **postgres**: PostgreSQL 16 + PostGIS 3
 - **keycloak**: identity
 - **minio**: object storage (replaceable by S3-compatible external)
 - **pg_tileserv**: tile server

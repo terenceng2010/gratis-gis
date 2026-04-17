@@ -7,7 +7,7 @@ surface must feel crafted and consistent. "Good enough" is not good enough.
 ## Principles
 
 1. **Calm, confident, modern.** Ample whitespace, clear hierarchy, not
-   noisy. Think Linear, Vercel, Notion. not ArcGIS Enterprise.
+   noisy. Think Linear, Vercel, Notion, not ArcGIS Enterprise.
 2. **Consistency across apps.** A user who's learned the portal should feel
    at home in the field app and the report builder on day one.
 3. **Accessibility is table stakes.** Every component meets WCAG 2.2 AA;
@@ -25,7 +25,7 @@ surface must feel crafted and consistent. "Good enough" is not good enough.
 - **Tailwind CSS**: utility-first, great velocity, predictable output
 - **shadcn/ui**: component scaffold generated into our repo (not a locked
   npm dependency), so we own the code and can tune every pixel
-- **Radix UI** primitives. a11y-correct dialogs, menus, popovers, tabs,
+- **Radix UI** primitives: a11y-correct dialogs, menus, popovers, tabs,
   tooltips, toasts (what shadcn/ui is built on)
 - **lucide-react**: clean, consistent icon set
 - **framer-motion**: motion system
@@ -57,7 +57,7 @@ Dark mode swaps them in one `.dark` block.
 ### Spacing
 
 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 px (Tailwind `1 / 2 / 3 / 4 / 6 / 8 / 12 / 16`).
-No freelance spacing. if you find yourself reaching for `m-[17px]`, a
+No freelance spacing: if you find yourself reaching for `m-[17px]`, a
 token is wrong.
 
 ### Radii
@@ -99,7 +99,7 @@ Every component we ship has:
 
 Every app ships with:
 
-- A **navigation shell** (top bar + side nav). consistent across apps
+- A **navigation shell** (top bar + side nav), consistent across apps
 - A **command palette** (⌘K / Ctrl-K) with routing + recent items
 - **Loading skeletons**, not spinners, for initial data
 - **Empty states** with an illustration + a single clear action

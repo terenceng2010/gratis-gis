@@ -19,7 +19,7 @@ app builder.
 
 ## Stack choice
 
-- **React Flow** for the canvas. mature, extensible, active. The ecosystem
+- **React Flow** for the canvas: mature, extensible, active. The ecosystem
   leader; used by n8n, Typebot, Langflow.
 - A typed node catalog defined in TypeScript; nodes self-describe their
   inputs, outputs, and config schema (using `packages/form-schema` for the
@@ -82,7 +82,7 @@ Two runners, chosen per node:
    faster than shipping data around.
 2. **Node worker**: for ops without a SQL equivalent, or for lightweight
    client-side previews, turf.js runs in-process.
-3. **Notebook kernel**. `NotebookStep` nodes hand a dataset to a Python
+3. **Notebook kernel**: `NotebookStep` nodes hand a dataset to a Python
    notebook kernel (via the `notebook-hub`), receive a result back. This
    keeps the "big red button" escape hatch for anything PostGIS can't do.
 

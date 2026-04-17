@@ -41,3 +41,7 @@ infra/data/
 # Temp
 *.tmp
 tmp/
+
+# Local dev helpers (launching detached dev servers from inside an SSH session)
+run-api.bat
+run-web.bat

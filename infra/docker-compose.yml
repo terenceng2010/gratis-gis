@@ -30,7 +30,11 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HOSTNAME: localhost
       KC_HTTP_ENABLED: "true"
-      KC_DB: dev-mem
+      # dev-file keeps data in a local H2 file that survives container restarts
+      # AND stays alive when the connection pool idles. dev-mem loses everything
+      # the moment the JDBC pool drains a connection, which in Keycloak 26 can
+      # happen within minutes of idle.
+      KC_DB: dev-file
     ports:
       - "8080:8080"
     volumes:

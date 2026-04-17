@@ -1,5 +1,5 @@
-import type { GroupId, UserId, OrgId, ISODateString } from './ids.js';
-import type { GroupAccess, GroupRole } from './sharing.js';
+import type { GroupId, UserId, OrgId, ISODateString } from './ids';
+import type { GroupAccess, GroupRole } from './sharing';
 
 export interface Group {
   id: GroupId;

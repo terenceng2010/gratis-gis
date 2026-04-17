@@ -1,6 +1,6 @@
-import type { ItemId, UserId, OrgId, ISODateString } from './ids.js';
-import type { ItemAccess, SharePermission } from './sharing.js';
-import type { ItemType } from './item-types.js';
+import type { ItemId, UserId, OrgId, ISODateString } from './ids';
+import type { ItemAccess, SharePermission } from './sharing';
+import type { ItemType } from './item-types';
 
 export type PrincipalType = 'user' | 'group';
 
