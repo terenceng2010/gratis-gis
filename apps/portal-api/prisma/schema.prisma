@@ -1,0 +1,172 @@
+// Prisma schema for GratisGIS portal-api.
+// See /docs/data-model.md for the design rationale.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis, uuidOssp(map: "uuid-ossp"), pgcrypto, pg_trgm]
+}
+
+// ---------- Enums ----------
+
+enum OrgRole {
+  viewer
+  publisher
+  admin
+}
+
+enum GroupAccess {
+  private
+  org
+  public
+}
+
+enum GroupRole {
+  member
+  admin
+}
+
+enum ItemAccess {
+  private
+  org
+  public
+}
+
+enum SharePermission {
+  view
+  edit
+  admin
+}
+
+enum PrincipalType {
+  user
+  group
+}
+
+enum ItemType {
+  web_map                    @map("web-map")
+  feature_service            @map("feature-service")
+  form
+  form_submission_collection @map("form-submission-collection")
+  web_app                    @map("web-app")
+  report_template            @map("report-template")
+  dashboard
+  file
+  layer_package              @map("layer-package")
+  notebook
+  tool
+  widget_package             @map("widget-package")
+}
+
+// ---------- Tables ----------
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users  User[]
+  groups Group[]
+  items  Item[]
+
+  @@map("organization")
+}
+
+model User {
+  id        String   @id @db.Uuid // matches Keycloak sub
+  orgId     String   @map("org_id") @db.Uuid
+  username  String   @unique
+  email     String
+  fullName  String   @map("full_name")
+  orgRole   OrgRole  @default(viewer) @map("org_role")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  ownedGroups   Group[]       @relation("GroupOwner")
+  groupMembers  GroupMember[]
+  ownedItems    Item[]        @relation("ItemOwner")
+
+  @@index([orgId])
+  @@map("user")
+}
+
+model Group {
+  id          String      @id @default(uuid()) @db.Uuid
+  orgId       String      @map("org_id") @db.Uuid
+  title       String
+  description String      @default("")
+  access      GroupAccess @default(private)
+  ownerId     String      @map("owner_id") @db.Uuid
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  org        Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  owner      User          @relation("GroupOwner", fields: [ownerId], references: [id])
+  members    GroupMember[]
+
+  @@index([orgId])
+  @@map("group")
+}
+
+model GroupMember {
+  groupId  String    @map("group_id") @db.Uuid
+  userId   String    @map("user_id") @db.Uuid
+  role     GroupRole @default(member)
+  joinedAt DateTime  @default(now()) @map("joined_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+  @@map("group_member")
+}
+
+model Item {
+  id           String     @id @default(uuid()) @db.Uuid
+  orgId        String     @map("org_id") @db.Uuid
+  ownerId      String     @map("owner_id") @db.Uuid
+  type         ItemType
+  title        String
+  description  String     @default("")
+  tags         String[]   @default([])
+  thumbnailUrl String?    @map("thumbnail_url")
+  dataJson     Json       @map("data_json")
+  storageRef   String?    @map("storage_ref")
+  access       ItemAccess @default(private)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  owner  User         @relation("ItemOwner", fields: [ownerId], references: [id])
+  shares ItemShare[]
+
+  @@index([orgId, access])
+  @@index([ownerId])
+  @@index([type])
+  @@map("item")
+}
+
+/// A share row grants access to an item for a single principal (either a
+/// user or a group). We use (principalType, principalId) rather than two
+/// nullable FK columns so the composite primary key is always valid.
+/// Enforcement that the principalId actually references the correct table
+/// is handled by a CHECK constraint + trigger in an SQL migration.
+model ItemShare {
+  itemId        String          @map("item_id") @db.Uuid
+  principalType PrincipalType   @map("principal_type")
+  principalId   String          @map("principal_id") @db.Uuid
+  permission    SharePermission @default(view)
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, principalType, principalId])
+  @@index([principalType, principalId])
+  @@map("item_share")
+}
