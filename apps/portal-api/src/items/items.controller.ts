@@ -61,7 +61,12 @@ class UpdateItemDto {
 
 class ShareDto {
   @IsEnum(['user', 'group']) principalType!: PrincipalType;
-  @IsUUID('all') principalId!: string;
+  // 'loose' accepts any 8-4-4-4-12 hex string. Real UUIDs coming from Keycloak
+// and Prisma's @default(uuid()) are always v4, but seed fixtures use
+// readable all-same-char UUIDs (aaaa..., bbbb...) for debugging that fail
+// strict v4 validation. The DB-level FK check is our real integrity
+// guarantee via assertPrincipalExists().
+@IsUUID('loose') principalId!: string;
   @IsOptional() @IsEnum(['view', 'edit', 'admin']) permission?: SharePermission;
 }
 
