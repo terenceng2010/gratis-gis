@@ -22,7 +22,12 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      (session as SessionWithToken).accessToken = token.accessToken as string | undefined;
+      // Only attach the access token when there actually is one. Assigning
+      // `undefined` is rejected under `exactOptionalPropertyTypes: true`.
+      const accessToken = token.accessToken as string | undefined;
+      if (accessToken) {
+        (session as SessionWithToken).accessToken = accessToken;
+      }
       return session;
     },
   },

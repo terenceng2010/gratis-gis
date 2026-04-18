@@ -3,19 +3,33 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Building2,
   Check,
+  Globe2,
   Loader2,
+  Lock,
   Plus,
   Trash2,
   Users as UsersIcon,
   User as UserIcon,
 } from 'lucide-react';
-import type { Group, ItemShare, SharePermission } from '@gratis-gis/shared-types';
+import type {
+  Group,
+  ItemAccess,
+  ItemShare,
+  SharePermission,
+} from '@gratis-gis/shared-types';
 
 interface Props {
   itemId: string;
+  initialAccess: ItemAccess;
   initialShares: ItemShare[];
   groups: Pick<Group, 'id' | 'title'>[];
+  /**
+   * Name or slug of the owning org; used to label the "everyone in your org"
+   * visibility option. Pass 'Your organization' as a safe default.
+   */
+  orgLabel?: string;
 }
 
 /**
@@ -30,11 +44,44 @@ interface Props {
  */
 type RowSaveState = 'idle' | 'saving' | 'saved' | 'error';
 
-export function SharingPanel({ itemId, initialShares, groups }: Props) {
+export function SharingPanel({
+  itemId,
+  initialAccess,
+  initialShares,
+  groups,
+  orgLabel = 'Your organization',
+}: Props) {
   const router = useRouter();
+  const [access, setAccess] = useState<ItemAccess>(initialAccess);
+  const [accessSaveState, setAccessSaveState] = useState<RowSaveState>('idle');
   const [shares, setShares] = useState(initialShares);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+
+  async function updateAccess(next: ItemAccess) {
+    if (next === access) return;
+    const prev = access;
+    setAccess(next); // optimistic
+    setAccessSaveState('saving');
+    const res = await fetch(`/api/portal/items/${itemId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ access: next }),
+    });
+    if (!res.ok) {
+      setAccess(prev); // revert
+      setAccessSaveState('error');
+      setError(`Visibility update failed: ${res.status} ${await res.text()}`);
+      return;
+    }
+    setAccessSaveState('saved');
+    setTimeout(
+      () =>
+        setAccessSaveState((s) => (s === 'saved' ? 'idle' : s)),
+      1500,
+    );
+    startTransition(() => router.refresh());
+  }
 
   // Per-row save state, keyed by "<principalType>:<principalId>".
   // Lets us show a spinner / check next to exactly the row being saved,
@@ -178,12 +225,97 @@ export function SharingPanel({ itemId, initialShares, groups }: Props) {
     startTransition(() => router.refresh());
   }
 
+  const visibilityOptions: Array<{
+    value: ItemAccess;
+    label: string;
+    desc: string;
+    Icon: typeof Lock;
+  }> = [
+    {
+      value: 'private',
+      label: 'Private',
+      desc: 'Only you and people you share with below.',
+      Icon: Lock,
+    },
+    {
+      value: 'org',
+      label: orgLabel,
+      desc:
+        orgLabel === 'Your organization'
+          ? 'Everyone with a login in your organization can see this.'
+          : `Everyone with a login at ${orgLabel} can see this.`,
+      Icon: Building2,
+    },
+    {
+      value: 'public',
+      label: 'Public',
+      desc: 'Anyone on the internet, no login required.',
+      Icon: Globe2,
+    },
+  ];
+  const currentOption = visibilityOptions.find((o) => o.value === access)!;
+
   return (
     <div className="rounded-lg border border-border bg-surface-1 shadow-card">
+      <div className="border-b border-border p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
+            Visibility
+          </h3>
+          <span className="inline-flex h-5 w-5 items-center justify-center" aria-live="polite">
+            {accessSaveState === 'saving' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+            ) : accessSaveState === 'saved' ? (
+              <Check className="h-3.5 w-3.5 text-success" />
+            ) : null}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Visibility">
+          {visibilityOptions.map(({ value, label, desc, Icon }) => {
+            const selected = access === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => updateAccess(value)}
+                disabled={pending}
+                className={`flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors disabled:opacity-50 ${
+                  selected
+                    ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
+                    : 'border-border bg-surface-1 hover:bg-surface-2'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Icon
+                    className={`h-4 w-4 ${selected ? 'text-accent' : 'text-muted'}`}
+                  />
+                  <span className="text-sm font-medium text-ink-1">{label}</span>
+                </div>
+                <span className="text-xs text-muted">{desc}</span>
+              </button>
+            );
+          })}
+        </div>
+        {access !== 'private' ? (
+          <p className="mt-3 rounded-md border border-info/30 bg-info/10 px-3 py-2 text-xs text-ink-1">
+            <strong className="font-medium">{currentOption.label}</strong>{' '}
+            {access === 'org'
+              ? 'can already see this item. Shares below only matter for granting edit or admin permission on top of that.'
+              : 'means anyone on the internet can view this. Shares below only matter for granting edit or admin permission.'}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="px-4 pt-4">
+        <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
+          Additional shares
+        </h3>
+      </div>
       {shares.length === 0 ? (
-        <p className="px-4 py-6 text-sm text-muted">
-          Not shared with anyone yet. This item is governed by its baseline
-          access above.
+        <p className="px-4 py-4 text-sm text-muted">
+          No explicit shares yet.
         </p>
       ) : (
         <ul className="divide-y divide-border">

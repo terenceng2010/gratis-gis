@@ -18,7 +18,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" className={inter.variable}>
       <body className="font-sans antialiased">
         <Providers>
-          {/* @ts-expect-error Next.js async server component typing */}
           <AppShell>{children}</AppShell>
         </Providers>
       </body>
