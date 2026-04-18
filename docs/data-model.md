@@ -1,8 +1,8 @@
 # Data Model
 
-The item/group/sharing model is the heart of GratisGIS. This mirrors ArcGIS
-Online's concepts so admins and content authors can think in familiar terms,
-but the implementation is open and portable.
+The item/group/sharing model is the heart of GratisGIS. It follows patterns
+familiar from cloud-GIS portals so admins and content authors can think in
+familiar terms, but the implementation is open and portable.
 
 ## Entities
 
@@ -82,6 +82,12 @@ A row here grants a specific principal (a user *or* a group) access to an
 Item beyond its baseline `access`. We use `(principal_type, principal_id)`
 rather than two nullable FK columns so the composite PK has no nullable
 members and the query path stays simple.
+
+Note that sharing to a **specific user** (not just a group) is supported
+natively, which is a deliberate improvement over portals that only allow
+group-based sharing. For column-level and row-level scoping within a
+feature-service, see the `feature-view` pattern in
+[sharing-granularity.md](./sharing-granularity.md).
 
 | field | type | notes |
 | --- | --- | --- |

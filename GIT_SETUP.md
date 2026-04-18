@@ -81,10 +81,10 @@ rationale.
 
 ```bash
 gh repo edit palavido-dev/gratis-gis \
-  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." \
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and a visual tool builder. Built on PostGIS + MapLibre." \
   --homepage "https://github.com/palavido-dev/gratis-gis" \
   --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis \
-  --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted \
+  --add-topic open-source-gis --add-topic open-source --add-topic self-hosted \
   --add-topic postgis --add-topic maplibre --add-topic offline-first \
   --add-topic field-data-collection --add-topic form-builder --add-topic survey \
   --add-topic jupyter --add-topic keycloak --add-topic typescript \
@@ -95,10 +95,10 @@ gh repo edit palavido-dev/gratis-gis \
 
 ```cmd
 gh repo edit palavido-dev/gratis-gis ^
-  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." ^
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and a visual tool builder. Built on PostGIS + MapLibre." ^
   --homepage "https://github.com/palavido-dev/gratis-gis" ^
   --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis ^
-  --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted ^
+  --add-topic open-source-gis --add-topic open-source --add-topic self-hosted ^
   --add-topic postgis --add-topic maplibre --add-topic offline-first ^
   --add-topic field-data-collection --add-topic form-builder --add-topic survey ^
   --add-topic jupyter --add-topic keycloak --add-topic typescript ^
@@ -109,10 +109,10 @@ gh repo edit palavido-dev/gratis-gis ^
 
 ```powershell
 gh repo edit palavido-dev/gratis-gis `
-  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." `
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and a visual tool builder. Built on PostGIS + MapLibre." `
   --homepage "https://github.com/palavido-dev/gratis-gis" `
   --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis `
-  --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted `
+  --add-topic open-source-gis --add-topic open-source --add-topic self-hosted `
   --add-topic postgis --add-topic maplibre --add-topic offline-first `
   --add-topic field-data-collection --add-topic form-builder --add-topic survey `
   --add-topic jupyter --add-topic keycloak --add-topic typescript `

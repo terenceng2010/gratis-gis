@@ -4,9 +4,9 @@ A visual, node-graph authoring environment for building custom geospatial
 tools and web-app widgets, with no code required for common cases and a Python
 escape hatch via notebooks when needed.
 
-This is the open-source answer to ArcGIS ModelBuilder, with a modern UX and
-the extra ability to publish the same graph as a draggable widget in the
-app builder.
+This delivers the kind of visual geoprocessing workflow analysts expect from
+a modern GIS platform, plus the extra ability to publish the same graph as a
+draggable widget in the app builder.
 
 ## Why a visual builder
 
@@ -102,7 +102,7 @@ This means every tool is dual-use: run-as-analysis or drag-and-drop widget.
 
 ## UX notes
 
-Beyond ModelBuilder:
+Beyond what traditional geoprocessing model builders offer:
 
 - Live preview (run the graph on a 1% sample as you edit)
 - Inline docs per node

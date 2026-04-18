@@ -9,8 +9,8 @@ Recommended:
 
 ```
 Open-source, self-hosted geospatial portal with web maps, app builder,
-offline field data collection, notebooks, and visual tools. An ArcGIS
-Online/Enterprise alternative.
+offline field data collection, notebooks, and a visual tool builder.
+Built on PostGIS + MapLibre. Inspired by modern cloud-GIS platforms.
 ```
 
 Trim for the 160-char About field on github.com.
@@ -25,7 +25,7 @@ gis
 geospatial
 mapping
 webgis
-arcgis-alternative
+open-source-gis
 open-source
 self-hosted
 postgis
@@ -47,10 +47,10 @@ Apply with:
 
 ```bash
 gh repo edit <owner>/gratis-gis \
-  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and visual tools. ArcGIS Online/Enterprise alternative." \
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and a visual tool builder. Built on PostGIS + MapLibre." \
   --homepage "https://gratisgis.org" \
   --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis \
-  --add-topic arcgis-alternative --add-topic open-source --add-topic self-hosted \
+  --add-topic open-source-gis --add-topic open-source --add-topic self-hosted \
   --add-topic postgis --add-topic maplibre --add-topic offline-first \
   --add-topic field-data-collection --add-topic form-builder --add-topic survey \
   --add-topic jupyter --add-topic keycloak --add-topic typescript \

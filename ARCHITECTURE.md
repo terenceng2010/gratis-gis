@@ -12,8 +12,8 @@ building) and `ROADMAP.md` (when we're building it).
    takes a week of consulting to stand up. See [docs/deployment.md](./docs/deployment.md).
 2. **One domain model, everywhere.** The `Item` concept (with owner, sharing,
    and type) is the backbone: web maps, feature collections, forms, web apps,
-   and reports are all items. This mirrors ArcGIS's item model and lets a
-   single portal, sharing, and search layer serve every product.
+   and reports are all items. This is a familiar content-portal pattern and
+   lets a single portal, sharing, and search layer serve every product.
 3. **TypeScript across all surfaces** so form schemas, sharing logic, and
    geometry types can be reused in the API, web portal, app builder, and
    field app.
@@ -117,8 +117,8 @@ Single app for all data collection:
 - Sync when online (conflict-aware deltas)
 
 Uses the **same form renderer** as portal-web (shipped from
-`packages/form-renderer`), so the Survey123-Designer-derived form builder
-produces artifacts that render identically on web and mobile.
+`packages/form-renderer`), so the form designer produces artifacts that
+render identically on web and mobile.
 
 ### Shared packages
 
@@ -149,8 +149,8 @@ See [docs/data-model.md](./docs/data-model.md) for full detail.
   realm's JWKS.
 - Each user has an `Organization` scope. Items are owned by a user and
   shared via `ItemShare` rows.
-- Sharing scopes (mirroring ArcGIS Online): `private`, `shared-with-group(s)`,
-  `org`, `public`.
+- Sharing scopes follow a familiar portal pattern: `private`,
+  `shared-with-group(s)`, `org`, `public`.
 - Roles within a group: `member`, `admin`. Org roles: `viewer`, `publisher`,
   `admin`.
 

@@ -4,7 +4,8 @@ GratisGIS ships a hosted Jupyter environment so users can do ad-hoc analysis,
 automated reporting, and heavy geoprocessing in Python, directly against
 portal data, respecting portal sharing rules.
 
-This is the open-source equivalent of ArcGIS Online Notebooks.
+This gives users the same kind of in-portal Python notebook workflow that
+cloud GIS platforms offer, built on standard JupyterHub.
 
 ## Choice of tech
 

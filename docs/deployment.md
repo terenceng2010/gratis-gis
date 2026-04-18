@@ -2,8 +2,8 @@
 
 > **Design goal:** an IT admin with no prior GratisGIS experience should go
 > from a fresh Ubuntu server to a working, HTTPS-enabled portal in under
-> 30 minutes. ArcGIS Enterprise famously takes days; we can do better by
-> being honest about the 80% case.
+> 30 minutes. Traditional self-hosted enterprise GIS stacks can take days or
+> weeks to stand up; we can do better by being honest about the 80% case.
 
 ## The Three Deployment Modes
 

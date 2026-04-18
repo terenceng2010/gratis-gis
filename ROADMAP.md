@@ -37,16 +37,25 @@ their group, and see each other's shared items (but not private ones).
 - [ ] Web-map item type (JSON: basemap + layer refs + styling)
 - [ ] Map viewer in portal-web using MapLibre GL
 - [ ] Simple map authoring UI (add/remove layers, style pop-ups)
+- [ ] Row/field-level access policies attached to feature-services, with
+      Preview-as-user and an audit query path (see
+      [docs/sharing-granularity.md](./docs/sharing-granularity.md))
 
 **Exit criteria:** upload a GeoJSON, it becomes a shareable layer, and a
-saved web-map renders it in the portal.
+saved web-map renders it in the portal. Additionally: attach a field
+policy that hides a column from a specific group and a row policy that
+filters rows by viewer identity, then confirm that hidden columns and
+filtered rows never appear in either JSON responses or vector tiles for
+that audience. All enforced against the same single layer (no separate
+layer-views required).
 
 ## Phase 3: Form Designer + Data Collection (pillar 4) 🔥
 
-This is the highest-differentiation pillar. We consolidate Survey123 +
-Field Maps into one experience.
+This is the highest-differentiation pillar. We consolidate survey-based
+data collection and field geometry capture into one experience, instead of
+forcing users to jump between a forms app and a separate mapping app.
 
-- [ ] Port Survey123-Designer form-builder UI into `apps/form-designer`
+- [ ] Port existing form-builder UI into `apps/form-designer`
 - [ ] `packages/form-schema` finalized (JSON Schema + custom widget types)
 - [ ] `packages/form-renderer`. React components rendering a form schema,
       isomorphic across web and React Native
@@ -108,7 +117,7 @@ publish the same graph as a draggable widget in the app builder.
 - [ ] AuthZ policy tests
 - [ ] Load tests for tile serving
 - [ ] Backup / restore tooling
-- [ ] Migration guides from ArcGIS Online exports
+- [ ] Migration guides from common cloud-GIS export formats
 
 ---
 

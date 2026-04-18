@@ -27,14 +27,13 @@ free, sustainable open-source foundations.
 1. **Portal**: users, groups, organizations, items, sharing, access control
 2. **Web Maps**: interactive map authoring backed by PostGIS feature services
 3. **App Builder**: a WYSIWYG, widget-based builder for configurable web apps
-   (Experience Builder equivalent)
 4. **Data Collection**: a single web-and-mobile app with offline support for
-   form-based collection (Survey123 + Field Maps combined, one app)
+   form-based collection, combining survey authoring and field geometry capture
 5. **Reporting**: turn collected data into dashboards and document reports
 6. **Notebooks**: hosted JupyterHub with Keycloak SSO and a Python client
-   library for portal data access (ArcGIS Online Notebooks equivalent)
+   library for portal data access
 7. **Tool & Widget Builder**: visual, node-graph authoring of custom
-   geospatial tools and web-app widgets (ModelBuilder equivalent, friendlier)
+   geospatial tools and web-app widgets, friendly to non-developers
 
 ## Tech Stack
 
@@ -75,7 +74,7 @@ gratis-gis/
 │                report-builder, tool-builder, notebook-proxy
 ├── packages/
 │   ├── shared-types/      Domain types shared across apps
-│   ├── form-schema/       Form-definition types (Survey123-Designer port target)
+│   ├── form-schema/       Form-definition types
 │   └── ui/                Shared React component library
 ├── docs/                  Architecture and data-model docs
 ├── infra/                 Docker-compose and bootstrap scripts
@@ -84,8 +83,8 @@ gratis-gis/
 
 ## Deploy for an Organization
 
-GratisGIS is designed to be dramatically simpler to deploy than ArcGIS
-Enterprise. Three supported deployment modes:
+GratisGIS is designed to be dramatically simpler to deploy than typical
+enterprise GIS platforms. Three supported deployment modes:
 
 | Mode | Good for | Time to first sign-in |
 | --- | --- | --- |
@@ -133,6 +132,7 @@ pnpm dev
 - [ARCHITECTURE.md](./ARCHITECTURE.md): system design, services, boundaries
 - [ROADMAP.md](./ROADMAP.md): phased delivery plan, milestones
 - [docs/data-model.md](./docs/data-model.md): item, group, and sharing model
+- [docs/sharing-granularity.md](./docs/sharing-granularity.md): per-user + column/row-level sharing design
 - [docs/auth-model.md](./docs/auth-model.md): authentication and RBAC
 - [docs/notebooks.md](./docs/notebooks.md): notebook environment integration
 - [docs/tool-builder.md](./docs/tool-builder.md): visual tool/widget builder
@@ -143,7 +143,15 @@ pnpm dev
 
 ## License
 
-TBD (recommended: Apache 2.0, permissive, enterprise-friendly, GPL-compatible).
+Apache 2.0. Permissive, enterprise-friendly, GPL-compatible.
+
+## Trademarks
+
+GratisGIS is an independent open-source project. It is not affiliated with,
+endorsed by, or sponsored by Esri Inc. or any other company. Any product
+names, logos, brands, or other trademarks referenced in this repository are
+the property of their respective owners, used here only where necessary for
+descriptive comparison.
 
 ---
 

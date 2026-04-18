@@ -7,7 +7,7 @@ surface must feel crafted and consistent. "Good enough" is not good enough.
 ## Principles
 
 1. **Calm, confident, modern.** Ample whitespace, clear hierarchy, not
-   noisy. Think Linear, Vercel, Notion, not ArcGIS Enterprise.
+   noisy. Think Linear, Vercel, Notion, not dated enterprise admin consoles.
 2. **Consistency across apps.** A user who's learned the portal should feel
    at home in the field app and the report builder on day one.
 3. **Accessibility is table stakes.** Every component meets WCAG 2.2 AA;

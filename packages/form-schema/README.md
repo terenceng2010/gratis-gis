@@ -3,9 +3,9 @@
 JSON-serializable form definitions used by the form designer (web), the form
 renderer (web + mobile), and the submission storage engine.
 
-**Status:** placeholder. The final schema will be ported from the Survey123
-Designer work Matt has referenced. The shape below is a minimal starting point
-so the rest of the platform has something to type against; expect it to grow.
+**Status:** placeholder. The final schema will be ported from Matt's existing
+form-builder work. The shape below is a minimal starting point so the rest
+of the platform has something to type against; expect it to grow.
 
 ## Why a schema package?
 
@@ -16,7 +16,7 @@ so the rest of the platform has something to type against; expect it to grow.
 
 Keeping the schema types in a single package avoids drift across consumers.
 
-## Migration path from Survey123 Designer
+## Migration path from the legacy form builder
 
 When we port the designer UI, we'll:
 
