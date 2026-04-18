@@ -61,7 +61,7 @@ class UpdateItemDto {
 
 class ShareDto {
   @IsEnum(['user', 'group']) principalType!: PrincipalType;
-  @IsUUID() principalId!: string;
+  @IsUUID('all') principalId!: string;
   @IsOptional() @IsEnum(['view', 'edit', 'admin']) permission?: SharePermission;
 }
 
