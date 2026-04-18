@@ -33,6 +33,16 @@ export class GroupsController {
     return this.groups.listVisible(user);
   }
 
+  @Get(':id')
+  get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.groups.get(user, id);
+  }
+
+  @Get(':id/members')
+  listMembers(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.groups.listMembers(user, id);
+  }
+
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateGroupDto) {
     return this.groups.create(user, dto);

@@ -5,7 +5,8 @@
   "description": "GratisGIS backend API: auth, items, groups, sharing, feature services.",
   "scripts": {
     "build": "nest build",
-    "dev": "nest start --watch",
+    "dev": "nest build && node --watch dist/main.js",
+    "rebuild": "nest build",
     "start": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "jest",

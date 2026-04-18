@@ -43,6 +43,35 @@ export class GroupsService {
     });
   }
 
+  async get(user: AuthUser, groupId: string) {
+    const group = await this.prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundException('Group not found');
+    if (!this.canSee(user, group)) throw new NotFoundException('Group not found');
+    return group;
+  }
+
+  async listMembers(user: AuthUser, groupId: string) {
+    const group = await this.get(user, groupId);
+    // Only members (or org-admins) can see the full roster; non-members
+    // of a discoverable group see membership count only. For now we gate
+    // roster visibility to members-and-up.
+    const isMember =
+      user.orgRole === 'admin' ||
+      group.ownerId === user.id ||
+      user.groupIds.includes(groupId);
+    if (!isMember) throw new NotFoundException('Group not found');
+
+    return this.prisma.groupMember.findMany({
+      where: { groupId },
+      orderBy: { joinedAt: 'asc' },
+      include: {
+        user: {
+          select: { id: true, username: true, fullName: true, email: true },
+        },
+      },
+    });
+  }
+
   async addMember(user: AuthUser, groupId: string, memberId: string, role: GroupRole = 'member') {
     await this.assertAdminOfGroup(user, groupId);
     return this.prisma.groupMember.upsert({
@@ -50,6 +79,14 @@ export class GroupsService {
       update: { role },
       create: { groupId, userId: memberId, role },
     });
+  }
+
+  private canSee(user: AuthUser, group: { orgId: string; access: string; ownerId: string }) {
+    if (user.orgRole === 'admin') return true;
+    if (group.ownerId === user.id) return true;
+    if (group.access === 'public') return true;
+    if (group.access === 'org' && group.orgId === user.orgId) return true;
+    return false; // Membership check handled at query time for private groups.
   }
 
   async removeMember(user: AuthUser, groupId: string, memberId: string) {

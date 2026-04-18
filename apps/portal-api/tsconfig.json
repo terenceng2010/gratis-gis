@@ -14,7 +14,13 @@
     // to true by default, which silently skips producing dist/ files when
     // there are any errors at all. We handle type errors separately via
     // the `typecheck` script; the build step should always emit.
-    "noEmitOnError": false
+    "noEmitOnError": false,
+    // Incremental builds share a .tsbuildinfo cache. When the cache gets
+    // poisoned (e.g. by a mid-build crash or a deleted dist/) tsc will
+    // silently skip emit on subsequent runs, producing nothing and no
+    // error. Turn it off for portal-api; the watch workflow uses
+    // `node --watch` for fast reloads anyway.
+    "incremental": false
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
