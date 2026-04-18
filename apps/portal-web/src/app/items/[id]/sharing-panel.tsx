@@ -42,12 +42,37 @@ export function SharingPanel({ itemId, initialShares, groups }: Props) {
   const [rowState, setRowState] = useState<Record<string, RowSaveState>>({});
 
   const [mode, setMode] = useState<'group' | 'user'>('group');
-  const [groupId, setGroupId] = useState<string>(groups[0]?.id ?? '');
   const [userId, setUserId] = useState<string>('');
   const [permission, setPermission] = useState<SharePermission>('view');
 
   const keyOf = (s: Pick<ItemShare, 'principalType' | 'principalId'>) =>
     `${s.principalType}:${s.principalId}`;
+
+  // Hide groups that already have a share — picking one of those is a no-op
+  // anyway (the existing row's inline permission dropdown handles edits).
+  const sharedGroupIds = new Set(
+    shares
+      .filter((s) => s.principalType === 'group')
+      .map((s) => s.principalId),
+  );
+  const availableGroups = groups.filter((g) => !sharedGroupIds.has(g.id));
+  const [groupId, setGroupId] = useState<string>(availableGroups[0]?.id ?? '');
+
+  // If the pool of available groups changes (because a share was just added
+  // or removed), keep the selected value valid.
+  if (mode === 'group' && groupId && !availableGroups.some((g) => g.id === groupId)) {
+    // Defer state update out of render. React will re-render with new value.
+    queueMicrotask(() => setGroupId(availableGroups[0]?.id ?? ''));
+  }
+
+  // Same-user duplicate-detection for the user-mode input; soft hint, the
+  // backend is upsert so it's not a hard error if they go ahead.
+  const userAlreadyShared =
+    mode === 'user' &&
+    userId.length > 0 &&
+    shares.some(
+      (s) => s.principalType === 'user' && s.principalId === userId,
+    );
 
   async function updateSharePermission(
     share: ItemShare,
@@ -254,12 +279,17 @@ export function SharingPanel({ itemId, initialShares, groups }: Props) {
             <select
               value={groupId}
               onChange={(e) => setGroupId(e.target.value)}
-              className="h-9 min-w-[12rem] rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              disabled={availableGroups.length === 0}
+              className="h-9 min-w-[12rem] rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50"
             >
-              {groups.length === 0 ? (
-                <option value="">(no groups yet)</option>
+              {availableGroups.length === 0 ? (
+                <option value="">
+                  {groups.length === 0
+                    ? '(no groups yet)'
+                    : '(all groups already shared)'}
+                </option>
               ) : (
-                groups.map((g) => (
+                availableGroups.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.title}
                   </option>
@@ -267,13 +297,25 @@ export function SharingPanel({ itemId, initialShares, groups }: Props) {
               )}
             </select>
           ) : (
-            <input
-              type="text"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="user id (uuid)"
-              className="h-9 min-w-[18rem] rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-            />
+            <div className="flex flex-col">
+              <input
+                type="text"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                placeholder="user id (uuid)"
+                className={`h-9 min-w-[18rem] rounded-md border bg-surface-1 px-3 font-mono text-xs focus:outline-none focus:ring-2 ${
+                  userAlreadyShared
+                    ? 'border-warn focus:border-warn focus:ring-warn/30'
+                    : 'border-border focus:border-accent focus:ring-accent/30'
+                }`}
+              />
+              {userAlreadyShared ? (
+                <span className="mt-1 text-xs text-warn">
+                  This user already has a share. Submitting will update their
+                  permission.
+                </span>
+              ) : null}
+            </div>
           )}
 
           <select
@@ -289,7 +331,11 @@ export function SharingPanel({ itemId, initialShares, groups }: Props) {
           <button
             type="button"
             onClick={addShare}
-            disabled={pending}
+            disabled={
+              pending ||
+              (mode === 'group' && availableGroups.length === 0) ||
+              (mode === 'user' && userId.length === 0)
+            }
             className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
