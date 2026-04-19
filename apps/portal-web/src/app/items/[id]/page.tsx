@@ -2,10 +2,11 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   ArrowLeft,
-  Calendar,
-  Lock,
   Building2,
+  Calendar,
   Globe2,
+  Lock,
+  Pencil,
   User,
   Users,
 } from 'lucide-react';
@@ -69,7 +70,7 @@ export default async function ItemDetailPage({ params }: Props) {
       </Link>
 
       <header className="mb-8 flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span
               className={`rounded px-2 py-0.5 text-xs font-medium ${badgeClass}`}
@@ -100,6 +101,16 @@ export default async function ItemDetailPage({ params }: Props) {
             </span>
           </div>
         </div>
+
+        {canManage ? (
+          <Link
+            href={`/items/${item.id}/edit`}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 shadow-card hover:bg-surface-2"
+          >
+            <Pencil className="h-4 w-4" />
+            Edit
+          </Link>
+        ) : null}
       </header>
 
       {item.tags.length > 0 ? (
