@@ -35,6 +35,12 @@ interface Props {
   layers: WebMapLayer[];
   metadata: Record<string, LayerMetadata>;
   canEdit: boolean;
+  /**
+   * Current camera zoom. Rendered as a tick under each scale-range
+   * slider so authors can see at a glance whether their thumbs bracket
+   * the current view. Updates whenever the map camera changes.
+   */
+  currentZoom: number;
   onOpenAdd: () => void;
   onChange: (next: WebMapLayer[]) => void;
 }
@@ -56,6 +62,7 @@ export function LayerPanel({
   layers,
   metadata,
   canEdit,
+  currentZoom,
   onOpenAdd,
   onChange,
 }: Props) {
@@ -124,6 +131,7 @@ export function LayerPanel({
                 loading: true,
               }}
               canEdit={canEdit}
+              currentZoom={currentZoom}
               dragging={dragFrom === i}
               dropTarget={dragOver === i}
               onDragStart={() => setDragFrom(i)}
@@ -150,6 +158,7 @@ interface RowProps {
   index: number;
   metadata: LayerMetadata;
   canEdit: boolean;
+  currentZoom: number;
   dragging: boolean;
   dropTarget: boolean;
   onDragStart: () => void;
@@ -175,6 +184,7 @@ function LayerRow({
   index,
   metadata,
   canEdit,
+  currentZoom,
   dragging,
   dropTarget,
   onDragStart,
@@ -428,6 +438,7 @@ function LayerRow({
               >
                 <ScaleEditor
                   value={layer.scale ?? DEFAULT_LAYER_SCALE}
+                  currentZoom={currentZoom}
                   onChange={(scale) => onPatch({ scale })}
                 />
               </Section>
@@ -629,14 +640,19 @@ function Toggle({
  * Scale controls: per-layer zoom-range visibility for features and
  * labels, plus an opt-out for the default icon/circle auto-scaling.
  * Ranges are inclusive and expressed in MapLibre zoom units (0 = world,
- * 22 = street). An approximate scale denominator is shown next to each
- * bound so GIS folks coming from ArcGIS can orient themselves quickly.
+ * 22 = street). The slider reads cartographically from large scale on
+ * the left (zoomed-in / building) to small scale on the right (zoomed-
+ * out / world), mirroring how scale ranges are typically written
+ * ("1:500 – 1:500,000"). A small tick tracks the current camera zoom
+ * so authors can see whether their bounds bracket the live view.
  */
 function ScaleEditor({
   value,
+  currentZoom,
   onChange,
 }: {
   value: WebMapLayerScale;
+  currentZoom: number;
   onChange: (next: WebMapLayerScale) => void;
 }) {
   function patch(p: Partial<WebMapLayerScale>) {
@@ -649,6 +665,7 @@ function ScaleEditor({
         label="Layer visible"
         minZoom={value.minZoom}
         maxZoom={value.maxZoom}
+        currentZoom={currentZoom}
         onMin={(z) => patch({ minZoom: z })}
         onMax={(z) => patch({ maxZoom: z })}
       />
@@ -656,6 +673,7 @@ function ScaleEditor({
         label="Labels visible"
         minZoom={value.labelsMinZoom}
         maxZoom={value.labelsMaxZoom}
+        currentZoom={currentZoom}
         onMin={(z) => patch({ labelsMinZoom: z })}
         onMax={(z) => patch({ labelsMaxZoom: z })}
       />
@@ -681,12 +699,14 @@ function ZoomRange({
   label,
   minZoom,
   maxZoom,
+  currentZoom,
   onMin,
   onMax,
 }: {
   label: string;
   minZoom: number | null;
   maxZoom: number | null;
+  currentZoom: number;
   onMin: (z: number | null) => void;
   onMax: (z: number | null) => void;
 }) {
@@ -696,41 +716,44 @@ function ZoomRange({
   const minV = minZoom ?? ZOOM_MIN;
   const maxV = maxZoom ?? ZOOM_MAX;
   const span = ZOOM_MAX - ZOOM_MIN;
-  const pctMin = ((minV - ZOOM_MIN) / span) * 100;
-  const pctMax = ((maxV - ZOOM_MIN) / span) * 100;
+  // The slider reads right-to-left in zoom terms (left = zoomed-in =
+  // large scale, right = zoomed-out = small scale). We reverse the
+  // position math so a higher zoom value sits further to the left.
+  const posOf = (z: number) => ((ZOOM_MAX - z) / span) * 100;
+  const pctCurrent = Math.max(0, Math.min(100, posOf(currentZoom)));
+  const leftEdge = posOf(maxV); // zoomed-in thumb — on the left
+  const rightEdge = posOf(minV); // zoomed-out thumb — on the right
 
   return (
     <div className="rounded-md border border-border bg-surface-1 p-2">
       <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-wide text-muted">
         <span>{label}</span>
         <span className="tabular-nums normal-case tracking-normal text-muted">
-          {minZoom == null ? 'any' : `z${minZoom}`}
-          {'  –  '}
           {maxZoom == null ? 'any' : `z${maxZoom}`}
+          {'  –  '}
+          {minZoom == null ? 'any' : `z${minZoom}`}
         </span>
       </div>
       <div className="gg-dual-range">
         <div className="gg-dual-range__track" />
         <div
           className="gg-dual-range__fill"
-          style={{ left: `${pctMin}%`, right: `${100 - pctMax}%` }}
+          style={{ left: `${leftEdge}%`, right: `${100 - rightEdge}%` }}
         />
+        {/* Current camera-zoom indicator. Sits above the track so both
+            thumbs still overlap it; rendered as a thin vertical bar. */}
+        <div
+          className="gg-dual-range__now"
+          style={{ left: `${pctCurrent}%` }}
+          aria-hidden="true"
+          title={`Current zoom: z${currentZoom.toFixed(1)} (${zoomToScaleLabel(currentZoom)})`}
+        />
+        {/* Left thumb controls the zoomed-in (max) side. RTL on the
+            input flips its native direction so dragging right lowers
+            the max zoom. We also clamp against the other bound. */}
         <input
           type="range"
-          min={ZOOM_MIN}
-          max={ZOOM_MAX}
-          step={1}
-          value={minV}
-          onChange={(e) => {
-            let n = Number(e.target.value);
-            if (n > maxV) n = maxV;
-            onMin(n === ZOOM_MIN ? null : n);
-          }}
-          aria-label={`${label} minimum zoom`}
-          className="gg-dual-range__input"
-        />
-        <input
-          type="range"
+          dir="rtl"
           min={ZOOM_MIN}
           max={ZOOM_MAX}
           step={1}
@@ -740,16 +763,35 @@ function ZoomRange({
             if (n < minV) n = minV;
             onMax(n === ZOOM_MAX ? null : n);
           }}
-          aria-label={`${label} maximum zoom`}
+          aria-label={`${label} maximum zoom (zoomed-in limit)`}
+          className="gg-dual-range__input"
+        />
+        {/* Right thumb controls the zoomed-out (min) side. Same RTL
+            trick so its drag direction matches the reversed axis. */}
+        <input
+          type="range"
+          dir="rtl"
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          step={1}
+          value={minV}
+          onChange={(e) => {
+            let n = Number(e.target.value);
+            if (n > maxV) n = maxV;
+            onMin(n === ZOOM_MIN ? null : n);
+          }}
+          aria-label={`${label} minimum zoom (zoomed-out limit)`}
           className="gg-dual-range__input"
         />
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
-        <span className="tabular-nums">
-          {minZoom == null ? 'world' : zoomToScaleLabel(minZoom)}
-        </span>
+        {/* Left label describes the zoomed-in end — large scale.
+            Right label the zoomed-out end — small scale. */}
         <span className="tabular-nums">
           {maxZoom == null ? 'building' : zoomToScaleLabel(maxZoom)}
+        </span>
+        <span className="tabular-nums">
+          {minZoom == null ? 'world' : zoomToScaleLabel(minZoom)}
         </span>
       </div>
     </div>

@@ -193,3 +193,28 @@
     0 0 0 3px hsl(var(--focus-ring) / 0.35),
     0 1px 2px rgba(0, 0, 0, 0.15);
 }
+.gg-dual-range__now {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 0.9rem;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  background: hsl(var(--danger));
+  border-radius: 1px;
+  pointer-events: none;
+}
+.gg-dual-range__now::after {
+  /* Little triangle tick below the bar so the current-zoom marker
+     reads clearly even when it sits on top of the accent-colored
+     selected range. Mimics the indicator style in the ArcGIS
+     Visibility slider. */
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid hsl(var(--danger));
+}

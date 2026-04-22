@@ -397,6 +397,7 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
             layers={map.layers}
             metadata={metadata}
             canEdit={canEdit}
+            currentZoom={map.zoom}
             onOpenAdd={() => setAddOpen(true)}
             onChange={setLayers}
           />
