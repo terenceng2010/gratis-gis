@@ -18,7 +18,14 @@ import type {
   WebMapLayerFilterClause,
 } from '@gratis-gis/shared-types';
 import { BASEMAPS } from '@/lib/basemaps';
-import { MAP_ICONS, iconImageId, renderIconSvg } from './map-icons';
+import {
+  MAP_ICONS,
+  iconImageId,
+  iconSdfImageId,
+  renderIconSvg,
+  renderIconSvgForSdf,
+} from './map-icons';
+import { svgToSdf } from './sdf';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
@@ -175,18 +182,36 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     const loadIcons = async () => {
       await Promise.all(
         Object.keys(MAP_ICONS).map(async (name) => {
-          const id = iconImageId(name);
-          if (m.hasImage(id)) return;
-          try {
-            const svg = renderIconSvg(name);
-            if (!svg) return;
-            const img = await rasterizeSvg(svg, 48);
-            if (cancelled) return;
-            if (!m.hasImage(id)) {
-              m.addImage(id, img, { pixelRatio: 2 });
+          const plainId = iconImageId(name);
+          const sdfId = iconSdfImageId(name);
+          // Plain (as-is) variant.
+          if (!m.hasImage(plainId)) {
+            try {
+              const svg = renderIconSvg(name);
+              if (svg) {
+                const img = await rasterizeSvg(svg, 48);
+                if (!cancelled && !m.hasImage(plainId)) {
+                  m.addImage(plainId, img, { pixelRatio: 2 });
+                }
+              }
+            } catch {
+              /* non-fatal: tinted variant or circle fallback still works */
             }
-          } catch {
-            /* non-fatal: layer falls back to circle when an icon is missing */
+          }
+          // SDF (tintable) variant. Slightly thicker stroke so the
+          // distance field has enough body; see renderIconSvgForSdf.
+          if (!m.hasImage(sdfId)) {
+            try {
+              const svg = renderIconSvgForSdf(name);
+              if (svg) {
+                const sdfImg = await svgToSdf(svg, 48);
+                if (!cancelled && !m.hasImage(sdfId)) {
+                  m.addImage(sdfId, sdfImg, { pixelRatio: 2, sdf: true });
+                }
+              }
+            } catch {
+              /* non-fatal: plain variant or circle fallback still works */
+            }
           }
         }),
       );
@@ -565,23 +590,27 @@ function syncOverlays(
     });
 
     // Point geometries. When the layer's point style picks an icon
-    // symbol AND the referenced image is already registered, render a
-    // MapLibre symbol layer; otherwise fall back to the classic circle
-    // so the feature is still visible while icons load or if an icon
-    // name is typo'd.
-    const iconReady =
-      s.point.symbol === 'icon' &&
-      !!s.point.iconName &&
-      m.hasImage(iconImageId(s.point.iconName));
+    // symbol, try to render a MapLibre symbol layer with the right
+    // image variant (SDF for tinted, plain for as-shipped). When the
+    // image hasn't been registered yet, fall back to a circle so the
+    // feature stays visible while images load or if the icon name
+    // is typo'd.
+    const wantsIcon = s.point.symbol === 'icon' && !!s.point.iconName;
+    const tint = s.point.iconTint !== false; // default true
+    const preferredId = wantsIcon
+      ? tint
+        ? iconSdfImageId(s.point.iconName)
+        : iconImageId(s.point.iconName)
+      : '';
+    const iconReady = wantsIcon && m.hasImage(preferredId);
     if (iconReady) {
-      const iconId = iconImageId(s.point.iconName);
       m.addLayer({
         id: `gg:${layer.id}-circle`,
         type: 'symbol',
         source: sourceId,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         layout: {
-          'icon-image': iconId,
+          'icon-image': preferredId,
           'icon-size': hover
             ? ([
                 'case',
@@ -596,6 +625,10 @@ function syncOverlays(
         },
         paint: {
           'icon-opacity': op,
+          // icon-color only takes effect when the image was registered
+          // with sdf: true. For the plain variant this paint property
+          // is ignored, which is exactly what we want.
+          ...(tint ? { 'icon-color': pointFill } : {}),
         },
       });
     } else {

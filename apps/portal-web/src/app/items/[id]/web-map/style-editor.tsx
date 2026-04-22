@@ -136,7 +136,7 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
                 value={value.point.iconName}
                 onChange={(iconName) => patch('point', { iconName })}
               />
-              <div className="mt-3">
+              <div className="mt-3 space-y-3">
                 <Slider
                   label="Icon size"
                   min={0.5}
@@ -145,11 +145,29 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
                   value={value.point.iconSize ?? 1}
                   onChange={(n) => patch('point', { iconSize: n })}
                 />
+                <label className="flex cursor-pointer items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={value.point.iconTint !== false}
+                    onChange={(e) =>
+                      patch('point', { iconTint: e.target.checked })
+                    }
+                    className="h-3.5 w-3.5 rounded border-border text-accent focus:ring-accent/30"
+                  />
+                  <span className="text-ink-1">Tint with fill color</span>
+                </label>
+                {value.point.iconTint !== false ? (
+                  <Color
+                    label="Fill"
+                    value={value.point.color}
+                    onChange={(c) => patch('point', { color: c })}
+                  />
+                ) : null}
               </div>
               <p className="mt-2 text-[11px] text-muted">
-                Icons render in their shipped color. Per-feature
-                tinting lands in a follow-up alongside custom SVG
-                upload.
+                Built-in icons support tinting via the SDF variant
+                registered at map load. Raster uploads (PNG / JPEG /
+                etc.) render in their shipped colors regardless.
               </p>
             </>
           ) : (

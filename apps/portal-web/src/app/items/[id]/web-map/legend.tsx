@@ -201,7 +201,10 @@ function SimpleSwatches({
       {showPoint ? (
         <li className="flex items-center gap-2">
           {s.point.symbol === 'icon' && s.point.iconName ? (
-            <IconMark iconName={s.point.iconName} />
+            <IconMark
+              iconName={s.point.iconName}
+              color={s.point.iconTint !== false ? s.point.color : '#111827'}
+            />
           ) : (
             <PointMark
               fill={s.point.color}
@@ -261,8 +264,14 @@ function LineMark({ color }: { color: string }) {
   );
 }
 
-function IconMark({ iconName }: { iconName: string }) {
-  const svg = renderIconSvg(iconName) ?? '';
+function IconMark({
+  iconName,
+  color,
+}: {
+  iconName: string;
+  color: string;
+}) {
+  const svg = renderIconSvg(iconName, color) ?? '';
   return (
     <span
       aria-hidden="true"

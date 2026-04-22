@@ -174,21 +174,49 @@ export const MAP_ICON_CATEGORIES = [
 ];
 
 /**
- * MapLibre image id. Prefixed so the icons namespace can't collide
- * with anything the basemap style already registers.
+ * MapLibre image id for a plain icon. Prefixed so the icons
+ * namespace can't collide with anything the basemap style already
+ * registers.
  */
 export function iconImageId(name: string): string {
   return `gg-icon-${name}`;
 }
 
 /**
- * Render an icon to a full SVG document. The canvas rasterization
- * step drops it into an Image and then onto a canvas, so we want a
- * real SVG root with explicit stroke/fill colors. `currentColor` in
- * lucide originals becomes a concrete hex here.
+ * MapLibre image id for the SDF (tintable) copy of an icon. We
+ * register both variants and let the renderer pick based on the
+ * layer's `iconTint` setting.
+ */
+export function iconSdfImageId(name: string): string {
+  return `gg-icon-${name}-sdf`;
+}
+
+/**
+ * Render an icon as a full SVG document for plain rasterization.
+ * Used when we want the icon to display in its ship color (no SDF,
+ * no tinting). Lucide originals use stroke-based paths, so we keep
+ * the stroke as the given color and leave fill as none.
  */
 export function renderIconSvg(name: string, color = '#111827'): string | null {
   const icon = MAP_ICONS[name];
   if (!icon) return null;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon.body}</svg>`;
+}
+
+/**
+ * Render an icon as a black-on-transparent SVG with a thicker stroke
+ * so the resulting alpha mask has enough body for a good SDF. Used
+ * only when preparing the distance-field copy of an icon that will
+ * be tinted via MapLibre's `icon-color`.
+ *
+ * The trick here is that lucide icons are drawn with a 2 px stroke
+ * at 24 px, which after rasterization to 96 px leaves tiny features
+ * (like the center dot of a map-pin) smaller than the typical SDF
+ * buffer. Bumping the stroke to 2.5 gives the distance transform
+ * enough signal to produce a clean tint.
+ */
+export function renderIconSvgForSdf(name: string): string | null {
+  const icon = MAP_ICONS[name];
+  if (!icon) return null;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#000000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${icon.body}</svg>`;
 }

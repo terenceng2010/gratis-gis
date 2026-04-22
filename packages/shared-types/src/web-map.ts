@@ -176,6 +176,13 @@ export interface WebMapLayerStyle {
     iconName: string;
     /** Multiplier applied to the icon's base 48px size. */
     iconSize: number;
+    /**
+     * When true, the icon renders via its SDF variant and is tinted
+     * by `color`. When false, the icon uses its shipped colors as-
+     * rendered from the SVG. Always off for raster uploads (PNG /
+     * JPEG / etc.) since those can't be meaningfully SDF-encoded.
+     */
+    iconTint: boolean;
   };
   line: {
     color: string;
@@ -297,6 +304,7 @@ export const DEFAULT_LAYER_STYLE: WebMapLayerStyle = {
     symbol: 'circle',
     iconName: '',
     iconSize: 1,
+    iconTint: true,
   },
   line: {
     color: '#6366f1',
