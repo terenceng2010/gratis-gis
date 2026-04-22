@@ -495,10 +495,20 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     // Asking MapLibre to filter by an unknown layer silently returns
     // zero hits, which made popups and hover appear totally dead when
     // a layer's optional variants (e.g. `-label`) weren't registered.
+    // Only layers whose effective permissions allow querying should
+    // participate in hover / popup / click-select. Server-filtered
+    // maps (viewer-only access) set `effective.query === false` on
+    // layers the matrix narrowed to view-only; leaving them out of
+    // queryRenderedFeatures keeps the cursor from turning into a
+    // "clickable" pointer and stops hover highlight from firing on
+    // data the user isn't cleared to read.
     const interactiveLayerIds = (): string[] => {
       const style = m.getStyle();
       const existing = new Set((style.layers ?? []).map((sl) => sl.id));
-      const wanted = map.layers.flatMap((l) => overlayLayerIds(l.id));
+      const queryable = map.layers.filter(
+        (l) => l.effective === undefined || l.effective.query !== false,
+      );
+      const wanted = queryable.flatMap((l) => overlayLayerIds(l.id));
       return wanted.filter((id) => existing.has(id));
     };
 

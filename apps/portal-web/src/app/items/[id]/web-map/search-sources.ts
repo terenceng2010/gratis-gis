@@ -69,6 +69,10 @@ export function searchLayers(
 
   for (const layer of layers) {
     if (!layer.search?.enabled) continue;
+    // Honour server-enforced matrix permissions — a layer the viewer
+    // has view-only access to shouldn't surface feature attributes
+    // through search any more than through a popup.
+    if (layer.effective && layer.effective.query === false) continue;
     const fields = layer.search.fields.filter((f) => f.length > 0);
     if (fields.length === 0) continue;
     // ArcGIS-REST layers only have the visible viewport's features in
@@ -150,7 +154,9 @@ export async function searchArcgisLayers(
       (l) =>
         l.search?.enabled &&
         l.search.fields.length > 0 &&
-        l.source.kind === 'arcgis-rest',
+        l.source.kind === 'arcgis-rest' &&
+        // Same matrix-enforcement gate as the local search path.
+        (l.effective === undefined || l.effective.query !== false),
     )
     .map(async (layer) => {
       const src = layer.source as {

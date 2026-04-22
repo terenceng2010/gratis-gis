@@ -112,6 +112,55 @@ export function AccessMatrix({
     return layers.filter((l) => l.title.toLowerCase().includes(q));
   }, [layers, filter]);
 
+  // Enumerate every (layer, principal) pair where item access is
+  // missing. Used both for the bulk-grant button and the summary
+  // line above the matrix. Kept above the early return so hook
+  // order stays stable across open/closed transitions of the modal.
+  const gaps = useMemo(() => {
+    const out: Array<{
+      itemId: string;
+      layer: WebMapLayer;
+      principal: MatrixPrincipal;
+    }> = [];
+    const hasAccess = (itemId: string, p: MatrixPrincipal): boolean => {
+      const shares = itemShares[itemId];
+      if (!shares) return true;
+      if (p.type === 'user') {
+        if (
+          shares.some(
+            (s) => s.principalType === 'user' && s.principalId === p.id,
+          )
+        ) {
+          return true;
+        }
+        const myGroups = groupMemberships[p.id] ?? [];
+        for (const gid of myGroups) {
+          if (
+            shares.some(
+              (s) => s.principalType === 'group' && s.principalId === gid,
+            )
+          ) {
+            return true;
+          }
+        }
+        return false;
+      }
+      return shares.some(
+        (s) => s.principalType === 'group' && s.principalId === p.id,
+      );
+    };
+    for (const layer of layers) {
+      const itemId = layerItemIds[layer.id];
+      if (!itemId) continue;
+      for (const p of principals) {
+        if (!hasAccess(itemId, p)) {
+          out.push({ itemId, layer, principal: p });
+        }
+      }
+    }
+    return out;
+  }, [layers, layerItemIds, itemShares, principals, groupMemberships]);
+
   if (!open) return null;
 
   const principalKey = (p: MatrixPrincipal) => `${p.type}:${p.id}`;
@@ -198,28 +247,6 @@ export function AccessMatrix({
     else next.entries.push(merged);
     onPatchAccess(layer.id, next);
   }
-
-  // Enumerate every (layer, principal) pair where item access is
-  // missing. Used both for the bulk-grant button and the summary
-  // line above the matrix.
-  const gaps = useMemo(() => {
-    const out: Array<{
-      itemId: string;
-      layer: WebMapLayer;
-      principal: MatrixPrincipal;
-    }> = [];
-    for (const layer of layers) {
-      const itemId = layerItemIds[layer.id];
-      if (!itemId) continue;
-      for (const p of principals) {
-        if (!principalHasItemAccess(itemId, p)) {
-          out.push({ itemId, layer, principal: p });
-        }
-      }
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layers, layerItemIds, itemShares, principals, groupMemberships]);
 
   async function doGrant(itemId: string, p: MatrixPrincipal) {
     const key = `${itemId}:${principalKey(p)}`;
