@@ -43,7 +43,7 @@ type Tab = 'url' | 'paste' | 'file' | 'portal' | 'curated';
  * WebMapLayer and fires onAdd, the parent decides what to do with it.
  */
 export function AddLayerDialog({ open, onClose, onAdd }: Props) {
-  const [tab, setTab] = useState<Tab>('url');
+  const [tab, setTab] = useState<Tab>('portal');
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
   const [paste, setPaste] = useState('');
@@ -59,7 +59,7 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
   const [curatedQ, setCuratedQ] = useState('');
 
   const reset = useCallback(() => {
-    setTab('url');
+    setTab('portal');
     setTitle('');
     setUrl('');
     setPaste('');
@@ -248,8 +248,23 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
           </button>
         </div>
 
-        <div className="flex gap-0 border-b border-border px-2 pt-2">
-          <TabButton Icon={Link2} label="URL" active={tab === 'url'} onClick={() => setTab('url')} />
+<div className="flex gap-0 border-b border-border px-2 pt-2">
+          {/* Portal first — content inside this org's catalog is the
+              most common "add a layer" path once maps exist. Curated
+              sources come next as the guided-browse option. File /
+              Paste / URL are progressively more manual. */}
+          <TabButton
+            Icon={Database}
+            label="Portal"
+            active={tab === 'portal'}
+            onClick={() => setTab('portal')}
+          />
+          <TabButton
+            Icon={Globe}
+            label="Curated"
+            active={tab === 'curated'}
+            onClick={() => setTab('curated')}
+          />
           <TabButton
             Icon={Upload}
             label="File"
@@ -263,16 +278,10 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
             onClick={() => setTab('paste')}
           />
           <TabButton
-            Icon={Database}
-            label="Portal"
-            active={tab === 'portal'}
-            onClick={() => setTab('portal')}
-          />
-          <TabButton
-            Icon={Globe}
-            label="Curated"
-            active={tab === 'curated'}
-            onClick={() => setTab('curated')}
+            Icon={Link2}
+            label="URL"
+            active={tab === 'url'}
+            onClick={() => setTab('url')}
           />
         </div>
 
