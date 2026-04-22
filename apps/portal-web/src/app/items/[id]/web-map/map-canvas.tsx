@@ -27,6 +27,7 @@ import {
   renderIconSvgForSdf,
 } from './map-icons';
 import { svgToSdf } from './sdf';
+import { fetchLayerBBox } from './arcgis-rest';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
@@ -333,6 +334,74 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       return;
     }
     syncOverlays(m, map.layers, hoveredRef);
+  }, [map.layers, iconsTick]);
+
+  // Live bbox-driven refetch for ArcGIS REST layers. Runs after
+  // syncOverlays (same dep array, later in the file), so the sources
+  // those layers registered are already in place when we try to
+  // setData on them. Abort in-flight requests on camera churn so we
+  // don't race; cap at ~5000 features per bbox to keep the browser
+  // responsive on dense services. Users can pull-to-local as a
+  // separate flow when they want the full dataset.
+  const arcgisControllers = useRef<Record<string, AbortController>>({});
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const arcgisLayers = map.layers.filter(
+      (l) => l.visible && l.source.kind === 'arcgis-rest',
+    );
+    // Drop any controllers for layers that are no longer in the list.
+    for (const id of Object.keys(arcgisControllers.current)) {
+      if (!arcgisLayers.some((l) => l.id === id)) {
+        arcgisControllers.current[id]?.abort();
+        delete arcgisControllers.current[id];
+      }
+    }
+    if (arcgisLayers.length === 0) return;
+
+    const refetchAll = () => {
+      const b = m.getBounds();
+      const bbox: [number, number, number, number] = [
+        b.getWest(),
+        b.getSouth(),
+        b.getEast(),
+        b.getNorth(),
+      ];
+      for (const layer of arcgisLayers) {
+        const src = m.getSource(`gg:${layer.id}`) as
+          | maplibregl.GeoJSONSource
+          | undefined;
+        if (!src) continue;
+        arcgisControllers.current[layer.id]?.abort();
+        const controller = new AbortController();
+        arcgisControllers.current[layer.id] = controller;
+        const arc = layer.source as {
+          kind: 'arcgis-rest';
+          url: string;
+          layerId: number;
+        };
+        fetchLayerBBox(arc.url, arc.layerId, bbox, {
+          signal: controller.signal,
+        })
+          .then(({ featureCollection }) => {
+            if (controller.signal.aborted) return;
+            src.setData(featureCollection);
+          })
+          .catch((err) => {
+            if ((err as Error)?.name === 'AbortError') return;
+            // Surface errors via console — a user-facing banner can
+            // land with the item detail page rather than scattering
+            // fetch notifications across the canvas.
+            // eslint-disable-next-line no-console
+            console.warn(`[arcgis] ${layer.title}:`, (err as Error).message);
+          });
+      }
+    };
+    refetchAll();
+    m.on('moveend', refetchAll);
+    return () => {
+      m.off('moveend', refetchAll);
+    };
   }, [map.layers, iconsTick]);
 
   // Click handlers for popups, hover handlers for highlight + cursor.
@@ -1042,6 +1111,14 @@ function sourceData(layer: WebMapLayer): GeoJSON.FeatureCollection | string | nu
     // The server-side API endpoint emits the GeoJSON directly; see
     // apps/portal-api/src/items/items.controller.ts `@Get(':id/geojson')`.
     return `/api/portal/items/${layer.source.itemId}/geojson`;
+  }
+  if (layer.source.kind === 'arcgis-rest') {
+    // Start with an empty collection. The camera-driven refetch
+    // effect below calls setData once the initial viewport query
+    // resolves; this keeps syncOverlays synchronous (no awaits in
+    // the hot path) and lets MapLibre add the source immediately
+    // so downstream paint / hover / click layers attach.
+    return { type: 'FeatureCollection', features: [] };
   }
   return null;
 }

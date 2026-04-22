@@ -5,6 +5,7 @@ import {
   ClipboardPaste,
   Database,
   Globe,
+  Layers,
   Link2,
   Loader2,
   Search,
@@ -15,6 +16,7 @@ import {
 import type { Item, WebMapLayer, WebMapLayerSource } from '@gratis-gis/shared-types';
 import {
   DEFAULT_LAYER_LABELS,
+  DEFAULT_LAYER_SCALE,
   DEFAULT_LAYER_SEARCH,
   DEFAULT_LAYER_STYLE,
   DEFAULT_LAYER_POPUP,
@@ -23,6 +25,11 @@ import {
 } from '@gratis-gis/shared-types';
 import { CURATED_SOURCES, type CuratedSource } from './curated-sources';
 import { fileToGeoJson } from './kml-convert';
+import {
+  probeService,
+  type ArcgisServiceDescription,
+  type ArcgisServiceLayer,
+} from './arcgis-rest';
 
 interface Props {
   open: boolean;
@@ -30,7 +37,7 @@ interface Props {
   onAdd: (layer: WebMapLayer) => void;
 }
 
-type Tab = 'url' | 'paste' | 'file' | 'portal' | 'curated';
+type Tab = 'url' | 'paste' | 'file' | 'portal' | 'curated' | 'arcgis';
 
 /**
  * Four-tab layer catalog:
@@ -58,6 +65,14 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
   // Curated tab state: search narrows the curated list.
   const [curatedQ, setCuratedQ] = useState('');
 
+  // ArcGIS REST tab state: url, probe result, picked layer.
+  const [arcgisUrl, setArcgisUrl] = useState('');
+  const [arcgisProbing, setArcgisProbing] = useState(false);
+  const [arcgisService, setArcgisService] =
+    useState<ArcgisServiceDescription | null>(null);
+  const [arcgisLayerId, setArcgisLayerId] = useState<number | null>(null);
+  const arcgisAbortRef = useRef<AbortController | null>(null);
+
   const reset = useCallback(() => {
     setTab('portal');
     setTitle('');
@@ -65,6 +80,12 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
     setPaste('');
     setPortalQ('');
     setCuratedQ('');
+    setArcgisUrl('');
+    setArcgisProbing(false);
+    setArcgisService(null);
+    setArcgisLayerId(null);
+    arcgisAbortRef.current?.abort();
+    arcgisAbortRef.current = null;
     setError(null);
   }, []);
 
@@ -115,8 +136,70 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
       interactions: structuredClone(DEFAULT_LAYER_INTERACTIONS),
       labels: structuredClone(DEFAULT_LAYER_LABELS),
       search: structuredClone(DEFAULT_LAYER_SEARCH),
+      scale: structuredClone(DEFAULT_LAYER_SCALE),
       filter: null,
     };
+  }
+
+  async function runArcgisProbe(raw: string) {
+    setError(null);
+    if (!raw.trim()) {
+      setError('Paste an ArcGIS MapServer or FeatureServer URL.');
+      return;
+    }
+    arcgisAbortRef.current?.abort();
+    const controller = new AbortController();
+    arcgisAbortRef.current = controller;
+    setArcgisProbing(true);
+    setArcgisService(null);
+    setArcgisLayerId(null);
+    try {
+      const desc = await probeService(raw.trim(), controller.signal);
+      if (controller.signal.aborted) return;
+      setArcgisService(desc);
+      // Auto-pick the first polygon/line/point layer (skip tables when
+      // something else is available); or the first layer at all.
+      const pick =
+        desc.layers.find((l) => l.geometryType) ?? desc.layers[0] ?? null;
+      setArcgisLayerId(pick?.id ?? null);
+      if (!title.trim()) {
+        setTitle(pick?.name ?? desc.name);
+      }
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      setError(
+        (err as Error).message ||
+          'Could not read that service. Check the URL and CORS config.',
+      );
+    } finally {
+      if (!controller.signal.aborted) setArcgisProbing(false);
+    }
+  }
+
+  function submitArcgis() {
+    setError(null);
+    if (!arcgisService) {
+      setError('Probe the service first so we know which layers it offers.');
+      return;
+    }
+    if (arcgisLayerId == null) {
+      setError('Pick a layer from the service.');
+      return;
+    }
+    if (!title.trim()) {
+      setError('Give the layer a name so it shows up in the list.');
+      return;
+    }
+    onAdd(
+      makeLayer(title.trim(), {
+        kind: 'arcgis-rest',
+        url: arcgisService.url,
+        layerId: arcgisLayerId,
+        serviceType: arcgisService.serviceType,
+      }),
+    );
+    reset();
+    onClose();
   }
 
   function submitUrlOrPaste() {
@@ -282,6 +365,12 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
             label="URL"
             active={tab === 'url'}
             onClick={() => setTab('url')}
+          />
+          <TabButton
+            Icon={Layers}
+            label="ArcGIS"
+            active={tab === 'arcgis'}
+            onClick={() => setTab('arcgis')}
           />
         </div>
 
@@ -473,6 +562,103 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
             </div>
           )}
 
+          {tab === 'arcgis' && (
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Assessor parcels, roads, ..."
+                  maxLength={200}
+                  className="h-9 w-full rounded-md border border-border bg-surface-1 px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">
+                  ArcGIS REST URL
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={arcgisUrl}
+                    onChange={(e) => setArcgisUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void runArcgisProbe(arcgisUrl);
+                      }
+                    }}
+                    placeholder="https://host/arcgis/rest/services/OpenData/Assessor/MapServer"
+                    className="h-9 min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void runArcgisProbe(arcgisUrl)}
+                    disabled={arcgisProbing || !arcgisUrl.trim()}
+                    className="inline-flex h-9 items-center gap-1 rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                  >
+                    {arcgisProbing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                    Probe
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  Paste the service root (<code>.../MapServer</code> or
+                  <code> .../FeatureServer</code>) or a specific layer URL
+                  (<code>.../MapServer/0</code>). The viewer will query
+                  features live by bbox as you pan and zoom.
+                </p>
+              </div>
+
+              {arcgisService ? (
+                <div className="rounded-md border border-border bg-surface-1 p-3">
+                  <div className="mb-2 flex items-baseline justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">
+                        {arcgisService.name}
+                      </div>
+                      <div className="text-[11px] text-muted">
+                        {arcgisService.serviceType} • {arcgisService.layers.length}{' '}
+                        layer{arcgisService.layers.length === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                  </div>
+                  {arcgisService.description ? (
+                    <p className="mb-2 line-clamp-3 text-xs text-muted">
+                      {arcgisService.description}
+                    </p>
+                  ) : null}
+                  <label className="mb-1 block text-[10px] uppercase tracking-wide text-muted">
+                    Pick a layer
+                  </label>
+                  <ArcgisLayerPicker
+                    layers={arcgisService.layers}
+                    value={arcgisLayerId}
+                    onChange={(id) => {
+                      setArcgisLayerId(id);
+                      const l = arcgisService.layers.find((x) => x.id === id);
+                      if (l && (!title.trim() || arcgisService.layers.find((x) => x.name === title))) {
+                        setTitle(l.name);
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
+              <p className="text-[11px] text-muted">
+                The service must allow cross-origin requests from this
+                portal. Paginated fetches cap at ~5000 features per
+                viewport — zoom in for denser layers, or pull the data
+                to a local copy from the layer&apos;s item page (coming
+                next).
+              </p>
+            </div>
+          )}
+
           {error ? (
             <p role="alert" className="mt-3 text-sm text-danger">
               {error}
@@ -480,7 +666,7 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
           ) : null}
         </div>
 
-        {(tab === 'url' || tab === 'paste') && (
+        {(tab === 'url' || tab === 'paste' || tab === 'arcgis') && (
           <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
             <button
               type="button"
@@ -491,8 +677,12 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
             </button>
             <button
               type="button"
-              onClick={submitUrlOrPaste}
-              className="h-9 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
+              onClick={tab === 'arcgis' ? submitArcgis : submitUrlOrPaste}
+              className="h-9 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+              disabled={
+                tab === 'arcgis' &&
+                (!arcgisService || arcgisLayerId == null || arcgisProbing)
+              }
             >
               Add layer
             </button>
@@ -591,4 +781,74 @@ function TabButton({
       {label}
     </button>
   );
+}
+
+/**
+ * Scrollable layer picker for an ArcGIS service probe. Nested group
+ * layers (MapServers often wrap sub-layers in folders) are rendered
+ * with a subtle indent so hierarchy is visible without an accordion.
+ * Empty-geometry rows (tables) are greyed but still selectable — the
+ * attribute table view works even when there's nothing to draw.
+ */
+function ArcgisLayerPicker({
+  layers,
+  value,
+  onChange,
+}: {
+  layers: ArcgisServiceLayer[];
+  value: number | null;
+  onChange: (id: number) => void;
+}) {
+  if (layers.length === 0) {
+    return (
+      <p className="text-xs text-muted">
+        Service reported no layers. Is this URL pointing at something
+        other than a MapServer / FeatureServer?
+      </p>
+    );
+  }
+  const parentIds = new Set(
+    layers
+      .map((l) => l.parentLayerId)
+      .filter((x): x is number => typeof x === 'number' && x >= 0),
+  );
+  return (
+    <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-0 p-1">
+      {layers.map((l) => {
+        const indented = typeof l.parentLayerId === 'number' && l.parentLayerId >= 0;
+        const isGroup = parentIds.has(l.id);
+        const active = l.id === value;
+        return (
+          <li key={l.id}>
+            <button
+              type="button"
+              onClick={() => onChange(l.id)}
+              className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs transition-colors ${
+                active
+                  ? 'bg-accent/10 text-ink-0 ring-1 ring-accent/40'
+                  : 'text-ink-1 hover:bg-surface-2'
+              } ${indented ? 'pl-6' : ''}`}
+            >
+              <span className="truncate">
+                <span className="tabular-nums text-muted">{l.id}</span>{' '}
+                {l.name}
+                {isGroup ? (
+                  <span className="ml-1 text-[10px] text-muted">(group)</span>
+                ) : null}
+              </span>
+              <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
+                {geometryShort(l.geometryType)}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function geometryShort(g?: string): string {
+  if (!g) return 'table';
+  const m = g.match(/esriGeometry(\w+)/);
+  return (m?.[1] ?? g).toLowerCase();
 }

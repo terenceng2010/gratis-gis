@@ -161,15 +161,32 @@ export interface WebMapLayerFilter {
 }
 
 /**
- * Layer data sources. `geojson-url` pulls from a public URL at load
- * time; `geojson-inline` stores the GeoJSON body directly in the item
- * (small datasets only, it lives in dataJson); `feature-service`
- * references a portal item and will light up once that pillar ships.
+ * Layer data sources.
+ *   - `geojson-url`: pulls from a public URL at load time.
+ *   - `geojson-inline`: stores the GeoJSON body directly in the item
+ *     (small datasets only — it lives in dataJson).
+ *   - `feature-service`: references a portal item and will light up
+ *     once that pillar ships.
+ *   - `arcgis-rest`: points at a layer inside an ArcGIS Server
+ *     MapServer or FeatureServer endpoint; the viewer queries
+ *     `/<layerId>/query?...&f=geojson` live as the camera moves and
+ *     paginates when the server reports `exceededTransferLimit`. The
+ *     `serviceType` field is persisted so callers don't have to re-
+ *     probe just to tell which REST vocabulary the server uses.
  */
 export type WebMapLayerSource =
   | { kind: 'geojson-url'; url: string }
   | { kind: 'geojson-inline'; geojson: unknown }
-  | { kind: 'feature-service'; itemId: string };
+  | { kind: 'feature-service'; itemId: string }
+  | {
+      kind: 'arcgis-rest';
+      /** Root service URL, without the trailing /<layerId>. */
+      url: string;
+      /** Sub-layer id inside the service (usually a small integer). */
+      layerId: number;
+      /** MapServer or FeatureServer — persisted so we skip a probe. */
+      serviceType: 'MapServer' | 'FeatureServer';
+    };
 
 /**
  * Simple-renderer style vocabulary, one section per geometry family.

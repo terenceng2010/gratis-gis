@@ -65,6 +65,28 @@ export async function discoverLayerMetadata(
   try {
     if (layer.source.kind === 'geojson-inline') {
       raw = layer.source.geojson;
+    } else if (layer.source.kind === 'arcgis-rest') {
+      // ArcGIS REST: pull a representative sample (no bbox filter)
+      // to light up field/value discovery. We deliberately fetch
+      // outside the map bbox so filters & the attribute table have
+      // something to work with even when the user hasn't panned to
+      // a region with features yet. The live draw path still does
+      // its own bbox queries.
+      const params = new URLSearchParams({
+        where: '1=1',
+        outFields: '*',
+        outSR: '4326',
+        f: 'geojson',
+        resultRecordCount: String(FEATURE_SAMPLE_CAP),
+      });
+      const url = `${layer.source.url}/${layer.source.layerId}/query?${params.toString()}`;
+      const init: RequestInit = {};
+      if (signal) init.signal = signal;
+      const res = await fetch(url, init);
+      if (!res.ok) {
+        return { ...EMPTY, error: `ArcGIS service returned ${res.status}` };
+      }
+      raw = await res.json();
     } else {
       const url =
         layer.source.kind === 'geojson-url'
