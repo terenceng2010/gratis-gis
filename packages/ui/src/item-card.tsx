@@ -1,4 +1,5 @@
 import type { Item } from '@gratis-gis/shared-types';
+import { EntityBadge } from './entity-badge';
 import { cn } from './cn';
 
 export interface ItemCardProps {
@@ -33,19 +34,30 @@ export function ItemCard({ item, href, className }: ItemCardProps) {
     className,
   );
 
+  // Thumbnail slot: if the owner uploaded a custom image, show it.
+  // Otherwise fall back to a full-bleed colored initial tile so the
+  // card still looks finished instead of a grey void.
+  const thumbnail = item.thumbnailUrl ? (
+    <img
+      src={item.thumbnailUrl}
+      alt=""
+      className="h-32 w-full rounded-md object-cover"
+    />
+  ) : (
+    <div className="h-32 w-full overflow-hidden rounded-md">
+      <EntityBadge
+        label={item.title}
+        seed={item.id}
+        size="xl"
+        rounded="md"
+        className="h-full w-full text-4xl"
+      />
+    </div>
+  );
+
   const content = (
     <>
-      {item.thumbnailUrl ? (
-        <img
-          src={item.thumbnailUrl}
-          alt=""
-          className="h-32 w-full rounded-md object-cover"
-        />
-      ) : (
-        <div className="flex h-32 w-full items-center justify-center rounded-md bg-surface-2 text-muted">
-          No thumbnail
-        </div>
-      )}
+      {thumbnail}
       <div className="flex items-center gap-2">
         <span className={cn('rounded px-2 py-0.5 text-xs font-medium', badgeClass)}>
           {item.type}

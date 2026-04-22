@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Plus, Users, Lock, Globe2, Building2 } from 'lucide-react';
 import type { Group } from '@gratis-gis/shared-types';
+import { EntityBadge } from '@gratis-gis/ui';
 import { apiFetch } from '@/lib/api';
 import { EmptyState } from '@/components/empty-state';
 
@@ -55,10 +56,19 @@ export default async function GroupsPage() {
               key={g.id}
               className="flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-surface-2"
             >
-              <div className="min-w-0">
-                <div className="truncate font-medium text-ink-1">{g.title}</div>
-                <div className="mt-0.5 truncate text-sm text-muted">
-                  {g.description || '-'}
+              <div className="flex min-w-0 items-center gap-3">
+                <EntityBadge
+                  label={g.title}
+                  seed={g.id}
+                  imageUrl={g.thumbnailUrl}
+                  size="md"
+                  rounded="md"
+                />
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-ink-1">{g.title}</div>
+                  <div className="mt-0.5 truncate text-sm text-muted">
+                    {g.description || '-'}
+                  </div>
                 </div>
               </div>
               <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted">

@@ -8,7 +8,17 @@ export interface Group {
   description: string;
   access: GroupAccess;
   ownerId: UserId;
+  /**
+   * Absolute URL to the group's thumbnail image, served from MinIO.
+   * Null means we fall back to the auto-generated initial badge.
+   */
+  thumbnailUrl: string | null;
   createdAt: ISODateString;
+  /**
+   * Soft-delete timestamp. Non-null means the group is in the recycle
+   * bin. See /docs/soft-delete.md.
+   */
+  deletedAt: ISODateString | null;
 }
 
 export interface GroupMember {

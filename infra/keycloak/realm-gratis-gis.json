@@ -118,10 +118,10 @@
   },
   "users": [
     {
-      "username": "alice",
-      "email": "alice@acme.test",
-      "firstName": "Alice",
-      "lastName": "Example",
+      "username": "mateo",
+      "email": "mateo@acme.test",
+      "firstName": "Mateo",
+      "lastName": "García",
       "enabled": true,
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "devpassword", "temporary": false }],

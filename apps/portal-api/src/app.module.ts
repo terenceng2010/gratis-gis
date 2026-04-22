@@ -8,6 +8,9 @@ import { AuthModule } from './auth/auth.module.js';
 import { UsersModule } from './users/users.module.js';
 import { GroupsModule } from './groups/groups.module.js';
 import { ItemsModule } from './items/items.module.js';
+import { StorageModule } from './storage/storage.module.js';
+import { IngestModule } from './ingest/ingest.module.js';
+import { MaintenanceModule } from './maintenance/maintenance.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
 @Module({
@@ -18,6 +21,9 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     UsersModule,
     GroupsModule,
     ItemsModule,
+    StorageModule,
+    IngestModule,
+    MaintenanceModule,
   ],
   controllers: [HealthController],
   providers: [

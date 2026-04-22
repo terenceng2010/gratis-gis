@@ -8,16 +8,38 @@ import {
   Users,
   Bell,
   Search,
+  Trash2,
 } from 'lucide-react';
 import { authOptions } from '@/lib/auth';
+import { apiFetch } from '@/lib/api';
+import { UserMenu } from './user-menu';
 
 /**
  * Top-level chrome shared by every portal page: top bar with brand + search
  * + account, left nav with primary destinations, and a content area. One
  * consistent frame keeps the app feeling cohesive as we add surfaces.
  */
+type Me = {
+  id: string;
+  fullName: string;
+  avatarUrl: string | null;
+  orgName: string | null;
+};
+
 export async function AppShell({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
+
+  // Fetch the user's profile so we can show their avatar + org in the
+  // top bar. Silently fall back if this fails so the shell still renders
+  // (e.g. the user is signed out and the fetch 401s).
+  let me: Me | null = null;
+  if (session) {
+    try {
+      me = await apiFetch<Me>('/api/users/me');
+    } catch {
+      me = null;
+    }
+  }
 
   return (
     <div className="flex min-h-screen bg-surface-0 text-ink-0">
@@ -31,6 +53,9 @@ export async function AppShell({ children }: { children: ReactNode }) {
           <NavLink href="/items" icon={<MapIcon className="h-4 w-4" />}>Items</NavLink>
           <NavLink href="/items?mine=true" icon={<LayoutGrid className="h-4 w-4" />}>My items</NavLink>
           <NavLink href="/groups" icon={<Users className="h-4 w-4" />}>Groups</NavLink>
+          <NavLink href="/recently-deleted" icon={<Trash2 className="h-4 w-4" />}>
+            Recently deleted
+          </NavLink>
         </nav>
       </aside>
 
@@ -53,15 +78,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
               <Bell className="h-4 w-4" />
             </button>
             {session ? (
-              <Link
-                href="/api/auth/signout"
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-surface-2"
-              >
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-xs font-medium text-accent-foreground">
-                  {session.user?.name?.[0]?.toUpperCase() ?? '?'}
-                </span>
-                <span className="hidden md:inline">{session.user?.name}</span>
-              </Link>
+              <UserMenu
+                seed={me?.id ?? session.user?.email ?? 'you'}
+                displayName={me?.fullName ?? session.user?.name ?? 'You'}
+                orgName={me?.orgName ?? null}
+                avatarUrl={me?.avatarUrl ?? null}
+              />
             ) : (
               <Link
                 href="/api/auth/signin"

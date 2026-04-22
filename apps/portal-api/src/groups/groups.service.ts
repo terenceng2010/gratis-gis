@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { GroupAccess, GroupRole } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -10,6 +10,14 @@ export interface CreateGroupInput {
   access?: GroupAccess;
 }
 
+export interface UpdateGroupInput {
+  title?: string;
+  description?: string;
+  access?: GroupAccess;
+  /** Pass null to clear. */
+  thumbnailUrl?: string | null;
+}
+
 @Injectable()
 export class GroupsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -18,6 +26,7 @@ export class GroupsService {
   listVisible(user: AuthUser) {
     return this.prisma.group.findMany({
       where: {
+        deletedAt: null,
         OR: [
           { members: { some: { userId: user.id } } },
           { orgId: user.orgId, access: { in: ['org', 'public'] } },
@@ -25,6 +34,20 @@ export class GroupsService {
         ],
       },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Trashed groups visible to the caller. Scoped to owner + org admin so
+   * a collaborator can't surface or restore someone else's deleted group.
+   */
+  listTrash(user: AuthUser) {
+    return this.prisma.group.findMany({
+      where:
+        user.orgRole === 'admin'
+          ? { orgId: user.orgId, deletedAt: { not: null } }
+          : { ownerId: user.id, deletedAt: { not: null } },
+      orderBy: { deletedAt: 'desc' },
     });
   }
 
@@ -43,9 +66,71 @@ export class GroupsService {
     });
   }
 
-  async get(user: AuthUser, groupId: string) {
+  async update(user: AuthUser, groupId: string, input: UpdateGroupInput) {
+    const group = await this.get(user, groupId);
+    if (!this.canAdmin(user, group)) {
+      throw new ForbiddenException('Only the group owner or an org admin can edit a group');
+    }
+    return this.prisma.group.update({
+      where: { id: groupId },
+      data: {
+        ...(input.title !== undefined && { title: input.title }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.access !== undefined && { access: input.access }),
+        ...(input.thumbnailUrl !== undefined && { thumbnailUrl: input.thumbnailUrl }),
+      },
+    });
+  }
+
+  /** Soft-delete. See docs/soft-delete.md for rationale. */
+  async remove(user: AuthUser, groupId: string) {
+    const group = await this.get(user, groupId);
+    if (!this.canAdmin(user, group)) {
+      throw new ForbiddenException('Only the group owner or an org admin can delete a group');
+    }
+    await this.prisma.group.update({
+      where: { id: groupId },
+      data: { deletedAt: new Date() },
+    });
+  }
+
+  async restore(user: AuthUser, groupId: string) {
+    const group = await this.get(user, groupId, { includeTrashed: true });
+    if (!group.deletedAt) {
+      throw new BadRequestException('Group is not in the trash');
+    }
+    if (!this.canAdmin(user, group)) {
+      throw new ForbiddenException('Only the group owner or an org admin can restore a group');
+    }
+    return this.prisma.group.update({
+      where: { id: groupId },
+      data: { deletedAt: null },
+    });
+  }
+
+  /**
+   * Permanent delete. Cascades to group_member rows. Only available for
+   * groups already in the trash so there is always a two-step ceremony.
+   */
+  async purge(user: AuthUser, groupId: string) {
+    const group = await this.get(user, groupId, { includeTrashed: true });
+    if (!group.deletedAt) {
+      throw new BadRequestException('Group must be in the trash before it can be purged');
+    }
+    if (!this.canAdmin(user, group)) {
+      throw new ForbiddenException('Only the group owner or an org admin can purge a group');
+    }
+    await this.prisma.group.delete({ where: { id: groupId } });
+  }
+
+  async get(user: AuthUser, groupId: string, opts: { includeTrashed?: boolean } = {}) {
     const group = await this.prisma.group.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundException('Group not found');
+    if (group.deletedAt) {
+      if (!opts.includeTrashed) throw new NotFoundException('Group not found');
+      if (!this.canAdmin(user, group)) throw new NotFoundException('Group not found');
+      return group;
+    }
     if (!this.canSee(user, group)) throw new NotFoundException('Group not found');
     return group;
   }
@@ -87,6 +172,12 @@ export class GroupsService {
     if (group.access === 'public') return true;
     if (group.access === 'org' && group.orgId === user.orgId) return true;
     return false; // Membership check handled at query time for private groups.
+  }
+
+  /** Owner or org-admin can edit/delete/restore/purge the group. */
+  private canAdmin(user: AuthUser, group: { ownerId: string; orgId: string }) {
+    if (group.ownerId === user.id) return true;
+    return user.orgRole === 'admin' && group.orgId === user.orgId;
   }
 
   async removeMember(user: AuthUser, groupId: string, memberId: string) {

@@ -85,6 +85,9 @@ model User {
   email     String
   fullName  String   @map("full_name")
   orgRole   OrgRole  @default(viewer) @map("org_role")
+  /// Absolute URL to the user's avatar image (served from MinIO).
+  /// Null falls back to the auto-generated initial badge.
+  avatarUrl String?  @map("avatar_url")
   createdAt DateTime @default(now()) @map("created_at")
 
   org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
@@ -97,19 +100,27 @@ model User {
 }
 
 model Group {
-  id          String      @id @default(uuid()) @db.Uuid
-  orgId       String      @map("org_id") @db.Uuid
-  title       String
-  description String      @default("")
-  access      GroupAccess @default(private)
-  ownerId     String      @map("owner_id") @db.Uuid
-  createdAt   DateTime    @default(now()) @map("created_at")
+  id           String      @id @default(uuid()) @db.Uuid
+  orgId        String      @map("org_id") @db.Uuid
+  title        String
+  description  String      @default("")
+  access       GroupAccess @default(private)
+  ownerId      String      @map("owner_id") @db.Uuid
+  /// Absolute URL to the group's thumbnail image. Null falls back to
+  /// the auto-generated initial badge.
+  thumbnailUrl String?     @map("thumbnail_url")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  // Soft-delete. When set, the group is in the trash and filtered out of
+  // normal queries. A scheduled job permanently removes rows whose
+  // deletedAt is older than the retention window (see docs/soft-delete.md).
+  deletedAt   DateTime?   @map("deleted_at")
 
   org        Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   owner      User          @relation("GroupOwner", fields: [ownerId], references: [id])
   members    GroupMember[]
 
   @@index([orgId])
+  @@index([deletedAt])
   @@map("group")
 }
 
@@ -136,11 +147,17 @@ model Item {
   description  String     @default("")
   tags         String[]   @default([])
   thumbnailUrl String?    @map("thumbnail_url")
-  dataJson     Json       @map("data_json")
+  /// Type-specific content payload. The underlying column is
+  /// `data_json` so existing migrations are undisturbed; exposing the
+  /// TS property as `data` keeps the API response shape aligned with
+  /// the client-side `Item` type in shared-types.
+  data         Json       @map("data_json")
   storageRef   String?    @map("storage_ref")
   access       ItemAccess @default(private)
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
+  // Soft-delete. See Group.deletedAt for rationale.
+  deletedAt    DateTime?  @map("deleted_at")
 
   org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   owner  User         @relation("ItemOwner", fields: [ownerId], references: [id])
@@ -149,6 +166,7 @@ model Item {
   @@index([orgId, access])
   @@index([ownerId])
   @@index([type])
+  @@index([deletedAt])
   @@map("item")
 }
 

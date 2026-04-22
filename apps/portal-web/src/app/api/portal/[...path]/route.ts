@@ -22,20 +22,30 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   const qs = req.nextUrl.search;
   const target = `${API_BASE}/api/${suffix}${qs}`;
 
+  // Preserve the full Content-Type header. Multipart uploads carry a
+  // boundary in the value (e.g. `multipart/form-data; boundary=----x`)
+  // and strip-to-"application/json" corrupts them.
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${session.accessToken}`,
+  };
+  const ct = req.headers.get('content-type');
+  if (ct) headers['content-type'] = ct;
+
   const init: RequestInit = {
     method: req.method,
-    headers: {
-      authorization: `Bearer ${session.accessToken}`,
-      'content-type': req.headers.get('content-type') ?? 'application/json',
-    },
+    headers,
     cache: 'no-store',
   };
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    init.body = await req.text();
+    // ArrayBuffer preserves binary content; text() would mangle any
+    // non-UTF8 byte in a multipart body.
+    init.body = await req.arrayBuffer();
   }
 
   const upstream = await fetch(target, init);
-  const body = await upstream.text();
+  // Stream the response body through as bytes so the browser receives
+  // exactly what portal-api produced. text() would re-encode.
+  const body = await upstream.arrayBuffer();
   return new NextResponse(body, {
     status: upstream.status,
     headers: {

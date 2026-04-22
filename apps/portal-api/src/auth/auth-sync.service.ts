@@ -60,8 +60,12 @@ export class AuthSyncService {
       },
     });
 
+    // Exclude memberships whose group is in the trash. Otherwise an item
+    // shared to a soft-deleted group would still match this user's
+    // effective groupIds and grant read access -- which would defeat
+    // the purpose of moving the group to the recycle bin.
     const memberships = await this.prisma.groupMember.findMany({
-      where: { userId: user.id },
+      where: { userId: user.id, group: { deletedAt: null } },
       select: { groupId: true },
     });
 

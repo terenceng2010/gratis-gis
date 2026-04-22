@@ -18,6 +18,12 @@ export interface Item<TData = unknown> {
   access: ItemAccess;
   createdAt: ISODateString;
   updatedAt: ISODateString;
+  /**
+   * Soft-delete timestamp. Non-null means the item is in the recycle
+   * bin and will be permanently removed after the retention window.
+   * See /docs/soft-delete.md.
+   */
+  deletedAt: ISODateString | null;
 }
 
 export interface ItemShare {

@@ -69,3 +69,39 @@
     }
   }
 }
+
+/* Feature popup content. MapLibre owns the outer chrome; these rules
+   style what we inject via setHTML so the popup matches the portal
+   look instead of browser defaults. */
+.gg-popup {
+  font: 500 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+  color: hsl(var(--surface-1-ink));
+}
+.gg-popup-title {
+  font-weight: 600;
+  font-size: 14px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.gg-popup dl {
+  display: grid;
+  grid-template-columns: minmax(60px, auto) 1fr;
+  gap: 2px 10px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.gg-popup dt {
+  color: hsl(var(--muted));
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.gg-popup dd {
+  word-break: break-word;
+}
+.gg-popup-empty {
+  color: hsl(var(--muted));
+  font-style: italic;
+  font-size: 12px;
+}

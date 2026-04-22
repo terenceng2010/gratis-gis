@@ -71,6 +71,61 @@ services:
     ports:
       - "7800:7800"
 
+  # Self-hosted geocoder. Defaults to the full OSM planet so the stack
+  # is production-ready as-deployed; see infra/NOMINATIM.md for what
+  # that commitment actually costs (time, disk, RAM) and how to dial
+  # back to a country/state/city extract for smaller deployments.
+  #
+  # On first boot the container downloads NOMINATIM_PBF_URL and builds
+  # its own Postgres database inside the container volume. Subsequent
+  # boots skip the import. REPLICATION_URL lets Nominatim pull diffs
+  # so the data stays current without re-importing.
+  #
+  # Env var matrix for common scenarios:
+  #
+  #   Dev spike (Monaco, ~1 MB, minutes to import):
+  #     NOMINATIM_PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
+  #     NOMINATIM_REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/
+  #     NOMINATIM_SHM_SIZE=1gb
+  #
+  #   Regional (North America, ~13 GB, ~12 hr import on an SSD):
+  #     NOMINATIM_PBF_URL=https://download.geofabrik.de/north-america-latest.osm.pbf
+  #     NOMINATIM_REPLICATION_URL=https://download.geofabrik.de/north-america-updates/
+  #     NOMINATIM_SHM_SIZE=8gb
+  #
+  #   Planet (~80 GB, 1-3 days on adequate hardware — the default):
+  #     see NOMINATIM.md for the hardware baseline.
+  nominatim:
+    image: mediagis/nominatim:4.5
+    container_name: gratis-gis-nominatim
+    restart: unless-stopped
+    environment:
+      PBF_URL: ${NOMINATIM_PBF_URL:-https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf}
+      REPLICATION_URL: ${NOMINATIM_REPLICATION_URL:-https://planet.openstreetmap.org/replication/minute/}
+      # Wikipedia ranking data significantly improves planet-level
+      # result quality and costs ~20 GB to import. Off for small
+      # extracts; flip to true in your .env for planet deployments.
+      IMPORT_WIKIPEDIA: ${NOMINATIM_IMPORT_WIKIPEDIA:-true}
+      # Freeze drops indexes and columns not needed for query-time so
+      # disk footprint shrinks. Safe for a geocoder-only deployment;
+      # turn off if you want to keep the raw OSM tables around.
+      FREEZE: ${NOMINATIM_FREEZE:-true}
+      NOMINATIM_PASSWORD: devpassword
+      THREADS: ${NOMINATIM_THREADS:-8}
+    ports:
+      - "8081:8080"
+    volumes:
+      - nominatim-data:/var/lib/postgresql/16/main
+      - nominatim-flatnode:/nominatim/flatnode
+    # shm backs Postgres's parallel work. The default 64 MB is nowhere
+    # near enough for a planet import — Postgres will OOM partway
+    # through. 16 GB is a safe floor; 32 GB lets more of the import
+    # run in parallel and finishes faster. Dial down for small
+    # extracts via NOMINATIM_SHM_SIZE.
+    shm_size: ${NOMINATIM_SHM_SIZE:-16gb}
+
 volumes:
   pgdata:
   miniodata:
+  nominatim-data:
+  nominatim-flatnode:

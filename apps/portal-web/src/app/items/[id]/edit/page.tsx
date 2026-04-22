@@ -52,6 +52,7 @@ export default async function EditItemPage({ params }: Props) {
           description: item.description,
           tags: item.tags,
           access: item.access,
+          thumbnailUrl: item.thumbnailUrl,
         }}
       />
     </div>

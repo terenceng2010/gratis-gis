@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Users, Lock, Building2, Globe2 } from 'lucide-react';
+import { ArrowLeft, Users, Lock, Building2, Globe2, Pencil } from 'lucide-react';
 import type { Group, GroupMember, User } from '@gratis-gis/shared-types';
+import { EntityBadge } from '@gratis-gis/ui';
 import { apiFetch } from '@/lib/api';
 import { MembersPanel } from './members-panel';
+import { DeleteGroupButton } from './delete-button';
 
 interface Props {
   params: { id: string };
@@ -43,20 +45,47 @@ export default async function GroupDetailPage({ params }: Props) {
         Back to groups
       </Link>
 
-      <header className="mb-8">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted">
-            {accessIcon[group.access]}
-            {group.access}
-          </span>
+      <header className="mb-8 flex items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-1 items-start gap-4">
+          <EntityBadge
+            label={group.title}
+            seed={group.id}
+            imageUrl={group.thumbnailUrl}
+            size="xl"
+            rounded="md"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted">
+                {accessIcon[group.access]}
+                {group.access}
+              </span>
+            </div>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+              {group.title}
+            </h1>
+            {group.description ? (
+              <p className="mt-2 max-w-3xl text-sm text-muted">
+                {group.description}
+              </p>
+            ) : null}
+            <div className="mt-3 text-xs text-muted">
+              Owner: {group.ownerId === me.id ? 'you' : group.ownerId.slice(0, 8)}
+            </div>
+          </div>
         </div>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">{group.title}</h1>
-        {group.description ? (
-          <p className="mt-2 max-w-3xl text-sm text-muted">{group.description}</p>
+        {canManage ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href={`/groups/${group.id}/edit`}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 shadow-card hover:bg-surface-2"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit
+            </Link>
+            <DeleteGroupButton groupId={group.id} groupTitle={group.title} />
+          </div>
         ) : null}
-        <div className="mt-3 text-xs text-muted">
-          Owner: {group.ownerId === me.id ? 'you' : group.ownerId.slice(0, 8)}
-        </div>
       </header>
 
       <section className="mb-8">

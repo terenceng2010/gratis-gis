@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
@@ -17,6 +17,21 @@ class CreateGroupDto {
   access?: 'private' | 'org' | 'public';
 }
 
+class UpdateGroupDto {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(120)
+  title?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  description?: string;
+
+  @IsOptional() @IsEnum(['private', 'org', 'public'])
+  access?: 'private' | 'org' | 'public';
+
+  // Null clears a previously-set thumbnail.
+  @IsOptional() @IsString() @MaxLength(2048)
+  thumbnailUrl?: string | null;
+}
+
 class AddMemberDto {
   @IsString() userId!: string;
   @IsOptional() @IsEnum(['member', 'admin']) role?: 'member' | 'admin';
@@ -33,6 +48,13 @@ export class GroupsController {
     return this.groups.listVisible(user);
   }
 
+  // NOTE: /groups/trash must be declared before /groups/:id so Nest's
+  // route matcher doesn't treat "trash" as an id parameter.
+  @Get('trash')
+  listTrash(@CurrentUser() user: AuthUser) {
+    return this.groups.listTrash(user);
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.groups.get(user, id);
@@ -46,6 +68,30 @@ export class GroupsController {
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateGroupDto) {
     return this.groups.create(user, dto);
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateGroupDto,
+  ) {
+    return this.groups.update(user, id, dto);
+  }
+
+  @Delete(':id')
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.groups.remove(user, id);
+  }
+
+  @Post(':id/restore')
+  restore(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.groups.restore(user, id);
+  }
+
+  @Delete(':id/purge')
+  purge(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.groups.purge(user, id);
   }
 
   @Post(':id/members')

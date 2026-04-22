@@ -19,5 +19,7 @@ export const config = {
     '/items/:path*',
     '/groups/:path*',
     '/reports/:path*',
+    '/recently-deleted/:path*',
+    '/profile/:path*',
   ],
 };

@@ -11,12 +11,13 @@ you don't have to install Postgres, Keycloak, etc. on your host.
 | Keycloak | 8080 (admin) | `admin` / `admin` |
 | MinIO | 9000 (S3), 9001 (console) | `gratisgis` / `devpassword` |
 | pg\_tileserv | 7800 | - |
+| Nominatim (geocoder) | 8081 | see [NOMINATIM.md](./NOMINATIM.md) |
 
 Keycloak is pre-seeded with:
 
 - Realm: `gratis-gis`
 - Clients: `portal-web`, `portal-api`, `field-app`
-- Users: `alice` (publisher) and `bob` (admin) in org `acme`, password `devpassword`
+- Users: `mateo` (publisher) and `bob` (admin) in org `acme`, password `devpassword`
 
 ## Usage
 

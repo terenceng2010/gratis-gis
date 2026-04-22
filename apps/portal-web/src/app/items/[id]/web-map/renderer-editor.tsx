@@ -1,0 +1,468 @@
+'use client';
+
+import { BarChart3, Plus, Shuffle, Trash2 } from 'lucide-react';
+import type {
+  WebMapLayerRenderer,
+  WebMapUniqueValueCategory,
+} from '@gratis-gis/shared-types';
+import {
+  CLASS_BREAK_RAMPS,
+  DEFAULT_CLASS_BREAK_RAMP,
+  UNIQUE_VALUE_PALETTE,
+  sampleRamp,
+} from '@gratis-gis/shared-types';
+import type { LayerMetadata } from './layer-metadata';
+
+interface Props {
+  value: WebMapLayerRenderer;
+  metadata: LayerMetadata;
+  onChange: (next: WebMapLayerRenderer) => void;
+}
+
+/**
+ * Picker + editor for the layer's rendering strategy.
+ *
+ * Simple vs. unique-values is a radio; when unique-values is active the
+ * editor shows a field dropdown (populated from discovered metadata)
+ * and a color-per-category list. An "Auto-populate" button seeds the
+ * categories from the metadata's distinct values with palette colors.
+ *
+ * Keeping this focused: no class-breaks yet. The UI makes the missing
+ * strategy obvious so the user knows what's coming.
+ */
+export function RendererEditor({ value, metadata, onChange }: Props) {
+  const isUnique = value.kind === 'unique-values';
+
+  const isBreaks = value.kind === 'class-breaks';
+
+  function setSimple() {
+    onChange({ kind: 'simple' });
+  }
+  function setUnique(field?: string) {
+    onChange({
+      kind: 'unique-values',
+      field: field ?? (isUnique ? value.field : ''),
+      categories: isUnique ? value.categories : [],
+    });
+  }
+  function setBreaks(field?: string) {
+    // When switching in, pre-seed with a neutral 3-class ramp so the
+    // user sees something immediately; they can replace stops to match
+    // their data distribution.
+    const colors = sampleRamp(CLASS_BREAK_RAMPS[DEFAULT_CLASS_BREAK_RAMP]!, 4);
+    onChange({
+      kind: 'class-breaks',
+      field: field ?? (isBreaks ? value.field : ''),
+      stops: isBreaks && value.stops.length ? value.stops : [33, 66, 100],
+      colors: isBreaks && value.colors.length === 4 ? value.colors : colors,
+    });
+  }
+
+  function autoPopulate(field: string) {
+    const values = metadata.valuesByField[field] ?? [];
+    const categories: WebMapUniqueValueCategory[] = values.map((v, i) => ({
+      value: v,
+      color: UNIQUE_VALUE_PALETTE[i % UNIQUE_VALUE_PALETTE.length]!,
+    }));
+    onChange({ kind: 'unique-values', field, categories });
+  }
+
+  function patchCategory(idx: number, patch: Partial<WebMapUniqueValueCategory>) {
+    if (!isUnique) return;
+    const next = value.categories.map((c, i) => (i === idx ? { ...c, ...patch } : c));
+    onChange({ ...value, categories: next });
+  }
+  function addCategory() {
+    if (!isUnique) return;
+    onChange({
+      ...value,
+      categories: [
+        ...value.categories,
+        {
+          value: '',
+          color:
+            UNIQUE_VALUE_PALETTE[value.categories.length % UNIQUE_VALUE_PALETTE.length]!,
+        },
+      ],
+    });
+  }
+  function removeCategory(idx: number) {
+    if (!isUnique) return;
+    onChange({ ...value, categories: value.categories.filter((_, i) => i !== idx) });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <ModeBtn
+          active={value.kind === 'simple'}
+          onClick={setSimple}
+          label="Single"
+        />
+        <ModeBtn
+          active={isUnique}
+          onClick={() => setUnique()}
+          label="By category"
+          Icon={Shuffle}
+        />
+        <ModeBtn
+          active={isBreaks}
+          onClick={() => setBreaks()}
+          label="By range"
+          Icon={BarChart3}
+        />
+      </div>
+
+      {isBreaks ? (
+        <ClassBreaksEditor value={value} metadata={metadata} onChange={onChange} />
+      ) : null}
+
+      {isUnique ? (
+        <div className="space-y-3 rounded-md border border-border bg-surface-1 p-3">
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wide text-muted">
+              Attribute
+            </label>
+            {metadata.fields.length > 0 ? (
+              <div className="flex gap-2">
+                <select
+                  value={value.field}
+                  onChange={(e) => setUnique(e.target.value)}
+                  className="h-8 min-w-0 flex-1 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+                >
+                  <option value="">Pick a field...</option>
+                  {metadata.fields.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => value.field && autoPopulate(value.field)}
+                  disabled={!value.field}
+                  className="h-8 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                >
+                  Auto fill
+                </button>
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={value.field}
+                onChange={(e) => setUnique(e.target.value)}
+                placeholder="field name"
+                className="h-8 w-full rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+              />
+            )}
+            {metadata.loading ? (
+              <p className="mt-1 text-[11px] text-muted">
+                Loading field options...
+              </p>
+            ) : metadata.error ? (
+              <p className="mt-1 text-[11px] text-warn">{metadata.error}</p>
+            ) : null}
+          </div>
+
+          {value.field ? (
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wide text-muted">
+                  Categories
+                </span>
+                {value.field &&
+                (metadata.valuesByField[value.field]?.length ?? 0) >= 64 ? (
+                  <span className="text-[10px] text-warn">
+                    &gt; 64 unique values; showing first 64
+                  </span>
+                ) : null}
+              </div>
+              {value.categories.length === 0 ? (
+                <div className="rounded border border-dashed border-border px-2 py-3 text-center text-[11px] text-muted">
+                  No categories yet. Click <strong>Auto fill</strong> above or
+                  add rows manually.
+                </div>
+              ) : (
+                <ul className="space-y-1">
+                  {value.categories.map((c, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={c.color}
+                        onChange={(e) =>
+                          patchCategory(i, { color: e.target.value })
+                        }
+                        className="h-7 w-8 shrink-0 cursor-pointer rounded border border-border bg-surface-1 p-0.5"
+                      />
+                      <input
+                        type="text"
+                        value={c.value}
+                        onChange={(e) =>
+                          patchCategory(i, { value: e.target.value })
+                        }
+                        placeholder="value"
+                        className="h-7 min-w-0 flex-1 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeCategory(i)}
+                        aria-label="Remove category"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-danger"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                type="button"
+                onClick={addCategory}
+                className="mt-2 inline-flex h-7 items-center gap-1 rounded text-[11px] text-accent hover:underline"
+              >
+                <Plus className="h-3 w-3" />
+                Add category
+              </button>
+              <p className="mt-1 text-[11px] text-muted">
+                Features whose value isn&apos;t listed fall back to the single
+                color from the style editor below.
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ClassBreaksEditor({
+  value,
+  metadata,
+  onChange,
+}: {
+  value: Extract<WebMapLayerRenderer, { kind: 'class-breaks' }>;
+  metadata: LayerMetadata;
+  onChange: (next: WebMapLayerRenderer) => void;
+}) {
+  const numericFields = metadata.fields.filter((f) => {
+    const vals = metadata.valuesByField[f] ?? [];
+    if (vals.length === 0) return true; // can't tell; offer it
+    return vals.every((v) => v === '' || !Number.isNaN(Number(v)));
+  });
+
+  function resample(stopsCount: number, rampName: string) {
+    const colors = sampleRamp(CLASS_BREAK_RAMPS[rampName]!, stopsCount + 1);
+    onChange({ ...value, colors });
+  }
+
+  function patch(p: Partial<Extract<WebMapLayerRenderer, { kind: 'class-breaks' }>>) {
+    onChange({ ...value, ...p });
+  }
+
+  function setStopCount(n: number) {
+    if (n < 1 || n > 7) return;
+    const nextStops =
+      n > value.stops.length
+        ? [...value.stops, ...Array(n - value.stops.length).fill(value.stops.at(-1) ?? 1)]
+        : value.stops.slice(0, n);
+    const colors = sampleRamp(
+      CLASS_BREAK_RAMPS[DEFAULT_CLASS_BREAK_RAMP]!,
+      n + 1,
+    );
+    onChange({ ...value, stops: nextStops, colors });
+  }
+
+  function updateStop(idx: number, val: string) {
+    const n = Number(val);
+    if (Number.isNaN(n)) return;
+    const next = [...value.stops];
+    next[idx] = n;
+    patch({ stops: next });
+  }
+
+  function updateColor(idx: number, color: string) {
+    const next = [...value.colors];
+    next[idx] = color;
+    patch({ colors: next });
+  }
+
+  const currentRamp =
+    Object.entries(CLASS_BREAK_RAMPS).find(
+      ([, colors]) =>
+        JSON.stringify(sampleRamp(colors, value.colors.length)) ===
+        JSON.stringify(value.colors),
+    )?.[0] ?? 'custom';
+
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-surface-1 p-3">
+      <div>
+        <label className="mb-1 block text-[10px] uppercase tracking-wide text-muted">
+          Numeric field
+        </label>
+        {numericFields.length > 0 ? (
+          <select
+            value={value.field}
+            onChange={(e) => patch({ field: e.target.value })}
+            className="h-8 w-full rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+          >
+            <option value="">Pick a field...</option>
+            {numericFields.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={value.field}
+            onChange={(e) => patch({ field: e.target.value })}
+            placeholder="field name"
+            className="h-8 w-full rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-[10px] uppercase tracking-wide text-muted">
+            Classes
+          </label>
+          <select
+            value={value.stops.length}
+            onChange={(e) => setStopCount(Number(e.target.value))}
+            className="h-8 w-full rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+          >
+            {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+              <option key={n} value={n}>
+                {n + 1}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] uppercase tracking-wide text-muted">
+            Color ramp
+          </label>
+          <select
+            value={currentRamp === 'custom' ? '' : currentRamp}
+            onChange={(e) =>
+              e.target.value && resample(value.stops.length, e.target.value)
+            }
+            className="h-8 w-full rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+          >
+            {currentRamp === 'custom' ? <option value="">custom</option> : null}
+            {Object.keys(CLASS_BREAK_RAMPS).map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-wide text-muted">
+            Breaks
+          </span>
+          <span className="text-[10px] text-muted">
+            {value.colors.length} colors
+          </span>
+        </div>
+        <ul className="space-y-1">
+          <ClassRow
+            label={value.stops[0] !== undefined ? `< ${value.stops[0]}` : 'all'}
+            color={value.colors[0] ?? '#000'}
+            onColor={(c) => updateColor(0, c)}
+            stop={null}
+            onStop={() => {}}
+          />
+          {value.stops.map((stop, i) => (
+            <ClassRow
+              key={i}
+              label={
+                i < value.stops.length - 1
+                  ? `${stop} to < ${value.stops[i + 1]}`
+                  : `≥ ${stop}`
+              }
+              color={value.colors[i + 1] ?? '#000'}
+              onColor={(c) => updateColor(i + 1, c)}
+              stop={stop}
+              onStop={(v) => updateStop(i, v)}
+            />
+          ))}
+        </ul>
+        <p className="mt-2 text-[11px] text-muted">
+          Features whose value isn&apos;t numeric fall back to the single
+          color below.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ClassRow({
+  label,
+  color,
+  onColor,
+  stop,
+  onStop,
+}: {
+  label: string;
+  color: string;
+  onColor: (c: string) => void;
+  stop: number | null;
+  onStop: (v: string) => void;
+}) {
+  return (
+    <li className="flex items-center gap-2">
+      <input
+        type="color"
+        value={color}
+        onChange={(e) => onColor(e.target.value)}
+        className="h-7 w-8 shrink-0 cursor-pointer rounded border border-border bg-surface-1 p-0.5"
+      />
+      <span className="flex-1 truncate text-[11px] text-muted">{label}</span>
+      {stop !== null ? (
+        <input
+          type="number"
+          value={stop}
+          onChange={(e) => onStop(e.target.value)}
+          className="h-7 w-20 shrink-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+        />
+      ) : (
+        <span className="h-7 w-20" />
+      )}
+    </li>
+  );
+}
+
+function ModeBtn({
+  active,
+  onClick,
+  label,
+  Icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  Icon?: typeof Shuffle;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 rounded-md border p-2 text-xs font-medium transition-colors ${
+        active
+          ? 'border-accent bg-accent/5 text-ink-0 ring-2 ring-accent/30'
+          : 'border-border bg-surface-1 text-muted hover:bg-surface-2'
+      }`}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        {Icon ? <Icon className="h-3.5 w-3.5" /> : null}
+        {label}
+      </span>
+    </button>
+  );
+}

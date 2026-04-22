@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2,
@@ -8,7 +8,6 @@ import {
   Globe2,
   Loader2,
   Lock,
-  Plus,
   Trash2,
   Users as UsersIcon,
   User as UserIcon,
@@ -19,6 +18,10 @@ import type {
   ItemShare,
   SharePermission,
 } from '@gratis-gis/shared-types';
+import {
+  PrincipalPicker,
+  type PrincipalOption,
+} from '@/components/principal-picker';
 
 interface Props {
   itemId: string;
@@ -89,37 +92,26 @@ export function SharingPanel({
   const [rowState, setRowState] = useState<Record<string, RowSaveState>>({});
 
   const [mode, setMode] = useState<'group' | 'user'>('group');
-  const [userId, setUserId] = useState<string>('');
   const [permission, setPermission] = useState<SharePermission>('view');
 
   const keyOf = (s: Pick<ItemShare, 'principalType' | 'principalId'>) =>
     `${s.principalType}:${s.principalId}`;
 
-  // Hide groups that already have a share — picking one of those is a no-op
-  // anyway (the existing row's inline permission dropdown handles edits).
-  const sharedGroupIds = new Set(
-    shares
-      .filter((s) => s.principalType === 'group')
-      .map((s) => s.principalId),
+  // Quick lookup sets so the picker can grey out already-shared principals.
+  const sharedGroupIds = useMemo(
+    () =>
+      new Set(
+        shares.filter((s) => s.principalType === 'group').map((s) => s.principalId),
+      ),
+    [shares],
   );
-  const availableGroups = groups.filter((g) => !sharedGroupIds.has(g.id));
-  const [groupId, setGroupId] = useState<string>(availableGroups[0]?.id ?? '');
-
-  // If the pool of available groups changes (because a share was just added
-  // or removed), keep the selected value valid.
-  if (mode === 'group' && groupId && !availableGroups.some((g) => g.id === groupId)) {
-    // Defer state update out of render. React will re-render with new value.
-    queueMicrotask(() => setGroupId(availableGroups[0]?.id ?? ''));
-  }
-
-  // Same-user duplicate-detection for the user-mode input; soft hint, the
-  // backend is upsert so it's not a hard error if they go ahead.
-  const userAlreadyShared =
-    mode === 'user' &&
-    userId.length > 0 &&
-    shares.some(
-      (s) => s.principalType === 'user' && s.principalId === userId,
-    );
+  const sharedUserIds = useMemo(
+    () =>
+      new Set(
+        shares.filter((s) => s.principalType === 'user').map((s) => s.principalId),
+      ),
+    [shares],
+  );
 
   async function updateSharePermission(
     share: ItemShare,
@@ -164,21 +156,15 @@ export function SharingPanel({
     startTransition(() => router.refresh());
   }
 
-  async function addShare() {
+  async function addShare(
+    principalType: 'group' | 'user',
+    principalId: string,
+  ) {
     setError(null);
-    const body = {
-      principalType: mode,
-      principalId: mode === 'group' ? groupId : userId,
-      permission,
-    };
-    if (!body.principalId) {
-      setError(`Pick a ${mode} first.`);
-      return;
-    }
     const res = await fetch(`/api/portal/items/${itemId}/share`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ principalType, principalId, permission }),
     });
     if (!res.ok) {
       setError(`Share failed: ${res.status} ${await res.text()}`);
@@ -195,9 +181,59 @@ export function SharingPanel({
       );
       return [...filtered, added];
     });
-    setUserId('');
     startTransition(() => router.refresh());
   }
+
+  // Group search: purely client-side against the already-loaded list.
+  const searchGroups = useCallback(
+    (q: string): PrincipalOption[] => {
+      const needle = q.trim().toLowerCase();
+      const base = needle
+        ? groups.filter((g) => g.title.toLowerCase().includes(needle))
+        : groups;
+      return base.map((g) => {
+        const already = sharedGroupIds.has(g.id);
+        const opt: PrincipalOption = { id: g.id, title: g.title };
+        if (already) {
+          opt.disabled = true;
+          opt.disabledReason = 'already shared';
+        }
+        return opt;
+      });
+    },
+    [groups, sharedGroupIds],
+  );
+
+  // User search: hits the org-scoped /api/users endpoint. Debouncing is
+  // handled inside the picker.
+  const searchUsers = useCallback(
+    async (q: string): Promise<PrincipalOption[]> => {
+      const url = `/api/portal/users${q ? `?q=${encodeURIComponent(q)}` : ''}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const rows: Array<{
+        id: string;
+        username: string;
+        fullName: string;
+        avatarUrl: string | null;
+      }> = await res.json();
+      return rows.map((u) => {
+        const already = sharedUserIds.has(u.id);
+        const opt: PrincipalOption = {
+          id: u.id,
+          title: u.fullName || u.username,
+          subtitle: u.username,
+          imageUrl: u.avatarUrl,
+        };
+        if (already) {
+          opt.disabled = true;
+          opt.disabledReason = 'already shared';
+        }
+        return opt;
+      });
+    },
+    [sharedUserIds],
+  );
 
   async function removeShare(share: ItemShare) {
     setError(null);
@@ -389,66 +425,55 @@ export function SharingPanel({
       )}
 
       <div className="border-t border-border p-4">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-start gap-2">
           <div className="inline-flex rounded-md border border-border bg-surface-2">
             <button
               type="button"
               onClick={() => setMode('group')}
-              className={`px-3 py-1.5 text-sm ${mode === 'group' ? 'bg-accent text-accent-foreground rounded-md' : 'text-muted'}`}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm ${mode === 'group' ? 'bg-accent text-accent-foreground rounded-md' : 'text-muted'}`}
             >
+              <UsersIcon className="h-3.5 w-3.5" />
               Group
             </button>
             <button
               type="button"
               onClick={() => setMode('user')}
-              className={`px-3 py-1.5 text-sm ${mode === 'user' ? 'bg-accent text-accent-foreground rounded-md' : 'text-muted'}`}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm ${mode === 'user' ? 'bg-accent text-accent-foreground rounded-md' : 'text-muted'}`}
             >
+              <UserIcon className="h-3.5 w-3.5" />
               User
             </button>
           </div>
 
-          {mode === 'group' ? (
-            <select
-              value={groupId}
-              onChange={(e) => setGroupId(e.target.value)}
-              disabled={availableGroups.length === 0}
-              className="h-9 min-w-[12rem] rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50"
-            >
-              {availableGroups.length === 0 ? (
-                <option value="">
-                  {groups.length === 0
-                    ? '(no groups yet)'
-                    : '(all groups already shared)'}
-                </option>
-              ) : (
-                availableGroups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.title}
-                  </option>
-                ))
-              )}
-            </select>
-          ) : (
-            <div className="flex flex-col">
-              <input
-                type="text"
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                placeholder="user id (uuid)"
-                className={`h-9 min-w-[18rem] rounded-md border bg-surface-1 px-3 font-mono text-xs focus:outline-none focus:ring-2 ${
-                  userAlreadyShared
-                    ? 'border-warn focus:border-warn focus:ring-warn/30'
-                    : 'border-border focus:border-accent focus:ring-accent/30'
-                }`}
+          {/*
+            The picker submits directly on selection so there's no separate
+            "Add share" button. Principals already on the item show up
+            greyed-out in the list so the user knows why the row doesn't
+            pop in afterwards. Permission can be adjusted before picking.
+          */}
+          <div className="min-w-[18rem] flex-1">
+            {mode === 'group' ? (
+              <PrincipalPicker
+                key="group-picker"
+                placeholder="Search groups..."
+                search={searchGroups}
+                onPick={(opt) => addShare('group', opt.id)}
+                emptyInitialMessage={
+                  groups.length === 0
+                    ? 'No groups yet. Create one from /groups.'
+                    : 'Start typing to filter groups.'
+                }
               />
-              {userAlreadyShared ? (
-                <span className="mt-1 text-xs text-warn">
-                  This user already has a share. Submitting will update their
-                  permission.
-                </span>
-              ) : null}
-            </div>
-          )}
+            ) : (
+              <PrincipalPicker
+                key="user-picker"
+                placeholder="Search people in your org..."
+                search={searchUsers}
+                onPick={(opt) => addShare('user', opt.id)}
+                emptyInitialMessage="Start typing a name or username."
+              />
+            )}
+          </div>
 
           <select
             value={permission}
@@ -459,20 +484,6 @@ export function SharingPanel({
             <option value="edit">can edit</option>
             <option value="admin">can admin</option>
           </select>
-
-          <button
-            type="button"
-            onClick={addShare}
-            disabled={
-              pending ||
-              (mode === 'group' && availableGroups.length === 0) ||
-              (mode === 'user' && userId.length === 0)
-            }
-            className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
-          >
-            <Plus className="h-4 w-4" />
-            Add share
-          </button>
         </div>
         {error ? (
           <p className="mt-3 text-sm text-danger" role="alert">

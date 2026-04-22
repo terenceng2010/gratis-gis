@@ -13,3 +13,5 @@ export * from './org';
 export * from './group';
 export * from './user';
 export * from './item';
+export * from './web-map';
+export * from './feature-service';

@@ -12,6 +12,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { Item, ItemAccess, ItemType } from '@gratis-gis/shared-types';
+import {
+  DEFAULT_FEATURE_SERVICE,
+  DEFAULT_WEB_MAP,
+} from '@gratis-gis/shared-types';
+import { ImageUploader } from '@/components/image-uploader';
 
 type Mode =
   | { kind: 'create' }
@@ -20,8 +25,10 @@ type Mode =
 interface Props {
   mode: Mode;
   initialValues?: Partial<
-    Pick<Item, 'type' | 'title' | 'description' | 'tags' | 'access'>
+    Pick<Item, 'type' | 'title' | 'description' | 'tags' | 'access' | 'thumbnailUrl'>
   >;
+  /** Item id in edit mode, used as a stable seed for the fallback badge. */
+  itemId?: string;
 }
 
 const ITEM_TYPE_OPTIONS: Array<{ value: ItemType; label: string; desc: string }> = [
@@ -98,7 +105,7 @@ const accessOptions: Array<{
  * type-specific editors (map authoring, form designer, etc.) ship with
  * their respective pillars. On create, the payload defaults to {}.
  */
-export function ItemForm({ mode, initialValues }: Props) {
+export function ItemForm({ mode, initialValues, itemId }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [submitting, setSubmitting] = useState(false);
@@ -117,6 +124,11 @@ export function ItemForm({ mode, initialValues }: Props) {
   );
   const [access, setAccess] = useState<ItemAccess>(
     (initialValues?.access as ItemAccess) ?? 'private',
+  );
+  // Thumbnail state lives in the form so the uploader can update it
+  // between renders and we ship the current URL with the submit.
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(
+    initialValues?.thumbnailUrl ?? null,
   );
 
   function parseTags(raw: string): string[] {
@@ -139,11 +151,19 @@ export function ItemForm({ mode, initialValues }: Props) {
       description: description.trim(),
       tags: parseTags(tagsText),
       access,
+      thumbnailUrl,
     };
     if (mode.kind === 'create') {
       payload.type = type;
-      // Empty data payload for now; type-specific editors will populate it.
-      payload.data = {};
+      // Seed type-specific defaults so the new item renders something
+      // meaningful immediately. Other types can fall through to {} and
+      // get populated by their dedicated editor on the detail page.
+      payload.data =
+        type === 'web_map'
+          ? DEFAULT_WEB_MAP
+          : type === 'feature_service'
+            ? DEFAULT_FEATURE_SERVICE
+            : {};
     }
 
     const url =
@@ -167,8 +187,12 @@ export function ItemForm({ mode, initialValues }: Props) {
     setTimeout(() => setSaved(false), 1500);
 
     if (mode.kind === 'create') {
-      // Navigate to the new item's detail page.
-      startTransition(() => router.push(`/items/${saved.id}`));
+      // Navigate to the new item's detail page. For types whose first
+      // job on arrival is to bring data in (feature_service), jump
+      // directly to the ingest anchor so the upload panel is the very
+      // first thing the user sees.
+      const anchor = type === 'feature_service' ? '#add-data' : '';
+      startTransition(() => router.push(`/items/${saved.id}${anchor}`));
     } else {
       // Stay on the edit page but refresh the server data so any downstream
       // consumers see the update.
@@ -209,6 +233,25 @@ export function ItemForm({ mode, initialValues }: Props) {
           </div>
         </section>
       ) : null}
+
+      <section>
+        <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
+          Thumbnail
+        </label>
+        <ImageUploader
+          kind="item-thumb"
+          value={thumbnailUrl}
+          onChange={setThumbnailUrl}
+          seed={
+            mode.kind === 'edit'
+              ? mode.itemId
+              : (itemId ?? title) || 'new-item'
+          }
+          label={title || 'New item'}
+          size="xl"
+          rounded="md"
+        />
+      </section>
 
       <section className="space-y-4">
         <div>

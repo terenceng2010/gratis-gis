@@ -9,7 +9,7 @@
     "emitDecoratorMetadata": true,
     "target": "ES2022",
     "lib": ["ES2022"],
-    "types": ["node", "jest"],
+    "types": ["node", "jest", "multer"],
     // Emit even if the type-checker produces warnings. nest-cli sets this
     // to true by default, which silently skips producing dist/ files when
     // there are any errors at all. We handle type errors separately via

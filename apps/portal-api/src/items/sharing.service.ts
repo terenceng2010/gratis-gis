@@ -43,8 +43,16 @@ export class SharingService {
   /**
    * Build a Prisma `where` clause selecting only items the user can see.
    * Used for list queries so we don't fetch + filter in memory.
+   *
+   * Trashed items (deletedAt != null) are excluded by default. Use
+   * `includeTrashed` for the trash view specifically; the caller is
+   * responsible for adding an explicit `deletedAt: { not: null }` filter
+   * when it wants only the trash.
    */
-  visibleWhere(user: AuthUser): Prisma.ItemWhereInput {
+  visibleWhere(
+    user: AuthUser,
+    opts: { includeTrashed?: boolean } = {},
+  ): Prisma.ItemWhereInput {
     const principalConditions: Prisma.ItemShareWhereInput[] = [
       { principalType: 'user', principalId: user.id },
     ];
@@ -54,7 +62,7 @@ export class SharingService {
         principalId: { in: user.groupIds },
       });
     }
-    return {
+    const access: Prisma.ItemWhereInput = {
       OR: [
         { ownerId: user.id },
         { access: 'public' },
@@ -62,5 +70,7 @@ export class SharingService {
         { shares: { some: { OR: principalConditions } } },
       ],
     };
+    if (opts.includeTrashed) return access;
+    return { AND: [access, { deletedAt: null }] };
   }
 }
