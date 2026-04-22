@@ -290,7 +290,7 @@ export function AccessMatrix({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay"
+        className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -432,25 +432,6 @@ export function AccessMatrix({
                                 )
                               }
                             />
-                            {isOpen ? (
-                              <AccessPopover
-                                entry={entry}
-                                itemId={itemId}
-                                hasItemAccess={hasItemAccess}
-                                granting={granting}
-                                onChange={(patch) =>
-                                  writeEntry(layer, p, patch)
-                                }
-                                onClose={() => setActivePopover(null)}
-                                {...(itemId && !hasItemAccess
-                                  ? {
-                                      onGrant: () => {
-                                        void doGrant(itemId, p);
-                                      },
-                                    }
-                                  : {})}
-                              />
-                            ) : null}
                           </td>
                         );
                       })}
@@ -476,6 +457,53 @@ export function AccessMatrix({
           </button>
         </div>
       </div>
+
+      {/* Per-cell detail dialog. Rendered as a sibling of the main
+          matrix (both sit on the same fixed backdrop) so it's never
+          clipped by the matrix's scroll area — the bug where users
+          had to scroll down to notice the popover. Stop-propagation
+          on the inner card lets a backdrop click close just this
+          dialog without collapsing the whole matrix. */}
+      {activePopover
+        ? (() => {
+            const aLayer = layers.find(
+              (l) => l.id === activePopover.layerId,
+            );
+            const aPrincipal = principals.find(
+              (pp) => principalKey(pp) === activePopover.principalKey,
+            );
+            if (!aLayer || !aPrincipal) return null;
+            const aItemId = layerItemIds[aLayer.id] ?? null;
+            const aEntry = entryFor(aLayer, aPrincipal);
+            const aHasItem = aItemId
+              ? principalHasItemAccess(aItemId, aPrincipal)
+              : true;
+            const aGranting =
+              grantingKey === (aItemId ? `${aItemId}:${activePopover.principalKey}` : '');
+            return (
+              <AccessDetailDialog
+                layerTitle={aLayer.title}
+                principalName={aPrincipal.name}
+                principalType={aPrincipal.type}
+                entry={aEntry}
+                itemId={aItemId}
+                hasItemAccess={aHasItem}
+                granting={aGranting}
+                onChange={(patch) =>
+                  writeEntry(aLayer, aPrincipal, patch)
+                }
+                onClose={() => setActivePopover(null)}
+                {...(aItemId && !aHasItem
+                  ? {
+                      onGrant: () => {
+                        void doGrant(aItemId, aPrincipal);
+                      },
+                    }
+                  : {})}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }
@@ -544,11 +572,17 @@ function AccessBadge({
 }
 
 /**
- * Popover exposing the raw View/Query/Edit toggles + item-level
- * access status with a Grant button when the principal has no
- * access. Closes on outside click or Esc.
+ * Per-cell detail dialog — the View/Query/Edit toggles plus the
+ * item-level access status and Grant button. Rendered as a proper
+ * centered modal (not an absolutely-positioned popover below the
+ * cell) so nothing inside the matrix's scroll region can clip it.
+ * Backdrop click and Esc both close; clicking the card itself
+ * doesn't propagate so the matrix behind stays open.
  */
-function AccessPopover({
+function AccessDetailDialog({
+  layerTitle,
+  principalName,
+  principalType,
   entry,
   itemId,
   hasItemAccess,
@@ -557,6 +591,9 @@ function AccessPopover({
   onGrant,
   onClose,
 }: {
+  layerTitle: string;
+  principalName: string;
+  principalType: 'user' | 'group';
   entry: WebMapLayerAccessEntry;
   itemId: string | null;
   hasItemAccess: boolean;
@@ -565,86 +602,119 @@ function AccessPopover({
   onGrant?: () => void | Promise<void>;
   onClose: () => void;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (!rootRef.current) return;
-      if (!rootRef.current.contains(e.target as Node)) onClose();
-    }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
     }
-    document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-    };
+    return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
   return (
     <div
-      ref={rootRef}
-      className="absolute left-1/2 top-full z-20 mt-1 w-56 -translate-x-1/2 rounded-md border border-border bg-surface-1 p-2 text-left shadow-raised"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Access for ${principalName} on ${layerTitle}`}
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
     >
-      {itemId ? (
-        <div
-          className={`mb-1.5 rounded px-1.5 py-1 text-[11px] ${
-            hasItemAccess
-              ? 'bg-success/10 text-success'
-              : 'bg-warn/10 text-warn'
-          }`}
-        >
-          {hasItemAccess ? (
-            <span className="inline-flex items-center gap-1">
-              <Check className="h-3 w-3" /> Has item access
-            </span>
-          ) : (
-            <div className="space-y-1">
-              <div className="inline-flex items-center gap-1">
-                <AlertTriangle className="h-3 w-3" /> No item access
-              </div>
-              {onGrant ? (
-                <button
-                  type="button"
-                  onClick={onGrant}
-                  disabled={granting}
-                  className="inline-flex h-6 items-center gap-1 rounded border border-warn bg-warn/10 px-2 text-[10px] font-medium text-warn hover:bg-warn/20 disabled:opacity-50"
-                >
-                  {granting ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : null}
-                  Grant view on item
-                </button>
-              ) : null}
+      <div
+        className="flex w-full max-w-sm flex-col gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-overlay"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs uppercase tracking-wide text-muted">
+              Layer access
             </div>
-          )}
+            <div className="mt-0.5 truncate text-sm font-semibold text-ink-0">
+              {layerTitle}
+            </div>
+            <div className="text-xs text-muted">
+              {principalType === 'group' ? 'Group' : 'User'} · {principalName}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-surface-2"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-      ) : (
-        <div className="mb-1.5 rounded bg-surface-2 px-1.5 py-1 text-[11px] text-muted">
-          Layer has no backing item — everyone with map access can see it.
+
+        {itemId ? (
+          <div
+            className={`rounded-md px-3 py-2 text-xs ${
+              hasItemAccess
+                ? 'bg-success/10 text-success'
+                : 'bg-warn/10 text-warn'
+            }`}
+          >
+            {hasItemAccess ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Check className="h-3.5 w-3.5" />
+                Has item-level access to the backing item.
+              </span>
+            ) : (
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="inline-flex items-center gap-1.5 font-medium">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    No item-level access
+                  </div>
+                  <div className="mt-0.5 text-[11px] opacity-80">
+                    The matrix flags below won&apos;t take effect until
+                    this principal is shared on the backing item.
+                  </div>
+                </div>
+                {onGrant ? (
+                  <button
+                    type="button"
+                    onClick={onGrant}
+                    disabled={granting}
+                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-warn bg-warn/10 px-2 text-[11px] font-medium text-warn hover:bg-warn/20 disabled:opacity-50"
+                  >
+                    {granting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : null}
+                    Grant view
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md bg-surface-2 px-3 py-2 text-xs text-muted">
+            No backing item — every principal with map access can see
+            this layer.
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <PopoverRow
+            label="View"
+            desc="See the layer on the map"
+            checked={entry.view}
+            onChange={(v) => onChange({ view: v })}
+          />
+          <PopoverRow
+            label="Query"
+            desc="Popups, attribute table, search"
+            checked={entry.query}
+            disabled={!entry.view}
+            onChange={(v) => onChange({ query: v })}
+          />
+          <PopoverRow
+            label="Edit"
+            desc="Modify features (future)"
+            checked={entry.edit}
+            disabled={!entry.view || !entry.query}
+            onChange={(v) => onChange({ edit: v })}
+          />
         </div>
-      )}
-      <PopoverRow
-        label="View"
-        desc="See the layer on the map"
-        checked={entry.view}
-        onChange={(v) => onChange({ view: v })}
-      />
-      <PopoverRow
-        label="Query"
-        desc="Popups, attribute table, search"
-        checked={entry.query}
-        disabled={!entry.view}
-        onChange={(v) => onChange({ query: v })}
-      />
-      <PopoverRow
-        label="Edit"
-        desc="Modify features (future)"
-        checked={entry.edit}
-        disabled={!entry.view || !entry.query}
-        onChange={(v) => onChange({ edit: v })}
-      />
+      </div>
     </div>
   );
 }
