@@ -46,7 +46,11 @@ export function alphaToSdf(
   const n = w * h;
   const INF = w + h;
   const buffer = opts.buffer ?? 0;
-  const cutoff = opts.cutoff ?? Math.min(w, h) / 4;
+  // Matches tiny-sdf's default (1/8 of the texture size). A tighter
+  // cutoff makes the edge smoothstep span fewer pixels, giving a
+  // sharper icon — min(w,h)/4 was too generous and showed up as a
+  // visible halo/haze around tinted icons.
+  const cutoff = opts.cutoff ?? Math.min(w, h) / 8;
 
   // Binary mask from alpha. Anything above 127 is "inside the shape".
   const mask = new Uint8Array(n);
