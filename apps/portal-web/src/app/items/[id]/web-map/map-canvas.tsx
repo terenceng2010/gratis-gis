@@ -77,6 +77,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   const mapRef = useRef<maplibregl.Map | null>(null);
   const hoveredRef = useRef<{ sourceId: string; featureId: string | number } | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  // Mirror of map.layers so async callbacks (basemap swap's
+  // styledata handler, deferred icon loads) see the latest layer
+  // list without re-running their setup effect on every prop update.
+  const layersRef = useRef<typeof map.layers>(map.layers);
+  layersRef.current = map.layers;
 
   useImperativeHandle(
     ref,
@@ -289,18 +294,19 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
   // Basemap swap. Preserves camera + overlays so it feels seamless.
   //
-  // MapLibre's `style.load` event does not reliably fire on subsequent
-  // setStyle() calls; only `styledata` is guaranteed. We listen until
-  // we see a styledata event where the style is actually ready, re-
-  // apply the camera, and bump iconsTick so the main overlay-sync
-  // useEffect re-runs against the fresh style.
-  //
-  // We deliberately do NOT call syncOverlays directly here. Calling
-  // it before icons have (re-)registered leaves symbol layers
-  // referencing images MapLibre hasn't got, which renders invisibly
-  // even though the source and paint props look right — the bug the
-  // "modify any symbology to unstick the map" workaround papered
-  // over. Routing through iconsTick keeps a single overlay-sync path.
+  // Sequence:
+  //   1. Remove every registered icon before setStyle. The image
+  //      cache technically survives setStyle, but the underlying GL
+  //      textures don't, so hasImage returns true for "ghost"
+  //      entries that render invisibly in symbol layers. Explicitly
+  //      clearing forces loadIcons to repaint them cleanly against
+  //      the fresh style's texture atlas.
+  //   2. setStyle(new basemap).
+  //   3. Wait for styledata + isStyleLoaded, then restore camera
+  //      and re-run syncOverlays. Bumping iconsTick in addition to
+  //      the direct sync call means the normal [map.layers,
+  //      iconsTick] useEffect also fires once icons re-register,
+  //      catching any late-arriving images.
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
@@ -312,6 +318,20 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     const z = m.getZoom();
     const b = m.getBearing();
     const p = m.getPitch();
+
+    for (const name of Object.keys(MAP_ICONS)) {
+      try {
+        m.removeImage(iconImageId(name));
+      } catch {
+        /* not registered yet */
+      }
+      try {
+        m.removeImage(iconSdfImageId(name));
+      } catch {
+        /* not registered yet */
+      }
+    }
+
     const style = { ...BASEMAPS[map.basemap].style, metadata: { basemap: map.basemap } };
     m.setStyle(style);
 
@@ -319,6 +339,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       if (!m.isStyleLoaded()) return;
       m.off('styledata', onStyleData);
       m.jumpTo({ center: [c.lng, c.lat], zoom: z, bearing: b, pitch: p });
+      // Direct sync so overlays reappear immediately; iconsTick
+      // bump triggers a second pass once the new icon load batch
+      // resolves so any symbol layers that needed images catch up.
+      syncOverlays(m, layersRef.current, hoveredRef);
       setIconsTick((t) => t + 1);
     };
     m.on('styledata', onStyleData);
