@@ -1,14 +1,10 @@
-fix(web-map): use rasterized alpha directly as SDF source 
+fix(web-map): disable SDF variant so icons always render 
  
-The runtime chamfer-distance transform was producing images that 
-MapLibre either rejected or rendered invisibly - so picking an 
-icon made the feature disappear entirely. Swap to passing the 
-plain rasterized icon straight to addImage with sdf: true; 
-MapLibre treats the alpha channel as a coarse distance field and 
-tinting via icon-color works. Edges are slightly harder than 
-what a proper per-pixel SDF would produce, but the feature is 
-always visible, which is the bigger win. 
+Registering the plain raster with sdf: true made MapLibre render 
+the point invisibly (alpha channel is binary, not a true distance 
+field). Skip SDF registration for now; the canvas already falls 
+back to the plain image whenever the SDF variant is missing, so 
+icons render reliably in their shipped color. 
  
-The sdf.ts helper stays in the tree so a future SDF-backed 
-upgrade (precomputed atlases, tiny-sdf, etc.) has the seam to 
-plug into.
+Tint toggle in the style editor remains so user preference 
+persists, with a note that tinting awaits a proper SDF pipeline.

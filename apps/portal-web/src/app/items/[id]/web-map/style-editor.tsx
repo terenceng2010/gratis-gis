@@ -165,9 +165,10 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
                 ) : null}
               </div>
               <p className="mt-2 text-[11px] text-muted">
-                Built-in icons support tinting via the SDF variant
-                registered at map load. Raster uploads (PNG / JPEG /
-                etc.) render in their shipped colors regardless.
+                Icons currently render in their shipped color. Tint
+                via fill color is wired up but needs a proper SDF
+                pipeline before it lights up; the toggle stays here
+                so your preference persists.
               </p>
             </>
           ) : (

@@ -240,25 +240,15 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
               /* non-fatal: tinted variant or circle fallback still works */
             }
           }
-          // SDF (tintable) variant. We use the plain rasterized icon
-          // but flag it as SDF, so MapLibre treats the image's alpha
-          // channel as a coarse distance field and tints via
-          // `icon-color`. This isn't a true per-pixel SDF so edges
-          // look marginally harder than tiny-sdf output, but it's
-          // bulletproof — any image we can rasterize we can tint.
-          if (!m.hasImage(sdfId)) {
-            try {
-              const svg = renderIconSvgForSdf(name);
-              if (svg) {
-                const sdfImg = await rasterizeSvg(svg, 48);
-                if (!cancelled && !m.hasImage(sdfId)) {
-                  m.addImage(sdfId, sdfImg, { pixelRatio: 2, sdf: true });
-                }
-              }
-            } catch {
-              /* non-fatal: plain variant or circle fallback still works */
-            }
-          }
+          // SDF (tintable) variant is currently disabled: feeding
+          // the plain rasterized icon to addImage with `sdf: true`
+          // makes MapLibre render the point invisibly, and a proper
+          // runtime distance-field pipeline needs dedicated work.
+          // The canvas code below falls back to the plain image
+          // whenever the SDF variant isn't registered, so icons
+          // always render in their shipped color. Tint toggle in
+          // the style editor remains visible but effectively
+          // inactive until this is fixed.
         }),
       );
       if (!cancelled) setIconsTick((t) => t + 1);
@@ -657,17 +647,19 @@ function syncOverlays(
 
     // Point geometries. When the layer's point style picks an icon
     // symbol, try to render a MapLibre symbol layer with the right
-    // image variant (SDF for tinted, plain for as-shipped). When the
-    // image hasn't been registered yet, fall back to a circle so the
-    // feature stays visible while images load or if the icon name
-    // is typo'd.
+    // image variant. SDF tinting needs a properly-encoded distance
+    // field — since our runtime pipeline can't reliably produce one,
+    // we only use the SDF variant when the author has explicitly
+    // opted in AND the SDF image is registered; otherwise we fall
+    // back to the plain raster (icon renders in its shipped color).
+    // If even the plain image isn't registered yet, we fall through
+    // to the circle renderer so the feature stays visible.
     const wantsIcon = s.point.symbol === 'icon' && !!s.point.iconName;
     const tint = s.point.iconTint !== false; // default true
-    const preferredId = wantsIcon
-      ? tint
-        ? iconSdfImageId(s.point.iconName)
-        : iconImageId(s.point.iconName)
-      : '';
+    const sdfId = wantsIcon ? iconSdfImageId(s.point.iconName) : '';
+    const plainId = wantsIcon ? iconImageId(s.point.iconName) : '';
+    const useSdf = tint && wantsIcon && m.hasImage(sdfId);
+    const preferredId = useSdf ? sdfId : plainId;
     const iconReady = wantsIcon && m.hasImage(preferredId);
     if (iconReady) {
       // Selection halo under the icon. Rendered as a separate circle
@@ -706,8 +698,9 @@ function syncOverlays(
           'icon-opacity': op,
           // icon-color only takes effect when the image was registered
           // with sdf: true. For the plain variant this paint property
-          // is ignored, which is exactly what we want.
-          ...(tint ? { 'icon-color': pointFill } : {}),
+          // is silently ignored, so emitting it only matters when we
+          // actually resolved to the SDF image.
+          ...(useSdf ? { 'icon-color': pointFill } : {}),
         },
       });
     } else {
