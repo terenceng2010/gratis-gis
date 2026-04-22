@@ -25,6 +25,7 @@ import {
   renderIconSvg,
   renderIconSvgForSdf,
 } from './map-icons';
+import { svgToSdf } from './sdf';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
@@ -240,15 +241,26 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
               /* non-fatal: tinted variant or circle fallback still works */
             }
           }
-          // SDF (tintable) variant is currently disabled: feeding
-          // the plain rasterized icon to addImage with `sdf: true`
-          // makes MapLibre render the point invisibly, and a proper
-          // runtime distance-field pipeline needs dedicated work.
-          // The canvas code below falls back to the plain image
-          // whenever the SDF variant isn't registered, so icons
-          // always render in their shipped color. Tint toggle in
-          // the style editor remains visible but effectively
-          // inactive until this is fixed.
+          // SDF (tintable) variant. Produced via a runtime chamfer
+          // distance transform over the alpha mask of the SVG — see
+          // ./sdf.ts. The value is written into the alpha channel
+          // because that's what MapLibre's symbol_sdf shader samples.
+          // Registered alongside the plain variant; the layer sync
+          // code below picks between them based on the layer's
+          // iconTint toggle.
+          if (!m.hasImage(sdfId)) {
+            try {
+              const svg = renderIconSvgForSdf(name);
+              if (svg) {
+                const sdf = await svgToSdf(svg, 48);
+                if (!cancelled && !m.hasImage(sdfId)) {
+                  m.addImage(sdfId, sdf, { pixelRatio: 2, sdf: true });
+                }
+              }
+            } catch {
+              /* non-fatal: falls back to the plain variant */
+            }
+          }
         }),
       );
       if (!cancelled) setIconsTick((t) => t + 1);
@@ -646,14 +658,14 @@ function syncOverlays(
     });
 
     // Point geometries. When the layer's point style picks an icon
-    // symbol, try to render a MapLibre symbol layer with the right
-    // image variant. SDF tinting needs a properly-encoded distance
-    // field — since our runtime pipeline can't reliably produce one,
-    // we only use the SDF variant when the author has explicitly
-    // opted in AND the SDF image is registered; otherwise we fall
-    // back to the plain raster (icon renders in its shipped color).
-    // If even the plain image isn't registered yet, we fall through
-    // to the circle renderer so the feature stays visible.
+    // symbol, render a MapLibre symbol layer with the right image
+    // variant. Two variants are registered per icon: a plain raster
+    // (renders in the icon's shipped color) and an SDF copy (takes
+    // the layer's fill via MapLibre's `icon-color` paint property).
+    // We prefer the SDF when iconTint is on AND the SDF image is
+    // registered; otherwise we fall back to the plain raster. If
+    // even the plain image isn't registered yet, we fall through to
+    // the circle renderer so the feature stays visible.
     const wantsIcon = s.point.symbol === 'icon' && !!s.point.iconName;
     const tint = s.point.iconTint !== false; // default true
     const sdfId = wantsIcon ? iconSdfImageId(s.point.iconName) : '';

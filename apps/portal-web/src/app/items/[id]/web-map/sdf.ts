@@ -16,11 +16,19 @@
  *     standard cheap approximation of Euclidean distance, good enough
  *     that a 48 px rendered icon doesn't betray the approximation.
  *
- * The encoded image uses MapLibre's SDF convention: the red channel
- * carries a remap of the signed distance where values around 192
- * fall on the shape boundary (same contract as @mapbox/tiny-sdf for
- * glyphs). Green and blue are zero; alpha is 255 so the texture
- * sampler doesn't run off the edges.
+ * The encoded image uses MapLibre's SDF convention: the *alpha*
+ * channel carries the remap of the signed distance, with values
+ * around 192/256 falling on the shape boundary. That matches the
+ * contract MapLibre's symbol_sdf shader expects — it samples
+ * `texture2D(u_texture, v_tex).a` and thresholds near (256-64)/256
+ * = 0.75 to decide inside/outside. RGB is set to white so when
+ * MapLibre lerps through the image sampler it doesn't drag color
+ * toward black at the edges.
+ *
+ * Previous iterations wrote the remap to the red channel and left
+ * alpha at 255 everywhere — which made MapLibre treat every pixel
+ * as fully inside the shape, rendering a solid square of the
+ * icon-color. Lesson learned: alpha is the payload.
  */
 
 export interface SdfOptions {
@@ -37,7 +45,7 @@ export function alphaToSdf(
   const { data, width: w, height: h } = imageData;
   const n = w * h;
   const INF = w + h;
-  const buffer = opts.buffer ?? 3;
+  const buffer = opts.buffer ?? 0;
   const cutoff = opts.cutoff ?? Math.min(w, h) / 4;
 
   // Binary mask from alpha. Anything above 127 is "inside the shape".
@@ -112,16 +120,23 @@ export function alphaToSdf(
 
   // Encode in MapLibre's expected format. We match tiny-sdf's
   // convention: the value is 192 at the boundary and scales out in
-  // both directions by the cutoff.
+  // both directions by the cutoff, written into the *alpha* channel
+  // (that's what MapLibre's SDF shader samples). RGB is kept at
+  // white so edge blending in the texture sampler doesn't drag the
+  // tint toward black.
   const out = new Uint8ClampedArray(n * 4);
   for (let i = 0; i < n; i += 1) {
     const signed = mask[i] ? dIn[i]! : -dOut[i]!;
-    const v = 192 + ((signed - buffer) * 63) / cutoff;
+    // Positive = inside the shape, negative = outside.
+    // At the boundary (signed=0) we want ~192/256; 1 px inside moves
+    // the value up, 1 px outside moves it down, with `buffer` pixels
+    // of padding near the edge before we start crossing the threshold.
+    const v = 192 + ((signed - buffer) * 64) / cutoff;
     const clamped = Math.max(0, Math.min(255, Math.round(v)));
-    out[i * 4 + 0] = clamped;
-    out[i * 4 + 1] = 0;
-    out[i * 4 + 2] = 0;
-    out[i * 4 + 3] = 255;
+    out[i * 4 + 0] = 255;
+    out[i * 4 + 1] = 255;
+    out[i * 4 + 2] = 255;
+    out[i * 4 + 3] = clamped;
   }
   return new ImageData(out, w, h);
 }

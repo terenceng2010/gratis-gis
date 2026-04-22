@@ -165,10 +165,10 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
                 ) : null}
               </div>
               <p className="mt-2 text-[11px] text-muted">
-                Icons currently render in their shipped color. Tint
-                via fill color is wired up but needs a proper SDF
-                pipeline before it lights up; the toggle stays here
-                so your preference persists.
+                Tinting renders the icon as a signed-distance field
+                so the fill color applies cleanly at any size.
+                Un-tick if you want the icon to stay in its shipped
+                color.
               </p>
             </>
           ) : (
