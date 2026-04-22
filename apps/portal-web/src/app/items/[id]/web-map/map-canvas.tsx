@@ -229,52 +229,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     // the tick setter so the async load callback doesn't capture a
     // stale React state function.
     let cancelled = false;
-    const loadIcons = async () => {
-      await Promise.all(
-        Object.keys(MAP_ICONS).map(async (name) => {
-          const plainId = iconImageId(name);
-          const sdfId = iconSdfImageId(name);
-          // Plain (as-is) variant.
-          if (!m.hasImage(plainId)) {
-            try {
-              const svg = renderIconSvg(name);
-              if (svg) {
-                const img = await rasterizeSvg(svg, 48);
-                if (!cancelled && !m.hasImage(plainId)) {
-                  m.addImage(plainId, img, { pixelRatio: 2 });
-                }
-              }
-            } catch {
-              /* non-fatal: tinted variant or circle fallback still works */
-            }
-          }
-          // SDF (tintable) variant. Produced via a runtime chamfer
-          // distance transform over the alpha mask of the SVG — see
-          // ./sdf.ts. The value is written into the alpha channel
-          // because that's what MapLibre's symbol_sdf shader samples.
-          // Registered alongside the plain variant; the layer sync
-          // code below picks between them based on the layer's
-          // iconTint toggle.
-          if (!m.hasImage(sdfId)) {
-            try {
-              const svg = renderIconSvgForSdf(name);
-              if (svg) {
-                const sdf = await svgToSdf(svg, 48);
-                if (!cancelled && !m.hasImage(sdfId)) {
-                  m.addImage(sdfId, sdf, { pixelRatio: 2, sdf: true });
-                }
-              }
-            } catch {
-              /* non-fatal: falls back to the plain variant */
-            }
-          }
-        }),
-      );
-      if (!cancelled) setIconsTick((t) => t + 1);
-    };
     const kickLoadIfReady = () => {
       if (!m.isStyleLoaded()) return;
-      void loadIcons();
+      void loadAllIcons(m).then(() => {
+        if (!cancelled) setIconsTick((t) => t + 1);
+      });
     };
     m.on('load', kickLoadIfReady);
     m.on('styledata', kickLoadIfReady);
@@ -294,19 +253,20 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
   // Basemap swap. Preserves camera + overlays so it feels seamless.
   //
-  // Sequence:
-  //   1. Remove every registered icon before setStyle. The image
-  //      cache technically survives setStyle, but the underlying GL
-  //      textures don't, so hasImage returns true for "ghost"
-  //      entries that render invisibly in symbol layers. Explicitly
-  //      clearing forces loadIcons to repaint them cleanly against
-  //      the fresh style's texture atlas.
+  // The sequence that works:
+  //   1. Drop icons *before* setStyle, but only those that were
+  //      actually registered. `hasImage`-guarded so MapLibre doesn't
+  //      fire "image does not exist" error events for entries it
+  //      never had. This is necessary because setStyle wipes the
+  //      underlying GL textures — the JS-side image cache can
+  //      claim `hasImage === true` for ghost entries that render
+  //      invisibly in symbol layers.
   //   2. setStyle(new basemap).
-  //   3. Wait for styledata + isStyleLoaded, then restore camera
-  //      and re-run syncOverlays. Bumping iconsTick in addition to
-  //      the direct sync call means the normal [map.layers,
-  //      iconsTick] useEffect also fires once icons re-register,
-  //      catching any late-arriving images.
+  //   3. Wait for styledata + isStyleLoaded, then restore camera,
+  //      *await* icon re-registration, and THEN syncOverlays. The
+  //      await matters: calling syncOverlays before icons are in
+  //      the atlas leaves symbol layers in the "image does not
+  //      exist" failure state even after the image shows up later.
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
@@ -320,32 +280,33 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     const p = m.getPitch();
 
     for (const name of Object.keys(MAP_ICONS)) {
-      try {
-        m.removeImage(iconImageId(name));
-      } catch {
-        /* not registered yet */
-      }
-      try {
-        m.removeImage(iconSdfImageId(name));
-      } catch {
-        /* not registered yet */
-      }
+      const plainId = iconImageId(name);
+      const sdfId = iconSdfImageId(name);
+      if (m.hasImage(plainId)) m.removeImage(plainId);
+      if (m.hasImage(sdfId)) m.removeImage(sdfId);
     }
 
     const style = { ...BASEMAPS[map.basemap].style, metadata: { basemap: map.basemap } };
     m.setStyle(style);
 
-    const onStyleData = () => {
+    let cancelled = false;
+    const onStyleData = async () => {
       if (!m.isStyleLoaded()) return;
       m.off('styledata', onStyleData);
+      if (cancelled) return;
       m.jumpTo({ center: [c.lng, c.lat], zoom: z, bearing: b, pitch: p });
-      // Direct sync so overlays reappear immediately; iconsTick
-      // bump triggers a second pass once the new icon load batch
-      // resolves so any symbol layers that needed images catch up.
+      await loadAllIcons(m);
+      if (cancelled) return;
       syncOverlays(m, layersRef.current, hoveredRef);
+      // Keep the main [map.layers, iconsTick] useEffect in sync so
+      // any subsequent layer edits during the transition still land.
       setIconsTick((t) => t + 1);
     };
     m.on('styledata', onStyleData);
+    return () => {
+      cancelled = true;
+      m.off('styledata', onStyleData);
+    };
   }, [map.basemap]);
 
   // Keep overlay layers (everything after the basemap) in sync with
@@ -603,6 +564,49 @@ async function rasterizeSvg(svg: string, size: number): Promise<ImageData> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * Register every bundled icon (plain + SDF variant) with the map.
+ * Idempotent via `hasImage` checks — caller is free to invoke this
+ * on every basemap swap or style event without risking duplicates.
+ * Failures are per-icon and silent so one bad SVG doesn't kill the
+ * whole batch. Module-scoped so the init useEffect and the basemap
+ * swap share a single implementation.
+ */
+async function loadAllIcons(m: maplibregl.Map): Promise<void> {
+  await Promise.all(
+    Object.keys(MAP_ICONS).map(async (name) => {
+      const plainId = iconImageId(name);
+      const sdfId = iconSdfImageId(name);
+      if (!m.hasImage(plainId)) {
+        try {
+          const svg = renderIconSvg(name);
+          if (svg) {
+            const img = await rasterizeSvg(svg, 48);
+            if (!m.hasImage(plainId)) {
+              m.addImage(plainId, img, { pixelRatio: 2 });
+            }
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+      if (!m.hasImage(sdfId)) {
+        try {
+          const svg = renderIconSvgForSdf(name);
+          if (svg) {
+            const sdf = await svgToSdf(svg, 48);
+            if (!m.hasImage(sdfId)) {
+              m.addImage(sdfId, sdf, { pixelRatio: 2, sdf: true });
+            }
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+    }),
+  );
 }
 
 /**
