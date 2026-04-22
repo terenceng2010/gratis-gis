@@ -123,6 +123,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   const [polygonCursor, setPolygonCursor] = useState<
     [number, number] | null
   >(null);
+  const [lassoPoints, setLassoPoints] = useState<Array<[number, number]>>([]);
+  const lassoPointsRef = useRef(lassoPoints);
+  lassoPointsRef.current = lassoPoints;
 
   // Tick that invalidates projected pixel positions for polygon
   // vertices whenever the camera moves. Vertices live in lng/lat so
@@ -500,6 +503,23 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     };
 
     function onMouseMove(e: maplibregl.MapMouseEvent) {
+      // Skip the hover + "pointer over feature" cursor while any
+      // selection tool is active. Otherwise the cursor flickers
+      // between the tool indicator and the pointer as the user
+      // passes over features, and hover highlights fire mid-drag
+      // of a box/polygon/lasso.
+      if (selectToolRef.current !== 'off') {
+        const cur = hoveredRef.current;
+        if (cur) {
+          m!.setFeatureState(
+            { source: cur.sourceId, id: cur.featureId },
+            { hover: false },
+          );
+          hoveredRef.current = null;
+        }
+        return;
+      }
+
       const hits = m!.queryRenderedFeatures(e.point, {
         layers: interactiveLayerIds(),
       });
@@ -612,8 +632,6 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     m.dragPan.disable();
     m.boxZoom.disable();
     const canvas = m.getCanvas();
-    const prevCursor = canvas.style.cursor;
-    canvas.style.cursor = 'crosshair';
 
     const toPixel = (ev: MouseEvent): [number, number] => {
       const rect = canvas.getBoundingClientRect();
@@ -666,7 +684,6 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       window.removeEventListener('mouseup', onMouseUp);
       m.dragPan.enable();
       m.boxZoom.enable();
-      canvas.style.cursor = prevCursor;
       setRectDrag(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -682,9 +699,6 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     if (!m) return;
     if (selectTool !== 'polygon') return;
 
-    const canvas = m.getCanvas();
-    const prevCursor = canvas.style.cursor;
-    canvas.style.cursor = 'crosshair';
     m.doubleClickZoom.disable();
 
     const closePolygon = (shift: boolean) => {
@@ -738,9 +752,91 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       m.off('mouseleave', onMouseLeave);
       m.doubleClickZoom.enable();
       window.removeEventListener('keydown', onKeyDown);
-      canvas.style.cursor = prevCursor;
       setPolygonVerts([]);
       setPolygonCursor(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectTool]);
+
+  // Tool-cursor bridge. Each select tool gets a cursor cut from its
+  // toolbar icon so authors always know which mode they're in just
+  // by looking at the pointer. Applied as a data-URI SVG cursor on
+  // the MapLibre canvas; off-mode restores whatever the canvas was
+  // doing (pointer on feature hover, grab during pan).
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const canvas = m.getCanvas();
+    const prev = canvas.style.cursor;
+    canvas.style.cursor = toolCursor(selectTool);
+    return () => {
+      canvas.style.cursor = prev;
+    };
+  }, [selectTool]);
+
+  // Freehand lasso tool. Mouse-down starts the stroke, move appends
+  // lng/lat points, mouseup closes the loop and runs the polygon
+  // selection (same centroid-based filter). Like rectangle we
+  // disable pan so drag is unambiguously the lasso gesture.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    if (selectTool !== 'lasso') return;
+
+    m.dragPan.disable();
+    m.boxZoom.disable();
+    const canvas = m.getCanvas();
+
+    let drawing = false;
+
+    const onMouseDown = (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      drawing = true;
+      const rect = canvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const ll = m.unproject([px, py]);
+      setLassoPoints([[ll.lng, ll.lat]]);
+    };
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!drawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const ll = m.unproject([px, py]);
+      // Throttle point count: skip points closer than ~2 px to the
+      // last one so the path stays smooth without exploding state
+      // on fast drags.
+      const last = lassoPointsRef.current[lassoPointsRef.current.length - 1];
+      if (last) {
+        const lp = m.project(last);
+        const dx = lp.x - px;
+        const dy = lp.y - py;
+        if (dx * dx + dy * dy < 4) return;
+      }
+      setLassoPoints([...lassoPointsRef.current, [ll.lng, ll.lat]]);
+    };
+    const onMouseUp = (ev: MouseEvent) => {
+      if (!drawing) return;
+      drawing = false;
+      const pts = lassoPointsRef.current;
+      setLassoPoints([]);
+      if (pts.length < 3) return;
+      const picked = collectFeaturesInPolygon(m, layersRef.current, pts);
+      applyShiftOrReplace(picked, ev.shiftKey);
+    };
+
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      m.dragPan.enable();
+      m.boxZoom.enable();
+      setLassoPoints([]);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectTool]);
@@ -844,6 +940,26 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
           every camera move via projectTick so they stay anchored to
           the map. A rubber-band edge tracks the cursor until the
           polygon closes. */}
+      {/* Lasso in-progress path. Uses the same project-on-render
+          trick as polygon so the path stays anchored to the map
+          while drawing. */}
+      {lassoPoints.length > 1 ? (
+        <svg className="pointer-events-none absolute inset-0 h-full w-full">
+          <polyline
+            points={lassoPoints
+              .map((p) => {
+                const xy = mapRef.current?.project(p);
+                return xy ? `${xy.x},${xy.y}` : '';
+              })
+              .filter(Boolean)
+              .join(' ')}
+            fill="rgba(37,99,235,0.08)"
+            stroke="hsl(var(--accent))"
+            strokeWidth={2}
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : null}
       {polygonVerts.length > 0 ? (
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full"
@@ -1191,6 +1307,49 @@ function overlayLayerIds(layerId: string): string[] {
     `gg:${layerId}-circle`,
     `gg:${layerId}-label`,
   ];
+}
+
+/**
+ * Cursor definitions for each select tool. Each entry is an inline
+ * SVG + the (x, y) hot-spot in SVG pixel coords. Rendered as a
+ * data-URI cursor so the browser handles the rest — no asset files,
+ * no preload timing. Cursor size is capped at 24px which is the
+ * largest all major browsers render reliably.
+ *
+ * White fill + black stroke makes the cursor readable on both light
+ * (positron) and dark (carto-dark) basemaps without a backdrop.
+ */
+const TOOL_CURSORS: Record<
+  Exclude<SelectToolMode, 'off'>,
+  { svg: string; hx: number; hy: number }
+> = {
+  click: {
+    svg: `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M4 2 L4 18 L8 14 L11 21 L13.5 20 L10.5 13 L16 13 Z'/></svg>`,
+    hx: 4,
+    hy: 2,
+  },
+  rectangle: {
+    svg: `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><rect x='4' y='4' width='16' height='16' stroke-dasharray='3 2' fill='white'/><line x1='12' y1='9' x2='12' y2='15' stroke='black'/><line x1='9' y1='12' x2='15' y2='12' stroke='black'/></svg>`,
+    hx: 12,
+    hy: 12,
+  },
+  polygon: {
+    svg: `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white' stroke='black' stroke-width='2' stroke-linejoin='round'><polygon points='12,3 22,10 18,21 6,21 2,10' stroke-dasharray='3 2'/><circle cx='12' cy='12' r='1.5' fill='black'/></svg>`,
+    hx: 12,
+    hy: 12,
+  },
+  lasso: {
+    svg: `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 18 C 4 6 20 4 20 13 Q 20 20 13 19 Q 5 18 8 12'/><circle cx='5' cy='18' r='1.5' fill='black'/></svg>`,
+    hx: 5,
+    hy: 18,
+  },
+};
+
+function toolCursor(mode: SelectToolMode): string {
+  if (mode === 'off') return '';
+  const def = TOOL_CURSORS[mode];
+  const encoded = encodeURIComponent(def.svg).replace(/'/g, '%27');
+  return `url("data:image/svg+xml;utf8,${encoded}") ${def.hx} ${def.hy}, crosshair`;
 }
 
 /**

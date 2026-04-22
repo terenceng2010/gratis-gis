@@ -1,8 +1,20 @@
 'use client';
 
-import { MousePointer2, Square, Pentagon, X } from 'lucide-react';
+import {
+  Hand,
+  MousePointer2,
+  Pentagon,
+  Spline,
+  Square,
+  X,
+} from 'lucide-react';
 
-export type SelectToolMode = 'off' | 'click' | 'rectangle' | 'polygon';
+export type SelectToolMode =
+  | 'off'
+  | 'click'
+  | 'rectangle'
+  | 'polygon'
+  | 'lasso';
 
 interface Props {
   mode: SelectToolMode;
@@ -27,6 +39,8 @@ interface Props {
  *   - polygon: click to add vertices, click the first vertex (or
  *     press Enter) to close. Features whose bbox centroid falls
  *     inside the polygon are selected.
+ *   - lasso: freehand drag; release to close. Same centroid test
+ *     as polygon once the path is formed.
  *
  * The toolbar owns no selection state — it just tells the canvas
  * which mode is live. The canvas applies selection changes via a
@@ -42,7 +56,7 @@ export function SelectToolbar({
   return (
     <div className="absolute left-4 top-[3.75rem] z-10 flex items-center gap-1 rounded-lg border border-border bg-surface-1/95 p-1 shadow-raised backdrop-blur">
       <ToolButton
-        icon={MousePointer2}
+        icon={Hand}
         label="Pan"
         active={mode === 'off'}
         onClick={() => onChange('off')}
@@ -67,6 +81,13 @@ export function SelectToolbar({
         label="Polygon select"
         active={mode === 'polygon'}
         onClick={() => onChange(mode === 'polygon' ? 'off' : 'polygon')}
+        accent
+      />
+      <ToolButton
+        icon={Spline}
+        label="Freehand select"
+        active={mode === 'lasso'}
+        onClick={() => onChange(mode === 'lasso' ? 'off' : 'lasso')}
         accent
       />
       {selectedCount > 0 ? (
