@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { Item, ItemAccess, ItemType } from '@gratis-gis/shared-types';
 import {
+  DEFAULT_ARCGIS_SERVICE,
   DEFAULT_FEATURE_SERVICE,
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
@@ -41,6 +42,11 @@ const ITEM_TYPE_OPTIONS: Array<{ value: ItemType; label: string; desc: string }>
     value: 'feature_service' as ItemType,
     label: 'Feature service',
     desc: 'A shareable vector layer backed by PostGIS.',
+  },
+  {
+    value: 'arcgis_service' as ItemType,
+    label: 'ArcGIS service',
+    desc: 'Live pointer at an ArcGIS MapServer or FeatureServer.',
   },
   {
     value: 'form' as ItemType,
@@ -163,7 +169,9 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
           ? DEFAULT_WEB_MAP
           : type === 'feature_service'
             ? DEFAULT_FEATURE_SERVICE
-            : {};
+            : type === 'arcgis_service'
+              ? DEFAULT_ARCGIS_SERVICE
+              : {};
     }
 
     const url =
@@ -191,7 +199,12 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
       // job on arrival is to bring data in (feature_service), jump
       // directly to the ingest anchor so the upload panel is the very
       // first thing the user sees.
-      const anchor = type === 'feature_service' ? '#add-data' : '';
+      const anchor =
+        type === 'feature_service'
+          ? '#add-data'
+          : type === 'arcgis_service'
+            ? '#configure-arcgis'
+            : '';
       startTransition(() => router.push(`/items/${saved.id}${anchor}`));
     } else {
       // Stay on the edit page but refresh the server data so any downstream

@@ -29,6 +29,7 @@ import { ItemsService } from './items.service.js';
 const ITEM_TYPE_VALUES = [
   'web_map',
   'feature_service',
+  'arcgis_service',
   'form',
   'form_submission_collection',
   'web_app',

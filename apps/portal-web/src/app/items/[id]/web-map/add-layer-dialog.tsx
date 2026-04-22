@@ -90,18 +90,34 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
   }, []);
 
   // Load portal items when the portal tab activates or the query changes.
+  // Fetch both layer-bearing item types in parallel and merge by
+  // recency — the list API only accepts one `type` at a time today,
+  // so two requests keeps the server change surface minimal.
   useEffect(() => {
     if (!open || tab !== 'portal') return;
     let cancelled = false;
     setPortalLoading(true);
     const handle = setTimeout(async () => {
       try {
-        const qs = new URLSearchParams({ type: 'feature_service' });
-        if (portalQ.trim()) qs.set('q', portalQ.trim());
-        const res = await fetch(`/api/portal/items?${qs}`);
-        if (!res.ok) return;
-        const items = (await res.json()) as Item[];
-        if (!cancelled) setPortalItems(items);
+        const q = portalQ.trim();
+        const fetchType = (t: string) => {
+          const qs = new URLSearchParams({ type: t });
+          if (q) qs.set('q', q);
+          return fetch(`/api/portal/items?${qs}`).then((r) =>
+            r.ok ? (r.json() as Promise<Item[]>) : Promise.resolve([]),
+          );
+        };
+        const [fs, ags] = await Promise.all([
+          fetchType('feature_service'),
+          fetchType('arcgis_service'),
+        ]);
+        if (cancelled) return;
+        const merged = [...fs, ...ags].sort((a, b) => {
+          const at = new Date(a.updatedAt ?? 0).getTime();
+          const bt = new Date(b.updatedAt ?? 0).getTime();
+          return bt - at;
+        });
+        setPortalItems(merged);
       } finally {
         if (!cancelled) setPortalLoading(false);
       }
@@ -239,9 +255,41 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
   }
 
   function submitPortalItem(item: Item) {
-    onAdd(
-      makeLayer(item.title, { kind: 'feature-service', itemId: item.id }),
-    );
+    // arcgis_service items carry the URL + sublayer directly in their
+    // dataJson, so we plumb them through as an arcgis-rest source
+    // rather than routing through the feature-service machinery.
+    // Feature-service items still go through /api/portal/items/:id/geojson.
+    if (item.type === 'arcgis_service') {
+      const d = (item.data ?? {}) as {
+        url?: string;
+        serviceType?: 'MapServer' | 'FeatureServer';
+        defaultLayerId?: number;
+        layers?: Array<{ id: number; geometryType?: string }>;
+      };
+      if (!d.url) {
+        setError(
+          `${item.title} has no service URL yet — open it and paste one.`,
+        );
+        return;
+      }
+      const layerId =
+        d.defaultLayerId ??
+        d.layers?.find((l) => l.geometryType)?.id ??
+        d.layers?.[0]?.id ??
+        0;
+      onAdd(
+        makeLayer(item.title, {
+          kind: 'arcgis-rest',
+          url: d.url,
+          layerId,
+          serviceType: d.serviceType ?? 'MapServer',
+        }),
+      );
+    } else {
+      onAdd(
+        makeLayer(item.title, { kind: 'feature-service', itemId: item.id }),
+      );
+    }
     reset();
     onClose();
   }
@@ -465,7 +513,7 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                   type="text"
                   value={portalQ}
                   onChange={(e) => setPortalQ(e.target.value)}
-                  placeholder="Search feature services..."
+                  placeholder="Search feature & ArcGIS services..."
                   className="h-9 w-full rounded-md border border-border bg-surface-1 pl-9 pr-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
                 />
               </label>
@@ -474,8 +522,9 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
               ) : portalItems.length === 0 ? (
                 <div className="rounded-md border border-border bg-surface-2 p-4 text-center text-xs text-muted">
                   <Sparkles className="mx-auto mb-2 h-5 w-5" />
-                  No feature services match. Once you upload vector data as a
-                  feature service, it will show up here.
+                  No services match. Upload vector data as a feature
+                  service, or save an ArcGIS REST URL as an ArcGIS
+                  service item to pick it here.
                 </div>
               ) : (
                 <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-surface-1">
@@ -486,8 +535,21 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                         onClick={() => submitPortalItem(item)}
                         className="flex w-full flex-col items-start gap-1 px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
                       >
-                        <div className="truncate text-sm font-medium text-ink-0">
-                          {item.title}
+                        <div className="flex w-full items-center gap-2">
+                          <div className="min-w-0 flex-1 truncate text-sm font-medium text-ink-0">
+                            {item.title}
+                          </div>
+                          <span
+                            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                              item.type === 'arcgis_service'
+                                ? 'bg-cyan-100 text-cyan-800'
+                                : 'bg-sky-100 text-sky-800'
+                            }`}
+                          >
+                            {item.type === 'arcgis_service'
+                              ? 'ArcGIS'
+                              : 'Feature'}
+                          </span>
                         </div>
                         {item.description ? (
                           <div className="line-clamp-1 text-xs text-muted">
@@ -500,9 +562,8 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                 </ul>
               )}
               <p className="text-[11px] text-muted">
-                Feature services will fully render on the map once that pillar
-                ships. Saving the reference now means switching to it later is
-                a one-line update.
+                Feature services stream from PostGIS; ArcGIS services
+                query the origin live as you pan and zoom.
               </p>
             </div>
           )}

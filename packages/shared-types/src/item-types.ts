@@ -11,6 +11,7 @@
 export const ITEM_TYPES = [
   'web_map',
   'feature_service',
+  'arcgis_service',
   'form',
   'form_submission_collection',
   'web_app',

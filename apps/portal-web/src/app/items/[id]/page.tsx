@@ -15,16 +15,22 @@ import type {
   ItemShare,
   Group,
   User as UserT,
+  ArcgisServiceData,
   FeatureServiceData,
   WebMapData,
 } from '@gratis-gis/shared-types';
-import { DEFAULT_FEATURE_SERVICE, DEFAULT_WEB_MAP } from '@gratis-gis/shared-types';
+import {
+  DEFAULT_ARCGIS_SERVICE,
+  DEFAULT_FEATURE_SERVICE,
+  DEFAULT_WEB_MAP,
+} from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
 import { apiFetch } from '@/lib/api';
 import { SharingPanel } from './sharing-panel';
 import { DeleteItemButton } from './delete-button';
 import { MapEditor } from './web-map/map-editor';
 import { FeatureServiceEditor } from './feature-service/editor';
+import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { ComingSoon } from './coming-soon';
 
 interface Props {
@@ -36,6 +42,7 @@ type ItemWithShares = Item & { shares: ItemShare[] };
 const typeBadge: Record<string, string> = {
   web_map: 'bg-emerald-100 text-emerald-800',
   feature_service: 'bg-sky-100 text-sky-800',
+  arcgis_service: 'bg-cyan-100 text-cyan-800',
   form: 'bg-violet-100 text-violet-800',
   web_app: 'bg-amber-100 text-amber-800',
   report_template: 'bg-rose-100 text-rose-800',
@@ -171,6 +178,18 @@ export default async function ItemDetailPage({ params }: Props) {
             initial={{
               ...DEFAULT_FEATURE_SERVICE,
               ...((item.data ?? {}) as Partial<FeatureServiceData>),
+            }}
+            canEdit={canManage}
+          />
+        </section>
+      ) : item.type === 'arcgis_service' ? (
+        <section className="mb-8">
+          <h2 className="mb-2 text-sm font-medium text-muted">ArcGIS service</h2>
+          <ArcgisServiceEditor
+            itemId={item.id}
+            initial={{
+              ...DEFAULT_ARCGIS_SERVICE,
+              ...((item.data ?? {}) as Partial<ArcgisServiceData>),
             }}
             canEdit={canManage}
           />
