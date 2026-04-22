@@ -54,12 +54,52 @@ export class UsersController {
    *
    * Search is case-insensitive across username and fullName. Limits to
    * 50 results so a cold query on a big org doesn't blow a payload.
+   *
+   * `ids` accepts a comma-separated list of user ids and returns
+   * exactly those users (still org-scoped for safety). This is the
+   * path the webmap access matrix uses to resolve names for
+   * arbitrary principal ids without running a wide-open search.
+   * When `ids` is set it takes precedence over `q`; the result
+   * carries `groupIds` so the client can evaluate transitive
+   * group-based access without a second round-trip.
    */
   @Get()
   async list(
     @CurrentUser() user: AuthUser,
     @Query('q') q?: string,
+    @Query('ids') ids?: string,
   ) {
+    const idList = (ids ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (idList.length > 0) {
+      const rows = await this.prisma.user.findMany({
+        where: {
+          orgId: user.orgId,
+          id: { in: idList },
+        },
+        select: {
+          id: true,
+          username: true,
+          fullName: true,
+          avatarUrl: true,
+          groupMemberships: {
+            where: { group: { deletedAt: null } },
+            select: { groupId: true },
+          },
+        },
+        take: Math.min(idList.length, 200),
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        username: r.username,
+        fullName: r.fullName,
+        avatarUrl: r.avatarUrl,
+        groupIds: r.groupMemberships.map((m) => m.groupId),
+      }));
+    }
+
     const trimmed = (q ?? '').trim();
     const where: {
       orgId: string;

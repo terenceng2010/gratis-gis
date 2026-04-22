@@ -602,7 +602,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const layer = map.layers.find((l) =>
         overlayLayerIds(l.id).some((id) => id === hit.layer.id),
       );
+      // Honour server-computed permissions when present — viewers
+      // get `effective.query === false` for any layer the access
+      // matrix narrowed to view-only, and popups should stay closed.
       if (!layer || !layer.popup.enabled) return;
+      if (layer.effective && layer.effective.query === false) return;
       popupRef.current?.remove();
       popupRef.current = new maplibregl.Popup({ closeOnClick: true, maxWidth: '320px' })
         .setLngLat(e.lngLat)

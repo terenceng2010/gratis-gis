@@ -83,6 +83,18 @@ export interface WebMapLayer {
    * grant access the underlying item didn't already allow.
    */
   access: WebMapLayerAccess;
+  /**
+   * Server-computed permissions for the current viewer. Only present
+   * on responses the server filtered for a non-editor viewer — the
+   * editor's view of the webmap sees full `access.entries` and no
+   * `effective` field. Client honors `effective.query === false` by
+   * disabling popups / attribute access for the layer.
+   */
+  effective?: {
+    view: boolean;
+    query: boolean;
+    edit: boolean;
+  };
 }
 
 /**

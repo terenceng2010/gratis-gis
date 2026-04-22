@@ -281,6 +281,56 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
     } catch {
       /* non-fatal — groups show as short ids */
     }
+
+    // Users: batch-resolve names + group memberships for every
+    // principal on the webmap's share list. One call covers the
+    // whole matrix — avoids a per-row fetch during render.
+    try {
+      // Snapshot webmapShares here; the list was just refreshed at
+      // the top of loadMatrixData so whatever's in state now is
+      // current.
+      const userIds = Array.from(
+        new Set(
+          (await (async () => {
+            const r = await fetch(`/api/portal/items/${itemId}`);
+            if (!r.ok) return [] as ItemShare[];
+            const j = (await r.json()) as { shares?: ItemShare[] };
+            return j.shares ?? [];
+          })())
+            .filter((s) => s.principalType === 'user')
+            .map((s) => s.principalId),
+        ),
+      );
+      if (userIds.length > 0) {
+        const r = await fetch(
+          `/api/portal/users?ids=${encodeURIComponent(userIds.join(','))}`,
+        );
+        if (r.ok) {
+          const rows = (await r.json()) as Array<{
+            id: string;
+            username: string;
+            fullName: string | null;
+            groupIds?: string[];
+          }>;
+          setUserNames((prev) => {
+            const next = { ...prev };
+            for (const u of rows) {
+              next[u.id] = u.fullName || u.username;
+            }
+            return next;
+          });
+          setGroupMemberships((prev) => {
+            const next = { ...prev };
+            for (const u of rows) {
+              next[u.id] = u.groupIds ?? [];
+            }
+            return next;
+          });
+        }
+      }
+    } catch {
+      /* non-fatal — users show as short ids, memberships empty */
+    }
   }
 
   // Fire-and-forget load when the matrix opens. Re-runs if the layer

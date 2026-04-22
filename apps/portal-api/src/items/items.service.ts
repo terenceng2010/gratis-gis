@@ -92,7 +92,129 @@ export class ItemsService {
       // Don't leak existence; return 404 instead of 403 for unauthenticated reads
       throw new NotFoundException('Item not found');
     }
+    // Viewers of a web map see a layer-filtered copy so the matrix
+    // acts as actual enforcement (not just UI). Editors and admins
+    // see the raw data so they can edit the matrix itself.
+    if (
+      item.type === 'web_map' &&
+      !this.sharing.canEdit(user, item, item.shares)
+    ) {
+      const filtered = await this.filterWebMapForViewer(user, item.data);
+      return { ...item, data: filtered };
+    }
     return item;
+  }
+
+  /**
+   * Apply per-layer access for a viewer. Walks each layer in the
+   * web map and:
+   *   1. Drops it if the viewer has no item-level access to the
+   *      layer's backing source (feature_service today; arcgis_service
+   *      + future types slot in the same way).
+   *   2. Drops it if the layer's access policy is `custom` and the
+   *      viewer has neither a direct entry nor a group entry with
+   *      view=true.
+   *   3. Annotates it with `effective: { view, query, edit }` so the
+   *      client can gate popups / editing without re-deriving the
+   *      permissions locally. `access.entries` is stripped so the
+   *      full roster never leaves the server for non-editors.
+   *
+   * Backing items are fetched in a single batched query. Items the
+   * caller can't read are treated the same as "doesn't exist".
+   */
+  private async filterWebMapForViewer(
+    viewer: AuthUser,
+    rawData: unknown,
+  ): Promise<unknown> {
+    if (!rawData || typeof rawData !== 'object') return rawData;
+    const data = rawData as {
+      layers?: Array<Record<string, unknown>>;
+    };
+    const layers = Array.isArray(data.layers) ? data.layers : [];
+    // Fetch each backing feature_service / arcgis_service item and
+    // its shares in one round-trip. Only layers that use an item id
+    // are relevant; url / inline sources have no separate gatekeeping.
+    const backingItemIds = new Set<string>();
+    for (const l of layers) {
+      const src = (l as { source?: { kind?: string; itemId?: string } })
+        .source;
+      if (
+        src &&
+        (src.kind === 'feature-service' || src.kind === 'arcgis_service') &&
+        typeof src.itemId === 'string'
+      ) {
+        backingItemIds.add(src.itemId);
+      }
+    }
+    const backingItems =
+      backingItemIds.size > 0
+        ? await this.prisma.item.findMany({
+            where: { id: { in: [...backingItemIds] }, deletedAt: null },
+            include: { shares: true },
+          })
+        : [];
+    const byId = new Map(backingItems.map((i) => [i.id, i]));
+
+    const out: Array<Record<string, unknown>> = [];
+    for (const layer of layers) {
+      const src = (layer as { source?: { kind?: string; itemId?: string } })
+        .source;
+      if (
+        src &&
+        (src.kind === 'feature-service' || src.kind === 'arcgis_service') &&
+        typeof src.itemId === 'string'
+      ) {
+        const target = byId.get(src.itemId);
+        if (!target) continue;
+        if (!this.sharing.canRead(viewer, target, target.shares)) continue;
+      }
+
+      const access = (
+        layer as {
+          access?: {
+            policy?: 'inherit' | 'custom';
+            entries?: Array<{
+              principalType: 'user' | 'group';
+              principalId: string;
+              view: boolean;
+              query: boolean;
+              edit: boolean;
+            }>;
+          };
+        }
+      ).access;
+
+      let effective = { view: true, query: true, edit: false };
+      if (access?.policy === 'custom') {
+        const entry = (access.entries ?? []).find((e) => {
+          if (e.principalType === 'user') return e.principalId === viewer.id;
+          if (e.principalType === 'group') {
+            return viewer.groupIds.includes(e.principalId);
+          }
+          return false;
+        });
+        if (!entry || !entry.view) continue;
+        effective = {
+          view: !!entry.view,
+          query: !!entry.query,
+          edit: !!entry.edit,
+        };
+      }
+
+      const { access: _access, ...rest } = layer as Record<string, unknown> & {
+        access?: unknown;
+      };
+      out.push({
+        ...rest,
+        // Preserve the policy so the client knows whether limits
+        // applied, but drop the full entries array — that's who-
+        // else-sees-what, not something a viewer should enumerate.
+        access: { policy: access?.policy ?? 'inherit', entries: [] },
+        effective,
+      });
+    }
+
+    return { ...(data as Record<string, unknown>), layers: out };
   }
 
   create(user: AuthUser, input: CreateItemInput) {
