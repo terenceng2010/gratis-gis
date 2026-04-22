@@ -147,6 +147,33 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
   const canvasRef = useRef<MapCanvasHandle | null>(null);
 
   /**
+   * Shared selection state: per-layer set of feature ids. Because
+   * every geojson source is added with `generateId: true`, these ids
+   * are the same as the feature's array index in the cached
+   * FeatureCollection — which is what the attribute table uses for
+   * its row selection. That alignment lets one Set serve both the
+   * map highlight and the table checkboxes without translation.
+   */
+  const [selection, setSelection] = useState<Record<string, Set<number>>>({});
+
+  // Drop selection for layers that have been removed so the state
+  // doesn't leak references. Only runs when the layer-id set changes.
+  const layerIdKey = map.layers.map((l) => l.id).join('|');
+  useEffect(() => {
+    const known = new Set(map.layers.map((l) => l.id));
+    setSelection((prev) => {
+      let changed = false;
+      const next: Record<string, Set<number>> = {};
+      for (const [id, set] of Object.entries(prev)) {
+        if (known.has(id)) next[id] = set;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerIdKey]);
+
+  /**
    * Per-layer field + value metadata, populated lazily when a layer is
    * first seen. Used by the filter pick-list and the unique-values
    * renderer. Keyed by layer id; entries live as long as the layer does.
@@ -369,7 +396,12 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
           />
         </div>
         <div className="relative min-w-0 flex-1 p-2">
-          <MapCanvas ref={canvasRef} map={map} onCameraChange={onCameraChange} />
+          <MapCanvas
+            ref={canvasRef}
+            map={map}
+            onCameraChange={onCameraChange}
+            selection={selection}
+          />
           {map.search?.enabled !== false ? (
             <SearchBar
               layers={map.layers}
@@ -404,6 +436,8 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
             featuresByLayer={featuresByLayer}
             metadata={metadata}
             canEdit={canEdit}
+            selection={selection}
+            setSelection={setSelection}
             onClose={() => setTableOpen(false)}
             onZoomTo={(bbox) => canvasRef.current?.zoomTo(bbox)}
             onPatchLayer={(layerId, patch) => {

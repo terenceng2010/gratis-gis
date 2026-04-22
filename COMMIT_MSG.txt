@@ -1,16 +1,20 @@
-feat(web-map): SDF tinting for built-in point icons 
+feat(web-map): selection state, map highlight, attribute table sync 
  
-Built-in icons can now be tinted by the layer's fill color. The 
-loader registers each icon as two MapLibre images: a plain raster 
-(as-shipped colors) and an SDF variant (alpha-encoded distance 
-field, tintable via icon-color). 
+Selection is now first-class. Picks in the attribute table 
+immediately highlight on the map, picks persist across layer 
+switches inside the table, and a new per-layer Selectable toggle 
+in Interactions opts a layer out of selection entirely. 
  
-- Runtime chamfer distance transform in sdf.ts - no new deps, 
-  ~100ms to process 25 icons at 96px at map init. 
-- Schema: point.iconTint toggle, default on. 
-- Canvas picks the plain or SDF variant per layer and emits 
-  icon-color only when tinting is on. 
-- Style editor: tint toggle + fill color picker appear under 
-  the icon picker when an icon is selected. 
-- Legend renders the icon in the tint color so the swatch matches 
-  what's drawn on the map.
+- Schema: interactions.selectable, default true. 
+- map-editor owns selection as Record<layerId, Set<featureId>>. 
+- Canvas mirrors selection to MapLibre feature-state (diffed, so 
+  only changed ids touch the style) and paints selected features 
+  with an accent outline, bumped radius/width, or a halo circle 
+  under icon markers. 
+- Attribute table reads/writes the shared selection instead of 
+  its own local Set, so map and table stay in sync. 
+- Layer panel gains a Selectable checkbox alongside Highlight on 
+  hover. 
+ 
+Next: click / rectangle / lasso / polygon draw tools that write 
+into this same selection state.

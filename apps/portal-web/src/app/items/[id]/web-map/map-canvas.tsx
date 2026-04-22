@@ -32,6 +32,8 @@ interface Props {
   map: WebMapData;
   /** Fired whenever the user pans, zooms, rotates, or pitches. */
   onCameraChange: (next: Pick<WebMapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
+  /** Per-layer sets of selected feature ids (identical to feature indexes). */
+  selection: Record<string, Set<number>>;
 }
 
 export interface MapCanvasHandle {
@@ -66,7 +68,7 @@ export interface MapCanvasHandle {
  * diff is possible later; for now simplicity beats theoretical perf.
  */
 export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
-  { map, onCameraChange }: Props,
+  { map, onCameraChange, selection }: Props,
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -130,6 +132,47 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // Tick bumped whenever a batch of icons finishes registering, so the
   // layer-sync effect can re-run and pick up the new images.
   const [iconsTick, setIconsTick] = useState(0);
+
+  // Remember the last selection we applied to MapLibre's feature-state,
+  // so we know which ids to clear when the selection shrinks. A bare
+  // ref is enough — we don't need this in React state.
+  const appliedSelectionRef = useRef<Record<string, Set<number>>>({});
+
+  // Sync shared selection state → MapLibre feature-state. Diffs against
+  // the previously-applied map so we only touch what changed rather
+  // than walking every feature on every render.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const prevApplied = appliedSelectionRef.current;
+    const nextApplied: Record<string, Set<number>> = {};
+
+    for (const layerId of new Set([
+      ...Object.keys(prevApplied),
+      ...Object.keys(selection),
+    ])) {
+      const sourceId = `gg:${layerId}`;
+      // If the source isn't in the style (layer was deleted or still
+      // loading), skip — the next syncOverlays will handle it.
+      if (!m.getSource(sourceId)) continue;
+
+      const prev = prevApplied[layerId] ?? new Set<number>();
+      const next = selection[layerId] ?? new Set<number>();
+      nextApplied[layerId] = next;
+
+      for (const id of prev) {
+        if (!next.has(id)) {
+          m.setFeatureState({ source: sourceId, id }, { selected: false });
+        }
+      }
+      for (const id of next) {
+        if (!prev.has(id)) {
+          m.setFeatureState({ source: sourceId, id }, { selected: true });
+        }
+      }
+    }
+    appliedSelectionRef.current = nextApplied;
+  }, [selection, iconsTick]);
 
   // Wrap the callback in a ref so the stable effect below doesn't need
   // to re-bind listeners every render.
@@ -472,6 +515,7 @@ function overlayLayerIds(layerId: string): string[] {
     `gg:${layerId}-fill`,
     `gg:${layerId}-poly-line`,
     `gg:${layerId}-line`,
+    `gg:${layerId}-icon-halo`,
     `gg:${layerId}-circle`,
     `gg:${layerId}-label`,
   ];
@@ -530,7 +574,25 @@ function syncOverlays(
     const lineColor = rendererColor(layer, s.line.color);
     const pointFill = rendererColor(layer, s.point.color);
 
-    // Polygon fill
+    // Build a state-aware "case" expression. `selected` beats `hover`
+    // which beats the base value. Includes an optional hover branch
+    // only when hover highlighting is enabled on the layer, so we
+    // don't bloat the expression when nobody's hovering anywhere.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stateCase = (base: any, selectedValue: any, hoverValue: any): any => {
+      const expr: any[] = ['case'];
+      expr.push(['boolean', ['feature-state', 'selected'], false], selectedValue);
+      if (hover) {
+        expr.push(['boolean', ['feature-state', 'hover'], false], hoverValue);
+      }
+      expr.push(base);
+      return expr;
+    };
+
+    const SEL_ACCENT = '#2563eb';
+
+    // Polygon fill. Selection bumps opacity so picked polygons read as
+    // highlighted even against a translucent base style.
     m.addLayer({
       id: `gg:${layer.id}-fill`,
       type: 'fill',
@@ -538,33 +600,33 @@ function syncOverlays(
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
         'fill-color': polyFill,
-        'fill-opacity': hover
-          ? ([
-              'case',
-              ['boolean', ['feature-state', 'hover'], false],
-              Math.min(1, s.polygon.fillOpacity + 0.25) * op,
-              s.polygon.fillOpacity * op,
-            ] as unknown as number)
-          : s.polygon.fillOpacity * op,
+        'fill-opacity': stateCase(
+          s.polygon.fillOpacity * op,
+          Math.min(1, s.polygon.fillOpacity + 0.4) * op,
+          Math.min(1, s.polygon.fillOpacity + 0.25) * op,
+        ) as unknown as number,
       },
     });
 
-    // Polygon outline (separate layer so paint rules stay simple)
+    // Polygon outline (separate layer so paint rules stay simple).
+    // Selected polygons get an accent color and a thicker outline so
+    // the pick is obvious without repainting the fill.
     m.addLayer({
       id: `gg:${layer.id}-poly-line`,
       type: 'line',
       source: sourceId,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
-        'line-color': polyStroke,
-        'line-width': hover
-          ? ([
-              'case',
-              ['boolean', ['feature-state', 'hover'], false],
-              s.polygon.strokeWidth + 1,
-              s.polygon.strokeWidth,
-            ] as unknown as number)
-          : s.polygon.strokeWidth,
+        'line-color': stateCase(
+          polyStroke,
+          SEL_ACCENT,
+          polyStroke,
+        ) as unknown as string,
+        'line-width': stateCase(
+          s.polygon.strokeWidth,
+          s.polygon.strokeWidth + 2,
+          s.polygon.strokeWidth + 1,
+        ) as unknown as number,
         'line-opacity': op,
       },
     });
@@ -576,15 +638,16 @@ function syncOverlays(
       source: sourceId,
       filter: combineFilter(['==', ['geometry-type'], 'LineString'], layer.filter),
       paint: {
-        'line-color': lineColor,
-        'line-width': hover
-          ? ([
-              'case',
-              ['boolean', ['feature-state', 'hover'], false],
-              s.line.width + 1,
-              s.line.width,
-            ] as unknown as number)
-          : s.line.width,
+        'line-color': stateCase(
+          lineColor,
+          SEL_ACCENT,
+          lineColor,
+        ) as unknown as string,
+        'line-width': stateCase(
+          s.line.width,
+          s.line.width + 2,
+          s.line.width + 1,
+        ) as unknown as number,
         'line-opacity': op,
       },
     });
@@ -604,6 +667,22 @@ function syncOverlays(
       : '';
     const iconReady = wantsIcon && m.hasImage(preferredId);
     if (iconReady) {
+      // Selection halo under the icon. Rendered as a separate circle
+      // layer so it reads through whatever the symbol shows on top —
+      // works for both SDF and plain icon variants.
+      m.addLayer({
+        id: `gg:${layer.id}-icon-halo`,
+        type: 'circle',
+        source: sourceId,
+        filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
+        paint: {
+          'circle-color': 'rgba(37, 99, 235, 0.25)',
+          'circle-radius': stateCase(0, 14 * s.point.iconSize, 0) as unknown as number,
+          'circle-stroke-color': SEL_ACCENT,
+          'circle-stroke-width': stateCase(0, 2, 0) as unknown as number,
+          'circle-opacity': op,
+        },
+      });
       m.addLayer({
         id: `gg:${layer.id}-circle`,
         type: 'symbol',
@@ -611,14 +690,11 @@ function syncOverlays(
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         layout: {
           'icon-image': preferredId,
-          'icon-size': hover
-            ? ([
-                'case',
-                ['boolean', ['feature-state', 'hover'], false],
-                s.point.iconSize * 1.2,
-                s.point.iconSize,
-              ] as unknown as number)
-            : s.point.iconSize,
+          'icon-size': stateCase(
+            s.point.iconSize,
+            s.point.iconSize * 1.15,
+            s.point.iconSize * 1.2,
+          ) as unknown as number,
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
           'icon-anchor': 'bottom',
@@ -639,16 +715,21 @@ function syncOverlays(
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         paint: {
           'circle-color': pointFill,
-          'circle-radius': hover
-            ? ([
-                'case',
-                ['boolean', ['feature-state', 'hover'], false],
-                s.point.radius + 2,
-                s.point.radius,
-              ] as unknown as number)
-            : s.point.radius,
-          'circle-stroke-color': s.point.strokeColor,
-          'circle-stroke-width': s.point.strokeWidth,
+          'circle-radius': stateCase(
+            s.point.radius,
+            s.point.radius + 3,
+            s.point.radius + 2,
+          ) as unknown as number,
+          'circle-stroke-color': stateCase(
+            s.point.strokeColor,
+            SEL_ACCENT,
+            s.point.strokeColor,
+          ) as unknown as string,
+          'circle-stroke-width': stateCase(
+            s.point.strokeWidth,
+            s.point.strokeWidth + 2,
+            s.point.strokeWidth,
+          ) as unknown as number,
           'circle-opacity': op,
           'circle-stroke-opacity': op,
         },

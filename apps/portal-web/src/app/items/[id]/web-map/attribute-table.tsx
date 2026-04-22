@@ -27,6 +27,15 @@ interface Props {
   featuresByLayer: Record<string, GeoJSON.FeatureCollection | null>;
   metadata: Record<string, LayerMetadata>;
   canEdit: boolean;
+  /**
+   * Shared selection state owned by the editor. Keys are layer ids;
+   * values are Sets of feature ids (== indexes into each layer's
+   * cached feature collection, since sources use generateId: true).
+   */
+  selection: Record<string, Set<number>>;
+  setSelection: React.Dispatch<
+    React.SetStateAction<Record<string, Set<number>>>
+  >;
   onClose: () => void;
   /** Fly to a bbox in the map canvas. */
   onZoomTo: (bbox: [number, number, number, number]) => void;
@@ -55,16 +64,21 @@ export function AttributeTable({
   featuresByLayer,
   metadata,
   canEdit,
+  selection,
+  setSelection,
   onClose,
   onZoomTo,
   onPatchLayer,
 }: Props) {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
-  const [selection, setSelection] = useState<Set<number>>(new Set());
   const [lastPicked, setLastPicked] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [query, setQuery] = useState('');
+
+  // The active layer's selection; the table only ever shows one
+  // layer at a time, so we read a single slice off the shared map.
+  const activeSelection = (activeLayerId && selection[activeLayerId]) || new Set<number>();
 
   // Default to the top visible layer whenever the list changes.
   useEffect(() => {
@@ -72,11 +86,18 @@ export function AttributeTable({
     if (activeLayerId && layers.some((l) => l.id === activeLayerId)) return;
     const first = layers.find((l) => l.visible) ?? layers[0] ?? null;
     setActiveLayerId(first?.id ?? null);
-    setSelection(new Set());
     setLastPicked(null);
     setSortBy(null);
     setQuery('');
+    // Note: we deliberately don't clear the shared selection here —
+    // switching layers should preserve the picks on other layers.
   }, [open, layers, activeLayerId]);
+
+  /** Replace the active layer's slice; leave other layers untouched. */
+  function updateActiveSelection(next: Set<number>) {
+    if (!activeLayerId) return;
+    setSelection((prev) => ({ ...prev, [activeLayerId]: next }));
+  }
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? null;
   const activeFields =
@@ -129,29 +150,31 @@ export function AttributeTable({
   }
 
   function onRowClick(displayIdx: number, shift: boolean) {
+    // Respect the layer's Selectable toggle. The row still highlights
+    // locally via lastPicked for shift-range anchoring, but we don't
+    // mutate the shared selection that drives the map.
+    if (activeLayer && activeLayer.interactions?.selectable === false) return;
     const idx = visibleIndexes[displayIdx];
     if (idx === undefined) return;
-    setSelection((prev) => {
-      const next = new Set(prev);
-      if (shift && lastPicked !== null) {
-        const a = Math.min(displayIdx, lastPicked);
-        const b = Math.max(displayIdx, lastPicked);
-        for (let i = a; i <= b; i += 1) {
-          const ix = visibleIndexes[i];
-          if (ix !== undefined) next.add(ix);
-        }
-      } else {
-        if (next.has(idx)) next.delete(idx);
-        else next.add(idx);
+    const next = new Set(activeSelection);
+    if (shift && lastPicked !== null) {
+      const a = Math.min(displayIdx, lastPicked);
+      const b = Math.max(displayIdx, lastPicked);
+      for (let i = a; i <= b; i += 1) {
+        const ix = visibleIndexes[i];
+        if (ix !== undefined) next.add(ix);
       }
-      return next;
-    });
+    } else {
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+    }
+    updateActiveSelection(next);
     setLastPicked(displayIdx);
   }
 
   function zoomToSelection() {
-    if (selection.size === 0) return;
-    const features = [...selection]
+    if (activeSelection.size === 0) return;
+    const features = [...activeSelection]
       .map((i) => activeFeatures[i])
       .filter((f): f is GeoJSON.Feature => Boolean(f && f.geometry));
     if (features.length === 0) return;
@@ -160,15 +183,15 @@ export function AttributeTable({
   }
 
   function selectionToFilter() {
-    if (!activeLayer || selection.size === 0) return;
+    if (!activeLayer || activeSelection.size === 0) return;
     // Strategy: if the features carry a stable id field, convert to a
     // single `in` clause. Otherwise fall back to a boolean-OR of per-
     // feature primary-key guesses. If no usable id field is
     // discoverable, we bail with a visible error rather than silently
     // filtering nothing.
-    const idField = pickIdField(activeFields, activeFeatures, selection);
+    const idField = pickIdField(activeFields, activeFeatures, activeSelection);
     if (!idField) return;
-    const values = [...selection]
+    const values = [...activeSelection]
       .map((i) => {
         const v = (activeFeatures[i]?.properties ?? {}) as Record<string, unknown>;
         return v[idField];
@@ -199,9 +222,11 @@ export function AttributeTable({
             value={activeLayerId ?? ''}
             onChange={(e) => {
               setActiveLayerId(e.target.value);
-              setSelection(new Set());
+              // Preserve selection across layer switches — picks on
+              // other layers keep their highlight on the map.
               setQuery('');
               setSortBy(null);
+              setLastPicked(null);
             }}
             className="h-7 min-w-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           >
@@ -225,13 +250,13 @@ export function AttributeTable({
           </label>
           <span className="text-[11px] text-muted">
             {visibleIndexes.length.toLocaleString()} rows
-            {selection.size > 0 ? ` · ${selection.size} selected` : ''}
+            {activeSelection.size > 0 ? ` · ${activeSelection.size} selected` : ''}
           </span>
         </div>
         <button
           type="button"
           onClick={zoomToSelection}
-          disabled={selection.size === 0}
+          disabled={activeSelection.size === 0}
           className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
           title="Zoom to selected features"
         >
@@ -241,7 +266,7 @@ export function AttributeTable({
         <button
           type="button"
           onClick={selectionToFilter}
-          disabled={selection.size === 0 || !activeLayer}
+          disabled={activeSelection.size === 0 || !activeLayer}
           className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
           title="Filter the layer to only the selected features"
         >
@@ -304,7 +329,7 @@ export function AttributeTable({
                   string,
                   unknown
                 >;
-                const selected = selection.has(idx);
+                const selected = activeSelection.has(idx);
                 return (
                   <tr
                     key={idx}

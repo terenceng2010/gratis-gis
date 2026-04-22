@@ -387,6 +387,19 @@ function LayerRow({
                       })
                     }
                   />
+                  <Toggle
+                    Icon={MousePointerClick}
+                    label="Selectable"
+                    checked={layer.interactions.selectable !== false}
+                    onChange={(v) =>
+                      onPatch({
+                        interactions: {
+                          ...layer.interactions,
+                          selectable: v,
+                        },
+                      })
+                    }
+                  />
                 </div>
                 <SearchConfig
                   value={layer.search}

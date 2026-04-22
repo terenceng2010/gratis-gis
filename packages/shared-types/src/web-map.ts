@@ -230,6 +230,14 @@ export interface WebMapLayerPopup {
 export interface WebMapLayerInteractions {
   hoverHighlight: boolean;
   editingEnabled: boolean;
+  /**
+   * When true (the default), features on this layer can be picked via
+   * the attribute table checkboxes, map click/rectangle/lasso/polygon
+   * tools, and programmatic selection. When false, the layer is
+   * effectively read-only for selection purposes — useful for
+   * basemap-style overlays that shouldn't compete for attention.
+   */
+  selectable: boolean;
 }
 
 /**
@@ -329,6 +337,7 @@ export const DEFAULT_LAYER_POPUP: WebMapLayerPopup = {
 export const DEFAULT_LAYER_INTERACTIONS: WebMapLayerInteractions = {
   hoverHighlight: true,
   editingEnabled: false,
+  selectable: true,
 };
 
 export const DEFAULT_LAYER_SEARCH: WebMapLayerSearch = {
