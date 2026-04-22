@@ -91,8 +91,10 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
 
   // Load portal items when the portal tab activates or the query changes.
   // Fetch both layer-bearing item types in parallel and merge by
-  // recency — the list API only accepts one `type` at a time today,
-  // so two requests keeps the server change surface minimal.
+  // recency. Uses Promise.allSettled so one failing fetch (common
+  // right after introducing a new item type — the API server may
+  // still be serving a pre-migration Prisma client) doesn't blank
+  // out the other type's results.
   useEffect(() => {
     if (!open || tab !== 'portal') return;
     let cancelled = false;
@@ -103,21 +105,30 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
         const fetchType = (t: string) => {
           const qs = new URLSearchParams({ type: t });
           if (q) qs.set('q', q);
-          return fetch(`/api/portal/items?${qs}`).then((r) =>
-            r.ok ? (r.json() as Promise<Item[]>) : Promise.resolve([]),
-          );
+          return fetch(`/api/portal/items?${qs}`).then((r) => {
+            if (!r.ok) throw new Error(`${t}: HTTP ${r.status}`);
+            return r.json() as Promise<Item[]>;
+          });
         };
-        const [fs, ags] = await Promise.all([
+        const settled = await Promise.allSettled([
           fetchType('feature_service'),
           fetchType('arcgis_service'),
         ]);
         if (cancelled) return;
-        const merged = [...fs, ...ags].sort((a, b) => {
+        const items: Item[] = [];
+        for (const s of settled) {
+          if (s.status === 'fulfilled') items.push(...s.value);
+          else {
+            // eslint-disable-next-line no-console
+            console.warn('[portal] fetch failed:', s.reason);
+          }
+        }
+        items.sort((a, b) => {
           const at = new Date(a.updatedAt ?? 0).getTime();
           const bt = new Date(b.updatedAt ?? 0).getTime();
           return bt - at;
         });
-        setPortalItems(merged);
+        setPortalItems(items);
       } finally {
         if (!cancelled) setPortalLoading(false);
       }
