@@ -723,6 +723,13 @@ function ZoomRange({
   const pctCurrent = Math.max(0, Math.min(100, posOf(currentZoom)));
   const leftEdge = posOf(maxV); // zoomed-in thumb — on the left
   const rightEdge = posOf(minV); // zoomed-out thumb — on the right
+  // Mirror MapLibre exactly: minzoom is inclusive, maxzoom is
+  // exclusive (the layer is hidden *at* maxzoom and above). Using the
+  // same comparison the renderer uses keeps the tick's color honest
+  // even near the thumbs, where raw position alone can mislead.
+  const inRange =
+    (minZoom == null || currentZoom >= minZoom) &&
+    (maxZoom == null || currentZoom < maxZoom);
 
   return (
     <div className="rounded-md border border-border bg-surface-1 p-2">
@@ -741,12 +748,22 @@ function ZoomRange({
           style={{ left: `${leftEdge}%`, right: `${100 - rightEdge}%` }}
         />
         {/* Current camera-zoom indicator. Sits above the track so both
-            thumbs still overlap it; rendered as a thin vertical bar. */}
+            thumbs still overlap it. Colored by real in-range status so
+            a tick nudged just past a thumb doesn't fool the eye into
+            thinking the layer is drawn when it isn't. */}
         <div
-          className="gg-dual-range__now"
+          className={
+            'gg-dual-range__now ' +
+            (inRange
+              ? 'gg-dual-range__now--in'
+              : 'gg-dual-range__now--out')
+          }
           style={{ left: `${pctCurrent}%` }}
           aria-hidden="true"
-          title={`Current zoom: z${currentZoom.toFixed(1)} (${zoomToScaleLabel(currentZoom)})`}
+          title={
+            `Current zoom: z${currentZoom.toFixed(1)} (${zoomToScaleLabel(currentZoom)})` +
+            ` — ${inRange ? 'in range' : 'outside range'}`
+          }
         />
         {/* Left thumb controls the zoomed-in (max) side. RTL on the
             input flips its native direction so dragging right lowers

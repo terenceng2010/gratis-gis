@@ -218,3 +218,18 @@
   border-right: 4px solid transparent;
   border-top: 5px solid hsl(var(--danger));
 }
+/* In-range: draw in the success color so "yes, the layer is showing
+   at the current zoom" reads at a glance. Out-of-range keeps the
+   default danger red. */
+.gg-dual-range__now--in {
+  background: hsl(var(--success));
+}
+.gg-dual-range__now--in::after {
+  border-top-color: hsl(var(--success));
+}
+.gg-dual-range__now--out {
+  background: hsl(var(--danger));
+}
+.gg-dual-range__now--out::after {
+  border-top-color: hsl(var(--danger));
+}
