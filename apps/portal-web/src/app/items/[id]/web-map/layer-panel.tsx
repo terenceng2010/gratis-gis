@@ -690,52 +690,67 @@ function ZoomRange({
   onMin: (z: number | null) => void;
   onMax: (z: number | null) => void;
 }) {
-  const minLabel =
-    minZoom == null ? 'any' : `${minZoom}  (${zoomToScaleLabel(minZoom)})`;
-  const maxLabel =
-    maxZoom == null ? 'any' : `${maxZoom}  (${zoomToScaleLabel(maxZoom)})`;
+  // Clamp nullable bounds to the slider range for positioning. Storing
+  // null when a thumb rests on the extreme keeps the persisted map's
+  // intent clear — "no minimum" vs. "minimum happens to be zero".
+  const minV = minZoom ?? ZOOM_MIN;
+  const maxV = maxZoom ?? ZOOM_MAX;
+  const span = ZOOM_MAX - ZOOM_MIN;
+  const pctMin = ((minV - ZOOM_MIN) / span) * 100;
+  const pctMax = ((maxV - ZOOM_MIN) / span) * 100;
+
   return (
     <div className="rounded-md border border-border bg-surface-1 p-2">
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
-        {label}
+      <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-wide text-muted">
+        <span>{label}</span>
+        <span className="tabular-nums normal-case tracking-normal text-muted">
+          {minZoom == null ? 'any' : `z${minZoom}`}
+          {'  –  '}
+          {maxZoom == null ? 'any' : `z${maxZoom}`}
+        </span>
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="flex items-center justify-between text-[10px] text-muted">
-            <span>Min zoom</span>
-            <span className="tabular-nums">{minLabel}</span>
-          </label>
-          <input
-            type="range"
-            min={ZOOM_MIN}
-            max={ZOOM_MAX}
-            step={1}
-            value={minZoom ?? ZOOM_MIN}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              onMin(n === ZOOM_MIN ? null : n);
-            }}
-            className="mt-1 w-full accent-accent"
-          />
-        </div>
-        <div>
-          <label className="flex items-center justify-between text-[10px] text-muted">
-            <span>Max zoom</span>
-            <span className="tabular-nums">{maxLabel}</span>
-          </label>
-          <input
-            type="range"
-            min={ZOOM_MIN}
-            max={ZOOM_MAX}
-            step={1}
-            value={maxZoom ?? ZOOM_MAX}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              onMax(n === ZOOM_MAX ? null : n);
-            }}
-            className="mt-1 w-full accent-accent"
-          />
-        </div>
+      <div className="gg-dual-range">
+        <div className="gg-dual-range__track" />
+        <div
+          className="gg-dual-range__fill"
+          style={{ left: `${pctMin}%`, right: `${100 - pctMax}%` }}
+        />
+        <input
+          type="range"
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          step={1}
+          value={minV}
+          onChange={(e) => {
+            let n = Number(e.target.value);
+            if (n > maxV) n = maxV;
+            onMin(n === ZOOM_MIN ? null : n);
+          }}
+          aria-label={`${label} minimum zoom`}
+          className="gg-dual-range__input"
+        />
+        <input
+          type="range"
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          step={1}
+          value={maxV}
+          onChange={(e) => {
+            let n = Number(e.target.value);
+            if (n < minV) n = minV;
+            onMax(n === ZOOM_MAX ? null : n);
+          }}
+          aria-label={`${label} maximum zoom`}
+          className="gg-dual-range__input"
+        />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
+        <span className="tabular-nums">
+          {minZoom == null ? 'world' : zoomToScaleLabel(minZoom)}
+        </span>
+        <span className="tabular-nums">
+          {maxZoom == null ? 'building' : zoomToScaleLabel(maxZoom)}
+        </span>
       </div>
     </div>
   );
