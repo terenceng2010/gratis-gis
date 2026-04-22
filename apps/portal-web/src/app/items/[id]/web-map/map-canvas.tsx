@@ -661,25 +661,6 @@ function syncOverlays(
     const useSdf = tint && wantsIcon && m.hasImage(sdfId);
     const preferredId = useSdf ? sdfId : plainId;
     const iconReady = wantsIcon && m.hasImage(preferredId);
-    // Diagnostic: remove once icon rendering is settled.
-    if (wantsIcon) {
-      const loadedIcons = Object.keys(MAP_ICONS).filter((n) =>
-        m.hasImage(iconImageId(n)),
-      );
-      // eslint-disable-next-line no-console
-      console.log('[gg map] icon sync', {
-        layer: layer.title,
-        iconName: s.point.iconName,
-        plainId,
-        sdfId,
-        iconReady,
-        useSdf,
-        plainRegistered: m.hasImage(plainId),
-        sdfRegistered: m.hasImage(sdfId),
-        totalIconsLoaded: loadedIcons.length,
-        sampleLoaded: loadedIcons.slice(0, 3),
-      });
-    }
     if (iconReady) {
       // Selection halo under the icon. Rendered as a separate circle
       // layer so it reads through whatever the symbol shows on top —
@@ -704,11 +685,11 @@ function syncOverlays(
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         layout: {
           'icon-image': preferredId,
-          'icon-size': stateCase(
-            s.point.iconSize,
-            s.point.iconSize * 1.15,
-            s.point.iconSize * 1.2,
-          ) as unknown as number,
+          // Plain constant: MapLibre rejects feature-state expressions
+          // in layout properties ("icon-size" is one). The selection
+          // halo circle above the icon carries the selected/hover
+          // visual instead, which DOES go on a paint property.
+          'icon-size': s.point.iconSize,
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
           'icon-anchor': 'bottom',
