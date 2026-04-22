@@ -253,20 +253,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
   // Basemap swap. Preserves camera + overlays so it feels seamless.
   //
-  // The sequence that works:
-  //   1. Drop icons *before* setStyle, but only those that were
-  //      actually registered. `hasImage`-guarded so MapLibre doesn't
-  //      fire "image does not exist" error events for entries it
-  //      never had. This is necessary because setStyle wipes the
-  //      underlying GL textures — the JS-side image cache can
-  //      claim `hasImage === true` for ghost entries that render
-  //      invisibly in symbol layers.
-  //   2. setStyle(new basemap).
-  //   3. Wait for styledata + isStyleLoaded, then restore camera,
-  //      *await* icon re-registration, and THEN syncOverlays. The
-  //      await matters: calling syncOverlays before icons are in
-  //      the atlas leaves symbol layers in the "image does not
-  //      exist" failure state even after the image shows up later.
+  // Polling isStyleLoaded on a short interval turned out to be more
+  // reliable than hooking `styledata` — when MapLibre falls back to
+  // "rebuild from scratch" (which the console warning flagged),
+  // `styledata` events can fire in a state where `isStyleLoaded`
+  // briefly returns true but the style isn't really ready for
+  // addSource/addLayer. Polling plus an explicit `idle` event as
+  // the "fully done" signal catches both fast and slow basemaps.
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
@@ -287,25 +280,53 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     }
 
     const style = { ...BASEMAPS[map.basemap].style, metadata: { basemap: map.basemap } };
+    // eslint-disable-next-line no-console
+    console.debug('[basemap] setStyle →', map.basemap);
     m.setStyle(style);
 
     let cancelled = false;
-    const onStyleData = async () => {
-      if (!m.isStyleLoaded()) return;
-      m.off('styledata', onStyleData);
-      if (cancelled) return;
+    let done = false;
+    const applyOverlays = async () => {
+      if (cancelled || done) return;
+      done = true;
+      // eslint-disable-next-line no-console
+      console.debug('[basemap] applying overlays for', map.basemap);
       m.jumpTo({ center: [c.lng, c.lat], zoom: z, bearing: b, pitch: p });
       await loadAllIcons(m);
       if (cancelled) return;
       syncOverlays(m, layersRef.current, hoveredRef);
-      // Keep the main [map.layers, iconsTick] useEffect in sync so
-      // any subsequent layer edits during the transition still land.
       setIconsTick((t) => t + 1);
     };
-    m.on('styledata', onStyleData);
+
+    // Primary trigger: `idle` fires once everything — style, tiles,
+    // pending data — has settled. MapLibre emits it on style swaps
+    // reliably, so it's the right "fully ready" signal.
+    const onIdle = () => {
+      m.off('idle', onIdle);
+      void applyOverlays();
+    };
+    m.on('idle', onIdle);
+
+    // Safety net: if `idle` doesn't fire within a reasonable window
+    // (e.g., a slow raster basemap where a tile stays pending), poll
+    // isStyleLoaded and proceed anyway. Overlays live above tiles,
+    // so we don't need raster tiles to be done.
+    const pollHandle = window.setInterval(() => {
+      if (done || cancelled) {
+        window.clearInterval(pollHandle);
+        return;
+      }
+      if (m.isStyleLoaded()) {
+        window.clearInterval(pollHandle);
+        m.off('idle', onIdle);
+        void applyOverlays();
+      }
+    }, 120);
+
     return () => {
       cancelled = true;
-      m.off('styledata', onStyleData);
+      window.clearInterval(pollHandle);
+      m.off('idle', onIdle);
     };
   }, [map.basemap]);
 
