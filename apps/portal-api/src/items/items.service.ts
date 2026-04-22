@@ -100,7 +100,11 @@ export class ItemsService {
       !this.sharing.canEdit(user, item, item.shares)
     ) {
       const filtered = await this.filterWebMapForViewer(user, item.data);
-      return { ...item, data: filtered };
+      // Cast back to the original shape: filter returns `unknown`
+      // because the dataJson contract is loose, but the rest of the
+      // service expects Prisma's `JsonValue` so callers of get() see
+      // the same type regardless of branch.
+      return { ...item, data: filtered as typeof item.data };
     }
     return item;
   }

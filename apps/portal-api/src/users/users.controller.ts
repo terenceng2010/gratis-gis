@@ -84,7 +84,7 @@ export class UsersController {
           username: true,
           fullName: true,
           avatarUrl: true,
-          groupMemberships: {
+          groupMembers: {
             where: { group: { deletedAt: null } },
             select: { groupId: true },
           },
@@ -96,7 +96,7 @@ export class UsersController {
         username: r.username,
         fullName: r.fullName,
         avatarUrl: r.avatarUrl,
-        groupIds: r.groupMemberships.map((m) => m.groupId),
+        groupIds: r.groupMembers.map((m: { groupId: string }) => m.groupId),
       }));
     }
 
