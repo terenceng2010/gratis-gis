@@ -71,6 +71,12 @@ export function searchLayers(
     if (!layer.search?.enabled) continue;
     const fields = layer.search.fields.filter((f) => f.length > 0);
     if (fields.length === 0) continue;
+    // ArcGIS-REST layers only have the visible viewport's features in
+    // the local cache; we'd miss matches outside the camera's bbox.
+    // Those layers are handled by searchArcgisLayers(), which queries
+    // the origin directly with a WHERE clause against the whole
+    // dataset.
+    if (layer.source.kind === 'arcgis-rest') continue;
     const fc = featuresByLayer[layer.id];
     if (!fc) continue;
 
@@ -112,6 +118,116 @@ export function searchLayers(
     }
   }
   return out;
+}
+
+/**
+ * Search ArcGIS REST layers by hitting each service's /query endpoint
+ * with a WHERE clause against the layer's configured searchable
+ * fields. Unlike the local-cache search above this reaches features
+ * that aren't in the current viewport — important because ArcGIS-REST
+ * layers only have the last bbox query in memory, and a hit like a
+ * parcel APN is almost never visible when the user starts typing.
+ *
+ * The generated WHERE wraps each field in UPPER(CAST(... AS VARCHAR))
+ * so the same query works on numeric columns (APN-style integers)
+ * and string columns alike, and compares case-insensitively. Single
+ * quotes in the query are doubled per standard SQL escaping.
+ *
+ * Per-layer failures are swallowed — e.g. the server may reject LIKE
+ * on a field it can't cast, or the user may type a pattern that
+ * breaks before it reaches the server. We log once and move on so
+ * other layers still get searched.
+ */
+export async function searchArcgisLayers(
+  query: string,
+  layers: WebMapLayer[],
+  signal?: AbortSignal,
+): Promise<SearchResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const tasks = layers
+    .filter(
+      (l) =>
+        l.search?.enabled &&
+        l.search.fields.length > 0 &&
+        l.source.kind === 'arcgis-rest',
+    )
+    .map(async (layer) => {
+      const src = layer.source as {
+        kind: 'arcgis-rest';
+        url: string;
+        layerId: number;
+      };
+      const fields = layer.search!.fields.filter((f) => f.length > 0);
+      const safeQ = q.replace(/'/g, "''");
+      // UPPER + CAST lets the same WHERE run against string-valued
+      // APN columns and integer-valued APN columns alike. Wrapping
+      // in parens keeps precedence clear when we OR multiple fields.
+      const whereClauses = fields.map(
+        (f) =>
+          `UPPER(CAST(${f} AS VARCHAR(255))) LIKE UPPER('%${safeQ}%')`,
+      );
+      const where = whereClauses.join(' OR ');
+      const params = new URLSearchParams({
+        where,
+        outFields: fields.join(','),
+        outSR: '4326',
+        returnGeometry: 'true',
+        f: 'geojson',
+        resultRecordCount: String(MAX_ATTRIBUTE_HITS_PER_LAYER),
+      });
+      const url = `${src.url}/${src.layerId}/query?${params}`;
+      try {
+        const init: RequestInit = signal ? { signal } : {};
+        const res = await fetch(url, init);
+        if (!res.ok) return [] as SearchResult[];
+        const fc = (await res.json()) as GeoJSON.FeatureCollection & {
+          error?: { message?: string };
+        };
+        if (fc.error) {
+          // eslint-disable-next-line no-console
+          console.warn(`[search] ${layer.title}:`, fc.error.message);
+          return [] as SearchResult[];
+        }
+        if (fc.type !== 'FeatureCollection') return [] as SearchResult[];
+        return fc.features.slice(0, MAX_ATTRIBUTE_HITS_PER_LAYER).map(
+          (f): SearchResult => {
+            const props = (f.properties ?? {}) as Record<string, unknown>;
+            const label = layer.search!.labelTemplate
+              ? renderTemplate(layer.search!.labelTemplate, props)
+              : firstNonEmpty(fields.map((ff) => props[ff])) ?? '(unnamed)';
+            return {
+              kind: 'feature',
+              layerId: layer.id,
+              layerTitle: layer.title,
+              label,
+              subtitle:
+                fields
+                  .map((ff) => {
+                    const val = props[ff];
+                    return val ? `${ff}: ${val}` : null;
+                  })
+                  .filter(Boolean)
+                  .join(' · ') || null,
+              bbox: featureBbox(f),
+              center: featureCenter(f),
+              feature: f,
+            };
+          },
+        );
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return [] as SearchResult[];
+        }
+        // eslint-disable-next-line no-console
+        console.warn(`[search] ${layer.title}:`, (err as Error).message);
+        return [] as SearchResult[];
+      }
+    });
+
+  const perLayer = await Promise.all(tasks);
+  return perLayer.flat();
 }
 
 /**

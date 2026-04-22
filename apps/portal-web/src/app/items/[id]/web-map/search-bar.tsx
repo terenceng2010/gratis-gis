@@ -5,6 +5,7 @@ import { Loader2, MapPin, Search, Tag, X } from 'lucide-react';
 import type { WebMapLayer } from '@gratis-gis/shared-types';
 import {
   geocode,
+  searchArcgisLayers,
   searchLayers,
   type SearchResult,
 } from './search-sources';
@@ -45,6 +46,8 @@ export function SearchBar({
   const [open, setOpen] = useState(false);
   const [geocodeResults, setGeocodeResults] = useState<SearchResult[]>([]);
   const [geocodeLoading, setGeocodeLoading] = useState(false);
+  const [arcgisResults, setArcgisResults] = useState<SearchResult[]>([]);
+  const [arcgisLoading, setArcgisLoading] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -84,9 +87,39 @@ export function SearchBar({
     };
   }, [query, geocodingEnabled]);
 
+  // Debounced ArcGIS REST attribute search. Runs only when at least
+  // one visible layer is arcgis-rest and searchable; otherwise we
+  // fall through to the fast local-cache path alone. Short queries
+  // are skipped so a parcels service with a million rows doesn't
+  // get hammered by every keystroke.
+  useEffect(() => {
+    const q = query.trim();
+    const arcgisLayers = layers.filter(
+      (l) =>
+        l.source.kind === 'arcgis-rest' &&
+        l.search?.enabled &&
+        (l.search?.fields?.length ?? 0) > 0,
+    );
+    if (q.length < 2 || arcgisLayers.length === 0) {
+      setArcgisResults([]);
+      return;
+    }
+    const controller = new AbortController();
+    setArcgisLoading(true);
+    const handle = setTimeout(() => {
+      searchArcgisLayers(q, arcgisLayers, controller.signal)
+        .then((rows) => setArcgisResults(rows))
+        .finally(() => setArcgisLoading(false));
+    }, 300);
+    return () => {
+      controller.abort();
+      clearTimeout(handle);
+    };
+  }, [query, layers]);
+
   const all: SearchResult[] = useMemo(
-    () => [...layerResults, ...geocodeResults],
-    [layerResults, geocodeResults],
+    () => [...layerResults, ...arcgisResults, ...geocodeResults],
+    [layerResults, arcgisResults, geocodeResults],
   );
 
   useEffect(() => {
@@ -155,7 +188,7 @@ export function SearchBar({
           aria-autocomplete="list"
           className="h-10 w-full bg-transparent pl-9 pr-9 text-sm focus:outline-none"
         />
-        {geocodeLoading ? (
+        {geocodeLoading || arcgisLoading ? (
           <Loader2 className="pointer-events-none absolute right-8 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted" />
         ) : null}
         {query ? (
@@ -179,11 +212,23 @@ export function SearchBar({
           role="listbox"
           className="max-h-80 overflow-y-auto border-t border-border"
         >
-          {layerResults.length > 0 ? (
+          {layerResults.length > 0 || arcgisResults.length > 0 ? (
             <Section title="In this map">
               {layerResults.map((r, i) => (
                 <ResultRow
                   key={`l-${i}`}
+                  result={r}
+                  highlighted={all.indexOf(r) === highlight}
+                  onHover={() => setHighlight(all.indexOf(r))}
+                  onClick={() => {
+                    onPick(r);
+                    setOpen(false);
+                  }}
+                />
+              ))}
+              {arcgisResults.map((r, i) => (
+                <ResultRow
+                  key={`a-${i}`}
                   result={r}
                   highlighted={all.indexOf(r) === highlight}
                   onHover={() => setHighlight(all.indexOf(r))}
