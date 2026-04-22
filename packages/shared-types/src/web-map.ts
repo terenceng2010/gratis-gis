@@ -73,6 +73,43 @@ export interface WebMapLayer {
    * surfaces a human-readable scale hint next to each slider.
    */
   scale: WebMapLayerScale;
+  /**
+   * Per-layer access policy. Default `policy: 'inherit'` means the
+   * underlying item's sharing decides everything. `'custom'` enables
+   * the matrix — each principal the webmap is shared with gets an
+   * entry with explicit view / query / edit flags. Server enforcement
+   * always caps by item-level access: the matrix can subtract (hide
+   * a layer from a specific principal on this map) but can never
+   * grant access the underlying item didn't already allow.
+   */
+  access: WebMapLayerAccess;
+}
+
+/**
+ * Per-layer access entry. Anchors to a principal (user or group) by
+ * id; the layer is visible to that principal only when `view` is
+ * true. `query` gates popups / attribute-table / search; `edit`
+ * reserves future feature-editing once that pillar ships.
+ */
+export interface WebMapLayerAccessEntry {
+  principalType: 'user' | 'group';
+  principalId: string;
+  view: boolean;
+  query: boolean;
+  edit: boolean;
+}
+
+export interface WebMapLayerAccess {
+  /**
+   * `'inherit'`: no per-layer restriction beyond item-level sharing.
+   * `'custom'`: apply `entries` — a principal not listed (and not a
+   * member of a listed group) defaults to the layer being hidden for
+   * them. Authors flip to `'custom'` the first time they adjust the
+   * matrix; until then, everyone who can see the webmap can see
+   * every layer they have item access to.
+   */
+  policy: 'inherit' | 'custom';
+  entries: WebMapLayerAccessEntry[];
 }
 
 /**
@@ -412,6 +449,11 @@ export const DEFAULT_LAYER_SCALE: WebMapLayerScale = {
   scaleWithZoom: true,
   labelsMinZoom: null,
   labelsMaxZoom: null,
+};
+
+export const DEFAULT_LAYER_ACCESS: WebMapLayerAccess = {
+  policy: 'inherit',
+  entries: [],
 };
 
 /**

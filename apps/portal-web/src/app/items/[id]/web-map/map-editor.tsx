@@ -9,6 +9,7 @@ import type {
   WebMapLayer,
 } from '@gratis-gis/shared-types';
 import {
+  DEFAULT_LAYER_ACCESS,
   DEFAULT_LAYER_INTERACTIONS,
   DEFAULT_LAYER_LABELS,
   DEFAULT_LAYER_POPUP,
@@ -120,6 +121,11 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
           ...structuredClone(DEFAULT_LAYER_SCALE),
           ...(((l as unknown) as { scale?: Partial<WebMapLayer['scale']> })
             .scale ?? {}),
+        },
+        access: {
+          ...structuredClone(DEFAULT_LAYER_ACCESS),
+          ...(((l as unknown) as { access?: Partial<WebMapLayer['access']> })
+            .access ?? {}),
         },
         style: {
           ...structuredClone(DEFAULT_LAYER_STYLE),
