@@ -290,9 +290,17 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // Basemap swap. Preserves camera + overlays so it feels seamless.
   //
   // MapLibre's `style.load` event does not reliably fire on subsequent
-  // setStyle() calls; only `styledata` is guaranteed. We listen until we
-  // see a styledata event where the style is actually ready, re-apply
-  // the camera, and replay overlay layers (they're wiped by setStyle).
+  // setStyle() calls; only `styledata` is guaranteed. We listen until
+  // we see a styledata event where the style is actually ready, re-
+  // apply the camera, and bump iconsTick so the main overlay-sync
+  // useEffect re-runs against the fresh style.
+  //
+  // We deliberately do NOT call syncOverlays directly here. Calling
+  // it before icons have (re-)registered leaves symbol layers
+  // referencing images MapLibre hasn't got, which renders invisibly
+  // even though the source and paint props look right — the bug the
+  // "modify any symbology to unstick the map" workaround papered
+  // over. Routing through iconsTick keeps a single overlay-sync path.
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
@@ -311,27 +319,34 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       if (!m.isStyleLoaded()) return;
       m.off('styledata', onStyleData);
       m.jumpTo({ center: [c.lng, c.lat], zoom: z, bearing: b, pitch: p });
-      syncOverlays(m, map.layers, hoveredRef);
+      setIconsTick((t) => t + 1);
     };
     m.on('styledata', onStyleData);
-  }, [map.basemap, map.layers]);
+  }, [map.basemap]);
 
-  // Keep overlay layers (everything after the basemap) in sync with props.
-  // Depends on iconsTick so the sync re-runs once each icon batch
-  // finishes registering — otherwise a symbol layer can be added
-  // referencing an image that MapLibre hasn't received yet, and it
-  // silently renders nothing.
+  // Keep overlay layers (everything after the basemap) in sync with
+  // props. Depends on iconsTick so the sync re-runs once each icon
+  // batch finishes registering — otherwise a symbol layer can be
+  // added referencing an image that MapLibre hasn't received yet,
+  // and it silently renders nothing.
+  //
+  // When the style is mid-load we listen on `styledata` rather than
+  // `load`; `load` does not reliably fire on subsequent setStyle
+  // calls, so the basemap-swap path wouldn't unstick itself without
+  // this.
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
-    // Wait for style to be fully loaded, otherwise addSource throws.
     if (!m.isStyleLoaded()) {
       const once = () => {
+        if (!m.isStyleLoaded()) return;
+        m.off('styledata', once);
         syncOverlays(m, map.layers, hoveredRef);
-        m.off('load', once);
       };
-      m.on('load', once);
-      return;
+      m.on('styledata', once);
+      return () => {
+        m.off('styledata', once);
+      };
     }
     syncOverlays(m, map.layers, hoveredRef);
   }, [map.layers, iconsTick]);

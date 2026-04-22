@@ -128,15 +128,14 @@ export function searchLayers(
  * layers only have the last bbox query in memory, and a hit like a
  * parcel APN is almost never visible when the user starts typing.
  *
- * The generated WHERE wraps each field in UPPER(CAST(... AS VARCHAR))
- * so the same query works on numeric columns (APN-style integers)
- * and string columns alike, and compares case-insensitively. Single
+ * We try a case-insensitive LIKE first (UPPER on both sides of the
+ * comparison) and fall back to a plain LIKE if the server rejects
+ * UPPER. Numeric columns still match when the query is itself
+ * numeric since ArcGIS implicitly coerces the right-hand side. Single
  * quotes in the query are doubled per standard SQL escaping.
  *
- * Per-layer failures are swallowed — e.g. the server may reject LIKE
- * on a field it can't cast, or the user may type a pattern that
- * breaks before it reaches the server. We log once and move on so
- * other layers still get searched.
+ * Per-layer failures are logged to the console and swallowed — one
+ * misconfigured field shouldn't nuke search for the rest of the map.
  */
 export async function searchArcgisLayers(
   query: string,
@@ -161,36 +160,68 @@ export async function searchArcgisLayers(
       };
       const fields = layer.search!.fields.filter((f) => f.length > 0);
       const safeQ = q.replace(/'/g, "''");
-      // UPPER + CAST lets the same WHERE run against string-valued
-      // APN columns and integer-valued APN columns alike. Wrapping
-      // in parens keeps precedence clear when we OR multiple fields.
-      const whereClauses = fields.map(
-        (f) =>
-          `UPPER(CAST(${f} AS VARCHAR(255))) LIKE UPPER('%${safeQ}%')`,
-      );
-      const where = whereClauses.join(' OR ');
-      const params = new URLSearchParams({
-        where,
-        outFields: fields.join(','),
-        outSR: '4326',
-        returnGeometry: 'true',
-        f: 'geojson',
-        resultRecordCount: String(MAX_ATTRIBUTE_HITS_PER_LAYER),
-      });
-      const url = `${src.url}/${src.layerId}/query?${params}`;
-      try {
+      // Try two WHERE forms in order:
+      //   1. Case-insensitive LIKE via UPPER() on both sides. Works on
+      //      any string-typed column where the server's standardized
+      //      SQL allows UPPER.
+      //   2. Plain LIKE without UPPER. Works on strings where UPPER
+      //      isn't allowed (some file-geodatabase services), and on
+      //      numeric columns when the query is itself numeric (ArcGIS
+      //      implicitly coerces the right-hand side).
+      // Earlier iterations wrapped each field in CAST(... AS VARCHAR)
+      // to paper over numeric columns, but enough ArcGIS deployments
+      // reject that syntax that it did more harm than good.
+      const buildWhere = (wrapper: (f: string) => string) =>
+        fields
+          .map((f) => `${wrapper(f)} LIKE ${wrapper(`'%${safeQ}%'`)}`)
+          .join(' OR ');
+      const attempts = [
+        buildWhere((s) => `UPPER(${s})`),
+        buildWhere((s) => s),
+      ];
+      const tryQuery = async (
+        where: string,
+      ): Promise<{ fc: GeoJSON.FeatureCollection | null; err: string | null }> => {
+        const params = new URLSearchParams({
+          where,
+          outFields: '*',
+          outSR: '4326',
+          returnGeometry: 'true',
+          f: 'geojson',
+          resultRecordCount: String(MAX_ATTRIBUTE_HITS_PER_LAYER),
+        });
+        const url = `${src.url}/${src.layerId}/query?${params}`;
         const init: RequestInit = signal ? { signal } : {};
         const res = await fetch(url, init);
-        if (!res.ok) return [] as SearchResult[];
-        const fc = (await res.json()) as GeoJSON.FeatureCollection & {
+        if (!res.ok) return { fc: null, err: `HTTP ${res.status}` };
+        const j = (await res.json()) as GeoJSON.FeatureCollection & {
           error?: { message?: string };
         };
-        if (fc.error) {
+        if (j.error) return { fc: null, err: j.error.message ?? 'error' };
+        if (j.type !== 'FeatureCollection') {
+          return { fc: null, err: 'non-FeatureCollection response' };
+        }
+        return { fc: j, err: null };
+      };
+      try {
+        let fc: GeoJSON.FeatureCollection | null = null;
+        let lastErr: string | null = null;
+        for (const where of attempts) {
+          const result = await tryQuery(where);
+          if (result.fc) {
+            fc = result.fc;
+            break;
+          }
+          lastErr = result.err;
+        }
+        if (!fc) {
           // eslint-disable-next-line no-console
-          console.warn(`[search] ${layer.title}:`, fc.error.message);
+          console.warn(
+            `[search] ${layer.title}:`,
+            lastErr ?? 'all query variants failed',
+          );
           return [] as SearchResult[];
         }
-        if (fc.type !== 'FeatureCollection') return [] as SearchResult[];
         return fc.features.slice(0, MAX_ATTRIBUTE_HITS_PER_LAYER).map(
           (f): SearchResult => {
             const props = (f.properties ?? {}) as Record<string, unknown>;
