@@ -150,12 +150,32 @@ export type WebMapLayerSource =
  *
  * Colors are CSS / hex strings, rendered via MapLibre paint properties.
  */
+/**
+ * Which marker shape a point layer renders. `circle` keeps the
+ * classic dot; `icon` swaps in a named symbol registered with
+ * MapLibre via the map-icons library. Additional kinds (e.g. custom
+ * uploaded SVG) slot in here.
+ */
+export type PointSymbol = 'circle' | 'icon';
+
 export interface WebMapLayerStyle {
   point: {
     color: string;
     radius: number;
     strokeColor: string;
     strokeWidth: number;
+    /**
+     * Marker shape. `circle` (the default) uses color + radius +
+     * outline; `icon` uses a pre-registered SVG referenced by name.
+     */
+    symbol: PointSymbol;
+    /**
+     * Required when symbol is `icon`. Names a built-in icon from the
+     * MAP_ICONS registry (e.g. `"map-pin"`). Blank when using circle.
+     */
+    iconName: string;
+    /** Multiplier applied to the icon's base 48px size. */
+    iconSize: number;
   };
   line: {
     color: string;
@@ -274,6 +294,9 @@ export const DEFAULT_LAYER_STYLE: WebMapLayerStyle = {
     radius: 6,
     strokeColor: '#ffffff',
     strokeWidth: 1.5,
+    symbol: 'circle',
+    iconName: '',
+    iconSize: 1,
   },
   line: {
     color: '#6366f1',

@@ -3,6 +3,7 @@
 import { List, X } from 'lucide-react';
 import type { WebMapLayer } from '@gratis-gis/shared-types';
 import type { GeometryFamily, LayerMetadata } from './layer-metadata';
+import { renderIconSvg } from './map-icons';
 
 interface Props {
   open: boolean;
@@ -199,11 +200,15 @@ function SimpleSwatches({
       ) : null}
       {showPoint ? (
         <li className="flex items-center gap-2">
-          <PointMark
-            fill={s.point.color}
-            stroke={s.point.strokeColor}
-            radius={s.point.radius}
-          />
+          {s.point.symbol === 'icon' && s.point.iconName ? (
+            <IconMark iconName={s.point.iconName} />
+          ) : (
+            <PointMark
+              fill={s.point.color}
+              stroke={s.point.strokeColor}
+              radius={s.point.radius}
+            />
+          )}
           <span className="text-muted">point</span>
         </li>
       ) : null}
@@ -252,6 +257,17 @@ function LineMark({ color }: { color: string }) {
       aria-hidden="true"
       className="inline-block h-0.5 w-4 shrink-0 rounded"
       style={{ backgroundColor: color }}
+    />
+  );
+}
+
+function IconMark({ iconName }: { iconName: string }) {
+  const svg = renderIconSvg(iconName) ?? '';
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
+      dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
 }

@@ -1,7 +1,13 @@
 'use client';
 
-import type { WebMapLayerStyle } from '@gratis-gis/shared-types';
+import { useMemo, useState } from 'react';
+import type { WebMapLayerStyle, PointSymbol } from '@gratis-gis/shared-types';
 import type { GeometryFamily } from './layer-metadata';
+import {
+  MAP_ICONS,
+  MAP_ICON_CATEGORIES,
+  renderIconSvg,
+} from './map-icons';
 
 interface Props {
   value: WebMapLayerStyle;
@@ -102,40 +108,187 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
       ) : null}
 
       {showPoint ? (
-      <section>
-        <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
-          Points
-        </h4>
-        <div className="grid grid-cols-2 gap-2">
-          <Color
-            label="Fill"
-            value={value.point.color}
-            onChange={(c) => patch('point', { color: c })}
-          />
-          <Slider
-            label="Radius"
-            min={2}
-            max={24}
-            step={1}
-            value={value.point.radius}
-            onChange={(n) => patch('point', { radius: n })}
-          />
-          <Color
-            label="Outline"
-            value={value.point.strokeColor}
-            onChange={(c) => patch('point', { strokeColor: c })}
-          />
-          <Slider
-            label="Outline width"
-            min={0}
-            max={6}
-            step={0.5}
-            value={value.point.strokeWidth}
-            onChange={(n) => patch('point', { strokeWidth: n })}
-          />
-        </div>
-      </section>
+        <section>
+          <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+            Points
+          </h4>
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            <SymbolBtn
+              active={(value.point.symbol ?? 'circle') === 'circle'}
+              onClick={() => patch('point', { symbol: 'circle' })}
+              label="Circle"
+            />
+            <SymbolBtn
+              active={value.point.symbol === 'icon'}
+              onClick={() =>
+                patch('point', {
+                  symbol: 'icon',
+                  iconName: value.point.iconName || 'map-pin',
+                })
+              }
+              label="Icon"
+            />
+          </div>
+
+          {value.point.symbol === 'icon' ? (
+            <>
+              <IconPicker
+                value={value.point.iconName}
+                onChange={(iconName) => patch('point', { iconName })}
+              />
+              <div className="mt-3">
+                <Slider
+                  label="Icon size"
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  value={value.point.iconSize ?? 1}
+                  onChange={(n) => patch('point', { iconSize: n })}
+                />
+              </div>
+              <p className="mt-2 text-[11px] text-muted">
+                Icons render in their shipped color. Per-feature
+                tinting lands in a follow-up alongside custom SVG
+                upload.
+              </p>
+            </>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <Color
+                label="Fill"
+                value={value.point.color}
+                onChange={(c) => patch('point', { color: c })}
+              />
+              <Slider
+                label="Radius"
+                min={2}
+                max={24}
+                step={1}
+                value={value.point.radius}
+                onChange={(n) => patch('point', { radius: n })}
+              />
+              <Color
+                label="Outline"
+                value={value.point.strokeColor}
+                onChange={(c) => patch('point', { strokeColor: c })}
+              />
+              <Slider
+                label="Outline width"
+                min={0}
+                max={6}
+                step={0.5}
+                value={value.point.strokeWidth}
+                onChange={(n) => patch('point', { strokeWidth: n })}
+              />
+            </div>
+          )}
+        </section>
       ) : null}
+    </div>
+  );
+}
+
+function SymbolBtn({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-md border p-2 text-xs font-medium transition-colors ${
+        active
+          ? 'border-accent bg-accent/5 text-ink-0 ring-2 ring-accent/30'
+          : 'border-border bg-surface-1 text-muted hover:bg-surface-2'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/**
+ * Icon grid for the point symbol picker. Searchable across label +
+ * category so users can type what they're looking for rather than
+ * browse the whole library. Selecting an entry sets the layer's
+ * iconName; an SVG preview renders each option at 24x24.
+ */
+function IconPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (name: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<string>('all');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return Object.entries(MAP_ICONS).filter(([name, icon]) => {
+      if (category !== 'all' && icon.category !== category) return false;
+      if (!q) return true;
+      return (
+        name.includes(q) ||
+        icon.label.toLowerCase().includes(q) ||
+        icon.category.toLowerCase().includes(q)
+      );
+    });
+  }, [query, category]);
+
+  return (
+    <div className="rounded-md border border-border bg-surface-1 p-2">
+      <div className="mb-2 flex gap-2">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search icons..."
+          className="h-7 min-w-0 flex-1 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+        />
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="h-7 rounded border border-border bg-surface-1 px-1 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+        >
+          <option value="all">all</option>
+          {MAP_ICON_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid max-h-40 grid-cols-6 gap-1 overflow-y-auto">
+        {filtered.map(([name, icon]) => {
+          const svg = renderIconSvg(name) ?? '';
+          const active = name === value;
+          return (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onChange(name)}
+              title={icon.label}
+              className={`flex aspect-square items-center justify-center rounded border p-1 transition-colors ${
+                active
+                  ? 'border-accent bg-accent/10 ring-2 ring-accent/30'
+                  : 'border-border bg-surface-1 hover:bg-surface-2'
+              }`}
+              dangerouslySetInnerHTML={{ __html: svg }}
+            />
+          );
+        })}
+        {filtered.length === 0 ? (
+          <div className="col-span-6 py-4 text-center text-[11px] text-muted">
+            No icons match.
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

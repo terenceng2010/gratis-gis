@@ -1,0 +1,20 @@
+feat(web-map): point symbol icons with reliable rendering 
+ 
+Adds a pluggable point symbol system alongside the existing circle 
+renderer. Users can pick from 25 curated lucide SVG icons covering 
+markers, buildings, places, nature, and transport. 
+ 
+- Schema: point.symbol (circle | icon), iconName, iconSize 
+- map-icons.ts registry with inlined lucide SVGs and iconImageId helper 
+- Icon picker in style editor: searchable grid + category filter 
+- Legend renders the chosen icon instead of the circle swatch 
+- Backward-compatible hydration sets symbol=circle on older layers 
+ 
+Fixes the initial render race where picking an icon showed nothing: 
+- Icon rasterization runs through Promise.all with an iconsTick 
+  state that bumps when the batch completes. 
+- Layer-sync effect depends on iconsTick so it re-runs once the 
+  images are registered. 
+- syncOverlays falls back to the circle renderer when the chosen 
+  image is not yet in MapLibre's registry, so features never 
+  disappear if an icon is missing or still loading.

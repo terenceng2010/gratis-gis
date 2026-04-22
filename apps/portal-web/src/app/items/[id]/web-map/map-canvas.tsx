@@ -1,7 +1,14 @@
 'use client';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import maplibregl from 'maplibre-gl';
 import type {
   BasemapKey,
@@ -11,6 +18,7 @@ import type {
   WebMapLayerFilterClause,
 } from '@gratis-gis/shared-types';
 import { BASEMAPS } from '@/lib/basemaps';
+import { MAP_ICONS, iconImageId, renderIconSvg } from './map-icons';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
@@ -112,6 +120,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     [],
   );
 
+  // Tick bumped whenever a batch of icons finishes registering, so the
+  // layer-sync effect can re-run and pick up the new images.
+  const [iconsTick, setIconsTick] = useState(0);
+
   // Wrap the callback in a ref so the stable effect below doesn't need
   // to re-bind listeners every render.
   const onCameraChangeRef = useRef(onCameraChange);
@@ -150,8 +162,47 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     m.on('rotateend', markCamera);
     m.on('pitchend', markCamera);
 
+    // Register the default icon library. Layer sync waits on this via
+    // the `iconsTick` state: each time a batch of icons finishes
+    // registering we bump the tick so the sync effect re-runs and any
+    // symbol layers that were waiting on their images finally render.
+    //
+    // Registration is idempotent per-id, so basemap swaps that replay
+    // this via 'styledata' don't duplicate images. We track a ref to
+    // the tick setter so the async load callback doesn't capture a
+    // stale React state function.
+    let cancelled = false;
+    const loadIcons = async () => {
+      await Promise.all(
+        Object.keys(MAP_ICONS).map(async (name) => {
+          const id = iconImageId(name);
+          if (m.hasImage(id)) return;
+          try {
+            const svg = renderIconSvg(name);
+            if (!svg) return;
+            const img = await rasterizeSvg(svg, 48);
+            if (cancelled) return;
+            if (!m.hasImage(id)) {
+              m.addImage(id, img, { pixelRatio: 2 });
+            }
+          } catch {
+            /* non-fatal: layer falls back to circle when an icon is missing */
+          }
+        }),
+      );
+      if (!cancelled) setIconsTick((t) => t + 1);
+    };
+    const kickLoadIfReady = () => {
+      if (!m.isStyleLoaded()) return;
+      void loadIcons();
+    };
+    m.on('load', kickLoadIfReady);
+    m.on('styledata', kickLoadIfReady);
+    kickLoadIfReady();
+
     mapRef.current = m;
     return () => {
+      cancelled = true;
       m.remove();
       mapRef.current = null;
     };
@@ -159,6 +210,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     // are handled by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // Basemap swap. Preserves camera + overlays so it feels seamless.
   //
@@ -190,7 +242,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   }, [map.basemap, map.layers]);
 
   // Keep overlay layers (everything after the basemap) in sync with props.
-  // Runs on every layer-list change.
+  // Depends on iconsTick so the sync re-runs once each icon batch
+  // finishes registering — otherwise a symbol layer can be added
+  // referencing an image that MapLibre hasn't received yet, and it
+  // silently renders nothing.
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
@@ -204,7 +259,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       return;
     }
     syncOverlays(m, map.layers, hoveredRef);
-  }, [map.layers]);
+  }, [map.layers, iconsTick]);
 
   // Click handlers for popups, hover handlers for highlight + cursor.
   // Attached once, dispatches dynamically based on the current layer set.
@@ -336,6 +391,37 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     />
   );
 });
+
+/**
+ * Load an SVG string onto a canvas and return the raw pixels. Used to
+ * turn the bundled icon library into images MapLibre can register via
+ * addImage(). We render at 2x physical pixels (96 × 96 pixels for a
+ * 48 × 48 icon) so high-DPI displays stay crisp.
+ */
+async function rasterizeSvg(svg: string, size: number): Promise<ImageData> {
+  const scale = 2;
+  const w = size * scale;
+  const h = size * scale;
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = (e) => reject(e);
+      i.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas 2D unavailable');
+    ctx.drawImage(img, 0, 0, w, h);
+    return ctx.getImageData(0, 0, w, h);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 /**
  * Shallow property-match. Used only for search highlight fallback
@@ -478,28 +564,63 @@ function syncOverlays(
       },
     });
 
-    // Point geometries
-    m.addLayer({
-      id: `gg:${layer.id}-circle`,
-      type: 'circle',
-      source: sourceId,
-      filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
-      paint: {
-        'circle-color': pointFill,
-        'circle-radius': hover
-          ? ([
-              'case',
-              ['boolean', ['feature-state', 'hover'], false],
-              s.point.radius + 2,
-              s.point.radius,
-            ] as unknown as number)
-          : s.point.radius,
-        'circle-stroke-color': s.point.strokeColor,
-        'circle-stroke-width': s.point.strokeWidth,
-        'circle-opacity': op,
-        'circle-stroke-opacity': op,
-      },
-    });
+    // Point geometries. When the layer's point style picks an icon
+    // symbol AND the referenced image is already registered, render a
+    // MapLibre symbol layer; otherwise fall back to the classic circle
+    // so the feature is still visible while icons load or if an icon
+    // name is typo'd.
+    const iconReady =
+      s.point.symbol === 'icon' &&
+      !!s.point.iconName &&
+      m.hasImage(iconImageId(s.point.iconName));
+    if (iconReady) {
+      const iconId = iconImageId(s.point.iconName);
+      m.addLayer({
+        id: `gg:${layer.id}-circle`,
+        type: 'symbol',
+        source: sourceId,
+        filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
+        layout: {
+          'icon-image': iconId,
+          'icon-size': hover
+            ? ([
+                'case',
+                ['boolean', ['feature-state', 'hover'], false],
+                s.point.iconSize * 1.2,
+                s.point.iconSize,
+              ] as unknown as number)
+            : s.point.iconSize,
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'icon-anchor': 'bottom',
+        },
+        paint: {
+          'icon-opacity': op,
+        },
+      });
+    } else {
+      m.addLayer({
+        id: `gg:${layer.id}-circle`,
+        type: 'circle',
+        source: sourceId,
+        filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
+        paint: {
+          'circle-color': pointFill,
+          'circle-radius': hover
+            ? ([
+                'case',
+                ['boolean', ['feature-state', 'hover'], false],
+                s.point.radius + 2,
+                s.point.radius,
+              ] as unknown as number)
+            : s.point.radius,
+          'circle-stroke-color': s.point.strokeColor,
+          'circle-stroke-width': s.point.strokeWidth,
+          'circle-opacity': op,
+          'circle-stroke-opacity': op,
+        },
+      });
+    }
 
     // Text labels. Only add the symbol layer when enabled + a non-
     // empty template is present; an empty text-field renders as blank

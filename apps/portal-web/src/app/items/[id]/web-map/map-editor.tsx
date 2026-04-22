@@ -114,7 +114,14 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
           ...(((l as unknown) as { search?: Partial<WebMapLayer['search']> })
             .search ?? {}),
         },
-        style: { ...structuredClone(DEFAULT_LAYER_STYLE), ...(l.style ?? {}) },
+        style: {
+          ...structuredClone(DEFAULT_LAYER_STYLE),
+          ...(l.style ?? {}),
+          point: {
+            ...structuredClone(DEFAULT_LAYER_STYLE.point),
+            ...(l.style?.point ?? {}),
+          },
+        },
         opacity: typeof l.opacity === 'number' ? l.opacity : 1,
         visible: l.visible ?? true,
       } as WebMapLayer;
