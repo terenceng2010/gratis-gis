@@ -28,6 +28,7 @@ import {
 } from './map-icons';
 import { svgToSdf } from './sdf';
 import { fetchLayerBBox } from './arcgis-rest';
+import type { SelectToolMode } from './select-tool';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
@@ -36,6 +37,20 @@ interface Props {
   onCameraChange: (next: Pick<WebMapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
   /** Per-layer sets of selected feature ids (identical to feature indexes). */
   selection: Record<string, Set<number>>;
+  /**
+   * Active selection tool. When `'off'`, clicks show popups and drags
+   * pan the camera (today's default). Any other mode suppresses popups
+   * and re-routes pointer events into the selection handlers.
+   */
+  selectTool: SelectToolMode;
+  /**
+   * Commit a new selection. Called by the click / rectangle / polygon
+   * handlers once they resolve a feature set. The canvas never mutates
+   * the selection state directly — parent owns the canonical copy.
+   */
+  onSelectionChange: (
+    next: Record<string, Set<number>>,
+  ) => void;
 }
 
 export interface MapCanvasHandle {
@@ -70,7 +85,7 @@ export interface MapCanvasHandle {
  * diff is possible later; for now simplicity beats theoretical perf.
  */
 export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
-  { map, onCameraChange, selection }: Props,
+  { map, onCameraChange, selection, selectTool, onSelectionChange }: Props,
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +97,48 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // list without re-running their setup effect on every prop update.
   const layersRef = useRef<typeof map.layers>(map.layers);
   layersRef.current = map.layers;
+  // Refs the selection handlers read so we don't have to re-wire
+  // mouse listeners every time the selection or tool changes.
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const selectToolRef = useRef<SelectToolMode>(selectTool);
+  selectToolRef.current = selectTool;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+
+  // Select-tool local state. Refs mirror the state so the MapLibre
+  // event handlers (which live in a useEffect closure) can read the
+  // latest values without re-binding on every keystroke.
+  const [rectDrag, setRectDrag] = useState<null | {
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+  }>(null);
+  const rectDragRef = useRef(rectDrag);
+  rectDragRef.current = rectDrag;
+  const [polygonVerts, setPolygonVerts] = useState<Array<[number, number]>>([]);
+  const polygonVertsRef = useRef(polygonVerts);
+  polygonVertsRef.current = polygonVerts;
+  const [polygonCursor, setPolygonCursor] = useState<
+    [number, number] | null
+  >(null);
+
+  // Tick that invalidates projected pixel positions for polygon
+  // vertices whenever the camera moves. Vertices live in lng/lat so
+  // they anchor to the map, but we render them in pixel space via
+  // map.project(); bumping this ensures the render picks up fresh
+  // projections after a pan/zoom.
+  const [projectTick, setProjectTick] = useState(0);
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const onMove = () => setProjectTick((t) => t + 1);
+    m.on('move', onMove);
+    return () => {
+      m.off('move', onMove);
+    };
+  }, []);
 
   useImperativeHandle(
     ref,
@@ -482,16 +539,46 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       m.getCanvas().style.cursor = '';
     }
     function onClick(e: maplibregl.MapMouseEvent) {
+      const tool = selectToolRef.current;
+      // Rectangle & polygon tools have their own handlers — a plain
+      // click should never compete with their drag/vertex logic.
+      if (tool === 'rectangle' || tool === 'polygon') return;
       const hits = m!.queryRenderedFeatures(e.point, {
         layers: interactiveLayerIds(),
       });
+
+      if (tool === 'click') {
+        const hit = hits[0];
+        const layer = hit
+          ? map.layers.find((l) =>
+              overlayLayerIds(l.id).some((id) => id === hit.layer.id),
+            )
+          : null;
+        applySelectionMutation({
+          current: selectionRef.current,
+          layers: map.layers,
+          hit:
+            hit && layer && layer.interactions.selectable !== false
+              ? { layerId: layer.id, featureId: hit.id as number }
+              : null,
+          mods: {
+            shift: (e.originalEvent as MouseEvent).shiftKey,
+            meta:
+              (e.originalEvent as MouseEvent).ctrlKey ||
+              (e.originalEvent as MouseEvent).metaKey,
+          },
+          apply: onSelectionChangeRef.current,
+        });
+        return;
+      }
+
+      // tool === 'off' → popup behaviour.
       const hit = hits[0];
       if (!hit) {
         popupRef.current?.remove();
         popupRef.current = null;
         return;
       }
-      // Which layer does this feature belong to?
       const layer = map.layers.find((l) =>
         overlayLayerIds(l.id).some((id) => id === hit.layer.id),
       );
@@ -512,6 +599,172 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       m.off('click', onClick);
     };
   }, [map.layers]);
+
+  // Rectangle-select tool. Disables pan while active so drag starts
+  // a box; on mouseup we queryRenderedFeatures against the pixel
+  // bbox and turn the result into per-layer id sets. Shift extends
+  // the current selection; no modifier replaces.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    if (selectTool !== 'rectangle') return;
+
+    m.dragPan.disable();
+    m.boxZoom.disable();
+    const canvas = m.getCanvas();
+    const prevCursor = canvas.style.cursor;
+    canvas.style.cursor = 'crosshair';
+
+    const toPixel = (ev: MouseEvent): [number, number] => {
+      const rect = canvas.getBoundingClientRect();
+      return [ev.clientX - rect.left, ev.clientY - rect.top];
+    };
+
+    let localDrag:
+      | { startX: number; startY: number; curX: number; curY: number }
+      | null = null;
+
+    const onMouseDown = (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      const [x, y] = toPixel(ev);
+      localDrag = { startX: x, startY: y, curX: x, curY: y };
+      setRectDrag({ ...localDrag });
+    };
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!localDrag) return;
+      const [x, y] = toPixel(ev);
+      localDrag.curX = x;
+      localDrag.curY = y;
+      setRectDrag({ ...localDrag });
+    };
+    const onMouseUp = (ev: MouseEvent) => {
+      if (!localDrag) return;
+      const box = localDrag;
+      localDrag = null;
+      setRectDrag(null);
+      if (
+        Math.abs(box.curX - box.startX) < 3 &&
+        Math.abs(box.curY - box.startY) < 3
+      ) {
+        return;
+      }
+      const bbox: [[number, number], [number, number]] = [
+        [Math.min(box.startX, box.curX), Math.min(box.startY, box.curY)],
+        [Math.max(box.startX, box.curX), Math.max(box.startY, box.curY)],
+      ];
+      const picked = collectFeaturesInBbox(m, layersRef.current, bbox);
+      applyShiftOrReplace(picked, ev.shiftKey);
+    };
+
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      m.dragPan.enable();
+      m.boxZoom.enable();
+      canvas.style.cursor = prevCursor;
+      setRectDrag(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectTool]);
+
+  // Polygon-select tool. Click adds a vertex; clicking near the
+  // first vertex (within ~10 px) or pressing Enter closes the shape
+  // and runs the selection. Escape discards the in-progress polygon.
+  // Pan stays enabled so authors can pan the map mid-draw if they
+  // need to reach far vertices.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    if (selectTool !== 'polygon') return;
+
+    const canvas = m.getCanvas();
+    const prevCursor = canvas.style.cursor;
+    canvas.style.cursor = 'crosshair';
+    m.doubleClickZoom.disable();
+
+    const closePolygon = (shift: boolean) => {
+      const verts = polygonVertsRef.current;
+      if (verts.length < 3) return;
+      const picked = collectFeaturesInPolygon(m, layersRef.current, verts);
+      applyShiftOrReplace(picked, shift);
+      setPolygonVerts([]);
+    };
+
+    const onClick = (e: maplibregl.MapMouseEvent) => {
+      const verts = polygonVertsRef.current;
+      if (verts.length >= 3) {
+        const first = verts[0]!;
+        const firstPx = m.project(first);
+        const dx = firstPx.x - e.point.x;
+        const dy = firstPx.y - e.point.y;
+        if (dx * dx + dy * dy < 12 * 12) {
+          closePolygon((e.originalEvent as MouseEvent).shiftKey);
+          return;
+        }
+      }
+      setPolygonVerts([...verts, [e.lngLat.lng, e.lngLat.lat]]);
+    };
+    const onDblClick = (e: maplibregl.MapMouseEvent) => {
+      if (polygonVertsRef.current.length < 3) return;
+      e.preventDefault();
+      closePolygon((e.originalEvent as MouseEvent).shiftKey);
+    };
+    const onMouseMove = (e: maplibregl.MapMouseEvent) => {
+      setPolygonCursor([e.point.x, e.point.y]);
+    };
+    const onMouseLeave = () => setPolygonCursor(null);
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setPolygonVerts([]);
+      } else if (ev.key === 'Enter') {
+        closePolygon(ev.shiftKey);
+      }
+    };
+
+    m.on('click', onClick);
+    m.on('dblclick', onDblClick);
+    m.on('mousemove', onMouseMove);
+    m.on('mouseleave', onMouseLeave);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      m.off('click', onClick);
+      m.off('dblclick', onDblClick);
+      m.off('mousemove', onMouseMove);
+      m.off('mouseleave', onMouseLeave);
+      m.doubleClickZoom.enable();
+      window.removeEventListener('keydown', onKeyDown);
+      canvas.style.cursor = prevCursor;
+      setPolygonVerts([]);
+      setPolygonCursor(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectTool]);
+
+  // Helper: either replace the selection wholesale (plain click) or
+  // merge into it (shift click). Used by both rectangle and polygon
+  // closers so modifier handling stays consistent.
+  function applyShiftOrReplace(
+    picked: Record<string, Set<number>>,
+    shift: boolean,
+  ): void {
+    if (!shift) {
+      onSelectionChangeRef.current(picked);
+      return;
+    }
+    const merged = { ...selectionRef.current };
+    for (const [lid, ids] of Object.entries(picked)) {
+      const cur = merged[lid] ?? new Set<number>();
+      const next = new Set(cur);
+      for (const id of ids) next.add(id);
+      merged[lid] = next;
+    }
+    onSelectionChangeRef.current(merged);
+  }
 
   // Camera sync: only push external camera changes into MapLibre, don't
   // fight the user's pan/zoom gestures.
@@ -548,11 +801,92 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     });
   }, [externalCamera]);
 
+  // Compute projected pixel positions for the in-progress polygon so
+  // the SVG overlay can render vertex handles + the closing edge.
+  // Depends on projectTick so camera moves repaint the vertices at
+  // their new screen positions.
+  const projectedVerts = useMemo(() => {
+    const m = mapRef.current;
+    if (!m) return [] as Array<{ x: number; y: number }>;
+    return polygonVerts.map((v) => m.project(v));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polygonVerts, projectTick]);
+  const firstVertHover =
+    polygonCursor && projectedVerts.length >= 3
+      ? (() => {
+          const f = projectedVerts[0]!;
+          const dx = f.x - polygonCursor[0];
+          const dy = f.y - polygonCursor[1];
+          return dx * dx + dy * dy < 12 * 12;
+        })()
+      : false;
+
   return (
-    <div
-      ref={containerRef}
-      className="h-full w-full overflow-hidden rounded-lg border border-border shadow-card"
-    />
+    <div className="relative h-full w-full">
+      <div
+        ref={containerRef}
+        className="h-full w-full overflow-hidden rounded-lg border border-border shadow-card"
+      />
+      {/* Rectangle drag overlay. Rendered only while an active drag
+          is happening so it doesn't catch pointer events otherwise. */}
+      {rectDrag ? (
+        <div
+          className="pointer-events-none absolute rounded-sm border-2 border-accent bg-accent/10"
+          style={{
+            left: Math.min(rectDrag.startX, rectDrag.curX),
+            top: Math.min(rectDrag.startY, rectDrag.curY),
+            width: Math.abs(rectDrag.curX - rectDrag.startX),
+            height: Math.abs(rectDrag.curY - rectDrag.startY),
+          }}
+        />
+      ) : null}
+      {/* Polygon in-progress overlay. Vertices are re-projected on
+          every camera move via projectTick so they stay anchored to
+          the map. A rubber-band edge tracks the cursor until the
+          polygon closes. */}
+      {polygonVerts.length > 0 ? (
+        <svg
+          className="pointer-events-none absolute inset-0 h-full w-full"
+          viewBox={undefined}
+        >
+          {/* Edge path including rubber-band to cursor */}
+          <polyline
+            points={[
+              ...projectedVerts.map((p) => `${p.x},${p.y}`),
+              polygonCursor ? `${polygonCursor[0]},${polygonCursor[1]}` : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            fill="none"
+            stroke="hsl(var(--accent))"
+            strokeWidth={2}
+            strokeDasharray="4 3"
+          />
+          {/* Closing segment preview when the cursor nears the first vertex */}
+          {firstVertHover && polygonCursor ? (
+            <line
+              x1={polygonCursor[0]}
+              y1={polygonCursor[1]}
+              x2={projectedVerts[0]!.x}
+              y2={projectedVerts[0]!.y}
+              stroke="hsl(var(--accent))"
+              strokeWidth={2}
+            />
+          ) : null}
+          {projectedVerts.map((p, i) => (
+            <circle
+              key={i}
+              cx={p.x}
+              cy={p.y}
+              r={i === 0 && firstVertHover ? 7 : 4}
+              fill={i === 0 && firstVertHover ? 'hsl(var(--accent))' : 'white'}
+              stroke="hsl(var(--accent))"
+              strokeWidth={2}
+            />
+          ))}
+        </svg>
+      ) : null}
+    </div>
   );
 });
 
@@ -646,6 +980,205 @@ function propertiesMatch(
     if (String(a[k]) !== String(v)) return false;
   }
   return true;
+}
+
+/**
+ * Apply a single-feature click to the current selection with modifier
+ * keys honored.
+ *
+ *   - No modifiers, miss: clear all layers (drags the "click empty
+ *     space to deselect" convention from most GIS apps).
+ *   - No modifiers, hit:  replace selection with just this feature.
+ *   - Shift + hit:        add this feature to existing selection.
+ *   - Ctrl/Cmd + hit:     toggle this feature in/out of selection.
+ *
+ * Pure function that dispatches via the caller's `apply` callback.
+ * Placed at module scope so the canvas's click handler can stay tiny.
+ */
+function applySelectionMutation({
+  current,
+  hit,
+  mods,
+  apply,
+}: {
+  current: Record<string, Set<number>>;
+  layers: WebMapLayer[];
+  hit: { layerId: string; featureId: number } | null;
+  mods: { shift: boolean; meta: boolean };
+  apply: (next: Record<string, Set<number>>) => void;
+}): void {
+  if (!hit) {
+    if (!mods.shift && !mods.meta) apply({});
+    return;
+  }
+  const { layerId, featureId } = hit;
+  const cur = current[layerId] ?? new Set<number>();
+  if (mods.meta) {
+    const set = new Set(cur);
+    if (set.has(featureId)) set.delete(featureId);
+    else set.add(featureId);
+    const next = { ...current };
+    if (set.size === 0) delete next[layerId];
+    else next[layerId] = set;
+    apply(next);
+    return;
+  }
+  if (mods.shift) {
+    const next = { ...current };
+    next[layerId] = new Set([...cur, featureId]);
+    apply(next);
+    return;
+  }
+  apply({ [layerId]: new Set([featureId]) });
+}
+
+/**
+ * Ask MapLibre which features intersect a pixel bbox, then group the
+ * hits by WebMapLayer id. Skips layers whose `interactions.selectable`
+ * is explicitly false. Feature ids come from the source's generateId
+ * setting — matches the indexes the attribute table uses.
+ */
+function collectFeaturesInBbox(
+  m: maplibregl.Map,
+  layers: WebMapLayer[],
+  bbox: [[number, number], [number, number]],
+): Record<string, Set<number>> {
+  const wanted = layers
+    .filter((l) => l.interactions.selectable !== false)
+    .flatMap((l) => overlayLayerIds(l.id));
+  const existing = new Set((m.getStyle().layers ?? []).map((sl) => sl.id));
+  const mapLayerIds = wanted.filter((id) => existing.has(id));
+  const hits = m.queryRenderedFeatures(bbox, { layers: mapLayerIds });
+  return hitsByLayer(hits, layers);
+}
+
+/**
+ * Pick features whose geometry centroid lies inside a polygon (vertex
+ * list is lng/lat). We bbox-query MapLibre first to narrow the
+ * candidate set, then ray-cast each candidate's centroid. Using the
+ * centroid is a deliberate simplification — it doesn't distinguish a
+ * feature straddling the polygon's edge from one fully inside, but
+ * it lands within a few percent of the right answer on typical
+ * parcel/building datasets and keeps us out of the turf.js size
+ * budget. Swap in a real intersection test when the inaccuracy bites.
+ */
+function collectFeaturesInPolygon(
+  m: maplibregl.Map,
+  layers: WebMapLayer[],
+  polygon: Array<[number, number]>,
+): Record<string, Set<number>> {
+  if (polygon.length < 3) return {};
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of polygon) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  const p1 = m.project([minX, minY]);
+  const p2 = m.project([maxX, maxY]);
+  const bbox: [[number, number], [number, number]] = [
+    [Math.min(p1.x, p2.x), Math.min(p1.y, p2.y)],
+    [Math.max(p1.x, p2.x), Math.max(p1.y, p2.y)],
+  ];
+  const wanted = layers
+    .filter((l) => l.interactions.selectable !== false)
+    .flatMap((l) => overlayLayerIds(l.id));
+  const existing = new Set((m.getStyle().layers ?? []).map((sl) => sl.id));
+  const mapLayerIds = wanted.filter((id) => existing.has(id));
+  const hits = m.queryRenderedFeatures(bbox, { layers: mapLayerIds });
+  const filtered = hits.filter((h) => {
+    const c = geometryCentroid(h.geometry);
+    return c !== null && pointInRing(c, polygon);
+  });
+  return hitsByLayer(filtered, layers);
+}
+
+function hitsByLayer(
+  hits: maplibregl.MapGeoJSONFeature[],
+  layers: WebMapLayer[],
+): Record<string, Set<number>> {
+  const result: Record<string, Set<number>> = {};
+  for (const hit of hits) {
+    if (hit.id === undefined || hit.id === null) continue;
+    const layer = layers.find((l) =>
+      overlayLayerIds(l.id).includes(hit.layer.id),
+    );
+    if (!layer || layer.interactions.selectable === false) continue;
+    const fid = typeof hit.id === 'number' ? hit.id : Number(hit.id);
+    if (!Number.isFinite(fid)) continue;
+    const set = result[layer.id] ?? new Set<number>();
+    set.add(fid);
+    result[layer.id] = set;
+  }
+  return result;
+}
+
+/**
+ * Classic ray-casting point-in-polygon. Polygon is a flat vertex
+ * ring (no holes for now — selection polygons are user-drawn, always
+ * simple). 1e-12 epsilon avoids divide-by-zero on horizontal edges.
+ */
+function pointInRing(
+  pt: [number, number],
+  ring: Array<[number, number]>,
+): boolean {
+  const [x, y] = pt;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]!;
+    const [xj, yj] = ring[j]!;
+    const intersect =
+      yi > y !== yj > y &&
+      x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Cheap geometry centroid: bbox mid for anything that isn't a Point.
+ * Not a true geometric centroid, but the tradeoff is consistency
+ * across geometry types and a tiny constant-time pass per feature.
+ */
+function geometryCentroid(
+  geom: GeoJSON.Geometry | null | undefined,
+): [number, number] | null {
+  if (!geom) return null;
+  if (geom.type === 'Point') {
+    const [x, y] = geom.coordinates as number[];
+    return typeof x === 'number' && typeof y === 'number' ? [x, y] : null;
+  }
+  const all: Array<[number, number]> = [];
+  const visit = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      if (
+        v.length >= 2 &&
+        typeof v[0] === 'number' &&
+        typeof v[1] === 'number'
+      ) {
+        all.push([v[0] as number, v[1] as number]);
+      } else {
+        for (const c of v) visit(c);
+      }
+    }
+  };
+  if ('coordinates' in geom) visit(geom.coordinates);
+  if (all.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of all) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return [(minX + maxX) / 2, (minY + maxY) / 2];
 }
 
 /** Ids of the MapLibre style-layers this WebMapLayer may contribute. */

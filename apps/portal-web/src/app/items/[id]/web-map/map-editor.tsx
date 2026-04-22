@@ -25,6 +25,7 @@ import { AddLayerDialog } from './add-layer-dialog';
 import { Legend } from './legend';
 import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
+import { SelectToolbar, type SelectToolMode } from './select-tool';
 import { discoverLayerMetadata, type LayerMetadata } from './layer-metadata';
 
 interface Props {
@@ -161,6 +162,20 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
    * map highlight and the table checkboxes without translation.
    */
   const [selection, setSelection] = useState<Record<string, Set<number>>>({});
+  // Active map-side selection tool. `off` is the default pan +
+  // popup-on-click behaviour; the other modes are owned by the
+  // MapCanvas and fed here so the SelectToolbar reads live state.
+  const [selectTool, setSelectTool] = useState<SelectToolMode>('off');
+  // Count selected features across layers so the toolbar can show
+  // the live total + clear-button affordance.
+  const selectedCount = useMemo(
+    () =>
+      Object.values(selection).reduce(
+        (sum: number, s) => sum + (s as Set<number>).size,
+        0,
+      ),
+    [selection],
+  );
 
   // Drop selection for layers that have been removed so the state
   // doesn't leak references. Only runs when the layer-id set changes.
@@ -408,6 +423,14 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
             map={map}
             onCameraChange={onCameraChange}
             selection={selection}
+            selectTool={selectTool}
+            onSelectionChange={setSelection}
+          />
+          <SelectToolbar
+            mode={selectTool}
+            onChange={setSelectTool}
+            selectedCount={selectedCount}
+            onClearSelection={() => setSelection({})}
           />
           {map.search?.enabled !== false ? (
             <SearchBar
