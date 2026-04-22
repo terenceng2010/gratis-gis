@@ -1,8 +1,18 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, Loader2, Search, Users, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Eye,
+  Link2,
+  Loader2,
+  Search,
+  Users,
+  X,
+} from 'lucide-react';
 import type {
+  ItemShare,
   WebMapLayer,
   WebMapLayerAccess,
   WebMapLayerAccessEntry,
@@ -11,9 +21,9 @@ import { DEFAULT_LAYER_ACCESS } from '@gratis-gis/shared-types';
 
 /**
  * Principal surfaced in the matrix columns. Resolved by the parent
- * from whatever share records are on the item, with user/group
- * names looked up for display. Unresolved names fall back to the
- * short id so the matrix can still render during a lookup.
+ * from whatever share records are on the item, with user/group names
+ * looked up for display. Unresolved names fall back to the short id
+ * so the matrix can still render during a lookup.
  */
 export interface MatrixPrincipal {
   type: 'user' | 'group';
@@ -25,41 +35,73 @@ interface Props {
   open: boolean;
   layers: WebMapLayer[];
   principals: MatrixPrincipal[];
+  /**
+   * Per-layer map of backing item id (feature_service, arcgis_service).
+   * Layers whose source isn't an item (geojson-url / geojson-inline)
+   * map to null — those can't have item-level access gaps because
+   * there's no separate item to share.
+   */
+  layerItemIds: Record<string, string | null>;
+  /**
+   * Current item-level shares keyed by item id. Matrix uses this to
+   * detect "webmap shared, but underlying item isn't" gaps. Fetched
+   * by the parent when the modal opens.
+   */
+  itemShares: Record<string, ItemShare[]>;
+  /** Groups the current user can see; used to resolve group membership. */
+  groupMemberships: Record<string, string[]>;
   onClose: () => void;
   /** Patch a single layer's `access` field; parent merges into its state. */
   onPatchAccess: (layerId: string, next: WebMapLayerAccess) => void;
+  /**
+   * Grant `view` permission on a backing item to a principal. Matrix
+   * calls this for single-cell "fix it" actions and the bulk-grant
+   * button at the top. Parent performs the POST to /items/:id/share
+   * and refreshes the itemShares entry.
+   */
+  onGrantItemAccess: (
+    itemId: string,
+    principal: MatrixPrincipal,
+  ) => Promise<void>;
 }
 
 /**
  * Per-layer access matrix modal for a web map.
  *
- * Model: rows are layers, columns are the principals the webmap is
- * already shared with. Each cell is a compact badge that opens a
- * popover with View / Query / Edit checkboxes — this is the
- * compact-cell-with-popover pattern from the sharing design doc,
- * 1/3 the width of a flat 3-column-per-principal matrix so it fits
- * without horizontal scroll for the common case (≤10 principals).
+ * Two concerns stacked in one view:
+ *   1. Webmap-scoped access — what each shared principal can see +
+ *      do on this particular map (the View/Query/Edit matrix).
+ *   2. Item-level sharing — whether the principal even has access to
+ *      the backing feature / ArcGIS service. The matrix surfaces
+ *      gaps here with a warning badge and a one-click "Grant view on
+ *      this item" action, so authors don't have to hop between the
+ *      map and each layer's item page to fix them. A top-level
+ *      "Grant all missing" button does the whole set at once.
  *
- * Cascading happens only on save: toggling View off in the popover
- * doesn't immediately clear Query/Edit values, so users can flip
- * View around without losing their permission intent. The effective
- * access on render does cap (if View=false you see an empty badge
- * even when Query/Edit are true in state).
+ * Guard rail: item-level access is the security floor. The webmap
+ * matrix can narrow access but can't widen it. Grant actions here
+ * are the author explicitly widening the *item* access, not the
+ * matrix silently bypassing it.
  */
 export function AccessMatrix({
   open,
   layers,
   principals,
+  layerItemIds,
+  itemShares,
+  groupMemberships,
   onClose,
   onPatchAccess,
+  onGrantItemAccess,
 }: Props) {
   const [filter, setFilter] = useState('');
   const [activePopover, setActivePopover] = useState<{
     layerId: string;
     principalKey: string;
   } | null>(null);
+  const [grantingKey, setGrantingKey] = useState<string | null>(null);
+  const [bulkGranting, setBulkGranting] = useState(false);
 
-  // Reset local UI state when the modal reopens.
   useEffect(() => {
     if (!open) setActivePopover(null);
   }, [open]);
@@ -74,6 +116,42 @@ export function AccessMatrix({
 
   const principalKey = (p: MatrixPrincipal) => `${p.type}:${p.id}`;
 
+  /**
+   * Does this principal have at least view access to the given item?
+   * A user matches by their own id; a group matches as itself; a user
+   * also matches any group they belong to (via groupMemberships).
+   */
+  function principalHasItemAccess(
+    itemId: string,
+    p: MatrixPrincipal,
+  ): boolean {
+    const shares = itemShares[itemId];
+    if (!shares) return true; // haven't loaded yet — don't warn prematurely
+    if (p.type === 'user') {
+      if (
+        shares.some(
+          (s) => s.principalType === 'user' && s.principalId === p.id,
+        )
+      ) {
+        return true;
+      }
+      const myGroups = groupMemberships[p.id] ?? [];
+      for (const gid of myGroups) {
+        if (
+          shares.some(
+            (s) => s.principalType === 'group' && s.principalId === gid,
+          )
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return shares.some(
+      (s) => s.principalType === 'group' && s.principalId === p.id,
+    );
+  }
+
   function entryFor(
     layer: WebMapLayer,
     p: MatrixPrincipal,
@@ -83,8 +161,6 @@ export function AccessMatrix({
       (e) => e.principalType === p.type && e.principalId === p.id,
     );
     if (found) return found;
-    // Default: if policy is 'inherit', everyone shared on the webmap
-    // gets view-and-query by default; 'custom' defaults to hidden.
     if (acc.policy === 'custom') {
       return {
         principalType: p.type,
@@ -110,8 +186,6 @@ export function AccessMatrix({
   ) {
     const acc = layer.access ?? DEFAULT_LAYER_ACCESS;
     const next: WebMapLayerAccess = {
-      // First adjustment flips the layer to 'custom' so the server
-      // knows the matrix is authoritative from here on.
       policy: 'custom',
       entries: [...acc.entries],
     };
@@ -123,6 +197,61 @@ export function AccessMatrix({
     if (idx >= 0) next.entries[idx] = merged;
     else next.entries.push(merged);
     onPatchAccess(layer.id, next);
+  }
+
+  // Enumerate every (layer, principal) pair where item access is
+  // missing. Used both for the bulk-grant button and the summary
+  // line above the matrix.
+  const gaps = useMemo(() => {
+    const out: Array<{
+      itemId: string;
+      layer: WebMapLayer;
+      principal: MatrixPrincipal;
+    }> = [];
+    for (const layer of layers) {
+      const itemId = layerItemIds[layer.id];
+      if (!itemId) continue;
+      for (const p of principals) {
+        if (!principalHasItemAccess(itemId, p)) {
+          out.push({ itemId, layer, principal: p });
+        }
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers, layerItemIds, itemShares, principals, groupMemberships]);
+
+  async function doGrant(itemId: string, p: MatrixPrincipal) {
+    const key = `${itemId}:${principalKey(p)}`;
+    setGrantingKey(key);
+    try {
+      await onGrantItemAccess(itemId, p);
+    } finally {
+      setGrantingKey(null);
+    }
+  }
+
+  async function grantAllMissing() {
+    if (gaps.length === 0) return;
+    setBulkGranting(true);
+    try {
+      // De-dupe so we don't grant the same (item, principal) pair
+      // twice when a principal is missing on multiple layers that
+      // share a backing item.
+      const seen = new Set<string>();
+      for (const g of gaps) {
+        const key = `${g.itemId}:${principalKey(g.principal)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        try {
+          await onGrantItemAccess(g.itemId, g.principal);
+        } catch {
+          /* continue so one failure doesn't stall the batch */
+        }
+      }
+    } finally {
+      setBulkGranting(false);
+    }
   }
 
   return (
@@ -141,9 +270,9 @@ export function AccessMatrix({
           <div>
             <h2 className="text-base font-semibold">Layer access</h2>
             <p className="text-xs text-muted">
-              Refine what each shared user or group can see on this map. The
-              matrix can only narrow access — it can&apos;t grant access the
-              underlying layer items don&apos;t already allow.
+              Refine what each shared user or group sees on this map. The
+              matrix narrows access; a warning badge appears when a principal
+              has no item-level access to a layer&apos;s source data.
             </p>
           </div>
           <button
@@ -172,6 +301,22 @@ export function AccessMatrix({
             {principals.length} principal
             {principals.length === 1 ? '' : 's'}
           </div>
+          {gaps.length > 0 ? (
+            <button
+              type="button"
+              onClick={grantAllMissing}
+              disabled={bulkGranting}
+              className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-md border border-warn bg-warn/10 px-3 text-xs font-medium text-warn hover:bg-warn/15 disabled:opacity-50"
+              title="Add view-level shares on every backing item so the gaps below disappear"
+            >
+              {bulkGranting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <AlertTriangle className="h-3.5 w-3.5" />
+              )}
+              Grant missing item access ({gapSummary(gaps)})
+            </button>
+          ) : null}
         </div>
 
         <div className="flex-1 overflow-auto">
@@ -211,51 +356,80 @@ export function AccessMatrix({
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((layer) => (
-                  <tr key={layer.id} className="hover:bg-surface-2/60">
-                    <td className="sticky left-0 z-[1] border-r border-b border-border bg-surface-1 px-3 py-2 text-left">
-                      <div className="truncate text-sm font-medium text-ink-0">
-                        {layer.title}
-                      </div>
-                      <div className="text-[11px] text-muted">
-                        {layer.access?.policy ?? 'inherit'}
-                      </div>
-                    </td>
-                    {principals.map((p) => {
-                      const key = principalKey(p);
-                      const entry = entryFor(layer, p);
-                      const isOpen =
-                        activePopover?.layerId === layer.id &&
-                        activePopover.principalKey === key;
-                      return (
-                        <td
-                          key={key}
-                          className="relative border-b border-border px-2 py-1 text-center"
-                        >
-                          <AccessBadge
-                            entry={entry}
-                            onClick={() =>
-                              setActivePopover(
-                                isOpen
-                                  ? null
-                                  : { layerId: layer.id, principalKey: key },
-                              )
-                            }
-                          />
-                          {isOpen ? (
-                            <AccessPopover
-                              entry={entry}
-                              onChange={(patch) =>
-                                writeEntry(layer, p, patch)
-                              }
-                              onClose={() => setActivePopover(null)}
-                            />
+                {filtered.map((layer) => {
+                  const itemId = layerItemIds[layer.id] ?? null;
+                  return (
+                    <tr key={layer.id} className="hover:bg-surface-2/60">
+                      <td className="sticky left-0 z-[1] border-r border-b border-border bg-surface-1 px-3 py-2 text-left">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-sm font-medium text-ink-0">
+                            {layer.title}
+                          </span>
+                          {itemId ? (
+                            <Link2 className="h-3 w-3 shrink-0 text-muted" />
                           ) : null}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                        </div>
+                        <div className="text-[11px] text-muted">
+                          {layer.access?.policy ?? 'inherit'}
+                          {itemId ? null : ' · no backing item'}
+                        </div>
+                      </td>
+                      {principals.map((p) => {
+                        const key = principalKey(p);
+                        const entry = entryFor(layer, p);
+                        const hasItemAccess = itemId
+                          ? principalHasItemAccess(itemId, p)
+                          : true;
+                        const isOpen =
+                          activePopover?.layerId === layer.id &&
+                          activePopover.principalKey === key;
+                        const granting =
+                          grantingKey ===
+                          (itemId ? `${itemId}:${key}` : '');
+                        return (
+                          <td
+                            key={key}
+                            className="relative border-b border-border px-2 py-1 text-center"
+                          >
+                            <AccessBadge
+                              entry={entry}
+                              hasItemAccess={hasItemAccess}
+                              onClick={() =>
+                                setActivePopover(
+                                  isOpen
+                                    ? null
+                                    : {
+                                        layerId: layer.id,
+                                        principalKey: key,
+                                      },
+                                )
+                              }
+                            />
+                            {isOpen ? (
+                              <AccessPopover
+                                entry={entry}
+                                itemId={itemId}
+                                hasItemAccess={hasItemAccess}
+                                granting={granting}
+                                onChange={(patch) =>
+                                  writeEntry(layer, p, patch)
+                                }
+                                onClose={() => setActivePopover(null)}
+                                {...(itemId && !hasItemAccess
+                                  ? {
+                                      onGrant: () => {
+                                        void doGrant(itemId, p);
+                                      },
+                                    }
+                                  : {})}
+                              />
+                            ) : null}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -263,8 +437,8 @@ export function AccessMatrix({
 
         <div className="flex items-center justify-between border-t border-border bg-surface-1 px-4 py-3 text-[11px] text-muted">
           <span>
-            Changes flow into the map&apos;s layers immediately and are
-            persisted on the next Save map.
+            Access changes flow into the map&apos;s layers immediately.
+            They persist with the next Save map.
           </span>
           <button
             type="button"
@@ -279,16 +453,28 @@ export function AccessMatrix({
   );
 }
 
+function gapSummary(
+  gaps: Array<{ itemId: string; principal: MatrixPrincipal }>,
+): string {
+  const uniq = new Set(
+    gaps.map((g) => `${g.itemId}:${g.principal.type}:${g.principal.id}`),
+  );
+  return `${uniq.size} gap${uniq.size === 1 ? '' : 's'}`;
+}
+
 /**
- * Compact one-cell summary of an access entry. "—" means the layer
- * is hidden for this principal (View off, which caps Query/Edit at
- * render time); "V", "V+Q", "V+Q+E" describe the effective set.
+ * Compact one-cell summary. Warning triangle overlays the badge when
+ * item-level access is missing for this (principal, layer), since
+ * the webmap flags don't matter if the server will reject the user
+ * at the item level anyway.
  */
 function AccessBadge({
   entry,
+  hasItemAccess,
   onClick,
 }: {
   entry: WebMapLayerAccessEntry;
+  hasItemAccess: boolean;
   onClick: () => void;
 }) {
   const effective = {
@@ -314,26 +500,42 @@ function AccessBadge({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex h-7 min-w-[3.25rem] items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-medium tabular-nums transition-colors hover:brightness-95 ${tone}`}
+      className={`relative inline-flex h-7 min-w-[3.25rem] items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-medium tabular-nums transition-colors hover:brightness-95 ${tone}`}
     >
       <Eye className="h-3 w-3 opacity-70" />
       {label}
+      {!hasItemAccess ? (
+        <span
+          className="absolute -right-1 -top-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-warn text-[8px] font-bold text-white"
+          title="No access to the backing item — grant from the popover"
+        >
+          !
+        </span>
+      ) : null}
     </button>
   );
 }
 
 /**
- * Popover exposing the raw View/Query/Edit toggles. Closes on outside
- * click or Esc. Keeps its own local state for snappy feedback, then
- * bubbles each toggle up through onChange.
+ * Popover exposing the raw View/Query/Edit toggles + item-level
+ * access status with a Grant button when the principal has no
+ * access. Closes on outside click or Esc.
  */
 function AccessPopover({
   entry,
+  itemId,
+  hasItemAccess,
+  granting,
   onChange,
+  onGrant,
   onClose,
 }: {
   entry: WebMapLayerAccessEntry;
+  itemId: string | null;
+  hasItemAccess: boolean;
+  granting: boolean;
   onChange: (patch: Partial<WebMapLayerAccessEntry>) => void;
+  onGrant?: () => void | Promise<void>;
   onClose: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -356,8 +558,46 @@ function AccessPopover({
   return (
     <div
       ref={rootRef}
-      className="absolute left-1/2 top-full z-20 mt-1 w-48 -translate-x-1/2 rounded-md border border-border bg-surface-1 p-2 text-left shadow-raised"
+      className="absolute left-1/2 top-full z-20 mt-1 w-56 -translate-x-1/2 rounded-md border border-border bg-surface-1 p-2 text-left shadow-raised"
     >
+      {itemId ? (
+        <div
+          className={`mb-1.5 rounded px-1.5 py-1 text-[11px] ${
+            hasItemAccess
+              ? 'bg-success/10 text-success'
+              : 'bg-warn/10 text-warn'
+          }`}
+        >
+          {hasItemAccess ? (
+            <span className="inline-flex items-center gap-1">
+              <Check className="h-3 w-3" /> Has item access
+            </span>
+          ) : (
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> No item access
+              </div>
+              {onGrant ? (
+                <button
+                  type="button"
+                  onClick={onGrant}
+                  disabled={granting}
+                  className="inline-flex h-6 items-center gap-1 rounded border border-warn bg-warn/10 px-2 text-[10px] font-medium text-warn hover:bg-warn/20 disabled:opacity-50"
+                >
+                  {granting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : null}
+                  Grant view on item
+                </button>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mb-1.5 rounded bg-surface-2 px-1.5 py-1 text-[11px] text-muted">
+          Layer has no backing item — everyone with map access can see it.
+        </div>
+      )}
       <PopoverRow
         label="View"
         desc="See the layer on the map"
@@ -418,9 +658,8 @@ function PopoverRow({
 
 /**
  * Helper the map-editor uses to resolve shares → named principals.
- * Returns an unresolved short id until the name lookup completes so
- * the matrix can still render during fetch. Exposed here so the
- * editor and any future sharing panel view share the same rules.
+ * Falls back to a short id when the name lookup hasn't come back
+ * yet so the matrix can render during fetch.
  */
 export function unresolvedPrincipal(
   principalType: 'user' | 'group',
@@ -432,5 +671,3 @@ export function unresolvedPrincipal(
     name: `${principalType}/${principalId.slice(0, 8)}`,
   };
 }
-
-export { Loader2 };

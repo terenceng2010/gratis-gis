@@ -1,12 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, List, Loader2, Save, Table } from 'lucide-react';
+import {
+  Check,
+  List,
+  Loader2,
+  Save,
+  ShieldCheck,
+  Table,
+} from 'lucide-react';
 import type {
   BasemapKey,
+  Group,
+  ItemShare,
   WebMapData,
   WebMapFilterOp,
   WebMapLayer,
+  WebMapLayerAccess,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_LAYER_ACCESS,
@@ -27,6 +37,11 @@ import { Legend } from './legend';
 import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
 import { SelectToolbar, type SelectToolMode } from './select-tool';
+import {
+  AccessMatrix,
+  unresolvedPrincipal,
+  type MatrixPrincipal,
+} from './access-matrix';
 import { discoverLayerMetadata, type LayerMetadata } from './layer-metadata';
 
 interface Props {
@@ -182,6 +197,145 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
       ),
     [selection],
   );
+
+  // Access matrix: open state + all the data the modal renders.
+  // We lazy-fetch on open so the overhead (a request per backing
+  // item) only happens when an author actually opens the matrix.
+  const [matrixOpen, setMatrixOpen] = useState(false);
+  const [webmapShares, setWebmapShares] = useState<ItemShare[]>([]);
+  const [itemShares, setItemShares] = useState<Record<string, ItemShare[]>>({});
+  const [groupDirectory, setGroupDirectory] = useState<Record<string, string>>({});
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [groupMemberships, setGroupMemberships] = useState<
+    Record<string, string[]>
+  >({});
+
+  // Maps layer id → backing item id (null for geojson-url / inline).
+  // Matrix uses this to know which layers can have item-level gaps.
+  const layerItemIds = useMemo<Record<string, string | null>>(() => {
+    const out: Record<string, string | null> = {};
+    for (const l of map.layers) {
+      if (
+        l.source.kind === 'feature-service' ||
+        l.source.kind === 'arcgis-rest'
+      ) {
+        // arcgis-rest layers don't have an item id — the ArcGIS
+        // service lives outside the portal's own sharing. The
+        // matrix treats them like geojson-url (no gap). When we
+        // have an arcgis_service item referring to the URL, that
+        // item would be the target; the layer source doesn't name
+        // the item directly today, so this stays null for now.
+        if (l.source.kind === 'arcgis-rest') {
+          out[l.id] = null;
+        } else {
+          out[l.id] = l.source.itemId;
+        }
+      } else {
+        out[l.id] = null;
+      }
+    }
+    return out;
+  }, [map.layers]);
+
+  async function loadMatrixData() {
+    // Webmap's own shares — drives the principal column list.
+    try {
+      const res = await fetch(`/api/portal/items/${itemId}`);
+      if (res.ok) {
+        const j = (await res.json()) as { shares?: ItemShare[] };
+        setWebmapShares(j.shares ?? []);
+      }
+    } catch {
+      /* non-fatal — matrix shows empty principals list */
+    }
+    // Each distinct backing item — pulls its shares for gap detection.
+    const uniqItemIds = Array.from(
+      new Set(
+        Object.values(layerItemIds).filter(
+          (v): v is string => typeof v === 'string',
+        ),
+      ),
+    );
+    await Promise.all(
+      uniqItemIds.map(async (id) => {
+        try {
+          const r = await fetch(`/api/portal/items/${id}`);
+          if (!r.ok) return;
+          const j = (await r.json()) as { shares?: ItemShare[] };
+          setItemShares((prev) => ({ ...prev, [id]: j.shares ?? [] }));
+        } catch {
+          /* non-fatal — cell falls back to "no warning" */
+        }
+      }),
+    );
+    // Groups: fetch all groups visible to the current user so the
+    // matrix can display names + resolve which groups a user is in.
+    try {
+      const r = await fetch('/api/portal/groups');
+      if (r.ok) {
+        const groups = (await r.json()) as Group[];
+        const dir: Record<string, string> = {};
+        for (const g of groups) dir[g.id] = g.name;
+        setGroupDirectory(dir);
+      }
+    } catch {
+      /* non-fatal — groups show as short ids */
+    }
+  }
+
+  // Fire-and-forget load when the matrix opens. Re-runs if the layer
+  // list changes while the modal is open so newly-added layers get
+  // their item shares fetched.
+  useEffect(() => {
+    if (!matrixOpen) return;
+    void loadMatrixData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matrixOpen, itemId]);
+
+  // Deduplicate shares into a principal list. Filters to principals
+  // who actually have view-or-better access to the webmap — the
+  // matrix exists to narrow their access, not to create new ones.
+  const matrixPrincipals = useMemo<MatrixPrincipal[]>(() => {
+    return webmapShares.map((s) => {
+      const name =
+        s.principalType === 'group'
+          ? groupDirectory[s.principalId] ?? unresolvedPrincipal(s.principalType, s.principalId).name
+          : userNames[s.principalId] ?? unresolvedPrincipal(s.principalType, s.principalId).name;
+      return { type: s.principalType, id: s.principalId, name };
+    });
+  }, [webmapShares, groupDirectory, userNames]);
+
+  function patchLayerAccess(layerId: string, next: WebMapLayerAccess) {
+    setLayers(
+      map.layers.map((l) => (l.id === layerId ? { ...l, access: next } : l)),
+    );
+  }
+
+  async function grantItemAccess(
+    bitemId: string,
+    p: MatrixPrincipal,
+  ): Promise<void> {
+    const res = await fetch(`/api/portal/items/${bitemId}/share`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        principalType: p.type,
+        principalId: p.id,
+        permission: 'view',
+      }),
+    });
+    if (!res.ok) return;
+    // Refresh that item's shares so the gap badge disappears.
+    try {
+      const r = await fetch(`/api/portal/items/${bitemId}`);
+      if (r.ok) {
+        const j = (await r.json()) as { shares?: ItemShare[] };
+        setItemShares((prev) => ({ ...prev, [bitemId]: j.shares ?? [] }));
+      }
+    } catch {
+      /* non-fatal — matrix may show stale state until close/reopen */
+    }
+  }
 
   // Drop selection for layers that have been removed so the state
   // doesn't leak references. Only runs when the layer-id set changes.
@@ -373,6 +527,12 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
               active={tableOpen}
               onClick={() => setTableOpen((v) => !v)}
             />
+            <ToolbarToggle
+              Icon={ShieldCheck}
+              label="Layer access"
+              active={matrixOpen}
+              onClick={() => setMatrixOpen((v) => !v)}
+            />
             {saved ? (
               <span className="inline-flex items-center gap-1 text-xs text-success">
                 <Check className="h-3.5 w-3.5" />
@@ -495,6 +655,18 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         onAdd={addLayer}
+      />
+
+      <AccessMatrix
+        open={matrixOpen}
+        layers={map.layers}
+        principals={matrixPrincipals}
+        layerItemIds={layerItemIds}
+        itemShares={itemShares}
+        groupMemberships={groupMemberships}
+        onClose={() => setMatrixOpen(false)}
+        onPatchAccess={patchLayerAccess}
+        onGrantItemAccess={grantItemAccess}
       />
     </div>
   );
