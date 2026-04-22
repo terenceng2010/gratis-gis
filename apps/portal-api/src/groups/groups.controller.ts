@@ -15,6 +15,12 @@ class CreateGroupDto {
 
   @IsOptional() @IsEnum(['private', 'org', 'public'])
   access?: 'private' | 'org' | 'public';
+
+  // The form sends this on create so a user who uploaded a custom
+  // thumbnail before pressing Create doesn't have to re-upload after
+  // navigating to the edit page. Matches the UpdateGroupDto shape.
+  @IsOptional() @IsString() @MaxLength(2048)
+  thumbnailUrl?: string | null;
 }
 
 class UpdateGroupDto {

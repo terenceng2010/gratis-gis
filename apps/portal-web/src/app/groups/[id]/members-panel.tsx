@@ -1,12 +1,18 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Trash2, User as UserIcon } from 'lucide-react';
+import { Trash2, User as UserIcon } from 'lucide-react';
 import type { GroupMember, User } from '@gratis-gis/shared-types';
+import {
+  PrincipalPicker,
+  type PrincipalOption,
+} from '@/components/principal-picker';
 
 type MemberWithUser = GroupMember & {
-  user?: Pick<User, 'id' | 'username' | 'fullName'>;
+  user?: Pick<User, 'id' | 'username' | 'fullName'> & {
+    avatarUrl?: string | null;
+  };
 };
 
 interface Props {
@@ -19,32 +25,65 @@ interface Props {
  * Membership management for a group. Admins and group owners can add or
  * remove members; everyone else sees a read-only roster.
  *
- * The backend endpoints already exist:
+ * Add flow uses the same org-scoped `/users?q=` search the sharing
+ * panel uses, so names + avatars show up instead of raw UUIDs.
+ * Already-added users get greyed out in the picker with an
+ * "already a member" tooltip.
+ *
+ * Backend endpoints:
  *   POST   /api/groups/:id/members      { userId, role? }
  *   DELETE /api/groups/:id/members/:userId
- *
- * User id input is a raw UUID for now; replace with a user picker once
- * /api/users (org directory) is exposed.
  */
 export function MembersPanel({ groupId, initialMembers, canManage }: Props) {
   const router = useRouter();
   const [members, setMembers] = useState(initialMembers);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [addingRole, setAddingRole] = useState<'member' | 'admin'>('member');
 
-  const [userId, setUserId] = useState('');
-  const [role, setRole] = useState<'member' | 'admin'>('member');
+  const memberIds = useMemo(
+    () => new Set(members.map((m) => m.userId)),
+    [members],
+  );
 
-  async function addMember() {
+  // Search users via the org directory. Already-member rows come
+  // back disabled so the picker can grey them out.
+  const searchUsers = useCallback(
+    async (q: string): Promise<PrincipalOption[]> => {
+      const url = `/api/portal/users${q ? `?q=${encodeURIComponent(q)}` : ''}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const rows: Array<{
+        id: string;
+        username: string;
+        fullName: string | null;
+        avatarUrl: string | null;
+      }> = await res.json();
+      return rows.map((u) => {
+        const already = memberIds.has(u.id);
+        const opt: PrincipalOption = {
+          id: u.id,
+          title: u.fullName || u.username,
+          subtitle: u.username,
+          imageUrl: u.avatarUrl,
+        };
+        if (already) {
+          opt.disabled = true;
+          opt.disabledReason = 'already a member';
+        }
+        return opt;
+      });
+    },
+    [memberIds],
+  );
+
+  async function addMember(pick: PrincipalOption) {
     setError(null);
-    if (!userId) {
-      setError('Enter a user id first.');
-      return;
-    }
+    if (memberIds.has(pick.id)) return;
     const res = await fetch(`/api/portal/groups/${groupId}/members`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ userId, role }),
+      body: JSON.stringify({ userId: pick.id, role: addingRole }),
     });
     if (!res.ok) {
       setError(`Add failed: ${res.status} ${await res.text()}`);
@@ -53,9 +92,17 @@ export function MembersPanel({ groupId, initialMembers, canManage }: Props) {
     const added: GroupMember = await res.json();
     setMembers((cur) => {
       const filtered = cur.filter((m) => m.userId !== added.userId);
-      return [...filtered, { ...added }];
+      // Keep the picked user's display info so the row shows a
+      // readable name immediately instead of flashing a UUID until
+      // the router refresh pulls the full join.
+      const userPart: MemberWithUser['user'] = {
+        id: pick.id,
+        username: pick.subtitle ?? pick.title,
+        fullName: pick.title,
+      };
+      if (pick.imageUrl !== undefined) userPart.avatarUrl = pick.imageUrl;
+      return [...filtered, { ...added, user: userPart }];
     });
-    setUserId('');
     startTransition(() => router.refresh());
   }
 
@@ -115,35 +162,36 @@ export function MembersPanel({ groupId, initialMembers, canManage }: Props) {
       )}
 
       {canManage ? (
-        <div className="border-t border-border p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="user id (uuid)"
-              className="h-9 min-w-[18rem] flex-1 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-            />
+        <div className="space-y-2 border-t border-border p-4">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <PrincipalPicker
+                placeholder="Search users to add..."
+                search={searchUsers}
+                onPick={(opt) => void addMember(opt)}
+                emptyMessage="No matching users."
+                emptyInitialMessage="Start typing a name or username."
+              />
+            </div>
             <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as 'member' | 'admin')}
-              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              value={addingRole}
+              onChange={(e) =>
+                setAddingRole(e.target.value as 'member' | 'admin')
+              }
+              className="h-9 shrink-0 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              title="Role the user joins as"
             >
               <option value="member">member</option>
               <option value="admin">admin</option>
             </select>
-            <button
-              type="button"
-              onClick={addMember}
-              disabled={pending}
-              className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
-            >
-              <Plus className="h-4 w-4" />
-              Add member
-            </button>
           </div>
+          <p className="text-[11px] text-muted">
+            Pick a user from the directory to add them as a{' '}
+            <span className="font-medium">{addingRole}</span>. Existing
+            members are greyed out.
+          </p>
           {error ? (
-            <p className="mt-3 text-sm text-danger" role="alert">
+            <p className="text-sm text-danger" role="alert">
               {error}
             </p>
           ) : null}
