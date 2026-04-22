@@ -661,6 +661,25 @@ function syncOverlays(
     const useSdf = tint && wantsIcon && m.hasImage(sdfId);
     const preferredId = useSdf ? sdfId : plainId;
     const iconReady = wantsIcon && m.hasImage(preferredId);
+    // Diagnostic: remove once icon rendering is settled.
+    if (wantsIcon) {
+      const loadedIcons = Object.keys(MAP_ICONS).filter((n) =>
+        m.hasImage(iconImageId(n)),
+      );
+      // eslint-disable-next-line no-console
+      console.log('[gg map] icon sync', {
+        layer: layer.title,
+        iconName: s.point.iconName,
+        plainId,
+        sdfId,
+        iconReady,
+        useSdf,
+        plainRegistered: m.hasImage(plainId),
+        sdfRegistered: m.hasImage(sdfId),
+        totalIconsLoaded: loadedIcons.length,
+        sampleLoaded: loadedIcons.slice(0, 3),
+      });
+    }
     if (iconReady) {
       // Selection halo under the icon. Rendered as a separate circle
       // layer so it reads through whatever the symbol shows on top —
