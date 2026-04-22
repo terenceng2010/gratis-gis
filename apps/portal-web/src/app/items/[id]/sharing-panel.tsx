@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2,
@@ -112,6 +112,51 @@ export function SharingPanel({
       ),
     [shares],
   );
+
+  // Resolve display names for every user principal already in the
+  // shares list. Group names come from the `groups` prop the parent
+  // hands us, but user names aren't pre-loaded anywhere — without
+  // this the row just showed a truncated UUID. Fetched via the same
+  // /users?ids= batch endpoint the access matrix uses.
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const userIdsKey = useMemo(
+    () =>
+      Array.from(sharedUserIds).sort().join(','),
+    [sharedUserIds],
+  );
+  useEffect(() => {
+    if (sharedUserIds.size === 0) return;
+    const missing = Array.from(sharedUserIds).filter((id) => !userNames[id]);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/portal/users?ids=${encodeURIComponent(missing.join(','))}`,
+        );
+        if (!r.ok) return;
+        const rows = (await r.json()) as Array<{
+          id: string;
+          username: string;
+          fullName: string | null;
+        }>;
+        if (cancelled) return;
+        setUserNames((prev) => {
+          const next = { ...prev };
+          for (const u of rows) {
+            next[u.id] = u.fullName || u.username;
+          }
+          return next;
+        });
+      } catch {
+        /* non-fatal — row falls back to short id */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userIdsKey]);
 
   async function updateSharePermission(
     share: ItemShare,
@@ -374,7 +419,8 @@ export function SharingPanel({
                     <div className="truncate text-sm font-medium text-ink-1">
                       {share.principalType === 'group'
                         ? (groupTitle ?? share.principalId.slice(0, 8))
-                        : share.principalId.slice(0, 8)}
+                        : (userNames[share.principalId] ??
+                          share.principalId.slice(0, 8))}
                     </div>
                     <div className="text-xs text-muted">
                       {share.principalType}
