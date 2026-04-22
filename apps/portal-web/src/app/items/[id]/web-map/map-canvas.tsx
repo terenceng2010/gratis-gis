@@ -25,7 +25,6 @@ import {
   renderIconSvg,
   renderIconSvgForSdf,
 } from './map-icons';
-import { svgToSdf } from './sdf';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
@@ -241,13 +240,17 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
               /* non-fatal: tinted variant or circle fallback still works */
             }
           }
-          // SDF (tintable) variant. Slightly thicker stroke so the
-          // distance field has enough body; see renderIconSvgForSdf.
+          // SDF (tintable) variant. We use the plain rasterized icon
+          // but flag it as SDF, so MapLibre treats the image's alpha
+          // channel as a coarse distance field and tints via
+          // `icon-color`. This isn't a true per-pixel SDF so edges
+          // look marginally harder than tiny-sdf output, but it's
+          // bulletproof — any image we can rasterize we can tint.
           if (!m.hasImage(sdfId)) {
             try {
               const svg = renderIconSvgForSdf(name);
               if (svg) {
-                const sdfImg = await svgToSdf(svg, 48);
+                const sdfImg = await rasterizeSvg(svg, 48);
                 if (!cancelled && !m.hasImage(sdfId)) {
                   m.addImage(sdfId, sdfImg, { pixelRatio: 2, sdf: true });
                 }

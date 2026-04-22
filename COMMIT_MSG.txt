@@ -1,20 +1,14 @@
-feat(web-map): selection state, map highlight, attribute table sync 
+fix(web-map): use rasterized alpha directly as SDF source 
  
-Selection is now first-class. Picks in the attribute table 
-immediately highlight on the map, picks persist across layer 
-switches inside the table, and a new per-layer Selectable toggle 
-in Interactions opts a layer out of selection entirely. 
+The runtime chamfer-distance transform was producing images that 
+MapLibre either rejected or rendered invisibly - so picking an 
+icon made the feature disappear entirely. Swap to passing the 
+plain rasterized icon straight to addImage with sdf: true; 
+MapLibre treats the alpha channel as a coarse distance field and 
+tinting via icon-color works. Edges are slightly harder than 
+what a proper per-pixel SDF would produce, but the feature is 
+always visible, which is the bigger win. 
  
-- Schema: interactions.selectable, default true. 
-- map-editor owns selection as Record<layerId, Set<featureId>>. 
-- Canvas mirrors selection to MapLibre feature-state (diffed, so 
-  only changed ids touch the style) and paints selected features 
-  with an accent outline, bumped radius/width, or a halo circle 
-  under icon markers. 
-- Attribute table reads/writes the shared selection instead of 
-  its own local Set, so map and table stay in sync. 
-- Layer panel gains a Selectable checkbox alongside Highlight on 
-  hover. 
- 
-Next: click / rectangle / lasso / polygon draw tools that write 
-into this same selection state.
+The sdf.ts helper stays in the tree so a future SDF-backed 
+upgrade (precomputed atlases, tiny-sdf, etc.) has the seam to 
+plug into.
