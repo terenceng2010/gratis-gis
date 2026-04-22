@@ -14,10 +14,16 @@ import {
   Search,
   Sparkles,
   Tag,
+  Telescope,
   Trash2,
   X,
 } from 'lucide-react';
-import type { WebMapLayer, WebMapLayerSearch } from '@gratis-gis/shared-types';
+import type {
+  WebMapLayer,
+  WebMapLayerScale,
+  WebMapLayerSearch,
+} from '@gratis-gis/shared-types';
+import { DEFAULT_LAYER_SCALE, ZOOM_MAX, ZOOM_MIN } from '@gratis-gis/shared-types';
 import { StyleEditor } from './style-editor';
 import { RendererEditor } from './renderer-editor';
 import { FilterEditor } from './filter-editor';
@@ -161,7 +167,8 @@ type SectionKey =
   | 'labels'
   | 'filters'
   | 'popups'
-  | 'interactions';
+  | 'interactions'
+  | 'scale';
 
 function LayerRow({
   layer,
@@ -186,6 +193,7 @@ function LayerRow({
     filters: false,
     popups: false,
     interactions: false,
+    scale: false,
   });
   function toggle(k: SectionKey) {
     setOpenSections((s) => ({ ...s, [k]: !s[k] }));
@@ -411,6 +419,18 @@ function LayerRow({
                   supports writes.
                 </p>
               </Section>
+
+              <Section
+                Icon={Telescope}
+                label="Scale"
+                open={openSections.scale}
+                onToggle={() => toggle('scale')}
+              >
+                <ScaleEditor
+                  value={layer.scale ?? DEFAULT_LAYER_SCALE}
+                  onChange={(scale) => onPatch({ scale })}
+                />
+              </Section>
             </>
           ) : null}
         </div>
@@ -603,4 +623,133 @@ function Toggle({
       <span className="text-ink-1">{label}</span>
     </label>
   );
+}
+
+/**
+ * Scale controls: per-layer zoom-range visibility for features and
+ * labels, plus an opt-out for the default icon/circle auto-scaling.
+ * Ranges are inclusive and expressed in MapLibre zoom units (0 = world,
+ * 22 = street). An approximate scale denominator is shown next to each
+ * bound so GIS folks coming from ArcGIS can orient themselves quickly.
+ */
+function ScaleEditor({
+  value,
+  onChange,
+}: {
+  value: WebMapLayerScale;
+  onChange: (next: WebMapLayerScale) => void;
+}) {
+  function patch(p: Partial<WebMapLayerScale>) {
+    onChange({ ...value, ...p });
+  }
+
+  return (
+    <div className="space-y-3 text-sm">
+      <ZoomRange
+        label="Layer visible"
+        minZoom={value.minZoom}
+        maxZoom={value.maxZoom}
+        onMin={(z) => patch({ minZoom: z })}
+        onMax={(z) => patch({ maxZoom: z })}
+      />
+      <ZoomRange
+        label="Labels visible"
+        minZoom={value.labelsMinZoom}
+        maxZoom={value.labelsMaxZoom}
+        onMin={(z) => patch({ labelsMinZoom: z })}
+        onMax={(z) => patch({ labelsMaxZoom: z })}
+      />
+      <label className="flex cursor-pointer items-center gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={value.scaleWithZoom !== false}
+          onChange={(e) => patch({ scaleWithZoom: e.target.checked })}
+          className="h-3.5 w-3.5 rounded border-border text-accent focus:ring-accent/30"
+        />
+        <span className="text-ink-1">Scale icons &amp; points with zoom</span>
+      </label>
+      <p className="text-[11px] text-muted">
+        Off keeps the exact size you set; on shrinks markers at low zooms
+        so the map isn&apos;t overwhelmed and nudges them up at close
+        range.
+      </p>
+    </div>
+  );
+}
+
+function ZoomRange({
+  label,
+  minZoom,
+  maxZoom,
+  onMin,
+  onMax,
+}: {
+  label: string;
+  minZoom: number | null;
+  maxZoom: number | null;
+  onMin: (z: number | null) => void;
+  onMax: (z: number | null) => void;
+}) {
+  const minLabel =
+    minZoom == null ? 'any' : `${minZoom}  (${zoomToScaleLabel(minZoom)})`;
+  const maxLabel =
+    maxZoom == null ? 'any' : `${maxZoom}  (${zoomToScaleLabel(maxZoom)})`;
+  return (
+    <div className="rounded-md border border-border bg-surface-1 p-2">
+      <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
+        {label}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="flex items-center justify-between text-[10px] text-muted">
+            <span>Min zoom</span>
+            <span className="tabular-nums">{minLabel}</span>
+          </label>
+          <input
+            type="range"
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
+            step={1}
+            value={minZoom ?? ZOOM_MIN}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              onMin(n === ZOOM_MIN ? null : n);
+            }}
+            className="mt-1 w-full accent-accent"
+          />
+        </div>
+        <div>
+          <label className="flex items-center justify-between text-[10px] text-muted">
+            <span>Max zoom</span>
+            <span className="tabular-nums">{maxLabel}</span>
+          </label>
+          <input
+            type="range"
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
+            step={1}
+            value={maxZoom ?? ZOOM_MAX}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              onMax(n === ZOOM_MAX ? null : n);
+            }}
+            className="mt-1 w-full accent-accent"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rough zoom → scale denominator conversion. Web Mercator ~1:500M at
+ * zoom 0, halving per zoom level. Just a hint so users familiar with
+ * scale-denominator thinking can orient — not a precise projection.
+ */
+function zoomToScaleLabel(zoom: number): string {
+  const base = 500_000_000;
+  const denom = base / Math.pow(2, zoom);
+  if (denom >= 1_000_000) return `1:${Math.round(denom / 1_000_000)}M`;
+  if (denom >= 1_000) return `1:${Math.round(denom / 1_000)}k`;
+  return `1:${Math.round(denom)}`;
 }

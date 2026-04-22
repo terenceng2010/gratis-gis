@@ -65,6 +65,34 @@ export interface WebMapLayer {
    * editor small.
    */
   filter: WebMapLayerFilter | null;
+  /**
+   * Per-layer scale visibility. `null` on either bound means
+   * "unconstrained"; MapLibre's min/maxzoom properties clamp to
+   * 0 / 24 at the extremes. Zoom is stored rather than scale
+   * denominator so the shape matches MapLibre directly — the editor
+   * surfaces a human-readable scale hint next to each slider.
+   */
+  scale: WebMapLayerScale;
+}
+
+/**
+ * Zoom-range visibility for a whole layer plus its labels. Scale is
+ * modelled as MapLibre zoom (0 = world, 22 = street). Labels carry
+ * their own range because it's common to want a feature visible while
+ * hiding its labels at distant zooms.
+ */
+export interface WebMapLayerScale {
+  minZoom: number | null;
+  maxZoom: number | null;
+  /**
+   * When true (the default), point icons and circle radii scale
+   * smoothly with zoom via a MapLibre `interpolate` expression so
+   * features don't look oversized when zoomed out. When false, sizes
+   * stay pinned to the style's numeric value at every zoom level.
+   */
+  scaleWithZoom: boolean;
+  labelsMinZoom: number | null;
+  labelsMaxZoom: number | null;
 }
 
 /**
@@ -360,6 +388,23 @@ export const DEFAULT_LAYER_LABELS: WebMapLayerLabels = {
 };
 
 export const DEFAULT_LAYER_RENDERER: WebMapLayerRenderer = { kind: 'simple' };
+
+export const DEFAULT_LAYER_SCALE: WebMapLayerScale = {
+  minZoom: null,
+  maxZoom: null,
+  scaleWithZoom: true,
+  labelsMinZoom: null,
+  labelsMaxZoom: null,
+};
+
+/**
+ * MapLibre's widest permissible zoom range. We use these when a
+ * layer's scale bound is `null` — MapLibre's default min/maxzoom
+ * props have the same effect but being explicit keeps the emitted
+ * layer spec easy to diff.
+ */
+export const ZOOM_MIN = 0;
+export const ZOOM_MAX = 24;
 
 /**
  * Palette used to auto-assign colors to unique-value categories. Chosen

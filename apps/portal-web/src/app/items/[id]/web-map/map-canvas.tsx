@@ -17,6 +17,7 @@ import type {
   WebMapLayerFilter,
   WebMapLayerFilterClause,
 } from '@gratis-gis/shared-types';
+import { DEFAULT_LAYER_SCALE, ZOOM_MAX, ZOOM_MIN } from '@gratis-gis/shared-types';
 import { BASEMAPS } from '@/lib/basemaps';
 import {
   MAP_ICONS,
@@ -570,6 +571,12 @@ function syncOverlays(
     const op = layer.opacity;
     const s = layer.style;
     const hover = layer.interactions.hoverHighlight;
+    const scale = layer.scale ?? DEFAULT_LAYER_SCALE;
+    const minzoom = scale.minZoom ?? ZOOM_MIN;
+    const maxzoom = scale.maxZoom ?? ZOOM_MAX;
+    const labelsMinzoom = scale.labelsMinZoom ?? minzoom;
+    const labelsMaxzoom = scale.labelsMaxZoom ?? maxzoom;
+    const zoomScaling = scale.scaleWithZoom !== false;
 
     // Colors may be driven by an attribute (unique-value renderer). The
     // helper returns either a MapLibre match expression or the plain
@@ -596,12 +603,53 @@ function syncOverlays(
 
     const SEL_ACCENT = '#2563eb';
 
+    // Point sizes grow smoothly with zoom so features don't dominate
+    // the view at continent-level zooms and stay legible at street
+    // level. Baseline at zoom 14 (roughly neighbourhood scale) with
+    // gentle shrink below and mild growth above — tuned to match the
+    // "feels right" curve most web map styles ship. When the layer
+    // opts out of zoom scaling, the helpers return the flat value.
+    const ZOOM_SCALE_STOPS: Array<[number, number]> = [
+      [3, 0.3],
+      [8, 0.6],
+      [14, 1.0],
+      [18, 1.3],
+    ];
+
+    // Interpolate a single numeric base across the zoom curve. Used
+    // for layout properties (icon-size) where feature-state expressions
+    // aren't allowed.
+    const zoomScaleNumber = (base: number): unknown => {
+      if (!zoomScaling) return base;
+      const expr: unknown[] = ['interpolate', ['linear'], ['zoom']];
+      for (const [z, k] of ZOOM_SCALE_STOPS) expr.push(z, base * k);
+      return expr;
+    };
+
+    // Interpolate across zoom while preserving feature-state branches
+    // at each stop. Used for circle-radius and icon-halo radius, where
+    // hover/selected values share the same zoom curve.
+    const zoomScaleState = (
+      base: number,
+      selectedValue: number,
+      hoverValue: number,
+    ): unknown => {
+      if (!zoomScaling) return stateCase(base, selectedValue, hoverValue);
+      const expr: unknown[] = ['interpolate', ['linear'], ['zoom']];
+      for (const [z, k] of ZOOM_SCALE_STOPS) {
+        expr.push(z, stateCase(base * k, selectedValue * k, hoverValue * k));
+      }
+      return expr;
+    };
+
     // Polygon fill. Selection bumps opacity so picked polygons read as
     // highlighted even against a translucent base style.
     m.addLayer({
       id: `gg:${layer.id}-fill`,
       type: 'fill',
       source: sourceId,
+      minzoom,
+      maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
         'fill-color': polyFill,
@@ -620,6 +668,8 @@ function syncOverlays(
       id: `gg:${layer.id}-poly-line`,
       type: 'line',
       source: sourceId,
+      minzoom,
+      maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
         'line-color': stateCase(
@@ -641,6 +691,8 @@ function syncOverlays(
       id: `gg:${layer.id}-line`,
       type: 'line',
       source: sourceId,
+      minzoom,
+      maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'LineString'], layer.filter),
       paint: {
         'line-color': stateCase(
@@ -681,10 +733,16 @@ function syncOverlays(
         id: `gg:${layer.id}-icon-halo`,
         type: 'circle',
         source: sourceId,
+        minzoom,
+        maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         paint: {
           'circle-color': 'rgba(37, 99, 235, 0.25)',
-          'circle-radius': stateCase(0, 14 * s.point.iconSize, 0) as unknown as number,
+          'circle-radius': zoomScaleState(
+            0,
+            14 * s.point.iconSize,
+            0,
+          ) as unknown as number,
           'circle-stroke-color': SEL_ACCENT,
           'circle-stroke-width': stateCase(0, 2, 0) as unknown as number,
           'circle-opacity': op,
@@ -694,14 +752,17 @@ function syncOverlays(
         id: `gg:${layer.id}-circle`,
         type: 'symbol',
         source: sourceId,
+        minzoom,
+        maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         layout: {
           'icon-image': preferredId,
-          // Plain constant: MapLibre rejects feature-state expressions
-          // in layout properties ("icon-size" is one). The selection
-          // halo circle above the icon carries the selected/hover
-          // visual instead, which DOES go on a paint property.
-          'icon-size': s.point.iconSize,
+          // Zoom-interpolated size. Feature-state expressions aren't
+          // allowed in layout properties, so the halo circle above
+          // carries selected/hover — this property only tracks zoom.
+          'icon-size': zoomScaleNumber(
+            s.point.iconSize,
+          ) as unknown as number,
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
           'icon-anchor': 'bottom',
@@ -720,10 +781,12 @@ function syncOverlays(
         id: `gg:${layer.id}-circle`,
         type: 'circle',
         source: sourceId,
+        minzoom,
+        maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         paint: {
           'circle-color': pointFill,
-          'circle-radius': stateCase(
+          'circle-radius': zoomScaleState(
             s.point.radius,
             s.point.radius + 3,
             s.point.radius + 2,
@@ -754,6 +817,8 @@ function syncOverlays(
         id: `gg:${layer.id}-label`,
         type: 'symbol',
         source: sourceId,
+        minzoom: labelsMinzoom,
+        maxzoom: labelsMaxzoom,
         layout: {
           'text-field': textExpr as unknown as maplibregl.DataDrivenPropertyValueSpecification<string>,
           'text-size': labels.size,

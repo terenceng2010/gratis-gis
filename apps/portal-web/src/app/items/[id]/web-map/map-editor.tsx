@@ -13,6 +13,7 @@ import {
   DEFAULT_LAYER_LABELS,
   DEFAULT_LAYER_POPUP,
   DEFAULT_LAYER_RENDERER,
+  DEFAULT_LAYER_SCALE,
   DEFAULT_LAYER_SEARCH,
   DEFAULT_LAYER_STYLE,
   DEFAULT_WEB_MAP,
@@ -113,6 +114,11 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
           ...structuredClone(DEFAULT_LAYER_SEARCH),
           ...(((l as unknown) as { search?: Partial<WebMapLayer['search']> })
             .search ?? {}),
+        },
+        scale: {
+          ...structuredClone(DEFAULT_LAYER_SCALE),
+          ...(((l as unknown) as { scale?: Partial<WebMapLayer['scale']> })
+            .scale ?? {}),
         },
         style: {
           ...structuredClone(DEFAULT_LAYER_STYLE),
