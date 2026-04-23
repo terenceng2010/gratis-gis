@@ -493,14 +493,18 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
   return (
     <ul className="divide-y divide-border rounded-lg border border-border bg-surface-1">
       {/* Header row: surfaces the columns so the list reads like a
-          table, which matters once there are many rows. */}
+          table, which matters once there are many rows. The two
+          `auto` edge columns use explicit placeholders (1rem wide +
+          a chevron-sized trailing span) so the data rows — whose
+          first cell is a 1rem icon and whose last cell is a
+          1rem chevron — line up pixel-for-pixel with the headers. */}
       <li className="hidden grid-cols-[auto_minmax(0,1fr)_8rem_7rem_9rem_auto] items-center gap-3 border-b border-border bg-surface-2 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted sm:grid">
-        <span />
+        <span className="h-4 w-4" aria-hidden="true" />
         <span>Title</span>
         <span>Type</span>
         <span>Updated</span>
         <span>Sharing</span>
-        <span />
+        <span className="h-3.5 w-3.5" aria-hidden="true" />
       </li>
       {items.map((item) => {
         const canManage =

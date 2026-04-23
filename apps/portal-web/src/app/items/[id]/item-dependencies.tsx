@@ -6,6 +6,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   ChevronDown,
+  HelpCircle,
   Link as LinkIcon,
   Loader2,
   RefreshCw,
@@ -88,14 +89,23 @@ export function ItemDependencies({ itemId }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <label className="inline-flex items-center gap-1.5 text-xs text-muted">
+          <label
+            className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted"
+            title={
+              'When on, this walks the full chain of references. ' +
+              'Example: a feature layer is used by a web map, which is ' +
+              'used by an app — all of those show up. When off, only ' +
+              'items that reference this one directly appear.'
+            }
+          >
             <input
               type="checkbox"
               checked={transitive}
               onChange={(e) => setTransitive(e.target.checked)}
               className="h-3.5 w-3.5 rounded border-border"
             />
-            Transitive
+            Include indirect
+            <HelpCircle className="h-3 w-3 text-muted" />
           </label>
           <button
             type="button"
@@ -125,8 +135,8 @@ export function ItemDependencies({ itemId }: Props) {
           title="Used by"
           help={
             transitive
-              ? 'Every item that references this one, directly or through another item.'
-              : 'Items that directly reference this one.'
+              ? 'Every item that references this one — directly, or through a chain of other items.'
+              : 'Items that reference this one directly.'
           }
           icon={<ArrowUpRight className="h-3.5 w-3.5" />}
           rows={dependents}
@@ -134,7 +144,7 @@ export function ItemDependencies({ itemId }: Props) {
           emptyMessage={
             transitive
               ? 'No other items reference this one.'
-              : 'No other items directly reference this one.'
+              : 'No other items reference this one directly.'
           }
         />
         <DependencyList
