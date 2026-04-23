@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Building2,
   Calendar,
+  ChevronDown,
   Globe2,
   Lock,
   Pencil,
@@ -30,6 +31,7 @@ import { SharingPanel } from './sharing-panel';
 import { DeleteItemButton } from './delete-button';
 import { MapEditor } from './web-map/map-editor';
 import { FeatureServiceEditor } from './feature-service/editor';
+import { FeatureServiceV3SchemaEditor } from './feature-service/v3-schema-editor';
 import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { ComingSoon } from './coming-soon';
 
@@ -78,66 +80,64 @@ export default async function ItemDetailPage({ params }: Props) {
   const groups = canManage ? await apiFetch<Group[]>('/api/groups') : [];
 
   const badgeClass = typeBadge[item.type] ?? 'bg-slate-100 text-slate-800';
+  // "Workspace" item types are content-heavy (map, feature service,
+  // arcgis service). For those, we collapse the metadata header so the
+  // actual editor is the first thing the user sees. Other types keep
+  // the standard, richer header because their "content" is basically
+  // metadata + some small payload anyway.
+  const isWorkspace =
+    item.type === 'web_map' ||
+    item.type === 'feature_service' ||
+    item.type === 'arcgis_service';
+  // Bump the container up for workspace types so the map gets more
+  // horizontal room; other pages keep the old 6xl width.
+  const containerWidth = isWorkspace ? 'max-w-7xl' : 'max-w-6xl';
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-10">
+    <div className={`mx-auto w-full ${containerWidth} px-6 py-6`}>
       <Link
         href="/items"
-        className="mb-6 inline-flex items-center gap-1 text-sm text-muted hover:text-ink-0"
+        className="mb-3 inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
       >
-        <ArrowLeft className="h-4 w-4" />
+        <ArrowLeft className="h-3.5 w-3.5" />
         Back to items
       </Link>
 
-      <header className="mb-8 flex items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-1 items-start gap-4">
-          <EntityBadge
-            label={item.title}
-            seed={item.id}
-            imageUrl={item.thumbnailUrl}
-            size="xl"
-            rounded="md"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span
-                className={`rounded px-2 py-0.5 text-xs font-medium ${badgeClass}`}
-              >
-                {item.type}
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted">
-                {accessIcon[item.access]}
-                {item.access}
-              </span>
-            </div>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+      {/* Compact header: single row with badge, title, chips, and
+          actions. Description / owner / updated / tags collapse into
+          a `<details>` disclosure below so they're one click away
+          without eating the fold. */}
+      <header className="mb-4 flex items-center gap-3">
+        <EntityBadge
+          label={item.title}
+          seed={item.id}
+          imageUrl={item.thumbnailUrl}
+          size="md"
+          rounded="md"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate text-xl font-semibold tracking-tight">
               {item.title}
             </h1>
-            {item.description ? (
-              <p className="mt-2 max-w-3xl text-sm text-muted">
-                {item.description}
-              </p>
-            ) : null}
-            <div className="mt-3 flex items-center gap-4 text-xs text-muted">
-              <span className="inline-flex items-center gap-1">
-                <Calendar className="h-3.5 w-3.5" />
-                Updated {new Date(item.updatedAt).toLocaleString()}
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <User className="h-3.5 w-3.5" />
-                Owner: {item.ownerId === me.id ? 'you' : item.ownerId.slice(0, 8)}
-              </span>
-            </div>
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${badgeClass}`}
+            >
+              {item.type}
+            </span>
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">
+              {accessIcon[item.access]}
+              {item.access}
+            </span>
           </div>
         </div>
-
         {canManage ? (
           <div className="flex shrink-0 items-center gap-2">
             <Link
               href={`/items/${item.id}/edit`}
-              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 shadow-card hover:bg-surface-2"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2.5 text-xs font-medium text-ink-1 shadow-card hover:bg-surface-2"
             >
-              <Pencil className="h-4 w-4" />
+              <Pencil className="h-3.5 w-3.5" />
               Edit
             </Link>
             <DeleteItemButton itemId={item.id} itemTitle={item.title} />
@@ -145,25 +145,67 @@ export default async function ItemDetailPage({ params }: Props) {
         ) : null}
       </header>
 
-      {item.tags.length > 0 ? (
-        <section className="mb-8">
-          <h2 className="mb-2 text-sm font-medium text-muted">Tags</h2>
-          <div className="flex flex-wrap gap-2">
-            {item.tags.map((tag) => (
-              <span
-                key={tag}
-                className="rounded-full border border-border bg-surface-1 px-3 py-1 text-xs"
-              >
-                {tag}
+      {/* Collapsed details: description + owner + updated + tags.
+          Uses the native <details> element so it works without any
+          client-side JS and stays accessible. Shown only when the
+          user has something worth seeing (description OR tags). */}
+      {item.description || item.tags.length > 0 ? (
+        <details className="group mb-4 rounded-md border border-border bg-surface-1">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs text-muted hover:text-ink-1">
+            <span className="inline-flex items-center gap-3">
+              <span className="inline-flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                Updated {new Date(item.updatedAt).toLocaleString()}
               </span>
-            ))}
+              <span className="inline-flex items-center gap-1">
+                <User className="h-3 w-3" />
+                Owner:{' '}
+                {item.ownerId === me.id ? 'you' : item.ownerId.slice(0, 8)}
+              </span>
+              {item.tags.length > 0 ? (
+                <span className="text-muted">
+                  · {item.tags.length}{' '}
+                  {item.tags.length === 1 ? 'tag' : 'tags'}
+                </span>
+              ) : null}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="space-y-3 border-t border-border px-3 py-3">
+            {item.description ? (
+              <p className="text-sm text-ink-1">{item.description}</p>
+            ) : null}
+            {item.tags.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {item.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[11px] text-muted"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
-        </section>
-      ) : null}
+        </details>
+      ) : (
+        // No description/tags: still show the updated + owner line
+        // so users have at least the audit trail visible.
+        <div className="mb-4 flex items-center gap-3 text-xs text-muted">
+          <span className="inline-flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            Updated {new Date(item.updatedAt).toLocaleString()}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <User className="h-3 w-3" />
+            Owner: {item.ownerId === me.id ? 'you' : item.ownerId.slice(0, 8)}
+          </span>
+        </div>
+      )}
 
       {item.type === 'web_map' ? (
-        <section className="mb-8">
-          <h2 className="mb-2 text-sm font-medium text-muted">Map</h2>
+        <section className="mb-6">
           <MapEditor
             itemId={item.id}
             initial={{ ...DEFAULT_WEB_MAP, ...((item.data ?? {}) as Partial<WebMapData>) }}
@@ -171,8 +213,24 @@ export default async function ItemDetailPage({ params }: Props) {
           />
         </section>
       ) : item.type === 'feature_service' ? (
-        <section className="mb-8">
-          <h2 className="mb-2 text-sm font-medium text-muted">Feature service</h2>
+        // v3 items route to the new multi-layer schema editor. v1/v2
+        // continue to use the legacy single-layer editor so existing
+        // items keep working exactly as before.
+        (item.data as FeatureServiceData | null)?.version === 3 ? (
+          <section className="mb-6">
+            <FeatureServiceV3SchemaEditor
+              itemId={item.id}
+              // Runtime version check above guarantees the v3 shape;
+              // cast through unknown to sidestep conditional-type
+              // acrobatics.
+              initial={
+                item.data as unknown as import('@gratis-gis/shared-types').FeatureServiceDataV3
+              }
+              canEdit={canManage}
+            />
+          </section>
+        ) : (
+        <section className="mb-6">
           <FeatureServiceEditor
             itemId={item.id}
             initial={
@@ -189,9 +247,9 @@ export default async function ItemDetailPage({ params }: Props) {
             canEdit={canManage}
           />
         </section>
+        )
       ) : item.type === 'arcgis_service' ? (
-        <section className="mb-8">
-          <h2 className="mb-2 text-sm font-medium text-muted">ArcGIS service</h2>
+        <section className="mb-6">
           <ArcgisServiceEditor
             itemId={item.id}
             initial={{
@@ -202,7 +260,7 @@ export default async function ItemDetailPage({ params }: Props) {
           />
         </section>
       ) : (
-        <section className="mb-8">
+        <section className="mb-6">
           <ComingSoon type={item.type} data={item.data} />
         </section>
       )}

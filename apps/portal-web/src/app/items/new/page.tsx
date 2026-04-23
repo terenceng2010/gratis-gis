@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
-import { ItemForm } from '../item-form';
+import { NewItemWizard } from './wizard';
 
 export const metadata = { title: 'New item' };
 
@@ -21,14 +21,13 @@ export default function NewItemPage() {
           Create a new item
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted">
-          Items are the shared unit of content in the portal: maps, feature
-          layers, forms, apps, dashboards, notebooks. Pick a type, name it,
-          decide who can see it, and refine the content from the item page
-          once it exists.
+          Pick what you&apos;re creating, then fill in the details. For services
+          and uploads, we&apos;ll gather what we need on the next screen so the
+          item lands ready to use.
         </p>
       </header>
 
-      <ItemForm mode={{ kind: 'create' }} />
+      <NewItemWizard />
     </div>
   );
 }

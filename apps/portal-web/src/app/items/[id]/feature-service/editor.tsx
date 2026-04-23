@@ -16,6 +16,7 @@ import type {
   FeatureServiceData,
   FeatureServiceDataV1,
   FeatureServiceDataV2,
+  FeatureServiceDataV3,
   ISODateString,
 } from '@gratis-gis/shared-types';
 import {
@@ -35,6 +36,10 @@ type Tab = 'upload' | 'paste';
 
 function isV2(data: FeatureServiceData): data is FeatureServiceDataV2 {
   return data.version === 2 && (data as FeatureServiceDataV2).storageType === 'postgis';
+}
+
+function isV3(data: FeatureServiceData): data is FeatureServiceDataV3 {
+  return data.version === 3;
 }
 
 /**
@@ -59,17 +64,33 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const v2 = isV2(initial);
+  const v3 = isV3(initial);
 
-  // v1: pull stats from inline features. v2: use metadata from item.data.
-  const currentFeatureCount = v2
-    ? (initial as FeatureServiceDataV2).featureCount
-    : ((initial as FeatureServiceDataV1).data?.features?.length ?? 0);
-  const currentFields = initial.fields;
+  // v3 is multi-layer — this single-layer editor surfaces aggregated
+  // stats and the fields of the first layer. The dedicated multi-layer
+  // editor (Phase B+) is the proper home for v3 editing; this block is
+  // a compatibility bridge so the existing ingest flows still compile.
+  const currentFeatureCount = v3
+    ? (initial as FeatureServiceDataV3).layers.reduce(
+        (sum, l) => sum + (l.featureCount ?? 0),
+        0,
+      )
+    : v2
+      ? (initial as FeatureServiceDataV2).featureCount
+      : ((initial as FeatureServiceDataV1).data?.features?.length ?? 0);
+  const currentFields: FeatureField[] = v3
+    ? ((initial as FeatureServiceDataV3).layers[0]?.fields ?? [])
+    : (initial as FeatureServiceDataV1 | FeatureServiceDataV2).fields;
   const currentUpdatedAt = initial.updatedAt;
-  const currentBbox = v2 ? (initial as FeatureServiceDataV2).bbox : null;
+  const currentBbox = v3
+    ? ((initial as FeatureServiceDataV3).layers[0]?.bbox ?? null)
+    : v2
+      ? (initial as FeatureServiceDataV2).bbox
+      : null;
 
-  // Derived fields only needed for v1 (v2 always stores explicit fields).
-  const v1Features = v2 ? [] : ((initial as FeatureServiceDataV1).data?.features ?? []);
+  // Derived fields only needed for v1 (v2/v3 always store explicit fields).
+  const v1Features =
+    v2 || v3 ? [] : ((initial as FeatureServiceDataV1).data?.features ?? []);
   const derivedFields = useMemo<FeatureField[]>(
     () => (v2 ? [] : deriveFields(v1Features, 500)),
     // eslint-disable-next-line react-hooks/exhaustive-deps

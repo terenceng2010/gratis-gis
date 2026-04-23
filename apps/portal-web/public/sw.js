@@ -17,6 +17,20 @@ const STATIC_CACHE = `gratis-static-${CACHE_VERSION}`;
 const GEOJSON_CACHE = `gratis-geojson-${CACHE_VERSION}`;
 const SYNC_QUEUE_TAG = 'gratis-feature-sync';
 
+// Detect the Next.js dev server. Dev chunks under /_next/static/ reuse
+// filenames across restarts, so cache-first serves up stale JS whose
+// module IDs no longer exist in the current webpack runtime — that
+// produces the dreaded `options.factory undefined` crash. Short-
+// circuit static asset caching when running on localhost so dev is
+// always fresh. The SwRegistrar should prevent this SW from loading
+// in dev at all, but this guard handles the case where an older SW
+// from a prior session is still running.
+const IS_DEV_HOST =
+  self.location.hostname === 'localhost' ||
+  self.location.hostname === '127.0.0.1' ||
+  self.location.hostname.endsWith('.local') ||
+  self.location.hostname.endsWith('.localhost');
+
 // Next.js static assets are served from /_next/static/ — these are
 // content-addressed (hash in filename) so they are safe to cache forever.
 const STATIC_PATTERNS = [
@@ -67,8 +81,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets: cache-first (content-addressed, safe to serve from cache).
+  // Static assets: cache-first in prod (content-addressed), pass-through
+  // in dev (chunk filenames aren't stable across dev server restarts).
   if (STATIC_PATTERNS.some((p) => p.test(url.pathname))) {
+    if (IS_DEV_HOST) return;
     event.respondWith(cacheFirst(request, STATIC_CACHE));
     return;
   }

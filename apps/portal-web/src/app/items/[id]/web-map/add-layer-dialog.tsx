@@ -30,7 +30,7 @@ import {
   probeService,
   type ArcgisServiceDescription,
   type ArcgisServiceLayer,
-} from './arcgis-rest';
+} from '@/lib/arcgis-rest';
 
 interface Props {
   open: boolean;

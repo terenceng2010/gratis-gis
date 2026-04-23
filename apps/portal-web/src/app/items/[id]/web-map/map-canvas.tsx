@@ -27,7 +27,7 @@ import {
   renderIconSvgForSdf,
 } from './map-icons';
 import { svgToSdf } from './sdf';
-import { fetchLayerBBox } from './arcgis-rest';
+import { fetchLayerBBox } from '@/lib/arcgis-rest';
 import type { SelectToolMode } from './select-tool';
 
 interface Props {
@@ -503,7 +503,12 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     // "clickable" pointer and stops hover highlight from firing on
     // data the user isn't cleared to read.
     const interactiveLayerIds = (): string[] => {
+      // getStyle() can return undefined before the initial style load
+      // completes and during style transitions. Bail out with an empty
+      // list — the hover / popup / click paths all no-op cleanly when
+      // there are no interactive layer ids to query.
       const style = m.getStyle();
+      if (!style) return [];
       const existing = new Set((style.layers ?? []).map((sl) => sl.id));
       const queryable = map.layers.filter(
         (l) => l.effective === undefined || l.effective.query !== false,
@@ -1176,7 +1181,10 @@ function collectFeaturesInBbox(
   const wanted = layers
     .filter((l) => l.interactions.selectable !== false)
     .flatMap((l) => overlayLayerIds(l.id));
-  const existing = new Set((m.getStyle().layers ?? []).map((sl) => sl.id));
+  // Guard against getStyle() returning undefined during style transitions.
+  const style = m.getStyle();
+  if (!style) return {};
+  const existing = new Set((style.layers ?? []).map((sl) => sl.id));
   const mapLayerIds = wanted.filter((id) => existing.has(id));
   const hits = m.queryRenderedFeatures(bbox, { layers: mapLayerIds });
   return hitsByLayer(hits, layers);
@@ -1217,7 +1225,10 @@ function collectFeaturesInPolygon(
   const wanted = layers
     .filter((l) => l.interactions.selectable !== false)
     .flatMap((l) => overlayLayerIds(l.id));
-  const existing = new Set((m.getStyle().layers ?? []).map((sl) => sl.id));
+  // Guard against getStyle() returning undefined during style transitions.
+  const style = m.getStyle();
+  if (!style) return {};
+  const existing = new Set((style.layers ?? []).map((sl) => sl.id));
   const mapLayerIds = wanted.filter((id) => existing.has(id));
   const hits = m.queryRenderedFeatures(bbox, { layers: mapLayerIds });
   const filtered = hits.filter((h) => {

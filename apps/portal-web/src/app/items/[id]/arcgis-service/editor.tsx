@@ -17,7 +17,7 @@ import {
 import {
   probeService,
   type ArcgisServiceDescription,
-} from '../web-map/arcgis-rest';
+} from '@/lib/arcgis-rest';
 
 interface Props {
   itemId: string;
