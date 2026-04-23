@@ -16,17 +16,17 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import { ItemsService } from '../items/items.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SharingService } from '../items/sharing.service.js';
+import { FeaturesService } from '../features/features.service.js';
 import { IngestService } from './ingest.service.js';
 
 /**
  * Server-side ingest endpoint. Accepts a multipart upload of an
- * OGR-readable vector file and replaces the target feature_service
- * item's data with the converted GeoJSON.
+ * OGR-readable vector file, parses it via GDAL, and writes the
+ * features into a PostGIS table (v2 storage). The item metadata is
+ * updated to reflect the new storage type.
  *
- * Only feature_service items are accepted as targets: web maps carry
- * camera state, files hold opaque bytes, and so on. The caller must
- * have edit rights on the item (owner or org admin, same rule as
- * PATCH /items/:id).
+ * Only feature_service items are accepted as targets. The caller must
+ * have edit rights (owner or org admin, same rule as PATCH /items/:id).
  */
 @ApiTags('ingest')
 @ApiBearerAuth()
@@ -37,6 +37,7 @@ export class IngestController {
     private readonly items: ItemsService,
     private readonly sharing: SharingService,
     private readonly prisma: PrismaService,
+    private readonly features: FeaturesService,
   ) {}
 
   @Post(':id/ingest')
@@ -75,27 +76,53 @@ export class IngestController {
       file.originalname,
     );
 
-    const data = {
-      version: 1,
+    // Ensure the PostGIS table exists for this item (idempotent).
+    await this.features.provisionTable(id);
+
+    // Replace all current features with the newly ingested set.
+    const { inserted, expired } = await this.features.replaceAll(
+      id,
+      geojson.features.map((f: unknown) => {
+        const feat = f as {
+          geometry?: unknown;
+          properties?: Record<string, unknown> | null;
+        };
+        return {
+          geometry: feat.geometry,
+          properties: feat.properties ?? {},
+        };
+      }),
+      user,
+    );
+
+    // Compute bbox and update item metadata to v2 storage shape.
+    const stats = await this.features.stats(id);
+    const nextData: Record<string, unknown> = {
+      version: 2,
+      storageType: 'postgis',
       fields: fields.map((f) => ({
         name: f.name,
         type: f.type,
         label: f.name,
         nullable: true,
       })),
-      data: geojson,
+      featureCount: stats.featureCount,
+      bbox: stats.bbox,
       updatedAt: new Date().toISOString(),
     };
 
     await this.prisma.item.update({
       where: { id },
-      data: { data: data as unknown as Prisma.InputJsonValue },
+      data: { data: nextData as unknown as Prisma.InputJsonValue },
     });
 
     return {
       driver,
-      features: geojson.features.length,
-      fields: data.fields,
+      inserted,
+      expired,
+      featureCount: stats.featureCount,
+      bbox: stats.bbox,
+      fields: nextData.fields,
     };
   }
 }

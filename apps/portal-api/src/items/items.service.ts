@@ -291,10 +291,9 @@ export class ItemsService {
   }
 
   /**
-   * Permanently delete a trashed item. Cascades to item_share rows and,
-   * once feature-services ship, to the tenant feature table. Only
-   * available for items already in the trash so there is always a
-   * two-step ceremony between "delete" and "gone".
+   * Permanently delete a trashed item. Cascades to item_share rows. If
+   * the item is a v2 feature_service (storageType === 'postgis'), also
+   * drops the backing PostGIS table so we don't leak orphaned tables.
    */
   async purge(user: AuthUser, id: string) {
     const item = await this.get(user, id, { includeTrashed: true });
@@ -304,7 +303,102 @@ export class ItemsService {
     if (!this.sharing.canAdmin(user, item)) {
       throw new ForbiddenException('Only the owner or an org admin can purge an item');
     }
+    // Drop the PostGIS feature table before removing the item row so
+    // we can still reference the item id to build the table name.
+    if (item.type === 'feature_service') {
+      const data = item.data as { storageType?: string } | null;
+      if (data?.storageType === 'postgis') {
+        const tbl = `fs_${id.replace(/-/g, '')}`;
+        // Best-effort; if the table never existed nothing breaks.
+        await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tbl}"`);
+      }
+    }
     await this.prisma.item.delete({ where: { id } });
+  }
+
+  /**
+   * Return the GeoJSON FeatureCollection for a feature_service item.
+   * Handles both v1 (inline JSON) and v2 (PostGIS table) storage transparently.
+   *
+   * Accepts an optional bbox filter for v2; v1 always returns all features.
+   */
+  async getGeoJson(
+    user: AuthUser,
+    id: string,
+    opts: { bbox?: [number, number, number, number]; at?: string } = {},
+  ): Promise<{ type: 'FeatureCollection'; features: unknown[] }> {
+    const item = await this.get(user, id);
+    if (item.type !== 'feature_service') {
+      return { type: 'FeatureCollection', features: [] };
+    }
+
+    const data = item.data as {
+      storageType?: string;
+      version?: number;
+      data?: unknown;
+    } | null;
+
+    if (data?.storageType === 'postgis') {
+      // v2: query the PostGIS table.
+      const tbl = `fs_${id.replace(/-/g, '')}`;
+      const params: unknown[] = [];
+      const conditions: string[] = [];
+
+      if (opts.at) {
+        const ts = new Date(opts.at);
+        if (!isNaN(ts.getTime())) {
+          params.push(ts.toISOString());
+          const p = params.length;
+          conditions.push(
+            `valid_from <= $${p}::timestamptz AND (valid_to IS NULL OR valid_to > $${p}::timestamptz)`,
+          );
+        }
+      } else {
+        conditions.push('valid_to IS NULL');
+      }
+
+      if (opts.bbox) {
+        const [minX, minY, maxX, maxY] = opts.bbox;
+        params.push(minX, minY, maxX, maxY);
+        const b = params.length;
+        conditions.push(
+          `geom IS NOT NULL AND ST_Intersects(geom, ST_MakeEnvelope($${b - 3}, $${b - 2}, $${b - 1}, $${b}, 4326))`,
+        );
+      }
+
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      type RawRow = { global_id: string; geom: string | null; properties: Record<string, unknown> };
+      const rows = await this.prisma.$queryRawUnsafe<RawRow[]>(
+        `SELECT global_id, ST_AsGeoJSON(geom) AS geom, properties
+           FROM "${tbl}"
+          ${where}
+          ORDER BY gid
+          LIMIT 10000`,
+        ...params,
+      );
+
+      return {
+        type: 'FeatureCollection',
+        features: rows.map((r) => ({
+          type: 'Feature',
+          id: r.global_id,
+          geometry: r.geom ? JSON.parse(r.geom) : null,
+          properties: r.properties,
+        })),
+      };
+    }
+
+    // v1: inline GeoJSON in item.data.data
+    const fc = data?.data;
+    if (
+      !fc ||
+      typeof fc !== 'object' ||
+      (fc as { type?: string }).type !== 'FeatureCollection'
+    ) {
+      return { type: 'FeatureCollection', features: [] };
+    }
+    return fc as { type: 'FeatureCollection'; features: unknown[] };
   }
 
   async share(user: AuthUser, id: string, input: ShareItemInput) {

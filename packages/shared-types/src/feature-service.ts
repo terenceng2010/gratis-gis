@@ -1,15 +1,18 @@
 /**
  * Canonical shape stored in an Item's dataJson when `type = 'feature_service'`.
  *
- * v1 strategy: hold the feature data inline as a GeoJSON FeatureCollection.
- * This is a conscious simplification — inline storage scales only as far
- * as the 1 MB-or-so dataJson soft cap reasonably handles, and has no
- * query optimization, tile cache, or spatial index beyond what MapLibre
- * does client-side. When the PostGIS-backed storage path ships, the
- * same item type swaps this payload for a server-side reference; the
- * HTTP contract (`GET /api/items/:id` returns a GeoJSON-shaped `data`)
- * stays stable so downstream consumers (web maps, dashboards, the
- * field app) don't need a rewrite.
+ * Two storage strategies exist:
+ *
+ * **v1** — inline GeoJSON in `item.data.data`. Works for demos and small
+ * datasets; hard cap around 25 MB upload / a few MB parsed JSON.
+ *
+ * **v2** — PostGIS table per item. `item.data` holds only metadata
+ * (field schema, feature count, bbox, updatedAt). The actual geometry
+ * and properties live in a table named `fs_<uuid_no_dashes>` in the
+ * database. `GET /api/items/:id/geojson` streams from PostGIS with
+ * optional `?bbox` and `?at` query parameters. Individual feature
+ * CRUD (append, update, delete, history) lives at
+ * `GET|POST|PATCH|DELETE /api/items/:id/features[/:fid]`.
  */
 
 import type { ISODateString } from './ids';
@@ -25,19 +28,11 @@ export interface FeatureField {
   nullable: boolean;
 }
 
-/**
- * A typed row shape would be nice here; it comes in once we generate
- * TS types from field definitions. For now, GeoJSON properties stay
- * loose.
- */
-export interface FeatureServiceData {
+/** v1: inline GeoJSON storage. */
+export interface FeatureServiceDataV1 {
   version: 1;
+  storageType?: never;
   fields: FeatureField[];
-  /**
-   * The feature data itself. Must be a GeoJSON FeatureCollection. The
-   * editor surfaces tools to replace this payload; downstream viewers
-   * can assume `type === 'FeatureCollection'` and iterate `features`.
-   */
   data: {
     type: 'FeatureCollection';
     features: Array<{
@@ -46,15 +41,69 @@ export interface FeatureServiceData {
       properties: Record<string, unknown>;
     }>;
   };
-  /**
-   * When the payload was last ingested. Useful for display and for
-   * tile-cache invalidation once server-side storage lands.
-   */
   updatedAt?: ISODateString;
 }
 
-export const DEFAULT_FEATURE_SERVICE: FeatureServiceData = {
+/** v2: PostGIS-backed storage. `data.data` is absent; features live in the DB. */
+export interface FeatureServiceDataV2 {
+  version: 2;
+  storageType: 'postgis';
+  fields: FeatureField[];
+  featureCount: number;
+  /** [minX, minY, maxX, maxY] in EPSG:4326. Null when the table is empty. */
+  bbox: [number, number, number, number] | null;
+  updatedAt?: ISODateString;
+}
+
+export type FeatureServiceData = FeatureServiceDataV1 | FeatureServiceDataV2;
+
+export const DEFAULT_FEATURE_SERVICE: FeatureServiceDataV1 = {
   version: 1,
   fields: [],
   data: { type: 'FeatureCollection', features: [] },
 };
+
+// ---------------------------------------------------------------------------
+// Feature API types (used by portal-web and field-app)
+// ---------------------------------------------------------------------------
+
+/** A single GeoJSON feature returned by the features REST API. */
+export interface FeatureRecord {
+  type: 'Feature';
+  /** Stable UUID across all versions of this feature. */
+  id: string;
+  geometry: unknown;
+  properties: Record<string, unknown>;
+  _meta?: {
+    gid: number;
+    validFrom: ISODateString;
+    /** null means the feature is current. */
+    validTo?: ISODateString;
+    createdBy: string;
+    createdAt: ISODateString;
+    editedBy: string;
+    editedAt: ISODateString;
+  };
+}
+
+export interface FeatureCollection {
+  type: 'FeatureCollection';
+  features: FeatureRecord[];
+}
+
+/** Body for POST /items/:id/features (append one or more features). */
+export interface AppendFeaturesInput {
+  features: Array<{
+    /** Client-generated UUID — provide for offline-created features so
+     *  parent/child GUIDs established offline survive the sync. */
+    globalId?: string;
+    geometry?: unknown;
+    properties?: Record<string, unknown>;
+  }>;
+}
+
+/** Body for PATCH /items/:id/features/:fid (partial update). */
+export interface UpdateFeatureInput {
+  geometry?: unknown;
+  properties?: Record<string, unknown>;
+}

@@ -113,31 +113,29 @@ export class ItemsController {
   }
 
   /**
-   * GeoJSON-only view of a feature_service item. Exposing this as a
-   * separate endpoint lets MapLibre's geojson source consume it with
-   * its own fetch and cache semantics, rather than having the client
-   * fetch the whole item envelope and extract data manually.
+   * GeoJSON-only view of a feature_service item. Handles both v1 (inline
+   * JSON) and v2 (PostGIS) storage transparently.
    *
-   * 404 if the item is not a feature_service or its data is not a
-   * GeoJSON FeatureCollection. Visibility still goes through the same
-   * sharing check as the regular get.
+   * For v2 items, accepts ?bbox=minX,minY,maxX,maxY and ?at=<ISO timestamp>
+   * for spatial filtering and point-in-time queries respectively.
+   *
+   * Visibility goes through the same sharing check as the regular get.
    */
   @Get(':id/geojson')
-  async geojson(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    const item = await this.items.get(user, id);
-    if (item.type !== 'feature_service') {
-      return { type: 'FeatureCollection', features: [] };
+  async geojson(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('bbox') bbox?: string,
+    @Query('at') at?: string,
+  ) {
+    let parsedBbox: [number, number, number, number] | undefined;
+    if (bbox) {
+      const parts = bbox.split(',').map(Number);
+      if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+        parsedBbox = [parts[0], parts[1], parts[2], parts[3]];
+      }
     }
-    const payload = item.data as { data?: unknown } | null;
-    const fc = payload?.data;
-    if (
-      !fc ||
-      typeof fc !== 'object' ||
-      (fc as { type?: string }).type !== 'FeatureCollection'
-    ) {
-      return { type: 'FeatureCollection', features: [] };
-    }
-    return fc;
+    return this.items.getGeoJson(user, id, { bbox: parsedBbox, at });
   }
 
   @Post()

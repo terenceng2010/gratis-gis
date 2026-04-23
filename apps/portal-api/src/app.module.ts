@@ -10,6 +10,7 @@ import { GroupsModule } from './groups/groups.module.js';
 import { ItemsModule } from './items/items.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { IngestModule } from './ingest/ingest.module.js';
+import { FeaturesModule } from './features/features.module.js';
 import { MaintenanceModule } from './maintenance/maintenance.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
@@ -23,6 +24,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     ItemsModule,
     StorageModule,
     IngestModule,
+    FeaturesModule,
     MaintenanceModule,
   ],
   controllers: [HealthController],
