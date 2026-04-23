@@ -42,7 +42,7 @@ export function MembersPanel({ groupId, initialMembers, canManage }: Props) {
   const [addingRole, setAddingRole] = useState<'member' | 'admin'>('member');
 
   const memberIds = useMemo(
-    () => new Set(members.map((m) => m.userId)),
+    () => new Set<string>(members.map((m) => String(m.userId))),
     [members],
   );
 
@@ -91,18 +91,13 @@ export function MembersPanel({ groupId, initialMembers, canManage }: Props) {
     }
     const added: GroupMember = await res.json();
     setMembers((cur) => {
-      const filtered = cur.filter((m) => m.userId !== added.userId);
-      // Keep the picked user's display info so the row shows a
-      // readable name immediately instead of flashing a UUID until
-      // the router refresh pulls the full join.
-      const userPart: MemberWithUser['user'] = {
-        id: pick.id,
-        username: pick.subtitle ?? pick.title,
-        fullName: pick.title,
-      };
-      if (pick.imageUrl !== undefined) userPart.avatarUrl = pick.imageUrl;
-      return [...filtered, { ...added, user: userPart }];
+      const filtered = cur.filter((m) => String(m.userId) !== String(added.userId));
+      return [...filtered, added as MemberWithUser];
     });
+    // router.refresh pulls the server-joined user metadata so the row
+    // updates from `bbbbbb` → `Alice Example` once the server round-
+    // trips. The briefly-raw name is acceptable; bypasses UserId
+    // branded-type complexity we'd hit constructing a shim locally.
     startTransition(() => router.refresh());
   }
 

@@ -55,6 +55,17 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
   // The "staged" view merges existing saved values with whatever the
   // probe returned. Once the user commits via Save, staged becomes
   // data and the probe result is cleared.
+  const stagedDefault = (() => {
+    if (!probeResult) return data.defaultLayerId;
+    if (
+      data.defaultLayerId != null &&
+      probeResult.layers.some((l) => l.id === data.defaultLayerId)
+    ) {
+      return data.defaultLayerId;
+    }
+    const firstGeom = probeResult.layers.find((l) => l.geometryType);
+    return firstGeom?.id ?? probeResult.layers[0]?.id;
+  })();
   const staged: ArcgisServiceData = probeResult
     ? {
         ...data,
@@ -69,12 +80,12 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
           return base;
         }),
         ...(probeResult.bbox ? { bbox: probeResult.bbox } : {}),
-        defaultLayerId:
-          data.defaultLayerId != null &&
-          probeResult.layers.some((l) => l.id === data.defaultLayerId)
-            ? data.defaultLayerId
-            : probeResult.layers.find((l) => l.geometryType)?.id ??
-              probeResult.layers[0]?.id,
+        // defaultLayerId only included when resolved — the shared
+        // type has it as optional, and exactOptionalPropertyTypes
+        // means we need to omit rather than pass `undefined`.
+        ...(stagedDefault !== undefined
+          ? { defaultLayerId: stagedDefault }
+          : {}),
         probedAt: new Date().toISOString() as ISODateString,
       }
     : data;

@@ -275,7 +275,7 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
       if (r.ok) {
         const groups = (await r.json()) as Group[];
         const dir: Record<string, string> = {};
-        for (const g of groups) dir[g.id] = g.name;
+        for (const g of groups) dir[g.id] = g.title;
         setGroupDirectory(dir);
       }
     } catch {

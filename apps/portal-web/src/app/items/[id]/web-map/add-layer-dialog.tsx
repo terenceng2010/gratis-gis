@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { Item, WebMapLayer, WebMapLayerSource } from '@gratis-gis/shared-types';
 import {
+  DEFAULT_LAYER_ACCESS,
   DEFAULT_LAYER_LABELS,
   DEFAULT_LAYER_SCALE,
   DEFAULT_LAYER_SEARCH,
@@ -164,6 +165,7 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
       labels: structuredClone(DEFAULT_LAYER_LABELS),
       search: structuredClone(DEFAULT_LAYER_SEARCH),
       scale: structuredClone(DEFAULT_LAYER_SCALE),
+      access: structuredClone(DEFAULT_LAYER_ACCESS),
       filter: null,
     };
   }

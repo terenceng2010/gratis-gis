@@ -76,22 +76,44 @@ export function AttributeTable({
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [query, setQuery] = useState('');
 
+  // Only layers the viewer is allowed to query belong in the table.
+  // `effective.query === false` is the server's signal (from the
+  // access matrix) that this layer's attributes are off-limits for
+  // the current user. Filtering at the picker level keeps both the
+  // dropdown and the auto-selected "first visible" layer honest.
+  const queryableLayers = useMemo(
+    () =>
+      layers.filter(
+        (l) => l.effective === undefined || l.effective.query !== false,
+      ),
+    [layers],
+  );
+
   // The active layer's selection; the table only ever shows one
   // layer at a time, so we read a single slice off the shared map.
   const activeSelection = (activeLayerId && selection[activeLayerId]) || new Set<number>();
 
-  // Default to the top visible layer whenever the list changes.
+  // Default to the top visible queryable layer whenever the list
+  // changes. Also resets the active layer if the currently-active one
+  // just had its query permission revoked (e.g. matrix edit on an
+  // editor-side map viewer refresh).
   useEffect(() => {
     if (!open) return;
-    if (activeLayerId && layers.some((l) => l.id === activeLayerId)) return;
-    const first = layers.find((l) => l.visible) ?? layers[0] ?? null;
+    if (
+      activeLayerId &&
+      queryableLayers.some((l) => l.id === activeLayerId)
+    ) {
+      return;
+    }
+    const first =
+      queryableLayers.find((l) => l.visible) ?? queryableLayers[0] ?? null;
     setActiveLayerId(first?.id ?? null);
     setLastPicked(null);
     setSortBy(null);
     setQuery('');
     // Note: we deliberately don't clear the shared selection here —
     // switching layers should preserve the picks on other layers.
-  }, [open, layers, activeLayerId]);
+  }, [open, queryableLayers, activeLayerId]);
 
   /** Replace the active layer's slice; leave other layers untouched. */
   function updateActiveSelection(next: Set<number>) {
@@ -217,7 +239,7 @@ export function AttributeTable({
           <Table className="h-3.5 w-3.5" />
           Attribute table
         </h3>
-        {layers.length > 0 ? (
+        {queryableLayers.length > 0 ? (
           <select
             value={activeLayerId ?? ''}
             onChange={(e) => {
@@ -230,7 +252,7 @@ export function AttributeTable({
             }}
             className="h-7 min-w-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           >
-            {layers.map((l) => (
+            {queryableLayers.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.title}
               </option>

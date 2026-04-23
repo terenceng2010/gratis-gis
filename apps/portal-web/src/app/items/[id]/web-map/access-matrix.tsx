@@ -166,6 +166,20 @@ export function AccessMatrix({
   const principalKey = (p: MatrixPrincipal) => `${p.type}:${p.id}`;
 
   /**
+   * Can this layer be edited via the map's (yet-to-ship) feature
+   * editing flow? Only feature_service layers have a writable backing
+   * store the webmap can own — arcgis-rest points at a remote service
+   * we don't control, geojson-url is read-only by definition, and
+   * geojson-inline is baked into the webmap's own dataJson (not
+   * per-feature editable). Exposing Edit for those three types in the
+   * matrix is misleading, so the popover disables the toggle and the
+   * badge never shows "+E" for non-editable layers.
+   */
+  function layerEditable(layer: WebMapLayer): boolean {
+    return layer.source.kind === 'feature-service';
+  }
+
+  /**
    * Does this principal have at least view access to the given item?
    * A user matches by their own id; a group matches as itself; a user
    * also matches any group they belong to (via groupMemberships).
@@ -243,6 +257,11 @@ export function AccessMatrix({
     );
     const current = entryFor(layer, p);
     const merged: WebMapLayerAccessEntry = { ...current, ...patch };
+    // Clamp edit for non-editable layers so the stored matrix matches
+    // what the UI offers. An author can't toggle Edit on for a layer
+    // that has no editable backing store, and the server would ignore
+    // the flag anyway; being strict here keeps persisted maps honest.
+    if (!layerEditable(layer)) merged.edit = false;
     if (idx >= 0) next.entries[idx] = merged;
     else next.entries.push(merged);
     onPatchAccess(layer.id, next);
@@ -421,6 +440,7 @@ export function AccessMatrix({
                             <AccessBadge
                               entry={entry}
                               hasItemAccess={hasItemAccess}
+                              editable={layerEditable(layer)}
                               onClick={() =>
                                 setActivePopover(
                                   isOpen
@@ -488,6 +508,7 @@ export function AccessMatrix({
                 entry={aEntry}
                 itemId={aItemId}
                 hasItemAccess={aHasItem}
+                editable={layerEditable(aLayer)}
                 granting={aGranting}
                 onChange={(patch) =>
                   writeEntry(aLayer, aPrincipal, patch)
@@ -526,16 +547,21 @@ function gapSummary(
 function AccessBadge({
   entry,
   hasItemAccess,
+  editable,
   onClick,
 }: {
   entry: WebMapLayerAccessEntry;
   hasItemAccess: boolean;
+  editable: boolean;
   onClick: () => void;
 }) {
   const effective = {
     view: entry.view,
     query: entry.view && entry.query,
-    edit: entry.view && entry.query && entry.edit,
+    // If the layer isn't editable, the "E" part of the badge would
+    // be misleading — the flag has no runtime effect regardless of
+    // what's stored in entry.edit.
+    edit: editable && entry.view && entry.query && entry.edit,
   };
   const label = !effective.view
     ? '—'
@@ -586,6 +612,7 @@ function AccessDetailDialog({
   entry,
   itemId,
   hasItemAccess,
+  editable,
   granting,
   onChange,
   onGrant,
@@ -597,6 +624,7 @@ function AccessDetailDialog({
   entry: WebMapLayerAccessEntry;
   itemId: string | null;
   hasItemAccess: boolean;
+  editable: boolean;
   granting: boolean;
   onChange: (patch: Partial<WebMapLayerAccessEntry>) => void;
   onGrant?: () => void | Promise<void>;
@@ -708,11 +736,23 @@ function AccessDetailDialog({
           />
           <PopoverRow
             label="Edit"
-            desc="Modify features (future)"
-            checked={entry.edit}
-            disabled={!entry.view || !entry.query}
+            desc={
+              editable
+                ? 'Modify features (enables once editing UI ships)'
+                : 'Not available — this layer has no writable source'
+            }
+            checked={editable && entry.edit}
+            disabled={!editable || !entry.view || !entry.query}
             onChange={(v) => onChange({ edit: v })}
           />
+          {!editable ? (
+            <p className="px-1.5 text-[10px] text-muted">
+              Edit is only available for feature-service layers. Remote
+              sources (ArcGIS REST, URL, inline) stay read-only in the
+              matrix to avoid offering permissions that can&apos;t
+              take effect.
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
