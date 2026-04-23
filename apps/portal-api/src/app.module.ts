@@ -13,6 +13,7 @@ import { IngestModule } from './ingest/ingest.module.js';
 import { FeaturesModule } from './features/features.module.js';
 import { MaintenanceModule } from './maintenance/maintenance.module.js';
 import { AdminModule } from './admin/admin.module.js';
+import { BasemapsModule } from './basemaps/basemaps.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
 @Module({
@@ -28,6 +29,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     FeaturesModule,
     MaintenanceModule,
     AdminModule,
+    BasemapsModule,
   ],
   controllers: [HealthController],
   providers: [

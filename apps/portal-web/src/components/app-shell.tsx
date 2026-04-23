@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { getServerSession } from 'next-auth';
 import {
   Compass,
+  Layers3,
   LayoutGrid,
   Map as MapIcon,
   Users,
@@ -70,6 +71,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 icon={<Shield className="h-4 w-4" />}
               >
                 Users
+              </NavLink>
+              <NavLink
+                href="/admin/basemaps"
+                icon={<Layers3 className="h-4 w-4" />}
+              >
+                Basemaps
               </NavLink>
             </>
           ) : null}
