@@ -1,12 +1,9 @@
 import Link from 'next/link';
-import { createElement } from 'react';
 import { Plus, Layers } from 'lucide-react';
-import { ItemCard } from '@gratis-gis/ui';
 import type { ItemWithShares } from '@gratis-gis/shared-types';
 import { apiFetch } from '@/lib/api';
 import { EmptyState } from '@/components/empty-state';
-import { getItemTypeIcon } from '@/lib/item-type-icon';
-import { ItemSharingIndicator } from '@/components/item-sharing-indicator';
+import { ItemsView } from './items-view';
 
 interface Props {
   searchParams: { mine?: string; q?: string };
@@ -22,8 +19,7 @@ export default async function ItemsPage({ searchParams }: Props) {
   const items = await apiFetch<ItemWithShares[]>(
     `/api/items${qs.toString() ? `?${qs}` : ''}`,
   );
-  // Fetch the viewer once so the sharing popover can gate on canManage
-  // (owner or org admin) without re-fetching per card.
+  // Viewer is fetched once; all per-card canManage checks run off it.
   const me = await apiFetch<{ id: string; orgRole: string }>(
     '/api/users/me',
   );
@@ -37,9 +33,6 @@ export default async function ItemsPage({ searchParams }: Props) {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">
             {isMine ? 'My items' : 'All items'}
           </h1>
-          <p className="mt-1 text-sm text-muted">
-            {items.length} item{items.length === 1 ? '' : 's'}
-          </p>
         </div>
 
         <Link
@@ -73,35 +66,7 @@ export default async function ItemsPage({ searchParams }: Props) {
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((item) => {
-            const canManage =
-              me.id === item.ownerId || me.orgRole === 'admin';
-            return (
-              <ItemCard
-                key={item.id}
-                item={item}
-                href={`/items/${item.id}`}
-                // Per-type lucide icon on a type-colored tile when there's
-                // no custom thumbnail. createElement keeps this a server
-                // component friendly render path.
-                fallbackIcon={createElement(getItemTypeIcon(item.type))}
-                // Sharing indicator chip sits next to the type badge;
-                // stopParentLink prevents the card's <a> from navigating
-                // when the chip/popover is clicked.
-                headerExtra={createElement(ItemSharingIndicator, {
-                  itemId: item.id,
-                  itemTitle: item.title,
-                  access: item.access,
-                  shares: item.shares,
-                  canManage,
-                  currentUserId: me.id,
-                  stopParentLink: true,
-                })}
-              />
-            );
-          })}
-        </div>
+        <ItemsView items={items} currentUser={me} />
       )}
     </div>
   );
