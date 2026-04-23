@@ -175,10 +175,17 @@ export default async function ItemDetailPage({ params }: Props) {
           <h2 className="mb-2 text-sm font-medium text-muted">Feature service</h2>
           <FeatureServiceEditor
             itemId={item.id}
-            initial={{
-              ...DEFAULT_FEATURE_SERVICE,
-              ...((item.data ?? {}) as Partial<FeatureServiceData>),
-            }}
+            initial={
+              // For v2 items, item.data is already the correct shape.
+              // For v1 items (or brand-new items with no data), merge
+              // defaults so the editor always receives a complete object.
+              (item.data as FeatureServiceData | null)?.version === 2
+                ? (item.data as FeatureServiceData)
+                : ({
+                    ...DEFAULT_FEATURE_SERVICE,
+                    ...((item.data ?? {}) as Partial<FeatureServiceData>),
+                  } as FeatureServiceData)
+            }
             canEdit={canManage}
           />
         </section>

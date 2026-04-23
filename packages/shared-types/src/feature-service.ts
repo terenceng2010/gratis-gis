@@ -107,3 +107,52 @@ export interface UpdateFeatureInput {
   geometry?: unknown;
   properties?: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Related tables
+// ---------------------------------------------------------------------------
+
+/**
+ * Registered relationship between two feature-service items.
+ * Stored in the parent item's data.relationships array.
+ *
+ * Example: nest points (parent) → annual_inspections (child).
+ * The child table has a `parent_global_id` UUID column (indexed) that
+ * references the parent feature's global_id.
+ */
+export interface FeatureRelationship {
+  /** Stable UUID for this relationship — used in API paths. */
+  id: string;
+  /** Display name shown in map popups and forms. */
+  label: string;
+  /** Item ID of the child feature service. */
+  relatedItemId: string;
+  /** Column name on the child table holding the parent's global_id. */
+  fkColumn: string;
+  /** Cardinality from the parent's perspective (almost always many). */
+  cardinality: 'one-to-many' | 'one-to-one';
+}
+
+/**
+ * Back-reference stored in the child item's data.parentRelationship.
+ * Lets the API quickly find which column is the FK without scanning
+ * the parent's relationship list.
+ */
+export interface ChildRelationshipRef {
+  /** Item ID of the parent feature service. */
+  parentItemId: string;
+  /** Column on this table that holds the parent's global_id. */
+  fkColumn: string;
+  /** Relationship ID on the parent (for cross-referencing). */
+  relationshipId: string;
+}
+
+/** Body for POST /items/:id/relationships — register a new relationship. */
+export interface CreateRelationshipInput {
+  label: string;
+  /** Item ID of the child feature service. */
+  relatedItemId: string;
+  /** Column name to add/use on the child table. Defaults to "parent_global_id". */
+  fkColumn?: string;
+  cardinality?: 'one-to-many' | 'one-to-one';
+}

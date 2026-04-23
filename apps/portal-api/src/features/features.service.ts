@@ -544,4 +544,122 @@ export class FeaturesService {
     const features = await this.query(itemId, { ...opts, limit: 10_000 });
     return { type: 'FeatureCollection', features };
   }
+
+  // -------------------------------------------------------------------------
+  // Related tables
+  // -------------------------------------------------------------------------
+
+  /**
+   * Add a UUID foreign-key column to a child feature table. Idempotent —
+   * safe to call if the column already exists. Used when registering a
+   * parent-child relationship.
+   *
+   * The column is indexed so that `WHERE <fkColumn> = $parentGlobalId`
+   * queries are fast even on large datasets.
+   */
+  async addParentKeyColumn(childItemId: string, fkColumn: string): Promise<void> {
+    // Column names must be plain identifiers. Reject anything suspicious.
+    if (!/^[a-z_][a-z0-9_]{0,62}$/i.test(fkColumn)) {
+      throw new BadRequestException('Invalid FK column name');
+    }
+    const tbl = toTableName(childItemId);
+    await this.prisma.$executeRawUnsafe(
+      `ALTER TABLE "${tbl}" ADD COLUMN IF NOT EXISTS "${fkColumn}" UUID`,
+    );
+    await this.prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "${tbl}_${fkColumn}_idx" ON "${tbl}" ("${fkColumn}")`,
+    );
+    this.log.log(`Added FK column ${fkColumn} to ${tbl}`);
+  }
+
+  /**
+   * Fetch related features from a child table for a given parent global_id.
+   * Returns only current versions (valid_to IS NULL) by default.
+   */
+  async getRelatedFeatures(
+    childItemId: string,
+    parentGlobalId: string,
+    fkColumn: string,
+    opts: Pick<QueryFeaturesOpts, 'limit' | 'offset' | 'at' | 'includeMeta'> = {},
+  ): Promise<GeoJsonFeature[]> {
+    if (!/^[a-z_][a-z0-9_]{0,62}$/i.test(fkColumn)) {
+      throw new BadRequestException('Invalid FK column name');
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(parentGlobalId)) {
+      throw new BadRequestException('Invalid parent feature id');
+    }
+    const tbl = toTableName(childItemId);
+    const params: unknown[] = [parentGlobalId];
+    const conditions: string[] = [`"${fkColumn}" = $1::uuid`];
+
+    if (opts.at) {
+      const ts = new Date(opts.at);
+      if (isNaN(ts.getTime())) throw new BadRequestException('Invalid at timestamp');
+      params.push(ts.toISOString());
+      const p = params.length;
+      conditions.push(
+        `valid_from <= $${p}::timestamptz AND (valid_to IS NULL OR valid_to > $${p}::timestamptz)`,
+      );
+    } else {
+      conditions.push('valid_to IS NULL');
+    }
+
+    const limit = Math.min(opts.limit ?? 500, 5_000);
+    const offset = opts.offset ?? 0;
+
+    const rows = await this.prisma.$queryRawUnsafe<FeatureRow[]>(
+      `SELECT *, ST_AsGeoJSON(geom) AS geom
+         FROM "${tbl}"
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY gid
+        LIMIT ${limit} OFFSET ${offset}`,
+      ...params,
+    );
+    return rows.map((r) => rowToFeature(r, opts.includeMeta ?? false));
+  }
+
+  /**
+   * Insert a single related feature (child) linked to a parent by the
+   * FK column. The parentGlobalId is written into both the FK column
+   * and the feature's properties for convenience.
+   */
+  async createRelatedFeature(
+    childItemId: string,
+    parentGlobalId: string,
+    fkColumn: string,
+    input: InsertFeatureInput,
+    user: AuthUser,
+  ): Promise<GeoJsonFeature> {
+    if (!/^[a-z_][a-z0-9_]{0,62}$/i.test(fkColumn)) {
+      throw new BadRequestException('Invalid FK column name');
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(parentGlobalId)) {
+      throw new BadRequestException('Invalid parent feature id');
+    }
+    const tbl = toTableName(childItemId);
+    const now = new Date().toISOString();
+
+    const rows = await this.prisma.$queryRawUnsafe<FeatureRow[]>(
+      `INSERT INTO "${tbl}"
+         (global_id, "${fkColumn}", geom, properties, valid_from, created_by, edited_by)
+       VALUES (
+         COALESCE($1::uuid, gen_random_uuid()),
+         $2::uuid,
+         CASE WHEN $3::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($3), 4326) ELSE NULL END,
+         $4::jsonb,
+         $5::timestamptz,
+         $6::uuid,
+         $6::uuid
+       )
+       RETURNING *, ST_AsGeoJSON(geom) AS geom`,
+      input.globalId ?? null,
+      parentGlobalId,
+      input.geometry ? JSON.stringify(input.geometry) : null,
+      JSON.stringify(input.properties ?? {}),
+      now,
+      user.id,
+    );
+
+    return rowToFeature(rows[0], true);
+  }
 }

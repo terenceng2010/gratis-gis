@@ -112,6 +112,24 @@ export class FeaturesController {
     return item;
   }
 
+  /**
+   * Edit access check that auto-provisions the PostGIS table if it does not
+   * yet exist. Used by bulk import, which IS the first write that creates v2.
+   */
+  private async requireEditAccessAndProvision(user: AuthUser, itemId: string) {
+    const item = await this.items.get(user, itemId);
+    if (item.type !== 'feature_service') {
+      throw new BadRequestException('Item is not a feature service');
+    }
+    const shares = await this.prisma.itemShare.findMany({ where: { itemId } });
+    if (!this.sharing.canEdit(user, item, shares)) {
+      throw new ForbiddenException('You do not have edit permission on this item');
+    }
+    // Create the PostGIS table on the first import. Idempotent.
+    await this.features.provisionTable(itemId);
+    return item;
+  }
+
   // -------------------------------------------------------------------------
   // Routes
   // -------------------------------------------------------------------------
@@ -197,7 +215,7 @@ export class FeaturesController {
     @Param('id') id: string,
     @Body() body: { type?: string; features?: unknown[] },
   ) {
-    await this.requireEditAccess(user, id);
+    await this.requireEditAccessAndProvision(user, id);
 
     if (!body.features || !Array.isArray(body.features)) {
       throw new BadRequestException('Body must be a GeoJSON FeatureCollection with a features array');
@@ -267,6 +285,94 @@ export class FeaturesController {
     await this.features.deleteFeature(id, fid, user);
     await this.syncItemMeta(id);
     return { deleted: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Related-table read/write
+  // -------------------------------------------------------------------------
+
+  /**
+   * List child records related to a specific parent feature.
+   *
+   * URL: GET /items/:id/features/:fid/related/:childItemId
+   *   :id         — parent feature-service item
+   *   :fid        — parent feature global_id
+   *   :childItemId — child feature-service item
+   *
+   * Query: ?fkColumn=parent_global_id (defaults to "parent_global_id")
+   *        ?at=<ISO timestamp>
+   *        ?limit=100
+   *        ?offset=0
+   */
+  @Get(':fid/related/:childItemId')
+  async listRelated(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('fid') fid: string,
+    @Param('childItemId') childItemId: string,
+    @Query('fkColumn') fkColumn?: string,
+    @Query('at') at?: string,
+    @Query('limit') limitStr?: string,
+    @Query('offset') offsetStr?: string,
+  ) {
+    // Caller must be able to read the parent AND the child.
+    await this.requireReadAccess(user, id);
+    await this.requireReadAccess(user, childItemId);
+
+    const opts: Parameters<typeof this.features.getRelatedFeatures>[3] = {
+      limit: limitStr ? Math.min(parseInt(limitStr, 10), 5_000) : 500,
+      offset: offsetStr ? parseInt(offsetStr, 10) : 0,
+    };
+    if (at !== undefined) opts.at = at;
+
+    const feats = await this.features.getRelatedFeatures(
+      childItemId,
+      fid,
+      fkColumn ?? 'parent_global_id',
+      opts,
+    );
+    return { type: 'FeatureCollection', features: feats };
+  }
+
+  /**
+   * Create a child record related to a specific parent feature.
+   *
+   * URL: POST /items/:id/features/:fid/related/:childItemId
+   *
+   * Body: { globalId?, geometry?, properties?, fkColumn? }
+   */
+  @Post(':fid/related/:childItemId')
+  async createRelated(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('fid') fid: string,
+    @Param('childItemId') childItemId: string,
+    @Body()
+    body: {
+      globalId?: string;
+      geometry?: unknown;
+      properties?: Record<string, unknown>;
+      fkColumn?: string;
+    },
+  ) {
+    await this.requireReadAccess(user, id);
+    await this.requireEditAccess(user, childItemId);
+
+    const input: Parameters<typeof this.features.createRelatedFeature>[3] = {
+      properties: body.properties ?? {},
+    };
+    if (body.globalId) input.globalId = body.globalId;
+    if (body.geometry !== undefined) input.geometry = body.geometry;
+
+    const result = await this.features.createRelatedFeature(
+      childItemId,
+      fid,
+      body.fkColumn ?? 'parent_global_id',
+      input,
+      user,
+    );
+    await this.syncItemMeta(childItemId);
+    return result;
   }
 
   // -------------------------------------------------------------------------

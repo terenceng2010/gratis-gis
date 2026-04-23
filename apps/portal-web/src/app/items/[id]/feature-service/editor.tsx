@@ -7,12 +7,15 @@ import {
   ClipboardPaste,
   FileArchive,
   Loader2,
+  MapPin,
   Save,
   Upload,
 } from 'lucide-react';
 import type {
   FeatureField,
   FeatureServiceData,
+  FeatureServiceDataV1,
+  FeatureServiceDataV2,
   ISODateString,
 } from '@gratis-gis/shared-types';
 import {
@@ -30,18 +33,21 @@ interface Props {
 
 type Tab = 'upload' | 'paste';
 
+function isV2(data: FeatureServiceData): data is FeatureServiceDataV2 {
+  return data.version === 2 && (data as FeatureServiceDataV2).storageType === 'postgis';
+}
+
 /**
- * Feature-service data editor. Supports two ways of replacing the
- * inline dataset:
+ * Feature-service data editor. Handles both v1 (inline GeoJSON) and v2
+ * (PostGIS-backed) storage transparently:
  *
- *   - Upload: drag-drop or pick a file. Client-side parsers handle
- *     GeoJSON, KML, KMZ, and zipped Shapefiles; File Geodatabase is
- *     detected and gives a useful "coming soon" message.
- *   - Paste: raw GeoJSON FeatureCollection for small datasets.
+ * - v1: parses client-side, saves via PATCH /items/:id with full GeoJSON payload.
+ * - v2: parses client-side, saves via POST /items/:id/features/import with the
+ *       GeoJSON FeatureCollection. The server atomically replaces all features
+ *       and updates item metadata.
  *
- * After parsing, a staged result is shown so the user can review the
- * feature count and detected fields before committing with Save.
- * Nothing hits the server until Save.
+ * Server-side GDAL ingest (File Geodatabase etc.) routes via POST /items/:id/ingest
+ * for both storage types.
  */
 export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
   const router = useRouter();
@@ -52,14 +58,22 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const currentFeatures = initial.data.features ?? [];
-  const currentFields = initial.fields;
+  const v2 = isV2(initial);
 
-  // Derived stats for the summary card; used as a fallback when the
-  // persisted item has no declared fields yet.
+  // v1: pull stats from inline features. v2: use metadata from item.data.
+  const currentFeatureCount = v2
+    ? (initial as FeatureServiceDataV2).featureCount
+    : ((initial as FeatureServiceDataV1).data?.features?.length ?? 0);
+  const currentFields = initial.fields;
+  const currentUpdatedAt = initial.updatedAt;
+  const currentBbox = v2 ? (initial as FeatureServiceDataV2).bbox : null;
+
+  // Derived fields only needed for v1 (v2 always stores explicit fields).
+  const v1Features = v2 ? [] : ((initial as FeatureServiceDataV1).data?.features ?? []);
   const derivedFields = useMemo<FeatureField[]>(
-    () => deriveFields(currentFeatures, 500),
-    [currentFeatures],
+    () => (v2 ? [] : deriveFields(v1Features, 500)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [v2],
   );
 
   async function importFile(file: File) {
@@ -67,10 +81,6 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
     setStaged(null);
     setPending(true);
     try {
-      // FGDB has no in-browser parser, so route it straight through
-      // the server-side GDAL endpoint. Same for anything the client-
-      // side parser rejects — caller can fall back to server ingest
-      // from the error state.
       if (detectFormat(file.name) === 'fgdb') {
         await ingestServerSide(file);
         return;
@@ -85,10 +95,9 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
   }
 
   /**
-   * Hands a file to the portal-api's GDAL-backed ingest endpoint.
-   * Unlike the client-side flow (stage → save), this commits in one
-   * hop because the server already wrote the feature service back to
-   * the database before responding.
+   * Server-side GDAL ingest — handles File Geodatabase and other formats
+   * that have no in-browser parser. The ingest endpoint now writes directly
+   * to PostGIS (provisioning the table on first use) and returns v2 metadata.
    */
   async function ingestServerSide(file: File) {
     setError(null);
@@ -140,26 +149,42 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
     setError(null);
     setPending(true);
     try {
-      const nextData: FeatureServiceData = {
-        version: 1,
-        fields: deriveFields(
-          staged.geojson.features as Array<{
-            properties?: Record<string, unknown>;
-          }>,
-          500,
-        ),
-        data: staged.geojson as FeatureServiceData['data'],
-        updatedAt: new Date().toISOString() as ISODateString,
-      };
-      const res = await fetch(`/api/portal/items/${itemId}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: nextData }),
-      });
-      if (!res.ok) {
-        setError(`Save failed: ${res.status} ${await res.text()}`);
-        return;
+      if (v2) {
+        // v2: POST the GeoJSON to the features/import endpoint. The server
+        // atomically replaces all current features and updates item metadata.
+        const res = await fetch(`/api/portal/items/${itemId}/features/import`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(staged.geojson),
+        });
+        if (!res.ok) {
+          setError(`Save failed: ${res.status} ${await res.text()}`);
+          return;
+        }
+      } else {
+        // v1: PATCH item.data with the full inline GeoJSON payload.
+        const nextData: FeatureServiceDataV1 = {
+          version: 1,
+          fields: deriveFields(
+            staged.geojson.features as Array<{
+              properties?: Record<string, unknown>;
+            }>,
+            500,
+          ),
+          data: staged.geojson as FeatureServiceDataV1['data'],
+          updatedAt: new Date().toISOString() as ISODateString,
+        };
+        const res = await fetch(`/api/portal/items/${itemId}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ data: nextData }),
+        });
+        if (!res.ok) {
+          setError(`Save failed: ${res.status} ${await res.text()}`);
+          return;
+        }
       }
+
       setStaged(null);
       setPaste('');
       setSaved(true);
@@ -176,23 +201,18 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
     setError(null);
   }
 
-  const isEmpty = currentFeatures.length === 0;
+  const isEmpty = currentFeatureCount === 0;
 
   return (
     <div className="space-y-6">
       {isEmpty ? (
-        // Dominant empty-state. A fresh feature_service has no features
-        // yet, so the page's primary job is to get data into it. The
-        // stats card + "Replace data" framing is for the steady-state
-        // case and doesn't match that first moment.
         <section className="rounded-lg border-2 border-dashed border-accent/40 bg-accent/5 p-5 text-center">
           <h3 className="text-base font-semibold text-ink-0">
             This feature service is empty
           </h3>
           <p className="mx-auto mt-1 max-w-xl text-sm text-muted">
-            Upload a file or paste GeoJSON below to get started. Your
-            fields, feature count, and last-updated time will appear
-            here once there's data to summarize.
+            Upload a file or paste GeoJSON below to get started.
+            {v2 ? ' Features are stored in PostGIS with full version history.' : ''}
           </p>
         </section>
       ) : (
@@ -202,14 +222,20 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
               Features
             </h3>
             <p className="mt-1 text-3xl font-semibold tabular-nums">
-              {currentFeatures.length.toLocaleString()}
+              {currentFeatureCount.toLocaleString()}
             </p>
             <p className="mt-1 text-xs text-muted">
               Last updated{' '}
-              {initial.updatedAt
-                ? new Date(initial.updatedAt).toLocaleString()
+              {currentUpdatedAt
+                ? new Date(currentUpdatedAt).toLocaleString()
                 : 'never'}
             </p>
+            {v2 && (
+              <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-700">
+                <MapPin className="h-3 w-3" />
+                PostGIS · versioned
+              </span>
+            )}
           </div>
           <div className="rounded-lg border border-border bg-surface-1 p-4 shadow-card">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -218,6 +244,11 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
             <FieldChips
               fields={currentFields.length > 0 ? currentFields : derivedFields}
             />
+            {v2 && currentBbox ? (
+              <p className="mt-2 text-[11px] text-muted">
+                Extent: {currentBbox.map((n) => n.toFixed(4)).join(', ')}
+              </p>
+            ) : null}
           </div>
         </section>
       )}
@@ -234,7 +265,7 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
             <span className="text-[11px] text-muted">
               {isEmpty
                 ? 'Upload a file, paste GeoJSON, or route a File Geodatabase through server-side GDAL.'
-                : 'Whole-dataset replace. Incremental updates land later.'}
+                : 'Whole-dataset replace. Individual feature edits via the API.'}
             </span>
           </div>
 
@@ -264,13 +295,9 @@ export function FeatureServiceEditor({ itemId, initial, canEdit }: Props) {
                   <span>KML / KMZ</span>
                   <span>·</span>
                   <span>Shapefile (.zip bundle)</span>
+                  <span>·</span>
+                  <span>File Geodatabase (server-side GDAL)</span>
                 </div>
-                <p className="text-[11px] text-muted">
-                  Files are parsed in your browser. File Geodatabase
-                  (.gdb) needs server-side GDAL which is planned but not
-                  shipped — export to shapefile or GeoJSON from ArcGIS
-                  Pro or QGIS for now.
-                </p>
               </>
             ) : (
               <>
@@ -503,12 +530,6 @@ function TabBtn({
   );
 }
 
-/**
- * Walk a feature sample and build the field list with guessed types.
- * Heuristic is intentionally simple: whichever non-null type appears
- * first on a property wins. A future version can look at every feature
- * and pick the best-fit type / nullability.
- */
 function deriveFields(
   features: Array<{ properties?: Record<string, unknown> }>,
   cap: number,
