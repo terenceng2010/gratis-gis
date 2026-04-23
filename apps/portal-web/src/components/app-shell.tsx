@@ -8,6 +8,7 @@ import {
   Users,
   Bell,
   Search,
+  Shield,
   Trash2,
 } from 'lucide-react';
 import { authOptions } from '@/lib/auth';
@@ -24,6 +25,9 @@ type Me = {
   fullName: string;
   avatarUrl: string | null;
   orgName: string | null;
+  /** Role derived from the JWT's org_role claim. Used to gate the
+   *  Admin section in the sidebar so non-admins never see it. */
+  orgRole: 'viewer' | 'publisher' | 'admin';
 };
 
 export async function AppShell({ children }: { children: ReactNode }) {
@@ -56,6 +60,19 @@ export async function AppShell({ children }: { children: ReactNode }) {
           <NavLink href="/recently-deleted" icon={<Trash2 className="h-4 w-4" />}>
             Recently deleted
           </NavLink>
+          {me?.orgRole === 'admin' ? (
+            <>
+              <p className="mt-4 px-2 text-[10px] font-medium uppercase tracking-wide text-muted">
+                Admin
+              </p>
+              <NavLink
+                href="/admin/users"
+                icon={<Shield className="h-4 w-4" />}
+              >
+                Users
+              </NavLink>
+            </>
+          ) : null}
         </nav>
       </aside>
 

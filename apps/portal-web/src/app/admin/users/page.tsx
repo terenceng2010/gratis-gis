@@ -1,0 +1,100 @@
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { ArrowLeft, Shield } from 'lucide-react';
+import { apiFetch } from '@/lib/api';
+import { AdminUsersView } from './admin-users-view';
+
+/** Shape we expose to the client. Matches Keycloak's user rep plus
+ *  our `fullName` convenience. Kept narrow so we don't leak internal
+ *  Keycloak fields we aren't actually using. */
+export interface AdminUserRow {
+  id: string;
+  username: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  fullName?: string;
+  enabled: boolean;
+  emailVerified?: boolean;
+  createdTimestamp?: number;
+  attributes?: Record<string, string[]>;
+}
+
+interface Meta {
+  configured: boolean;
+}
+
+export default async function AdminUsersPage() {
+  // Guard the page server-side: non-admins get bounced to /items rather
+  // than seeing a 403 from the API. The backend controller also gates
+  // with AdminGuard as the actual source of truth, so a sneaky client-
+  // side nav or direct URL hit can't bypass it.
+  let me: { orgRole: string };
+  try {
+    me = await apiFetch<{ orgRole: string }>('/api/users/me');
+  } catch {
+    redirect('/items');
+  }
+  if (me.orgRole !== 'admin') redirect('/items');
+
+  // Ask the backend whether the Keycloak admin integration is
+  // configured. Unconfigured = render a helpful banner pointing at
+  // the env vars + service-account role mapping instead of letting
+  // every row action 503.
+  let meta: Meta;
+  let users: AdminUserRow[] = [];
+  try {
+    meta = await apiFetch<Meta>('/api/admin/users/_meta');
+  } catch {
+    meta = { configured: false };
+  }
+  if (meta.configured) {
+    try {
+      users = await apiFetch<AdminUserRow[]>('/api/admin/users?max=200');
+    } catch {
+      users = [];
+    }
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-6xl px-6 py-10">
+      <Link
+        href="/items"
+        className="mb-3 inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" />
+        Back to portal
+      </Link>
+      <header className="mb-6 flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent/10 text-accent">
+          <Shield className="h-5 w-5" />
+        </span>
+        <div>
+          <p className="text-xs text-muted">Admin</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+          <p className="mt-0.5 text-sm text-muted">
+            Manage the built-in user store: invite new users, reset
+            passwords, change roles, disable access.
+          </p>
+        </div>
+      </header>
+
+      {!meta.configured ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">Admin API not configured</p>
+          <p className="mt-1">
+            Set <code className="font-mono">KEYCLOAK_ADMIN_CLIENT_ID</code>{' '}
+            and{' '}
+            <code className="font-mono">KEYCLOAK_ADMIN_CLIENT_SECRET</code>{' '}
+            for the portal-api, and grant the service-account of the{' '}
+            <code className="font-mono">portal-api-admin</code> client the{' '}
+            <code className="font-mono">realm-management / manage-users</code>{' '}
+            role in Keycloak.
+          </p>
+        </div>
+      ) : (
+        <AdminUsersView initialUsers={users} />
+      )}
+    </div>
+  );
+}
