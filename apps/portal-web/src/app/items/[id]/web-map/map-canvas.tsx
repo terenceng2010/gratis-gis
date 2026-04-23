@@ -20,6 +20,10 @@ import type {
 import { DEFAULT_LAYER_SCALE, ZOOM_MAX, ZOOM_MIN } from '@gratis-gis/shared-types';
 import { BASEMAPS } from '@/lib/basemaps';
 import {
+  customBasemapToStyle,
+  type CustomBasemap,
+} from '@/lib/custom-basemap';
+import {
   MAP_ICONS,
   iconImageId,
   iconSdfImageId,
@@ -33,6 +37,13 @@ import type { SelectToolMode } from './select-tool';
 interface Props {
   /** Controlled camera + basemap + layer list. */
   map: WebMapData;
+  /**
+   * Custom basemaps from the org's library. If the WebMap's
+   * `customBasemapId` is set and present in this list, we
+   * materialize a MapLibre style from the row instead of the
+   * built-in `map.basemap` key.
+   */
+  customBasemaps?: CustomBasemap[];
   /** Fired whenever the user pans, zooms, rotates, or pitches. */
   onCameraChange: (next: Pick<WebMapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
   /** Per-layer sets of selected feature ids (identical to feature indexes). */
@@ -85,10 +96,22 @@ export interface MapCanvasHandle {
  * diff is possible later; for now simplicity beats theoretical perf.
  */
 export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
-  { map, onCameraChange, selection, selectTool, onSelectionChange }: Props,
+  {
+    map,
+    customBasemaps = [],
+    onCameraChange,
+    selection,
+    selectTool,
+    onSelectionChange,
+  }: Props,
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Stable ref to the current customBasemaps array so the basemap-
+  // swap effect can read the latest list without re-running on every
+  // identity change of the prop.
+  const customBasemapsRef = useRef<CustomBasemap[]>(customBasemaps);
+  customBasemapsRef.current = customBasemaps;
   const mapRef = useRef<maplibregl.Map | null>(null);
   const hoveredRef = useRef<{ sourceId: string; featureId: string | number } | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -248,12 +271,30 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     onCameraChangeRef.current = onCameraChange;
   }, [onCameraChange]);
 
+  // Resolve the MapLibre style for the current WebMapData. Custom
+  // basemap wins if still present in the library; otherwise fall back
+  // to the built-in key. MapLibre's setStyle() accepts either a
+  // StyleSpecification or a URL string, so this returns whichever
+  // variant the source kind implies.
+  function resolveStyle(): maplibregl.StyleSpecification | string {
+    if (map.customBasemapId) {
+      const row = customBasemapsRef.current.find(
+        (b) => b.id === map.customBasemapId,
+      );
+      if (row) {
+        const cs = customBasemapToStyle(row);
+        return cs.kind === 'url' ? cs.url : cs.style;
+      }
+    }
+    return BASEMAPS[map.basemap].style;
+  }
+
   // Create the map once; tear down on unmount.
   useEffect(() => {
     if (mapRef.current || !containerRef.current) return;
     const m = new maplibregl.Map({
       container: containerRef.current,
-      style: BASEMAPS[map.basemap].style,
+      style: resolveStyle(),
       center: map.center,
       zoom: map.zoom,
       bearing: map.bearing,
@@ -323,9 +364,17 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
-    const current = (m.getStyle() as { metadata?: { basemap?: BasemapKey } } | null)?.metadata
-      ?.basemap;
-    if (current === map.basemap) return;
+    // Tag for the loaded style so we can tell when a new basemap
+    // choice needs a reset. Includes customBasemapId so a swap
+    // between two custom basemaps (same built-in fallback key) also
+    // triggers a setStyle.
+    const desiredTag = map.customBasemapId
+      ? `custom:${map.customBasemapId}`
+      : `builtin:${map.basemap}`;
+    const current = (
+      m.getStyle() as { metadata?: { basemapTag?: string } } | null
+    )?.metadata?.basemapTag;
+    if (current === desiredTag) return;
 
     const c = m.getCenter();
     const z = m.getZoom();
@@ -339,10 +388,30 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       if (m.hasImage(sdfId)) m.removeImage(sdfId);
     }
 
-    const style = { ...BASEMAPS[map.basemap].style, metadata: { basemap: map.basemap } };
-    // eslint-disable-next-line no-console
-    console.debug('[basemap] setStyle →', map.basemap);
-    m.setStyle(style);
+    const resolved = resolveStyle();
+    if (typeof resolved === 'string') {
+      // Vector style.json URL — MapLibre fetches it. We can't tag the
+      // style object directly, so fall back to marking after it loads.
+      // eslint-disable-next-line no-console
+      console.debug('[basemap] setStyle URL →', desiredTag);
+      m.setStyle(resolved);
+      m.once('styledata', () => {
+        // Best-effort tag so the `current !== desired` check above
+        // short-circuits on subsequent renders.
+        const s = m.getStyle() as { metadata?: Record<string, unknown> } | null;
+        if (s) {
+          (s.metadata ??= {}).basemapTag = desiredTag;
+        }
+      });
+    } else {
+      const style = {
+        ...resolved,
+        metadata: { ...(resolved.metadata ?? {}), basemapTag: desiredTag },
+      };
+      // eslint-disable-next-line no-console
+      console.debug('[basemap] setStyle →', desiredTag);
+      m.setStyle(style);
+    }
 
     let cancelled = false;
     let done = false;
@@ -388,7 +457,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       window.clearInterval(pollHandle);
       m.off('idle', onIdle);
     };
-  }, [map.basemap]);
+    // Re-run on either built-in or custom basemap changes so swapping
+    // between custom rows (or from a custom back to a built-in)
+    // triggers a setStyle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map.basemap, map.customBasemapId]);
 
   // Keep overlay layers (everything after the basemap) in sync with
   // props. Depends on iconsTick so the sync re-runs once each icon

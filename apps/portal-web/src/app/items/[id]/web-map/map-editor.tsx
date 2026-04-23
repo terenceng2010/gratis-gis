@@ -30,6 +30,7 @@ import {
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
 import { BASEMAPS, BASEMAP_KEYS } from '@/lib/basemaps';
+import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas, type MapCanvasHandle } from './map-canvas';
 import { LayerPanel } from './layer-panel';
 import { AddLayerDialog } from './add-layer-dialog';
@@ -48,6 +49,12 @@ interface Props {
   itemId: string;
   initial: WebMapData;
   canEdit: boolean;
+  /**
+   * Custom basemaps registered at /admin/basemaps in this org, merged
+   * into the basemap picker alongside the hardcoded built-ins. Empty
+   * array is fine — the picker falls back to built-ins only.
+   */
+  customBasemaps?: CustomBasemap[];
 }
 
 /**
@@ -61,7 +68,12 @@ interface Props {
  * use a fixed-width sidebar and let horizontal scroll handle anything
  * below that.
  */
-export function MapEditor({ itemId, initial, canEdit }: Props) {
+export function MapEditor({
+  itemId,
+  initial,
+  canEdit,
+  customBasemaps = [],
+}: Props) {
   // Hydrate older persisted maps. Each bump in the schema lands a new
   // migrator here; the goal is that any v2.x map still opens cleanly.
   const seed = useMemo<WebMapData>(() => {
@@ -483,10 +495,41 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
     setSaved(false);
   }
 
-  function setBasemap(basemap: BasemapKey) {
-    setMap((m) => ({ ...m, basemap }));
+  /**
+   * The picker <select> emits string values; values prefixed with
+   * `custom:` are custom basemap UUIDs, anything else is a built-in
+   * BasemapKey. Custom selection sets `customBasemapId` *and* keeps
+   * the last built-in key as a fallback for if the custom basemap is
+   * ever deleted from the library.
+   */
+  function setBasemap(value: string) {
+    if (value.startsWith('custom:')) {
+      const customBasemapId = value.slice('custom:'.length);
+      setMap((m) => ({ ...m, customBasemapId }));
+    } else {
+      const basemap = value as BasemapKey;
+      // Clear customBasemapId using destructure+spread so the optional
+      // key disappears under exactOptionalPropertyTypes.
+      setMap((m) => {
+        const { customBasemapId: _c, ...rest } = m;
+        void _c;
+        return { ...rest, basemap };
+      });
+    }
     markDirty();
   }
+
+  /** Value currently shown in the picker: `custom:<id>` if a custom
+   *  basemap is selected, otherwise the built-in key. */
+  const pickerValue = map.customBasemapId
+    ? `custom:${map.customBasemapId}`
+    : map.basemap;
+
+  /** Metadata of the selected custom basemap (if any), used for the
+   *  description line and for attribution. */
+  const selectedCustom = map.customBasemapId
+    ? customBasemaps.find((b) => b.id === map.customBasemapId)
+    : undefined;
 
   function setLayers(next: WebMapLayer[]) {
     setMap((m) => ({ ...m, layers: next }));
@@ -550,18 +593,33 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
             Basemap
           </label>
           <select
-            value={map.basemap}
-            onChange={(e) => setBasemap(e.target.value as BasemapKey)}
+            value={pickerValue}
+            onChange={(e) => setBasemap(e.target.value)}
             className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
           >
-            {BASEMAP_KEYS.map((key) => (
-              <option key={key} value={key}>
-                {BASEMAPS[key].label}
-              </option>
-            ))}
+            <optgroup label="Built-in">
+              {BASEMAP_KEYS.map((key) => (
+                <option key={key} value={key}>
+                  {BASEMAPS[key].label}
+                </option>
+              ))}
+            </optgroup>
+            {customBasemaps.length > 0 ? (
+              <optgroup label="Custom">
+                {customBasemaps.map((b) => (
+                  <option key={b.id} value={`custom:${b.id}`}>
+                    {b.label}
+                    {b.isDefault ? ' (org default)' : ''}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
           </select>
           <span className="hidden text-xs text-muted sm:inline">
-            {BASEMAPS[map.basemap].description}
+            {selectedCustom
+              ? selectedCustom.description ||
+                `Custom basemap — ${selectedCustom.sourceKind}`
+              : BASEMAPS[map.basemap].description}
           </span>
 
           <div className="ml-auto flex items-center gap-2">
@@ -637,6 +695,7 @@ export function MapEditor({ itemId, initial, canEdit }: Props) {
           <MapCanvas
             ref={canvasRef}
             map={map}
+            customBasemaps={customBasemaps}
             onCameraChange={onCameraChange}
             selection={selection}
             selectTool={selectTool}

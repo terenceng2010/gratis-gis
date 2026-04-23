@@ -77,6 +77,27 @@ export default async function ItemDetailPage({ params }: Props) {
   const me = await apiFetch<{ id: string; orgRole: string }>('/api/users/me');
   const canManage = me.id === item.ownerId || me.orgRole === 'admin';
 
+  // For web maps, fetch the org's custom basemap library so the
+  // editor's basemap picker can list them alongside the built-ins.
+  // Failure is non-fatal — the editor falls back to built-ins only.
+  const customBasemaps =
+    item.type === 'web_map'
+      ? await apiFetch<
+          Array<{
+            id: string;
+            orgId: string;
+            label: string;
+            description: string;
+            url: string;
+            sourceKind: 'xyz' | 'vector-style' | 'wms';
+            attribution: string;
+            thumbnailUrl: string | null;
+            config: Record<string, unknown> | null;
+            isDefault: boolean;
+          }>
+        >('/api/basemaps').catch(() => [])
+      : [];
+
   // Load groups (for the share picker) and any referenced users.
   // Visible-groups are already scoped to this user on the API side.
   const groups = canManage ? await apiFetch<Group[]>('/api/groups') : [];
@@ -219,6 +240,7 @@ export default async function ItemDetailPage({ params }: Props) {
             itemId={item.id}
             initial={{ ...DEFAULT_WEB_MAP, ...((item.data ?? {}) as Partial<WebMapData>) }}
             canEdit={canManage}
+            customBasemaps={customBasemaps}
           />
         </section>
       ) : item.type === 'feature_service' ? (

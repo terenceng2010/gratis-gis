@@ -15,7 +15,20 @@ export type BasemapKey =
 
 export interface WebMapData {
   version: 1;
+  /**
+   * Built-in basemap choice. Always set — acts as the fallback when
+   * `customBasemapId` is also set but the custom basemap has been
+   * deleted from the org's library.
+   */
   basemap: BasemapKey;
+  /**
+   * Optional UUID of a basemap from the org's custom basemap library
+   * (see /admin/basemaps). When set and still present, the viewer
+   * materializes a MapLibre style from that row instead of the
+   * built-in `basemap` key. Optional + additive so v1 maps without
+   * it keep rendering.
+   */
+  customBasemapId?: string;
   center: [number, number];
   zoom: number;
   bearing: number;
