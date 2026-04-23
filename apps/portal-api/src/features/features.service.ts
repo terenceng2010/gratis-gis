@@ -33,6 +33,8 @@ export interface GeoJsonFeature {
   _meta?: {
     gid: number;
     validFrom: string;
+    /** null when feature is current; non-null when feature was expired (updated or deleted). */
+    validTo: string | null;
     createdBy: string;
     createdAt: string;
     editedBy: string;
@@ -43,11 +45,14 @@ export interface GeoJsonFeature {
 export interface QueryFeaturesOpts {
   /** EPSG:4326 [minX, minY, maxX, maxY] */
   bbox?: [number, number, number, number];
-  /** SQL-like where clause on properties — NOT passed to raw SQL; filtered in memory for v2 */
   limit?: number;
   offset?: number;
   /** ISO 8601 timestamp: return features valid at this moment */
   at?: string;
+  /** ISO 8601 timestamp: delta-sync mode — return all rows touched since this cursor.
+   *  Includes both current rows (valid_to IS NULL) and rows that were expired/deleted
+   *  (valid_to >= since). Forces includeMeta=true so callers can detect tombstones. */
+  since?: string;
   includeMeta?: boolean;
 }
 
@@ -104,6 +109,7 @@ function rowToFeature(row: FeatureRow, includeMeta: boolean): GeoJsonFeature {
     f._meta = {
       gid: Number(row.gid),
       validFrom: row.valid_from.toISOString(),
+      validTo: row.valid_to ? row.valid_to.toISOString() : null,
       createdBy: row.created_by,
       createdAt: row.created_at.toISOString(),
       editedBy: row.edited_by,
@@ -417,7 +423,18 @@ export class FeaturesService {
     const params: unknown[] = [];
     const conditions: string[] = [];
 
-    if (opts.at) {
+    if (opts.since) {
+      // Delta-sync mode: return all rows touched since the cursor — both new/updated
+      // rows (valid_from >= since) and rows that were expired/deleted (valid_to >= since).
+      // includeMeta is forced below so callers can identify tombstones via validTo.
+      const ts = new Date(opts.since);
+      if (isNaN(ts.getTime())) throw new BadRequestException('Invalid since timestamp');
+      params.push(ts.toISOString());
+      const p = params.length;
+      conditions.push(
+        `(valid_from >= $${p}::timestamptz OR (valid_to IS NOT NULL AND valid_to >= $${p}::timestamptz))`,
+      );
+    } else if (opts.at) {
       const ts = new Date(opts.at);
       if (isNaN(ts.getTime())) throw new BadRequestException('Invalid at timestamp');
       params.push(ts.toISOString());
@@ -449,7 +466,9 @@ export class FeaturesService {
       ...params,
     );
 
-    return rows.map((r) => rowToFeature(r, opts.includeMeta ?? false));
+    // since-mode always includes meta so callers can detect tombstones (validTo != null).
+    const meta = opts.includeMeta ?? (opts.since !== undefined);
+    return rows.map((r) => rowToFeature(r, meta));
   }
 
   /**

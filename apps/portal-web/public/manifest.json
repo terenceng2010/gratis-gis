@@ -1,0 +1,38 @@
+{
+  "name": "GratisGIS",
+  "short_name": "GratisGIS",
+  "description": "Open-source geographic information system portal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f10",
+  "theme_color": "#0f0f10",
+  "orientation": "any",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "My items",
+      "url": "/items?mine=true",
+      "description": "View your items"
+    },
+    {
+      "name": "My groups",
+      "url": "/groups",
+      "description": "View your groups"
+    }
+  ]
+}

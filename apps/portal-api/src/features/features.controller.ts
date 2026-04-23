@@ -149,6 +149,7 @@ export class FeaturesController {
     @Param('id') id: string,
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
+    @Query('since') since?: string,
     @Query('limit') limitStr?: string,
     @Query('offset') offsetStr?: string,
     @Query('meta') meta?: string,
@@ -174,7 +175,8 @@ export class FeaturesController {
 
     const queryOpts: Parameters<typeof this.features.query>[1] = { limit, offset };
     if (parsedBbox !== undefined) queryOpts.bbox = parsedBbox;
-    if (at !== undefined) queryOpts.at = at;
+    if (since !== undefined) queryOpts.since = since;
+    else if (at !== undefined) queryOpts.at = at;
     if (meta === 'true') queryOpts.includeMeta = true;
 
     const feats = await this.features.query(id, queryOpts);
