@@ -61,8 +61,20 @@ export function ItemDependencies({ itemId }: Props) {
         ),
         fetch(`/api/portal/items/${itemId}/dependencies`),
       ]);
-      if (!upRes.ok) throw new Error(`dependents ${upRes.status}`);
-      if (!downRes.ok) throw new Error(`dependencies ${downRes.status}`);
+      // Include the response body in error messages so the UI actually
+      // says why it failed instead of just echoing a status code.
+      if (!upRes.ok) {
+        const text = await upRes.text().catch(() => '');
+        throw new Error(
+          `Used-by query failed (${upRes.status}): ${text || upRes.statusText || 'no body'}`,
+        );
+      }
+      if (!downRes.ok) {
+        const text = await downRes.text().catch(() => '');
+        throw new Error(
+          `Depends-on query failed (${downRes.status}): ${text || downRes.statusText || 'no body'}`,
+        );
+      }
       setDependents((await upRes.json()) as Row[]);
       setDependencies((await downRes.json()) as Row[]);
     } catch (err) {
