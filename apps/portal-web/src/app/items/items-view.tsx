@@ -41,9 +41,26 @@ interface Props {
 
 type ViewMode = 'card' | 'list';
 type GroupBy = 'none' | 'type' | 'access';
+type SortBy =
+  | 'updated-desc'
+  | 'updated-asc'
+  | 'created-desc'
+  | 'created-asc'
+  | 'title-asc'
+  | 'title-desc';
 
 const VIEW_MODE_KEY = 'gg.items.view';
 const GROUP_BY_KEY = 'gg.items.groupBy';
+const SORT_BY_KEY = 'gg.items.sortBy';
+
+const SORT_LABELS: Record<SortBy, string> = {
+  'updated-desc': 'Recently updated',
+  'updated-asc': 'Least recently updated',
+  'created-desc': 'Newest first',
+  'created-asc': 'Oldest first',
+  'title-asc': 'Name (A–Z)',
+  'title-desc': 'Name (Z–A)',
+};
 
 const TYPE_LABELS: Record<ItemType, string> = {
   web_map: 'Web map',
@@ -70,6 +87,7 @@ const ACCESS_LABELS: Record<string, string> = {
 export function ItemsView({ items, currentUser }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('card');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [sortBy, setSortBy] = useState<SortBy>('updated-desc');
   const [typeFilter, setTypeFilter] = useState<Set<ItemType>>(new Set());
 
   // Rehydrate persisted preferences on mount. Running this lazily
@@ -81,6 +99,8 @@ export function ItemsView({ items, currentUser }: Props) {
       if (vm === 'card' || vm === 'list') setViewMode(vm);
       const gb = localStorage.getItem(GROUP_BY_KEY);
       if (gb === 'none' || gb === 'type' || gb === 'access') setGroupBy(gb);
+      const sb = localStorage.getItem(SORT_BY_KEY);
+      if (sb && sb in SORT_LABELS) setSortBy(sb as SortBy);
     } catch {
       /* no localStorage, fall through to defaults */
     }
@@ -102,6 +122,14 @@ export function ItemsView({ items, currentUser }: Props) {
       /* non-fatal */
     }
   }
+  function persistSort(next: SortBy) {
+    setSortBy(next);
+    try {
+      localStorage.setItem(SORT_BY_KEY, next);
+    } catch {
+      /* non-fatal */
+    }
+  }
 
   // Present-in-data type counts, sorted by descending count so the
   // most common types sit at the front of the filter bar.
@@ -111,13 +139,17 @@ export function ItemsView({ items, currentUser }: Props) {
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
 
-  const filteredItems = useMemo(
-    () =>
+  const filteredItems = useMemo(() => {
+    const pool =
       typeFilter.size === 0
         ? items
-        : items.filter((it) => typeFilter.has(it.type)),
-    [items, typeFilter],
-  );
+        : items.filter((it) => typeFilter.has(it.type));
+    // Sort on every filter/sort change. copyWithin keeps the original
+    // array intact (it's the server prop).
+    const sorted = [...pool];
+    sorted.sort((a, b) => compareItems(a, b, sortBy));
+    return sorted;
+  }, [items, typeFilter, sortBy]);
 
   function toggleType(t: ItemType) {
     setTypeFilter((prev) => {
@@ -139,6 +171,8 @@ export function ItemsView({ items, currentUser }: Props) {
         onViewMode={persistView}
         groupBy={groupBy}
         onGroupBy={persistGroup}
+        sortBy={sortBy}
+        onSortBy={persistSort}
         typeFilter={typeFilter}
         typeCounts={typeCounts}
         onToggleType={toggleType}
@@ -158,11 +192,51 @@ export function ItemsView({ items, currentUser }: Props) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Comparator shared by every sort mode. Tie-break on id so the ordering
+ * is deterministic when two items have the same sort key.
+ */
+function compareItems(
+  a: ItemWithShares,
+  b: ItemWithShares,
+  mode: SortBy,
+): number {
+  switch (mode) {
+    case 'title-asc':
+      return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+    case 'title-desc':
+      return b.title.localeCompare(a.title) || a.id.localeCompare(b.id);
+    case 'created-desc':
+      return (
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
+        a.id.localeCompare(b.id)
+      );
+    case 'created-asc':
+      return (
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() ||
+        a.id.localeCompare(b.id)
+      );
+    case 'updated-asc':
+      return (
+        new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime() ||
+        a.id.localeCompare(b.id)
+      );
+    case 'updated-desc':
+    default:
+      return (
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime() ||
+        a.id.localeCompare(b.id)
+      );
+  }
+}
+
 interface ToolbarProps {
   viewMode: ViewMode;
   onViewMode: (next: ViewMode) => void;
   groupBy: GroupBy;
   onGroupBy: (next: GroupBy) => void;
+  sortBy: SortBy;
+  onSortBy: (next: SortBy) => void;
   typeFilter: Set<ItemType>;
   typeCounts: Array<[ItemType, number]>;
   onToggleType: (t: ItemType) => void;
@@ -176,6 +250,8 @@ function Toolbar({
   onViewMode,
   groupBy,
   onGroupBy,
+  sortBy,
+  onSortBy,
   typeFilter,
   typeCounts,
   onToggleType,
@@ -228,6 +304,23 @@ function Toolbar({
             <option value="none">None</option>
             <option value="type">Type</option>
             <option value="access">Access</option>
+          </select>
+        </label>
+
+        <label className="inline-flex items-center gap-1.5 text-xs text-muted">
+          Sort
+          <select
+            value={sortBy}
+            onChange={(e) => onSortBy(e.target.value as SortBy)}
+            className="h-8 rounded-md border border-border bg-surface-1 px-2 text-xs text-ink-1 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+          >
+            {(Object.entries(SORT_LABELS) as Array<[SortBy, string]>).map(
+              ([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ),
+            )}
           </select>
         </label>
 
@@ -389,10 +482,26 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
     );
   }
 
-  // List view: compact one-line rows, scales to hundreds of items
-  // without the scroll-on-scroll problems the card grid has.
+  // List view: compact rows in a CSS grid so every column (icon,
+  // title/desc, type, updated-at, sharing, chevron) aligns vertically
+  // across rows. Previously each row was flexbox with ad-hoc widths,
+  // which made dates and sharing chips wander across rows.
+  //
+  // overflow-visible on the <ul> so the sharing popover can escape the
+  // card (the list's rounded-lg corners are kept crisp by clipping
+  // only the top and bottom rows individually).
   return (
-    <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface-1">
+    <ul className="divide-y divide-border rounded-lg border border-border bg-surface-1">
+      {/* Header row: surfaces the columns so the list reads like a
+          table, which matters once there are many rows. */}
+      <li className="hidden grid-cols-[auto_minmax(0,1fr)_8rem_7rem_9rem_auto] items-center gap-3 border-b border-border bg-surface-2 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted sm:grid">
+        <span />
+        <span>Title</span>
+        <span>Type</span>
+        <span>Updated</span>
+        <span>Sharing</span>
+        <span />
+      </li>
       {items.map((item) => {
         const canManage =
           currentUser.id === item.ownerId || currentUser.orgRole === 'admin';
@@ -400,13 +509,14 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
         const accent = getItemTypeAccent(item.type);
         return (
           <li key={item.id} className="group">
-            <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-2">
+            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-surface-2 sm:grid-cols-[auto_minmax(0,1fr)_8rem_7rem_9rem_auto]">
               <Link
                 href={`/items/${item.id}`}
-                className="flex min-w-0 flex-1 items-center gap-3"
+                className="contents"
+                aria-label={item.title}
               >
                 <Icon className={`h-4 w-4 shrink-0 ${accent}`} />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-ink-0">
                     {item.title}
                   </p>
@@ -414,17 +524,18 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
                     <p className="truncate text-xs text-muted">
                       {item.description}
                     </p>
-                  ) : (
-                    <p className="text-[11px] text-muted">
-                      {TYPE_LABELS[item.type] ?? item.type}
-                    </p>
-                  )}
+                  ) : null}
                 </div>
-                <p className="hidden shrink-0 text-[11px] text-muted sm:block">
+                <p className="hidden truncate text-[11px] text-muted sm:block">
+                  {TYPE_LABELS[item.type] ?? item.type}
+                </p>
+                <p className="hidden text-[11px] text-muted sm:block">
                   {new Date(item.updatedAt).toLocaleDateString()}
                 </p>
               </Link>
-              <div className="shrink-0">
+              {/* Sharing + chevron sit outside the Link so their click
+                  handlers don't propagate a navigation. */}
+              <div className="hidden sm:block">
                 <ItemSharingIndicator
                   itemId={item.id}
                   itemTitle={item.title}
@@ -432,6 +543,7 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
                   shares={item.shares}
                   canManage={canManage}
                   currentUserId={currentUser.id}
+                  stopParentLink
                 />
               </div>
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100" />

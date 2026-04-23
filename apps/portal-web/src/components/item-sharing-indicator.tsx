@@ -1,6 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   Building2,
@@ -165,6 +173,15 @@ export function ItemSharingIndicator({
     groups: Record<string, PrincipalMeta>;
   }>({ users: {}, groups: {} });
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  // Popover is rendered via a portal so it escapes ancestor
+  // `overflow: hidden` / stacking contexts (the card's <a>, the list's
+  // rounded border). Fixed position driven by the button's current
+  // bounding rect; recomputed on scroll + resize while open.
+  const [popoverPos, setPopoverPos] = useState<{
+    top: number;
+    right: number;
+  } | null>(null);
 
   // Sync from props (in case the parent re-fetches and hands new data).
   useEffect(() => {
@@ -200,13 +217,17 @@ export function ItemSharingIndicator({
     })();
   }, [open, visibleShares]);
 
-  // Close on outside click or Escape.
+  // Close on outside click or Escape. The portal'd popover isn't a DOM
+  // descendant of the button, so the click check must include both.
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (
+        popoverRef.current && popoverRef.current.contains(target)
+      ) return;
+      if (buttonRef.current && buttonRef.current.contains(target)) return;
+      setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
@@ -216,6 +237,33 @@ export function ItemSharingIndicator({
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // Recompute the portal's anchor position whenever the button moves
+  // (open toggles, window resizes, page scrolls). Uses right-edge
+  // anchoring so the popover stays aligned with the chip even when
+  // the chip is in a compact toolbar.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPopoverPos(null);
+      return;
+    }
+    const update = () => {
+      const btn = buttonRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      setPopoverPos({
+        top: rect.bottom + 4,
+        right: window.innerWidth - rect.right,
+      });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
     };
   }, [open]);
 
@@ -274,47 +322,21 @@ export function ItemSharingIndicator({
     [itemId, router],
   );
 
-  return (
-    <div className="relative inline-block">
-      <button
-        type="button"
+  const popover =
+    open && popoverPos && typeof document !== 'undefined' ? (
+      <div
+        ref={popoverRef}
+        role="dialog"
+        aria-label={`Sharing for ${itemTitle}`}
         onClick={(e) => {
-          if (stopParentLink) {
-            e.preventDefault();
-            e.stopPropagation();
-          }
-          setOpen((v) => !v);
+          if (stopParentLink) e.stopPropagation();
         }}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${meta.chipBg} ${meta.chipText} ring-1 ring-inset ring-transparent hover:ring-current/20`}
-        title={
-          shareCount > 0
-            ? `${meta.label} · shared with ${shareCount} ${
-                shareCount === 1 ? 'principal' : 'principals'
-              }`
-            : meta.label
-        }
+        // Fixed-positioned so no ancestor overflow-hidden or stacking
+        // context clips or hides it. z-50 keeps it above the app shell's
+        // sticky top-bar (z-10).
+        style={{ top: popoverPos.top, right: popoverPos.right }}
+        className="fixed z-50 w-72 overflow-hidden rounded-lg border border-border bg-surface-1 text-left shadow-raised"
       >
-        <meta.Icon className="h-3 w-3" />
-        <span>{meta.label}</span>
-        {shareCount > 0 ? (
-          <span className="ml-0.5 rounded-full bg-white/50 px-1 text-[10px] leading-4 text-current">
-            +{shareCount}
-          </span>
-        ) : null}
-      </button>
-
-      {open ? (
-        <div
-          ref={popoverRef}
-          role="dialog"
-          aria-label={`Sharing for ${itemTitle}`}
-          onClick={(e) => {
-            if (stopParentLink) e.stopPropagation();
-          }}
-          className="absolute right-0 top-[calc(100%+4px)] z-20 w-72 overflow-hidden rounded-lg border border-border bg-surface-1 text-left shadow-raised"
-        >
           <div className="border-b border-border px-3 py-2">
             <p className="truncate text-xs font-semibold text-ink-0" title={itemTitle}>
               {itemTitle}
@@ -407,8 +429,43 @@ export function ItemSharingIndicator({
             </a>
           </div>
         </div>
-      ) : null}
-    </div>
+    ) : null;
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={(e) => {
+          if (stopParentLink) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${meta.chipBg} ${meta.chipText} ring-1 ring-inset ring-transparent hover:ring-current/20`}
+        title={
+          shareCount > 0
+            ? `${meta.label} · shared with ${shareCount} ${
+                shareCount === 1 ? 'principal' : 'principals'
+              }`
+            : meta.label
+        }
+      >
+        <meta.Icon className="h-3 w-3" />
+        <span>{meta.label}</span>
+        {shareCount > 0 ? (
+          <span className="ml-0.5 rounded-full bg-white/50 px-1 text-[10px] leading-4 text-current">
+            +{shareCount}
+          </span>
+        ) : null}
+      </button>
+      {popover && typeof document !== 'undefined'
+        ? createPortal(popover, document.body)
+        : null}
+    </>
   );
 }
 
