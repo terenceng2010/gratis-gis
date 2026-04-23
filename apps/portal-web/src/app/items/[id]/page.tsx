@@ -29,6 +29,7 @@ import { EntityBadge } from '@gratis-gis/ui';
 import { ItemTypeBadge } from '@/lib/item-type-icon';
 import { apiFetch } from '@/lib/api';
 import { SharingPanel } from './sharing-panel';
+import { ItemDependencies } from './item-dependencies';
 import { DeleteItemButton } from './delete-button';
 import { MapEditor } from './web-map/map-editor';
 import { FeatureServiceEditor } from './feature-service/editor';
@@ -273,8 +274,15 @@ export default async function ItemDetailPage({ params }: Props) {
         </section>
       )}
 
+      {/* Dependency panel runs above Sharing for everyone — knowing
+          what else will break if you touch this item is the same
+          shape of question whether you're the owner or a viewer. */}
+      <section className="mb-8">
+        <ItemDependencies itemId={item.id} />
+      </section>
+
       {canManage ? (
-        <section className="mb-8">
+        <section id="sharing" className="mb-8">
           <h2 className="mb-4 flex items-center gap-2 text-sm font-medium text-muted">
             <Users className="h-4 w-4" />
             Sharing

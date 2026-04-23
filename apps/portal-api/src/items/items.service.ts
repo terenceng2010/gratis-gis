@@ -4,6 +4,10 @@ import type { ItemAccess, ItemType, PrincipalType, Prisma, SharePermission } fro
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { SharingService } from './sharing.service.js';
+import {
+  extractDependencies,
+  REFERENCER_TYPES,
+} from './dependency-extractor.js';
 
 // Optional fields use `| undefined` explicitly so class-validator DTOs
 // (which leave unset keys present-as-undefined) can satisfy these types
@@ -463,5 +467,146 @@ export class ItemsService {
       });
       if (!hit) throw new BadRequestException('Unknown group principal');
     }
+  }
+
+  // ---------------------------------------------------------------
+  // Dependency tracking — "Used by" / "Depends on"
+  // ---------------------------------------------------------------
+
+  /**
+   * Return the items that THIS item references (forward edges). For a
+   * web_map, that's each layer's feature_service / arcgis_service.
+   *
+   * Results are scoped to items the caller can see — if the map
+   * references something private that the caller isn't shared on, it
+   * simply doesn't appear in the list (instead of 403'ing, which
+   * would leak the existence of a hidden dependency).
+   */
+  async listDependencies(user: AuthUser, id: string) {
+    const item = await this.get(user, id);
+    const depIds = extractDependencies(item);
+    if (depIds.length === 0) return [];
+
+    // Respect the same visibility rules as list(): only return items
+    // the caller has the right to see.
+    const visible = this.sharing.visibleWhere(user);
+    return this.prisma.item.findMany({
+      where: {
+        id: { in: depIds },
+        deletedAt: null,
+        ...visible,
+      },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        thumbnailUrl: true,
+        description: true,
+        updatedAt: true,
+        access: true,
+      },
+    });
+  }
+
+  /**
+   * Return the items that reference THIS one (reverse edges).
+   *
+   * Two modes:
+   *   - direct (default): every item whose data.* names this item id.
+   *   - transitive: plus every item that indirectly references it
+   *     through another dependent. E.g. a layer used by a web_map,
+   *     which is in turn used by a dashboard.
+   *
+   * Implementation: scan every referencer-type item in the org (small
+   * set: today just web_map), build a reverse index, then either
+   * return the direct hits or BFS outward for the transitive mode.
+   *
+   * For O(100k) items per org this is fine; if catalogs get bigger,
+   * swap for an `item_dependency` table maintained by the same
+   * extractor on item write.
+   */
+  async listDependents(
+    user: AuthUser,
+    id: string,
+    opts: { transitive?: boolean } = {},
+  ) {
+    // Caller must be able to see the item itself before asking who
+    // depends on it.
+    await this.get(user, id);
+
+    // Pull every referencer-type item in the org — we need their data
+    // to extract refs. We'll filter for visibility when shaping the
+    // response.
+    const referencers = await this.prisma.item.findMany({
+      where: {
+        orgId: user.orgId,
+        type: { in: REFERENCER_TYPES },
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        thumbnailUrl: true,
+        description: true,
+        updatedAt: true,
+        access: true,
+        data: true,
+        ownerId: true,
+      },
+    });
+
+    // Reverse index: target-id -> list of referrer ids that depend on it.
+    const reverse = new Map<string, string[]>();
+    for (const r of referencers) {
+      const deps = extractDependencies({ type: r.type, data: r.data });
+      for (const d of deps) {
+        const arr = reverse.get(d) ?? [];
+        arr.push(r.id);
+        reverse.set(d, arr);
+      }
+    }
+
+    // BFS from `id` outward. Direct-only = depth 1; transitive = full
+    // walk, guarded against cycles by the `seen` set.
+    const seen = new Set<string>();
+    const frontier = [id];
+    const hits = new Set<string>();
+    while (frontier.length > 0) {
+      const next = frontier.shift()!;
+      const ancestors = reverse.get(next) ?? [];
+      for (const a of ancestors) {
+        if (seen.has(a)) continue;
+        seen.add(a);
+        hits.add(a);
+        if (opts.transitive) frontier.push(a);
+      }
+    }
+
+    if (hits.size === 0) return [];
+
+    // Re-query with the visibility predicate so per-row access
+    // (public / org / explicit share / ownership) is enforced by the
+    // same logic the rest of the app uses instead of a hand-rolled
+    // duplicate. This is the only non-trivial SQL we do here; it runs
+    // once against a bounded id set.
+    const visible = this.sharing.visibleWhere(user);
+    return this.prisma.item.findMany({
+      where: {
+        id: { in: Array.from(hits) },
+        deletedAt: null,
+        ...visible,
+      },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        thumbnailUrl: true,
+        description: true,
+        updatedAt: true,
+        access: true,
+      },
+      orderBy: { title: 'asc' },
+    });
   }
 }

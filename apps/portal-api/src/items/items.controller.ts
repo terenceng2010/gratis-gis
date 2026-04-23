@@ -112,6 +112,26 @@ export class ItemsController {
     return this.items.get(user, id);
   }
 
+  /** Items that THIS item references (e.g. feature services powering
+   *  the layers of a web map). */
+  @Get(':id/dependencies')
+  dependencies(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.items.listDependencies(user, id);
+  }
+
+  /** Items that reference THIS one. Pass ?transitive=true to walk
+   *  further (e.g. a layer used by a web_map used by a dashboard). */
+  @Get(':id/dependents')
+  dependents(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('transitive') transitive?: string,
+  ) {
+    return this.items.listDependents(user, id, {
+      transitive: transitive === 'true' || transitive === '1',
+    });
+  }
+
   /**
    * GeoJSON-only view of a feature_service item. Handles both v1 (inline
    * JSON) and v2 (PostGIS) storage transparently.
@@ -128,14 +148,20 @@ export class ItemsController {
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
   ) {
-    let parsedBbox: [number, number, number, number] | undefined;
+    // Use conditional spread (not `undefined` values) to play nicely
+    // with exactOptionalPropertyTypes; the destructure also narrows
+    // parts[0..3] from `number | undefined` down to `number`, which
+    // is what the service signature needs.
+    const opts: { bbox?: [number, number, number, number]; at?: string } = {};
     if (bbox) {
       const parts = bbox.split(',').map(Number);
       if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
-        parsedBbox = [parts[0], parts[1], parts[2], parts[3]];
+        const [minX, minY, maxX, maxY] = parts as [number, number, number, number];
+        opts.bbox = [minX, minY, maxX, maxY];
       }
     }
-    return this.items.getGeoJson(user, id, { bbox: parsedBbox, at });
+    if (at) opts.at = at;
+    return this.items.getGeoJson(user, id, opts);
   }
 
   @Post()
