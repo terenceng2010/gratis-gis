@@ -54,7 +54,15 @@ export class ItemsService {
         { tags: { has: opts.q } },
       ];
     }
-    return this.prisma.item.findMany({ where, orderBy: { updatedAt: 'desc' } });
+    // Include shares in the list response so the items page can render
+    // sharing badges without a second round-trip per item. Most items
+    // have zero-to-single-digit share rows, so the extra join is cheap
+    // and far better than N+1 fetches on the client.
+    return this.prisma.item.findMany({
+      where,
+      include: { shares: true },
+      orderBy: { updatedAt: 'desc' },
+    });
   }
 
   /**

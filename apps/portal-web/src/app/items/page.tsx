@@ -2,10 +2,11 @@ import Link from 'next/link';
 import { createElement } from 'react';
 import { Plus, Layers } from 'lucide-react';
 import { ItemCard } from '@gratis-gis/ui';
-import type { Item } from '@gratis-gis/shared-types';
+import type { ItemWithShares } from '@gratis-gis/shared-types';
 import { apiFetch } from '@/lib/api';
 import { EmptyState } from '@/components/empty-state';
 import { getItemTypeIcon } from '@/lib/item-type-icon';
+import { ItemSharingIndicator } from '@/components/item-sharing-indicator';
 
 interface Props {
   searchParams: { mine?: string; q?: string };
@@ -16,7 +17,16 @@ export default async function ItemsPage({ searchParams }: Props) {
   if (searchParams.mine === 'true') qs.set('mine', 'true');
   if (searchParams.q) qs.set('q', searchParams.q);
 
-  const items = await apiFetch<Item[]>(`/api/items${qs.toString() ? `?${qs}` : ''}`);
+  // Items come back with their shares joined so the sharing indicator
+  // on each card has the data it needs without a second round-trip.
+  const items = await apiFetch<ItemWithShares[]>(
+    `/api/items${qs.toString() ? `?${qs}` : ''}`,
+  );
+  // Fetch the viewer once so the sharing popover can gate on canManage
+  // (owner or org admin) without re-fetching per card.
+  const me = await apiFetch<{ id: string; orgRole: string }>(
+    '/api/users/me',
+  );
   const isMine = searchParams.mine === 'true';
 
   return (
@@ -64,17 +74,33 @@ export default async function ItemsPage({ searchParams }: Props) {
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((item) => (
-            <ItemCard
-              key={item.id}
-              item={item}
-              href={`/items/${item.id}`}
-              // Per-type lucide icon on a type-colored tile when there's
-              // no custom thumbnail. createElement keeps this a server
-              // component — no JSX inside .map callbacks here.
-              fallbackIcon={createElement(getItemTypeIcon(item.type))}
-            />
-          ))}
+          {items.map((item) => {
+            const canManage =
+              me.id === item.ownerId || me.orgRole === 'admin';
+            return (
+              <ItemCard
+                key={item.id}
+                item={item}
+                href={`/items/${item.id}`}
+                // Per-type lucide icon on a type-colored tile when there's
+                // no custom thumbnail. createElement keeps this a server
+                // component friendly render path.
+                fallbackIcon={createElement(getItemTypeIcon(item.type))}
+                // Sharing indicator chip sits next to the type badge;
+                // stopParentLink prevents the card's <a> from navigating
+                // when the chip/popover is clicked.
+                headerExtra={createElement(ItemSharingIndicator, {
+                  itemId: item.id,
+                  itemTitle: item.title,
+                  access: item.access,
+                  shares: item.shares,
+                  canManage,
+                  currentUserId: me.id,
+                  stopParentLink: true,
+                })}
+              />
+            );
+          })}
         </div>
       )}
     </div>

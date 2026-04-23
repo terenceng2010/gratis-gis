@@ -35,6 +35,15 @@ export interface ItemShare {
   createdAt: ISODateString;
 }
 
+/**
+ * Item joined with its share rows. Returned by list + get endpoints so
+ * UIs can render sharing indicators (and the full sharing panel on
+ * detail pages) without a second round-trip per item.
+ */
+export type ItemWithShares<TData = unknown> = Item<TData> & {
+  shares: ItemShare[];
+};
+
 /** Input shape for creating a new Item via the API. */
 export interface CreateItemInput<TData = unknown> {
   type: ItemType;
