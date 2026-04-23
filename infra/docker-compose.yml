@@ -39,6 +39,10 @@ services:
       - "8080:8080"
     volumes:
       - ./keycloak/realm-gratis-gis.json:/opt/keycloak/data/import/realm-gratis-gis.json:ro
+      # Custom login / account theme. Mounted under /opt/keycloak/themes
+      # so Keycloak autoloads it; the realm references it by name via
+      # loginTheme: "portal" (see realm-gratis-gis.json).
+      - ./keycloak/themes/portal:/opt/keycloak/themes/portal:ro
 
   minio:
     image: minio/minio:RELEASE.2024-10-02T17-50-41Z

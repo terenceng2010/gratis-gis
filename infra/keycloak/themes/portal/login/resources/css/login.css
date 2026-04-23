@@ -1,0 +1,214 @@
+/*
+ * Portal login styles.
+ *
+ * Keycloak's v2 login theme is a PatternFly-flavored card centered on
+ * a dark-photo background. We keep the structural layout (it's solid)
+ * and re-skin it to match the portal: soft neutral background, white
+ * card with a thin border, the portal accent color on the primary
+ * submit button, and the portal's geometric sans-serif.
+ *
+ * Everything here is additive — no rules target the FTL structure, so
+ * Keycloak upgrades don't silently break this sheet.
+ */
+
+:root {
+  /* These mirror the portal's own CSS variables so login feels
+     visually continuous with the rest of the app. */
+  --portal-accent: #0ea5e9;         /* sky-500 */
+  --portal-accent-hover: #0284c7;   /* sky-600 */
+  --portal-accent-foreground: #ffffff;
+  --portal-ink-0: #0f172a;          /* slate-900 */
+  --portal-ink-1: #1e293b;          /* slate-800 */
+  --portal-muted: #64748b;          /* slate-500 */
+  --portal-border: #e2e8f0;         /* slate-200 */
+  --portal-surface-0: #f8fafc;      /* slate-50 */
+  --portal-surface-1: #ffffff;
+  --portal-danger: #dc2626;         /* red-600 */
+}
+
+html,
+body {
+  background: var(--portal-surface-0) !important;
+  color: var(--portal-ink-1);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Kill the photo background; replace with a subtle color wash so the
+   card remains the focal point without feeling floaty. */
+body.login-pf,
+.login-pf,
+.login-pf body,
+.login-pf-page {
+  background: var(--portal-surface-0) !important;
+  background-image: none !important;
+}
+
+/* Main card */
+.login-pf-page .card-pf,
+.login-pf-page .kc-body,
+#kc-content {
+  background: var(--portal-surface-1);
+  border: 1px solid var(--portal-border);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 12px rgba(15, 23, 42, 0.06);
+  padding: 28px 28px 32px;
+}
+
+/* Header: we hide Keycloak's default PF header and draw our own with
+   the portal brand mark + app name. */
+#kc-header {
+  display: none;
+}
+#kc-header-wrapper {
+  color: var(--portal-ink-0);
+  text-align: center;
+  padding: 0;
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+/* Add a portal-marked header inside the card */
+.login-pf-page .card-pf::before {
+  content: "";
+  display: block;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 12px;
+  background-image: url("../img/logo.svg");
+  background-size: contain;
+  background-repeat: no-repeat;
+}
+
+/* Form elements */
+#kc-form input[type="text"],
+#kc-form input[type="email"],
+#kc-form input[type="password"],
+#kc-form input[type="tel"],
+.pf-c-form-control {
+  appearance: none;
+  background: var(--portal-surface-1);
+  border: 1px solid var(--portal-border);
+  border-radius: 8px !important;
+  color: var(--portal-ink-0);
+  font-size: 0.875rem;
+  height: 40px;
+  padding: 8px 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  width: 100%;
+}
+#kc-form input[type="text"]:focus,
+#kc-form input[type="email"]:focus,
+#kc-form input[type="password"]:focus,
+#kc-form input[type="tel"]:focus,
+.pf-c-form-control:focus {
+  border-color: var(--portal-accent);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.25);
+  outline: none;
+}
+
+label,
+.pf-c-form__label,
+.pf-c-form__label-text {
+  color: var(--portal-muted) !important;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+/* Primary submit button */
+.pf-c-button.pf-m-primary,
+.pf-c-button.pf-m-block.pf-m-primary,
+input[type="submit"].pf-c-button,
+#kc-login,
+#kc-register-button {
+  background: var(--portal-accent) !important;
+  border-color: var(--portal-accent) !important;
+  border-radius: 8px !important;
+  color: var(--portal-accent-foreground) !important;
+  font-weight: 600;
+  height: 40px;
+  padding: 0 16px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  transition: background 0.15s ease;
+}
+.pf-c-button.pf-m-primary:hover,
+input[type="submit"].pf-c-button:hover,
+#kc-login:hover {
+  background: var(--portal-accent-hover) !important;
+  border-color: var(--portal-accent-hover) !important;
+}
+
+/* Secondary / link buttons */
+.pf-c-button.pf-m-link,
+a.login-pf-settings,
+#kc-registration a,
+#kc-info a,
+.pf-c-login__main-footer-links a {
+  color: var(--portal-accent) !important;
+  text-decoration: none;
+}
+.pf-c-button.pf-m-link:hover,
+#kc-registration a:hover,
+#kc-info a:hover,
+.pf-c-login__main-footer-links a:hover {
+  text-decoration: underline;
+}
+
+/* "Remember me" checkbox row */
+#kc-form-options .checkbox {
+  color: var(--portal-muted);
+  font-size: 0.75rem;
+}
+
+/* Error / alert banners */
+.pf-c-alert.pf-m-danger,
+.kc-feedback-text.error,
+.alert-error {
+  background: #fef2f2 !important;
+  border: 1px solid #fecaca !important;
+  border-radius: 8px;
+  color: var(--portal-danger) !important;
+}
+
+/* Social / IdP buttons — outline with portal border/text so they
+   blend with the card even when icons vary. */
+#kc-social-providers ul li a,
+.pf-c-button.kc-social-provider-link {
+  background: var(--portal-surface-1) !important;
+  border: 1px solid var(--portal-border) !important;
+  border-radius: 8px !important;
+  color: var(--portal-ink-1) !important;
+}
+#kc-social-providers ul li a:hover,
+.pf-c-button.kc-social-provider-link:hover {
+  background: var(--portal-surface-0) !important;
+}
+
+/* Footer / "Sign in" vs "Register" switcher */
+#kc-page-title {
+  color: var(--portal-ink-0);
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 4px 0 16px;
+  text-align: center;
+}
+
+/* Tighten the overall page padding */
+.login-pf-page {
+  padding: 40px 16px !important;
+}
+
+/* Mobile: make the card full-width comfortably */
+@media (max-width: 480px) {
+  .login-pf-page .card-pf,
+  #kc-content {
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    padding: 24px 16px 32px;
+  }
+}

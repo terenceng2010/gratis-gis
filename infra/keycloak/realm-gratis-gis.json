@@ -1,6 +1,9 @@
 {
   "realm": "gratis-gis",
   "enabled": true,
+  "displayName": "Portal",
+  "displayNameHtml": "<span>Portal</span>",
+  "loginTheme": "portal",
   "registrationAllowed": false,
   "resetPasswordAllowed": true,
   "editUsernameAllowed": false,

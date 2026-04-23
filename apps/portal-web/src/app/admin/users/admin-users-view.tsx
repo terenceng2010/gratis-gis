@@ -126,7 +126,7 @@ export function AdminUsersView({ initialUsers }: Props) {
   async function removeUser(user: AdminUserRow) {
     if (
       !confirm(
-        `Permanently delete ${user.username}? This cannot be undone and will remove their Keycloak account.`,
+        `Permanently delete ${user.username}? This cannot be undone and will remove their portal account.`,
       )
     ) {
       return;
@@ -408,7 +408,7 @@ function InviteUserDialog({ onClose, onInvited }: InviteDialogProps) {
           <h2 className="text-lg font-semibold">Invite user</h2>
         </div>
         <p className="text-xs text-muted">
-          We&apos;ll send a password-setup email via Keycloak. The user
+          We&apos;ll send a password-setup email from the portal. The user
           establishes their own password through that link —{' '}
           <span className="font-medium">no passwords are set here</span>.
         </p>
