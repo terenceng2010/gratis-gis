@@ -26,6 +26,7 @@ import {
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
+import { ItemTypeBadge } from '@/lib/item-type-icon';
 import { apiFetch } from '@/lib/api';
 import { SharingPanel } from './sharing-panel';
 import { DeleteItemButton } from './delete-button';
@@ -108,13 +109,20 @@ export default async function ItemDetailPage({ params }: Props) {
           a `<details>` disclosure below so they're one click away
           without eating the fold. */}
       <header className="mb-4 flex items-center gap-3">
-        <EntityBadge
-          label={item.title}
-          seed={item.id}
-          imageUrl={item.thumbnailUrl}
-          size="md"
-          rounded="md"
-        />
+        {/* Thumbnail: user-uploaded image wins; otherwise a per-type
+            icon tile so the header visually matches the card on the
+            list page instead of showing letter-initials. */}
+        {item.thumbnailUrl ? (
+          <EntityBadge
+            label={item.title}
+            seed={item.id}
+            imageUrl={item.thumbnailUrl}
+            size="md"
+            rounded="md"
+          />
+        ) : (
+          <ItemTypeBadge type={item.type} size="md" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-xl font-semibold tracking-tight">

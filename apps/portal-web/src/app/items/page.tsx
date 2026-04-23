@@ -1,9 +1,11 @@
 import Link from 'next/link';
+import { createElement } from 'react';
 import { Plus, Layers } from 'lucide-react';
 import { ItemCard } from '@gratis-gis/ui';
 import type { Item } from '@gratis-gis/shared-types';
 import { apiFetch } from '@/lib/api';
 import { EmptyState } from '@/components/empty-state';
+import { getItemTypeIcon } from '@/lib/item-type-icon';
 
 interface Props {
   searchParams: { mine?: string; q?: string };
@@ -63,7 +65,15 @@ export default async function ItemsPage({ searchParams }: Props) {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
-            <ItemCard key={item.id} item={item} href={`/items/${item.id}`} />
+            <ItemCard
+              key={item.id}
+              item={item}
+              href={`/items/${item.id}`}
+              // Per-type lucide icon on a type-colored tile when there's
+              // no custom thumbnail. createElement keeps this a server
+              // component — no JSX inside .map callbacks here.
+              fallbackIcon={createElement(getItemTypeIcon(item.type))}
+            />
           ))}
         </div>
       )}
