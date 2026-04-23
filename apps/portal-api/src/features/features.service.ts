@@ -12,6 +12,20 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal interface matching both PrismaService and Prisma.TransactionClient.
+ * Lets the same private helper serve bulk inserts from either the live
+ * service (non-transactional caller) or a transaction callback, so we
+ * don't maintain two copies of the SQL.
+ */
+interface PrismaExecutor {
+  $executeRawUnsafe: (sql: string, ...values: unknown[]) => Promise<unknown>;
+  $queryRawUnsafe: <T = unknown>(
+    sql: string,
+    ...values: unknown[]
+  ) => Promise<T>;
+}
+
 export interface FeatureRow {
   gid: bigint;
   global_id: string;
@@ -183,6 +197,15 @@ export class FeaturesService {
       CREATE INDEX IF NOT EXISTS "${tbl}_global_id_idx"
         ON "${tbl}" (global_id)
     `);
+    // Partial UNIQUE index: at most one current (unexpired) row per
+    // global_id. Concurrent updateFeature() / deleteFeature() calls
+    // can't both insert a new live version — the loser hits a unique-
+    // violation and fails cleanly instead of corrupting the table
+    // with two "current" rows for the same feature.
+    await this.prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "${tbl}_current_uniq"
+        ON "${tbl}" (global_id) WHERE valid_to IS NULL
+    `);
     this.log.log(`Provisioned feature table ${tbl}`);
   }
 
@@ -226,6 +249,22 @@ export class FeaturesService {
   ): Promise<{ inserted: number }> {
     if (features.length === 0) return { inserted: 0 };
     const tbl = toTableName(itemId);
+    const inserted = await this.bulkInsertCore(this.prisma, tbl, features, user);
+    return { inserted };
+  }
+
+  /**
+   * Core bulk-insert loop. Takes any Prisma-like client that exposes
+   * `$executeRawUnsafe` so callers can either pass the live service
+   * or a transaction client. Returns the number of inserted rows.
+   */
+  private async bulkInsertCore(
+    client: PrismaExecutor,
+    tbl: string,
+    features: InsertFeatureInput[],
+    user: AuthUser,
+  ): Promise<number> {
+    if (features.length === 0) return 0;
     const now = new Date();
     let inserted = 0;
 
@@ -265,7 +304,7 @@ export class FeaturesService {
         )`);
       }
 
-      await this.prisma.$executeRawUnsafe(
+      await client.$executeRawUnsafe(
         `INSERT INTO "${tbl}"
            (global_id, geom, properties, valid_from, created_by, edited_by)
          VALUES ${valueParts.join(', ')}`,
@@ -274,13 +313,14 @@ export class FeaturesService {
       inserted += batch.length;
     }
 
-    return { inserted };
+    return inserted;
   }
 
   /**
    * Replace ALL current features (valid_to IS NULL) with a new set.
-   * Expires existing rows then bulk-inserts the replacement set in a
-   * single transaction.
+   * Expires existing rows then bulk-inserts the replacement set,
+   * wrapped in a single database transaction so a partial failure
+   * can't leave the table in a "all expired, nothing inserted" state.
    */
   async replaceAll(
     itemId: string,
@@ -290,21 +330,22 @@ export class FeaturesService {
     const tbl = toTableName(itemId);
     const now = new Date().toISOString();
 
-    // Expire all current rows.
-    const expireResult = await this.prisma.$executeRawUnsafe(
-      `UPDATE "${tbl}"
-          SET valid_to  = $1::timestamptz,
-              edited_by = $2::uuid,
-              edited_at = $1::timestamptz
-        WHERE valid_to IS NULL`,
-      now,
-      user.id,
-    );
-    // $executeRawUnsafe returns the row count as a number.
-    const expired = typeof expireResult === 'number' ? expireResult : 0;
+    return this.prisma.$transaction(async (tx) => {
+      const expireResult = await tx.$executeRawUnsafe(
+        `UPDATE "${tbl}"
+            SET valid_to  = $1::timestamptz,
+                edited_by = $2::uuid,
+                edited_at = $1::timestamptz
+          WHERE valid_to IS NULL`,
+        now,
+        user.id,
+      );
+      // $executeRawUnsafe returns the row count as a number.
+      const expired = typeof expireResult === 'number' ? expireResult : 0;
 
-    const { inserted } = await this.bulkInsert(itemId, features, user);
-    return { inserted, expired };
+      const inserted = await this.bulkInsertCore(tx, tbl, features, user);
+      return { inserted, expired };
+    });
   }
 
   /**
@@ -324,59 +365,70 @@ export class FeaturesService {
     }
     const now = new Date().toISOString();
 
-    // Lock and fetch the current version.
-    const current = await this.prisma.$queryRawUnsafe<FeatureRow[]>(
-      `SELECT *,
-              ST_AsGeoJSON(geom) AS geom
-         FROM "${tbl}"
-        WHERE global_id = $1::uuid AND valid_to IS NULL
-        LIMIT 1`,
-      globalId,
-    );
-    if (!current.length) throw new NotFoundException('Feature not found');
-    const old = current[0];
+    // Expire + insert has to be atomic: otherwise a concurrent caller
+    // can read the same "current" row, both expire it, and both insert
+    // new live rows (the partial UNIQUE index from provisionTable then
+    // saves us by rejecting the second INSERT — the transaction lets
+    // us report that cleanly instead of leaking a half-done update).
+    // SELECT ... FOR UPDATE serializes concurrent updaters on the gid
+    // so only one proceeds to expire + insert.
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.$queryRawUnsafe<FeatureRow[]>(
+        `SELECT *,
+                ST_AsGeoJSON(geom) AS geom
+           FROM "${tbl}"
+          WHERE global_id = $1::uuid AND valid_to IS NULL
+          LIMIT 1
+          FOR UPDATE`,
+        globalId,
+      );
+      if (!current.length) throw new NotFoundException('Feature not found');
+      const old = current[0]!;
 
-    // Expire old version.
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE "${tbl}"
-          SET valid_to  = $1::timestamptz,
-              edited_by = $2::uuid,
-              edited_at = $1::timestamptz
-        WHERE gid = $3`,
-      now,
-      user.id,
-      old.gid,
-    );
+      // Expire old version.
+      await tx.$executeRawUnsafe(
+        `UPDATE "${tbl}"
+            SET valid_to  = $1::timestamptz,
+                edited_by = $2::uuid,
+                edited_at = $1::timestamptz
+          WHERE gid = $3`,
+        now,
+        user.id,
+        old.gid,
+      );
 
-    const newGeom = patch.geometry !== undefined ? patch.geometry : (old.geom ? JSON.parse(old.geom) : null);
-    const newProps = patch.properties !== undefined
-      ? { ...(old.properties as Record<string, unknown>), ...patch.properties }
-      : old.properties;
+      const newGeom = patch.geometry !== undefined
+        ? patch.geometry
+        : (old.geom ? JSON.parse(old.geom) : null);
+      const newProps = patch.properties !== undefined
+        ? { ...(old.properties as Record<string, unknown>), ...patch.properties }
+        : old.properties;
 
-    // Always pass geom as $4 (null when absent); CASE handles both branches.
-    const inserted = await this.prisma.$queryRawUnsafe<FeatureRow[]>(
-      `INSERT INTO "${tbl}"
-         (global_id, geom, properties, valid_from, created_by, created_at, edited_by, edited_at)
-       VALUES (
-         $1::uuid,
-         CASE WHEN $4::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($4), 4326) ELSE NULL END,
-         $5::jsonb,
-         $2::timestamptz,
-         $3::uuid,
-         $6::timestamptz,
-         $3::uuid,
-         $2::timestamptz
-       )
-       RETURNING *, ST_AsGeoJSON(geom) AS geom`,
-      globalId,
-      now,
-      user.id,
-      newGeom ? JSON.stringify(newGeom) : null,
-      JSON.stringify(newProps),
-      old.created_at.toISOString(),
-    );
+      // Always pass geom as $4 (null when absent); CASE handles both branches.
+      const inserted = await tx.$queryRawUnsafe<FeatureRow[]>(
+        `INSERT INTO "${tbl}"
+           (global_id, geom, properties, valid_from, created_by, created_at, edited_by, edited_at)
+         VALUES (
+           $1::uuid,
+           CASE WHEN $4::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($4), 4326) ELSE NULL END,
+           $5::jsonb,
+           $2::timestamptz,
+           $3::uuid,
+           $6::timestamptz,
+           $3::uuid,
+           $2::timestamptz
+         )
+         RETURNING *, ST_AsGeoJSON(geom) AS geom`,
+        globalId,
+        now,
+        user.id,
+        newGeom ? JSON.stringify(newGeom) : null,
+        JSON.stringify(newProps),
+        old.created_at.toISOString(),
+      );
 
-    return rowToFeature(inserted[0], true);
+      return rowToFeature(inserted[0]!, true);
+    });
   }
 
   /**

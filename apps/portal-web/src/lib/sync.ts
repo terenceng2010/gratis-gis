@@ -104,11 +104,12 @@ export async function pushPending(): Promise<PushResult> {
   for (const op of ops) {
     try {
       const url = `/api/portal/items/${op.itemId}${op.path}`;
-      const res = await fetch(url, {
-        method: op.method,
-        headers: op.body !== undefined ? { 'content-type': 'application/json' } : {},
-        body: op.body !== undefined ? JSON.stringify(op.body) : undefined,
-      });
+      const init: RequestInit = { method: op.method };
+      if (op.body !== undefined) {
+        init.headers = { 'content-type': 'application/json' };
+        init.body = JSON.stringify(op.body);
+      }
+      const res = await fetch(url, init);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await dequeueOp(op.id);
       replayed++;
