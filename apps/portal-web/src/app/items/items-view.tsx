@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ChevronRight,
   Grid3x3,
   List as ListIcon,
+  UserRound,
   X,
 } from 'lucide-react';
 import { ItemCard } from '@gratis-gis/ui';
@@ -15,6 +17,7 @@ import {
   getItemTypeIcon,
 } from '@/lib/item-type-icon';
 import { ItemSharingIndicator } from '@/components/item-sharing-indicator';
+import { ReassignOwnerDialog } from '@/components/reassign-owner-dialog';
 
 /**
  * Client-side wrapper around the items list. Owns three bits of UI
@@ -91,6 +94,15 @@ export function ItemsView({ items, currentUser }: Props) {
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [sortBy, setSortBy] = useState<SortBy>('updated-desc');
   const [typeFilter, setTypeFilter] = useState<Set<ItemType>>(new Set());
+  // Bulk-select state: ids of items the current user has ticked for
+  // ownership reassignment. Kept as a Set so toggles are O(1). Only
+  // items the user can manage (their own + all for admins) can land
+  // here — gating happens in ItemGrid where each row is rendered.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showReassign, setShowReassign] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const router = useRouter();
 
   // Rehydrate persisted preferences on mount. Running this lazily
   // (not as a useState initializer) keeps the component SSR-safe —
@@ -166,6 +178,87 @@ export function ItemsView({ items, currentUser }: Props) {
     setTypeFilter(new Set());
   }
 
+  // Items the user can manage (toggle into the selection). Admins can
+  // manage everything; everyone else only their own. Bulk ops act
+  // exclusively on this subset so the action bar can't trigger a 403
+  // partway through a batch.
+  const manageableIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const it of filteredItems) {
+      if (currentUser.orgRole === 'admin' || it.ownerId === currentUser.id) {
+        ids.add(it.id);
+      }
+    }
+    return ids;
+  }, [filteredItems, currentUser]);
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    // Ticking the header checkbox ticks every manageable row in the
+    // current filtered view. If they're already all selected, this
+    // clears just the visible-and-manageable ones (leaving any
+    // stale selections from a previous filter alone).
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected = Array.from(manageableIds).every((id) => next.has(id));
+      if (allSelected) {
+        for (const id of manageableIds) next.delete(id);
+      } else {
+        for (const id of manageableIds) next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  async function handleBulkReassign(
+    newOwnerId: string,
+    keepPreviousOwnerAccess: 'view' | 'edit' | 'admin' | null,
+  ) {
+    setBulkSaving(true);
+    setBulkError(null);
+    try {
+      const res = await fetch('/api/portal/items/bulk/reassign-owner', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          itemIds: Array.from(selected),
+          newOwnerId,
+          keepPreviousOwnerAccess,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const msg =
+          (body as { message?: string | string[] }).message ??
+          `HTTP ${res.status}`;
+        throw new Error(Array.isArray(msg) ? msg.join('; ') : msg);
+      }
+      setShowReassign(false);
+      setSelected(new Set());
+      // Refresh the server-rendered list so ownerId / owner fields
+      // reflect the new reality. The alternative (local state patch)
+      // would be faster but would risk drift with the "keep previous
+      // access" share rows the API may or may not have created.
+      router.refresh();
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : 'Reassign failed');
+    } finally {
+      setBulkSaving(false);
+    }
+  }
+
   return (
     <div>
       <Toolbar
@@ -182,12 +275,86 @@ export function ItemsView({ items, currentUser }: Props) {
         totalCount={items.length}
         filteredCount={filteredItems.length}
       />
+      {selected.size > 0 ? (
+        <BulkActionBar
+          count={selected.size}
+          onReassign={() => setShowReassign(true)}
+          onClear={clearSelection}
+        />
+      ) : null}
       <ItemsBody
         items={filteredItems}
         viewMode={viewMode}
         groupBy={groupBy}
         currentUser={currentUser}
+        selected={selected}
+        manageableIds={manageableIds}
+        onToggleSelected={toggleSelected}
+        onToggleAll={selectAllVisible}
       />
+      {showReassign ? (
+        <ReassignOwnerDialog
+          heading={`Reassign ${selected.size} ${selected.size === 1 ? 'item' : 'items'}`}
+          subheading="Pick the new owner; each item's existing shares are preserved."
+          saving={bulkSaving}
+          onClose={() => {
+            if (!bulkSaving) {
+              setShowReassign(false);
+              setBulkError(null);
+            }
+          }}
+          onSubmit={handleBulkReassign}
+        />
+      ) : null}
+      {bulkError ? (
+        <div className="fixed bottom-4 right-4 max-w-md rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger shadow-raised">
+          {bulkError}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Sticky bar that appears when one or more items are selected. */
+function BulkActionBar({
+  count,
+  onReassign,
+  onClear,
+}: {
+  count: number;
+  onReassign: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="sticky top-0 z-10 mb-3 flex items-center justify-between gap-3 rounded-md border border-accent/30 bg-accent/5 px-3 py-2 shadow-sm">
+      <div className="flex items-center gap-3 text-sm">
+        <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">
+            {count}
+          </span>
+          selected
+        </span>
+        <button
+          type="button"
+          onClick={onClear}
+          className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-1"
+        >
+          <X className="h-3 w-3" />
+          Clear
+        </button>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onReassign}
+          className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent/90"
+        >
+          <UserRound className="h-3.5 w-3.5" />
+          Reassign owner
+        </button>
+      </div>
     </div>
   );
 }
@@ -385,9 +552,22 @@ interface BodyProps {
   viewMode: ViewMode;
   groupBy: GroupBy;
   currentUser: { id: string; orgRole: string };
+  selected: Set<string>;
+  manageableIds: Set<string>;
+  onToggleSelected: (id: string) => void;
+  onToggleAll: () => void;
 }
 
-function ItemsBody({ items, viewMode, groupBy, currentUser }: BodyProps) {
+function ItemsBody({
+  items,
+  viewMode,
+  groupBy,
+  currentUser,
+  selected,
+  manageableIds,
+  onToggleSelected,
+  onToggleAll,
+}: BodyProps) {
   if (items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border bg-surface-1 px-6 py-10 text-center text-sm text-muted">
@@ -402,6 +582,10 @@ function ItemsBody({ items, viewMode, groupBy, currentUser }: BodyProps) {
         items={items}
         viewMode={viewMode}
         currentUser={currentUser}
+        selected={selected}
+        manageableIds={manageableIds}
+        onToggleSelected={onToggleSelected}
+        onToggleAll={onToggleAll}
       />
     );
   }
@@ -436,6 +620,10 @@ function ItemsBody({ items, viewMode, groupBy, currentUser }: BodyProps) {
               items={group}
               viewMode={viewMode}
               currentUser={currentUser}
+              selected={selected}
+              manageableIds={manageableIds}
+              onToggleSelected={onToggleSelected}
+              onToggleAll={onToggleAll}
             />
           </section>
         );
@@ -450,9 +638,21 @@ interface GridProps {
   items: ItemWithShares[];
   viewMode: ViewMode;
   currentUser: { id: string; orgRole: string };
+  selected: Set<string>;
+  manageableIds: Set<string>;
+  onToggleSelected: (id: string) => void;
+  onToggleAll: () => void;
 }
 
-function ItemGrid({ items, viewMode, currentUser }: GridProps) {
+function ItemGrid({
+  items,
+  viewMode,
+  currentUser,
+  selected,
+  manageableIds,
+  onToggleSelected,
+  onToggleAll,
+}: GridProps) {
   if (viewMode === 'card') {
     return (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -461,46 +661,79 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
             currentUser.id === item.ownerId || currentUser.orgRole === 'admin';
           const Icon = getItemTypeIcon(item.type);
           return (
-            <ItemCard
-              key={item.id}
-              item={item}
-              href={`/items/${item.id}`}
-              fallbackIcon={<Icon />}
-              headerExtra={
-                <ItemSharingIndicator
-                  itemId={item.id}
-                  itemTitle={item.title}
-                  access={item.access}
-                  shares={item.shares}
-                  canManage={canManage}
-                  currentUserId={currentUser.id}
-                  stopParentLink
-                />
-              }
-            />
+            <div key={item.id} className="group relative">
+              {canManage ? (
+                <label
+                  // Absolute-positioned checkbox so it sits on top of
+                  // the card thumbnail without disrupting the grid
+                  // cell math. Stops propagation so ticking doesn't
+                  // also trigger the card's navigation link.
+                  className={`absolute left-2 top-2 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded border bg-surface-1/90 backdrop-blur transition-opacity ${
+                    selected.has(item.id)
+                      ? 'border-accent opacity-100'
+                      : 'border-border opacity-0 group-hover:opacity-100'
+                  }`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(item.id)}
+                    onChange={() => onToggleSelected(item.id)}
+                    className="h-3.5 w-3.5"
+                    aria-label={`Select ${item.title}`}
+                  />
+                </label>
+              ) : null}
+              <ItemCard
+                item={item}
+                href={`/items/${item.id}`}
+                fallbackIcon={<Icon />}
+                headerExtra={
+                  <ItemSharingIndicator
+                    itemId={item.id}
+                    itemTitle={item.title}
+                    access={item.access}
+                    shares={item.shares}
+                    canManage={canManage}
+                    currentUserId={currentUser.id}
+                    stopParentLink
+                  />
+                }
+              />
+            </div>
           );
         })}
       </div>
     );
   }
 
-  // List view: compact rows in a CSS grid so every column (icon,
-  // title/desc, type, updated-at, sharing, chevron) aligns vertically
-  // across rows. Previously each row was flexbox with ad-hoc widths,
-  // which made dates and sharing chips wander across rows.
-  //
-  // overflow-visible on the <ul> so the sharing popover can escape the
-  // card (the list's rounded-lg corners are kept crisp by clipping
-  // only the top and bottom rows individually).
+  // List view: compact rows in a CSS grid so every column (checkbox,
+  // icon, title/desc, type, updated-at, sharing, chevron) aligns
+  // vertically across rows. A checkbox column was prepended to support
+  // bulk select + reassign; it's a fixed 1.5rem-wide column so the
+  // layout is pixel-stable whether or not the user has admin rights
+  // on any given row.
+  const allManageableSelected =
+    manageableIds.size > 0 &&
+    Array.from(manageableIds).every((id) => selected.has(id));
   return (
     <ul className="divide-y divide-border rounded-lg border border-border bg-surface-1">
-      {/* Header row: surfaces the columns so the list reads like a
-          table, which matters once there are many rows. The two
-          `auto` edge columns use explicit placeholders (1rem wide +
-          a chevron-sized trailing span) so the data rows — whose
-          first cell is a 1rem icon and whose last cell is a
-          1rem chevron — line up pixel-for-pixel with the headers. */}
-      <li className="hidden grid-cols-[auto_minmax(0,1fr)_8rem_8rem_7rem_9rem_auto] items-center gap-3 border-b border-border bg-surface-2 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted sm:grid">
+      {/* Header row. Grid template has an extra 1.5rem leading column
+          for the checkbox. The "select all visible" checkbox only
+          appears when the current user can manage at least one row
+          in this group — otherwise it'd be a no-op. */}
+      <li className="hidden grid-cols-[1.5rem_auto_minmax(0,1fr)_8rem_8rem_7rem_9rem_auto] items-center gap-3 border-b border-border bg-surface-2 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted sm:grid">
+        {manageableIds.size > 0 ? (
+          <input
+            type="checkbox"
+            checked={allManageableSelected}
+            onChange={onToggleAll}
+            className="h-3.5 w-3.5 cursor-pointer"
+            aria-label="Select all manageable items in this group"
+          />
+        ) : (
+          <span className="h-3.5 w-3.5" aria-hidden="true" />
+        )}
         <span className="h-4 w-4" aria-hidden="true" />
         <span>Title</span>
         <span>Type</span>
@@ -522,9 +755,31 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
             ? 'you'
             : (item.owner.fullName?.trim() || item.owner.username)
           : item.ownerId.slice(0, 8);
+        const isSelected = selected.has(item.id);
         return (
-          <li key={item.id} className="group">
-            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-surface-2 sm:grid-cols-[auto_minmax(0,1fr)_8rem_8rem_7rem_9rem_auto]">
+          <li
+            key={item.id}
+            className={`group ${isSelected ? 'bg-accent/5' : ''}`}
+          >
+            <div className="grid grid-cols-[1.5rem_auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-surface-2 sm:grid-cols-[1.5rem_auto_minmax(0,1fr)_8rem_8rem_7rem_9rem_auto]">
+              {/* Checkbox: rendered as a label that swallows its own
+                  click so the row's Link doesn't fire under it. */}
+              {canManage ? (
+                <label
+                  className="flex h-6 w-6 -ml-1 cursor-pointer items-center justify-center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggleSelected(item.id)}
+                    className="h-3.5 w-3.5 cursor-pointer"
+                    aria-label={`Select ${item.title}`}
+                  />
+                </label>
+              ) : (
+                <span className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
               <Link
                 href={`/items/${item.id}`}
                 className="contents"
