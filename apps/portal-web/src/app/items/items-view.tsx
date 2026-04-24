@@ -77,6 +77,7 @@ const TYPE_LABELS: Record<ItemType, string> = {
   tool: 'Tool',
   widget_package: 'Widget package',
   pick_list: 'Pick list',
+  geo_boundary: 'Geo boundary',
 };
 
 const ACCESS_LABELS: Record<string, string> = {

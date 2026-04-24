@@ -33,6 +33,7 @@ import type {
 import {
   DEFAULT_ARCGIS_SERVICE,
   DEFAULT_FEATURE_SERVICE_V3,
+  DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
@@ -88,6 +89,12 @@ const TYPE_OPTIONS: TypeOption[] = [
     label: 'Pick list',
     desc: 'Shared list of codes + labels referenced by fields, forms, and filters.',
     Icon: ListChecks,
+  },
+  {
+    value: 'geo_boundary',
+    label: 'Geo boundary',
+    desc: 'A named region (polygon) reused across shares, maps, and filters.',
+    Icon: MapIcon,
   },
   {
     value: 'form',
@@ -347,6 +354,10 @@ export function NewItemWizard() {
       // manual entry, CSV / XLSX upload, and paste-from-clipboard
       // import, so the wizard doesn't need a custom builder step.
       data = DEFAULT_PICK_LIST;
+    } else if (type === 'geo_boundary') {
+      // Start an empty boundary; detail-page editor lets the user
+      // draw, upload, or paste the geometry.
+      data = DEFAULT_GEO_BOUNDARY;
     } else {
       data = {};
     }

@@ -41,6 +41,7 @@ const ITEM_TYPE_VALUES = [
   'tool',
   'widget_package',
   'pick_list',
+  'geo_boundary',
 ] as const;
 
 class CreateItemDto {

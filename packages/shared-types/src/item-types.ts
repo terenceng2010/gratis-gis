@@ -23,6 +23,7 @@ export const ITEM_TYPES = [
   'tool',
   'widget_package',
   'pick_list',
+  'geo_boundary',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
