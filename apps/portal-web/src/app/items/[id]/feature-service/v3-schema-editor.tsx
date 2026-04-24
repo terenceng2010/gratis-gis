@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Check, Loader2, Save } from 'lucide-react';
 import type { FeatureServiceDataV3 } from '@gratis-gis/shared-types';
 import { FeatureServiceBuilder } from '@/app/items/new/feature-service-builder';
+import { V3LayerDataPanel } from './v3-layer-data-panel';
 
 /**
  * Detail-page schema editor for v3 feature_service items.
@@ -93,12 +94,21 @@ export function FeatureServiceV3SchemaEditor({
       <div className="rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-ink-1">
         <p className="font-medium">Multi-layer feature service (v3)</p>
         <p className="mt-0.5 text-muted">
-          Edit layers, tables, fields, pick lists, and constraints below.
-          Per-feature editing and real PostGIS table provisioning come
-          online when the backend picks up v3 (Phase C); for now, schema
-          changes are saved to the item so the configuration sticks.
+          The builder below edits schema; the panel above imports data
+          into whichever layer you pick. Saving the schema re-runs table
+          reconciliation on the backend (new columns added, dropped
+          layers removed).
         </p>
       </div>
+
+      {/* Data-import panel first: for most authors the first thing they
+          want to do on the detail page is actually load data into the
+          layer tables that were provisioned at create time. */}
+      <V3LayerDataPanel
+        itemId={itemId}
+        layers={data.layers}
+        canEdit={canEdit}
+      />
 
       <fieldset
         disabled={!canEdit}
