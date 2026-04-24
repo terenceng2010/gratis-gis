@@ -556,7 +556,7 @@ export class FeaturesService {
       ...params,
     );
     if (!rows.length) throw new NotFoundException('Feature not found');
-    return rowToFeature(rows[0], true);
+    return rowToFeature(rows[0]!, true);
   }
 
   /**
@@ -731,6 +731,10 @@ export class FeaturesService {
       user.id,
     );
 
-    return rowToFeature(rows[0], true);
+    if (!rows.length) {
+      throw new NotFoundException('Insert did not return a row');
+    }
+    return rowToFeature(rows[0]!, true);
   }
+
 }

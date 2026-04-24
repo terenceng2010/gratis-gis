@@ -14,6 +14,7 @@ import { FeaturesModule } from './features/features.module.js';
 import { MaintenanceModule } from './maintenance/maintenance.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { BasemapsModule } from './basemaps/basemaps.module.js';
+import { V3FeaturesModule } from './features-v3/v3-features.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
 @Module({
@@ -30,6 +31,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     MaintenanceModule,
     AdminModule,
     BasemapsModule,
+    V3FeaturesModule,
   ],
   controllers: [HealthController],
   providers: [

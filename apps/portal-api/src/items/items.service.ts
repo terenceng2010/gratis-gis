@@ -9,6 +9,10 @@ import {
   normalizeArcgisUrl,
   REFERENCER_TYPES,
 } from './dependency-extractor.js';
+import {
+  V3TablesService,
+  type V3LayerShape,
+} from '../features-v3/v3-tables.service.js';
 
 // Optional fields use `| undefined` explicitly so class-validator DTOs
 // (which leave unset keys present-as-undefined) can satisfy these types
@@ -45,6 +49,7 @@ export class ItemsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sharing: SharingService,
+    private readonly v3Tables: V3TablesService,
   ) {}
 
   list(user: AuthUser, opts: { mine?: boolean; type?: ItemType; q?: string } = {}) {
@@ -234,8 +239,8 @@ export class ItemsService {
     return { ...(data as Record<string, unknown>), layers: out };
   }
 
-  create(user: AuthUser, input: CreateItemInput) {
-    return this.prisma.item.create({
+  async create(user: AuthUser, input: CreateItemInput) {
+    const row = await this.prisma.item.create({
       data: {
         orgId: user.orgId,
         ownerId: user.id,
@@ -248,6 +253,32 @@ export class ItemsService {
         ...(input.thumbnailUrl ? { thumbnailUrl: input.thumbnailUrl } : {}),
       },
     });
+    // v3 feature-service items: provision a PostGIS table per layer
+    // defined in the builder. Safe to run inline because each
+    // $executeRawUnsafe is idempotent; if the item has no layers yet
+    // (empty builder), this is a no-op.
+    const layers = readV3Layers(row.data);
+    if (row.type === 'feature_service' && layers !== null) {
+      await this.v3Tables.reconcile(row.id, [], layers);
+    }
+    return row;
+  }
+
+  /**
+   * Throws ForbiddenException if the caller can't edit the item.
+   * Re-queries shares to make the check deterministic regardless of
+   * whether the caller already has a stale share list.
+   */
+  async assertCanEdit(user: AuthUser, id: string): Promise<void> {
+    const item = await this.get(user, id);
+    const shares = await this.prisma.itemShare.findMany({
+      where: { itemId: id },
+    });
+    if (!this.sharing.canEdit(user, item, shares)) {
+      throw new ForbiddenException(
+        'You do not have edit permission on this item',
+      );
+    }
   }
 
   async update(user: AuthUser, id: string, input: UpdateItemInput) {
@@ -256,7 +287,9 @@ export class ItemsService {
     if (!this.sharing.canEdit(user, item, shares)) {
       throw new ForbiddenException('You do not have edit permission on this item');
     }
-    return this.prisma.item.update({
+    const prevLayers =
+      item.type === 'feature_service' ? readV3Layers(item.data) : null;
+    const updated = await this.prisma.item.update({
       where: { id },
       data: {
         ...(input.title !== undefined && { title: input.title }),
@@ -267,6 +300,19 @@ export class ItemsService {
         ...(input.thumbnailUrl !== undefined && { thumbnailUrl: input.thumbnailUrl }),
       },
     });
+    // v3: reconcile layer tables against the updated schema. prev lets
+    // us drop tables for layers that were removed from the schema;
+    // reconcile is idempotent for layers that stayed.
+    const nextLayers =
+      updated.type === 'feature_service' ? readV3Layers(updated.data) : null;
+    if (nextLayers !== null) {
+      await this.v3Tables.reconcile(
+        updated.id,
+        prevLayers ?? [],
+        nextLayers,
+      );
+    }
+    return updated;
   }
 
   /**
@@ -316,14 +362,19 @@ export class ItemsService {
     if (!this.sharing.canAdmin(user, item)) {
       throw new ForbiddenException('Only the owner or an org admin can purge an item');
     }
-    // Drop the PostGIS feature table before removing the item row so
-    // we can still reference the item id to build the table name.
+    // Drop any backing PostGIS tables before removing the item row so
+    // we can still reference the item id to build the table name(s).
     if (item.type === 'feature_service') {
-      const data = item.data as { storageType?: string } | null;
-      if (data?.storageType === 'postgis') {
+      const data = item.data as { version?: number; storageType?: string } | null;
+      // v2 (single table per item)
+      if (data?.storageType === 'postgis' && data?.version !== 3) {
         const tbl = `fs_${id.replace(/-/g, '')}`;
-        // Best-effort; if the table never existed nothing breaks.
         await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tbl}"`);
+      }
+      // v3 (one table per layer)
+      const v3Layers = readV3Layers(item.data);
+      if (v3Layers !== null) {
+        await this.v3Tables.dropAll(id, v3Layers.map((l) => l.id));
       }
     }
     await this.prisma.item.delete({ where: { id } });
@@ -663,4 +714,53 @@ export class ItemsService {
       orderBy: { title: 'asc' },
     });
   }
+}
+
+/**
+ * Narrow an item's data payload to the v3 layer list when it's a v3
+ * feature_service. Returns null for v1/v2 items (so callers can skip
+ * the v3 reconcile path) or when the payload doesn't look like a
+ * valid v3 shape.
+ */
+function readV3Layers(data: unknown): V3LayerShape[] | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as { version?: unknown; layers?: unknown };
+  if (d.version !== 3) return null;
+  if (!Array.isArray(d.layers)) return [];
+  return d.layers
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const l = raw as Record<string, unknown>;
+      const id = typeof l.id === 'string' ? l.id : '';
+      if (!id) return null;
+      const gt = l.geometryType;
+      const geometryType: V3LayerShape['geometryType'] =
+        gt === 'point' || gt === 'line' || gt === 'polygon' ? gt : null;
+      const fields: NonNullable<V3LayerShape['fields']> = Array.isArray(
+        l.fields,
+      )
+        ? (l.fields as Array<Record<string, unknown>>)
+            .map((f) => {
+              const name = typeof f.name === 'string' ? f.name : '';
+              const type: 'string' | 'number' | 'boolean' | 'date' =
+                f.type === 'number' ||
+                f.type === 'boolean' ||
+                f.type === 'date'
+                  ? f.type
+                  : 'string';
+              return { name, type };
+            })
+            .filter((f) => f.name.length > 0)
+        : [];
+      const out: V3LayerShape = {
+        id,
+        geometryType,
+        fields,
+      };
+      if (typeof l.parentFkColumn === 'string' && l.parentFkColumn.length > 0) {
+        out.parentFkColumn = l.parentFkColumn;
+      }
+      return out;
+    })
+    .filter((l): l is V3LayerShape => l !== null);
 }
