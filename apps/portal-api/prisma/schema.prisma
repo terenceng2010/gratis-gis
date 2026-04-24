@@ -68,6 +68,7 @@ enum ItemType {
   notebook
   tool
   widget_package             @map("widget-package")
+  pick_list                  @map("pick-list")
 }
 
 // ---------- Tables ----------
@@ -190,6 +191,13 @@ model ItemShare {
   principalId   String          @map("principal_id") @db.Uuid
   permission    SharePermission @default(view)
   createdAt     DateTime        @default(now()) @map("created_at")
+
+  /// Optional geographic restriction. When set, the principal can
+  /// only see features whose geometry intersects this polygon, and
+  /// items whose bbox intersects it. Stored as GeoJSON (EPSG:4326)
+  /// so the frontend can draw / edit without a coordinate transform.
+  /// Null = no geographic restriction (full share grant).
+  geoLimit Json? @map("geo_limit")
 
   item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
 

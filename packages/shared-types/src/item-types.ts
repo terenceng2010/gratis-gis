@@ -22,6 +22,7 @@ export const ITEM_TYPES = [
   'notebook',
   'tool',
   'widget_package',
+  'pick_list',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];

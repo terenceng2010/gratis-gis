@@ -97,7 +97,7 @@ export class IngestController {
       throw new ForbiddenException('You do not have edit permission on this item.');
     }
 
-    const { geojson, fields, driver } = await this.ingest.fileToGeoJson(
+    const { geojson, fields, driver, sourceSrs } = await this.ingest.fileToGeoJson(
       file.buffer,
       file.originalname,
     );
@@ -135,6 +135,15 @@ export class IngestController {
       featureCount: stats.featureCount,
       bbox: stats.bbox,
       updatedAt: new Date().toISOString(),
+      source: {
+        fileName: file.originalname,
+        format: driverToFormat(driver),
+        sizeBytes: file.size,
+        importedAt: new Date().toISOString(),
+        importedBy: user.id,
+        note: `driver: ${driver}`,
+        sourceSrs,
+      },
     };
 
     await this.prisma.item.update({
@@ -149,6 +158,7 @@ export class IngestController {
       featureCount: stats.featureCount,
       bbox: stats.bbox,
       fields: nextData.fields,
+      sourceSrs,
     };
   }
 
@@ -199,7 +209,7 @@ export class IngestController {
     }
     await this.items.assertCanEdit(user, itemId);
 
-    const { geojson, driver, layerName } = await this.ingest.fileLayerToGeoJson(
+    const { geojson, driver, layerName, sourceSrs } = await this.ingest.fileLayerToGeoJson(
       file.buffer,
       file.originalname,
       sourceLayer,
@@ -220,6 +230,76 @@ export class IngestController {
       }),
       user,
     );
-    return { driver, sourceLayer: layerName, inserted };
+
+    // Stamp provenance on the layer so the detail page can render
+    // "Imported from nest-points.geojson on 4/24/2026 by Mateo". We
+    // re-read the item rather than rely on the earlier snapshot since
+    // insertFeatures may have mutated bbox / featureCount in between.
+    await this.stampV3LayerSource(itemId, layerId, {
+      fileName: file.originalname,
+      format: driverToFormat(driver),
+      sizeBytes: file.size,
+      importedAt: new Date().toISOString(),
+      importedBy: user.id,
+      note: `driver: ${driver}`,
+      sourceSrs,
+    });
+
+    return { driver, sourceLayer: layerName, inserted, sourceSrs };
   }
+
+  /**
+   * Merge a `source` block onto the named layer inside the item's
+   * v3 data blob. Read-modify-write is safe here: this endpoint is
+   * the only writer of layer.source, and we guard with canEdit above.
+   */
+  private async stampV3LayerSource(
+    itemId: string,
+    layerId: string,
+    source: {
+      fileName: string;
+      format: string;
+      sizeBytes: number;
+      importedAt: string;
+      importedBy: string;
+      note?: string;
+      sourceSrs?: string | null;
+    },
+  ) {
+    const row = await this.prisma.item.findUnique({
+      where: { id: itemId },
+      select: { data: true },
+    });
+    const data = row?.data as
+      | { version?: number; layers?: Array<Record<string, unknown>> }
+      | null;
+    if (!data || data.version !== 3 || !Array.isArray(data.layers)) return;
+    const nextLayers = data.layers.map((l) =>
+      (l as { id?: string }).id === layerId ? { ...l, source } : l,
+    );
+    const nextData = { ...(data as object), layers: nextLayers };
+    await this.prisma.item.update({
+      where: { id: itemId },
+      data: { data: nextData as unknown as Prisma.InputJsonValue },
+    });
+  }
+}
+
+/**
+ * Map GDAL driver strings we emit to the format enum the shared
+ * FeatureServiceSource type exposes. Unknown drivers fall through to
+ * 'api' so the shape stays strict on the client side.
+ */
+function driverToFormat(
+  driver: string,
+): 'geojson' | 'kml' | 'kmz' | 'shapefile' | 'gdb' | 'xlsx' | 'csv' | 'manual' | 'api' {
+  const d = driver.toLowerCase();
+  if (d.includes('geojson')) return 'geojson';
+  if (d.includes('kmz')) return 'kmz';
+  if (d.includes('kml')) return 'kml';
+  if (d.includes('shape') || d.includes('esri shapefile')) return 'shapefile';
+  if (d.includes('filegdb') || d.includes('openfilegdb')) return 'gdb';
+  if (d.includes('xlsx') || d.includes('excel')) return 'xlsx';
+  if (d.includes('csv')) return 'csv';
+  return 'api';
 }

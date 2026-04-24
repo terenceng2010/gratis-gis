@@ -33,6 +33,14 @@ export interface ItemShare {
   principalId: string;
   permission: SharePermission;
   createdAt: ISODateString;
+  /**
+   * Optional GeoJSON polygon / multipolygon (EPSG:4326) that restricts
+   * what this principal sees on the item. Null / undefined = no
+   * geographic restriction. When present, feature queries clip to rows
+   * whose geometry intersects it, and items whose bbox doesn't touch
+   * it are hidden from the grantee's list view.
+   */
+  geoLimit?: unknown | null;
 }
 
 /**
@@ -42,6 +50,18 @@ export interface ItemShare {
  */
 export type ItemWithShares<TData = unknown> = Item<TData> & {
   shares: ItemShare[];
+  /**
+   * Lean owner projection included on list responses so the items
+   * page can render an Owner column without N+1 lookups. Absent on
+   * endpoints that don't join the user table (e.g. per-item GET has
+   * it too, but specialised responses might not).
+   */
+  owner?: {
+    id: string;
+    username: string;
+    fullName: string;
+    avatarUrl: string | null;
+  } | null;
 };
 
 /** Input shape for creating a new Item via the API. */

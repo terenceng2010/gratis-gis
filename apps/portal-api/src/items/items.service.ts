@@ -42,6 +42,14 @@ export interface ShareItemInput {
   principalType: PrincipalType;
   principalId: string;
   permission?: SharePermission | undefined;
+  /**
+   * Optional geographic restriction. When present, the share's
+   * grantee only sees features that intersect this polygon (plus
+   * items whose bbox does). Pass `null` to explicitly clear a
+   * previously-set limit; omit the field to leave it untouched.
+   * GeoJSON in EPSG:4326 — no coordinate transform is applied.
+   */
+  geoLimit?: unknown | null;
 }
 
 @Injectable()
@@ -52,11 +60,32 @@ export class ItemsService {
     private readonly v3Tables: V3TablesService,
   ) {}
 
-  list(user: AuthUser, opts: { mine?: boolean; type?: ItemType; q?: string } = {}) {
+  list(
+    user: AuthUser,
+    opts: {
+      mine?: boolean;
+      type?: ItemType;
+      q?: string;
+      /**
+       * Filter to items owned by a specific user. Intended for the
+       * admin 'user delete → reassign their items' flow. Anyone may
+       * filter by their own id (equivalent to `mine: true`); filtering
+       * by anyone else's id requires org-admin, enforced below.
+       */
+      ownerId?: string;
+    } = {},
+  ) {
     const where: Prisma.ItemWhereInput = opts.mine
       ? { ownerId: user.id, deletedAt: null }
       : this.sharing.visibleWhere(user);
     if (opts.type) where.type = opts.type;
+    if (opts.ownerId && opts.ownerId !== user.id && user.orgRole !== 'admin') {
+      // Non-admins can only filter to their own items.
+      throw new ForbiddenException(
+        'Only org admins can filter items by another user',
+      );
+    }
+    if (opts.ownerId) where.ownerId = opts.ownerId;
     if (opts.q) {
       where.OR = [
         { title: { contains: opts.q, mode: 'insensitive' } },
@@ -68,9 +97,21 @@ export class ItemsService {
     // sharing badges without a second round-trip per item. Most items
     // have zero-to-single-digit share rows, so the extra join is cheap
     // and far better than N+1 fetches on the client.
+    // Also include a lean owner projection (username, fullName, avatar)
+    // so the Owner column can render without N+1 lookups.
     return this.prisma.item.findMany({
       where,
-      include: { shares: true },
+      include: {
+        shares: true,
+        owner: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+          },
+        },
+      },
       orderBy: { updatedAt: 'desc' },
     });
   }
@@ -93,7 +134,20 @@ export class ItemsService {
   async get(user: AuthUser, id: string, opts: { includeTrashed?: boolean } = {}) {
     const item = await this.prisma.item.findUnique({
       where: { id },
-      include: { shares: true },
+      include: {
+        shares: true,
+        // Same lean owner projection the list endpoint uses, so the
+        // detail page header can render "Owner: Mateo Garcia" without
+        // a separate lookup.
+        owner: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+          },
+        },
+      },
     });
     if (!item) throw new NotFoundException('Item not found');
     // Trashed items are invisible to anyone except the owner and org admins,
@@ -484,12 +538,151 @@ export class ItemsService {
     return fc as { type: 'FeatureCollection'; features: unknown[] };
   }
 
+  /**
+   * Change the owner of an item. Gated to the current owner + org
+   * admins. Optionally adds a `view` share for the previous owner so
+   * they don't lose access entirely — handy for "I'm leaving the
+   * team, please take this from me" and audit-friendly reassigns.
+   */
+  async reassignOwner(
+    user: AuthUser,
+    id: string,
+    input: {
+      newOwnerId: string;
+      keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+    },
+  ) {
+    const item = await this.get(user, id);
+    if (!this.sharing.canAdmin(user, item)) {
+      throw new ForbiddenException(
+        'Only the current owner or an org admin can reassign ownership',
+      );
+    }
+    if (input.newOwnerId === item.ownerId) {
+      return item; // no-op — already owned by the target user
+    }
+    // Target user must exist AND be in the same org. Cross-org
+    // reassignment is out of scope — that would leak content across
+    // org boundaries.
+    const newOwner = await this.prisma.user.findUnique({
+      where: { id: input.newOwnerId },
+      select: { id: true, orgId: true, username: true, fullName: true },
+    });
+    if (!newOwner) {
+      throw new BadRequestException('Unknown user');
+    }
+    if (newOwner.orgId !== item.orgId) {
+      throw new BadRequestException(
+        'Cannot reassign an item to a user in a different organization',
+      );
+    }
+
+    const prevOwnerId = item.ownerId;
+
+    // Transaction: update ownership + optionally add a share for the
+    // previous owner, in one round-trip. The share is skipped when
+    // keepPreviousOwnerAccess is null / undefined or when the
+    // previous owner is the caller's own account (they already
+    // carry admin through org role if relevant).
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.item.update({
+        where: { id },
+        data: { ownerId: input.newOwnerId },
+      });
+      if (input.keepPreviousOwnerAccess) {
+        await tx.itemShare.upsert({
+          where: {
+            itemId_principalType_principalId: {
+              itemId: id,
+              principalType: 'user',
+              principalId: prevOwnerId,
+            },
+          },
+          update: { permission: input.keepPreviousOwnerAccess },
+          create: {
+            itemId: id,
+            principalType: 'user',
+            principalId: prevOwnerId,
+            permission: input.keepPreviousOwnerAccess,
+          },
+        });
+      }
+      return updated;
+    });
+  }
+
+  /**
+   * Count how many items a given user owns. Used by the admin-delete
+   * flow to decide whether to force a reassignment step. Respects the
+   * caller's org — the count only includes items in the caller's org
+   * so admins don't see cross-org bleed.
+   */
+  async ownedItemCount(
+    user: AuthUser,
+    targetUserId: string,
+  ): Promise<number> {
+    return this.prisma.item.count({
+      where: {
+        ownerId: targetUserId,
+        orgId: user.orgId,
+        deletedAt: null,
+      },
+    });
+  }
+
+  /**
+   * Bulk reassignment. Applies reassignOwner() across many items in
+   * a single transaction, stopping on the first failure. Useful for
+   * the "delete this user → move their stuff first" flow and for
+   * bulk-select in the items list.
+   */
+  async bulkReassignOwner(
+    user: AuthUser,
+    input: {
+      itemIds: string[];
+      newOwnerId: string;
+      keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+    },
+  ): Promise<{ reassigned: number }> {
+    let reassigned = 0;
+    for (const id of input.itemIds) {
+      const patch: {
+        newOwnerId: string;
+        keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+      } = { newOwnerId: input.newOwnerId };
+      if (input.keepPreviousOwnerAccess !== undefined) {
+        patch.keepPreviousOwnerAccess = input.keepPreviousOwnerAccess;
+      }
+      await this.reassignOwner(user, id, patch);
+      reassigned += 1;
+    }
+    return { reassigned };
+  }
+
   async share(user: AuthUser, id: string, input: ShareItemInput) {
     const item = await this.get(user, id);
     if (!this.sharing.canAdmin(user, item)) {
       throw new ForbiddenException('Only the owner or an org admin can change sharing');
     }
     await this.assertPrincipalExists(input.principalType, input.principalId);
+    // Build the update payload conditionally so `geoLimit: undefined`
+    // doesn't overwrite a previously-set polygon. `null` is the
+    // explicit "clear" signal and DOES pass through to Prisma.
+    const update: Record<string, unknown> = {
+      permission: input.permission ?? 'view',
+    };
+    if (input.geoLimit !== undefined) {
+      update.geoLimit = input.geoLimit;
+    }
+    const create: Record<string, unknown> = {
+      itemId: id,
+      principalType: input.principalType,
+      principalId: input.principalId,
+      permission: input.permission ?? 'view',
+    };
+    if (input.geoLimit !== undefined && input.geoLimit !== null) {
+      create.geoLimit = input.geoLimit;
+    }
     return this.prisma.itemShare.upsert({
       where: {
         itemId_principalType_principalId: {
@@ -498,13 +691,8 @@ export class ItemsService {
           principalId: input.principalId,
         },
       },
-      update: { permission: input.permission ?? 'view' },
-      create: {
-        itemId: id,
-        principalType: input.principalType,
-        principalId: input.principalId,
-        permission: input.permission ?? 'view',
-      },
+      update: update as Prisma.ItemShareUpdateInput,
+      create: create as Prisma.ItemShareCreateInput,
     });
   }
 

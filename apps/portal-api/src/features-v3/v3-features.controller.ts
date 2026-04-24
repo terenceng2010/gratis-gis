@@ -20,9 +20,12 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
+import type { ItemShare } from '@prisma/client';
+
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { ItemsService } from '../items/items.service.js';
+import { SharingService } from '../items/sharing.service.js';
 import { V3FeaturesService } from './v3-features.service.js';
 
 class AppendFeatureDto {
@@ -60,6 +63,7 @@ class UpdateFeatureBodyDto {
 export class V3FeaturesController {
   constructor(
     private readonly items: ItemsService,
+    private readonly sharing: SharingService,
     private readonly v3: V3FeaturesService,
   ) {}
 
@@ -71,8 +75,12 @@ export class V3FeaturesController {
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
   ) {
-    await this.assertV3Layer(user, itemId, layerId, 'read');
-    const opts: { bbox?: [number, number, number, number]; at?: string } = {};
+    const { geoLimit } = await this.assertV3Layer(user, itemId, layerId, 'read');
+    const opts: {
+      bbox?: [number, number, number, number];
+      at?: string;
+      geoLimit?: unknown;
+    } = {};
     if (bbox) {
       const parts = bbox.split(',').map(Number);
       if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
@@ -80,6 +88,7 @@ export class V3FeaturesController {
       }
     }
     if (at) opts.at = at;
+    if (geoLimit) opts.geoLimit = geoLimit;
     return this.v3.listFeatures(itemId, layerId, opts);
   }
 
@@ -136,28 +145,34 @@ export class V3FeaturesController {
   }
 
   /** Verify the item exists, is a v3 feature_service, the caller can
-   *  read (or edit) it, and the named layer is part of its schema. */
+   *  read (or edit) it, and the named layer is part of its schema.
+   *  Returns the geographic restriction (if any) that applies to this
+   *  caller on this item so the query can clip rows to the allowed
+   *  area. Null means no restriction — either because the caller has
+   *  unrestricted access (owner / admin / org / public) or because
+   *  their share(s) don't carry a polygon. */
   private async assertV3Layer(
     user: AuthUser,
     itemId: string,
     layerId: string,
     mode: 'read' | 'write',
-  ): Promise<void> {
+  ): Promise<{ geoLimit: unknown | null }> {
     const item = await this.items.get(user, itemId);
     if (item.type !== 'feature_service') {
       throw new NotFoundException('Not a feature_service item');
     }
     const data = item.data as {
       version?: number;
-      layers?: Array<{ id: string }>;
+      layers?: Array<{ id: string; parentLayerId?: string }>;
     } | null;
     if (data?.version !== 3) {
       throw new NotFoundException(
         'Item is not a v3 multi-layer feature_service',
       );
     }
-    const layerExists = (data.layers ?? []).some((l) => l.id === layerId);
-    if (!layerExists) {
+    const layers = data.layers ?? [];
+    const layer = layers.find((l) => l.id === layerId);
+    if (!layer) {
       throw new NotFoundException(
         `Layer ${layerId} is not part of this item's schema`,
       );
@@ -166,5 +181,20 @@ export class V3FeaturesController {
       // Authoritative edit gate: same helper update() uses.
       await this.items.assertCanEdit(user, itemId);
     }
+    // Geo-limit is only meaningful on read — writes go through
+    // canEdit which doesn't use a polygon today (the share either
+    // grants edit or doesn't). For reads, consult every matching
+    // share's polygon to build the union. Owners / admins return
+    // null (no restriction).
+    let geoLimit: unknown | null = null;
+    if (mode === 'read') {
+      const withShares = item as typeof item & { shares?: ItemShare[] };
+      geoLimit = this.sharing.geoLimitFor(
+        user,
+        item,
+        withShares.shares ?? [],
+      );
+    }
+    return { geoLimit };
   }
 }

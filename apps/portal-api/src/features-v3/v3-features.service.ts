@@ -46,11 +46,18 @@ export class V3FeaturesService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** Current-state feature collection for a layer. Supports bbox
-   *  filter + point-in-time (?at=) in the usual temporal-table form. */
+   *  filter + point-in-time (?at=) in the usual temporal-table form,
+   *  plus an optional `geoLimit` GeoJSON geometry that intersects
+   *  every returned row (used to enforce per-share geographic
+   *  restrictions). */
   async listFeatures(
     itemId: string,
     layerId: string,
-    opts: { bbox?: [number, number, number, number]; at?: string } = {},
+    opts: {
+      bbox?: [number, number, number, number];
+      at?: string;
+      geoLimit?: unknown;
+    } = {},
   ): Promise<{ type: 'FeatureCollection'; features: V3FeatureOut[] }> {
     const tbl = toV3TableName(itemId, layerId);
     const whereClauses: string[] = [];
@@ -68,6 +75,18 @@ export class V3FeaturesService {
       const n = params.length;
       whereClauses.push(
         `geom && ST_MakeEnvelope($${n - 3}, $${n - 2}, $${n - 1}, $${n}, 4326)`,
+      );
+    }
+    if (opts.geoLimit) {
+      // Rows either intersect the allowed polygon, or have no geometry
+      // at all (attribute-only rows leak through here and are filtered
+      // by the controller's parent-layer inheritance logic for related
+      // tables). ST_GeomFromGeoJSON handles Polygon, MultiPolygon, and
+      // GeometryCollection variants in the same call.
+      params.push(JSON.stringify(opts.geoLimit));
+      const n = params.length;
+      whereClauses.push(
+        `(geom IS NULL OR ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON($${n}), 4326)))`,
       );
     }
     const sql = `

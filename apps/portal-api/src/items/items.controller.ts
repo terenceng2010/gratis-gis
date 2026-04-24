@@ -40,6 +40,7 @@ const ITEM_TYPE_VALUES = [
   'notebook',
   'tool',
   'widget_package',
+  'pick_list',
 ] as const;
 
 class CreateItemDto {
@@ -67,6 +68,24 @@ class UpdateItemDto {
   @IsOptional() @IsString() @MaxLength(2048) thumbnailUrl?: string | null;
 }
 
+class ReassignOwnerDto {
+  @IsUUID('loose') newOwnerId!: string;
+  // null explicitly clears / skips the courtesy share for the
+  // previous owner; 'view' | 'edit' | 'admin' creates / updates one;
+  // omitted = no courtesy share created.
+  @IsOptional()
+  @IsEnum(['view', 'edit', 'admin'])
+  keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+}
+
+class BulkReassignDto {
+  @IsArray() @IsUUID('loose', { each: true }) itemIds!: string[];
+  @IsUUID('loose') newOwnerId!: string;
+  @IsOptional()
+  @IsEnum(['view', 'edit', 'admin'])
+  keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+}
+
 class ShareDto {
   @IsEnum(['user', 'group']) principalType!: PrincipalType;
   // 'loose' accepts any 8-4-4-4-12 hex string. Real UUIDs coming from Keycloak
@@ -76,6 +95,12 @@ class ShareDto {
 // guarantee via assertPrincipalExists().
 @IsUUID('loose') principalId!: string;
   @IsOptional() @IsEnum(['view', 'edit', 'admin']) permission?: SharePermission;
+  /**
+   * Optional GeoJSON polygon (EPSG:4326) that clips what this
+   * principal can see on the item. Pass `null` to clear. Omit the
+   * field to leave the existing limit untouched.
+   */
+  @IsOptional() geoLimit?: unknown | null;
 }
 
 @ApiTags('items')
@@ -90,13 +115,20 @@ export class ItemsController {
     @Query('mine') mine?: string,
     @Query('type') type?: ItemType,
     @Query('q') q?: string,
+    @Query('ownerId') ownerId?: string,
   ) {
     // Build opts without explicit-undefined keys so `exactOptionalPropertyTypes`
     // is satisfied. Passing `{ type: undefined }` is not the same as omitting it.
-    const opts: { mine?: boolean; type?: ItemType; q?: string } = {};
+    const opts: {
+      mine?: boolean;
+      type?: ItemType;
+      q?: string;
+      ownerId?: string;
+    } = {};
     if (mine === 'true') opts.mine = true;
     if (type !== undefined) opts.type = type;
     if (q !== undefined) opts.q = q;
+    if (ownerId !== undefined) opts.ownerId = ownerId;
     return this.items.list(user, opts);
   }
 
@@ -213,5 +245,37 @@ export class ItemsController {
     @Body() dto: ShareDto,
   ) {
     return this.items.unshare(user, id, dto);
+  }
+
+  @Patch(':id/owner')
+  reassignOwner(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: ReassignOwnerDto,
+  ) {
+    const patch: {
+      newOwnerId: string;
+      keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+    } = { newOwnerId: dto.newOwnerId };
+    if (dto.keepPreviousOwnerAccess !== undefined) {
+      patch.keepPreviousOwnerAccess = dto.keepPreviousOwnerAccess;
+    }
+    return this.items.reassignOwner(user, id, patch);
+  }
+
+  @Post('bulk/reassign-owner')
+  bulkReassign(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: BulkReassignDto,
+  ) {
+    const patch: {
+      itemIds: string[];
+      newOwnerId: string;
+      keepPreviousOwnerAccess?: 'view' | 'edit' | 'admin' | null;
+    } = { itemIds: dto.itemIds, newOwnerId: dto.newOwnerId };
+    if (dto.keepPreviousOwnerAccess !== undefined) {
+      patch.keepPreviousOwnerAccess = dto.keepPreviousOwnerAccess;
+    }
+    return this.items.bulkReassignOwner(user, patch);
   }
 }

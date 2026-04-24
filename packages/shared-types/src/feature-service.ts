@@ -27,6 +27,10 @@ export type FeatureFieldType = 'string' | 'number' | 'boolean' | 'date';
  *   allowed code/label pairs. The CODE is persisted, the LABEL is what
  *   the UI shows. Codes must match the field's type (strings for a
  *   string field, numbers for a number field).
+ * - `coded-value-ref` references a shared pick_list item. The referenced
+ *   item's entries are resolved at read time, so a single authoritative
+ *   list can back many fields across many feature services. Renaming or
+ *   extending the shared list propagates without touching each field.
  * - `range` restricts a numeric field to a min/max inclusive range.
  *   Not yet rendered in the builder UI; the shape is pinned here so the
  *   data model doesn't change when range support ships.
@@ -35,6 +39,11 @@ export type FieldDomain =
   | {
       type: 'coded-value';
       values: Array<{ code: string | number; label: string }>;
+    }
+  | {
+      type: 'coded-value-ref';
+      /** UUID of a `pick_list` item in the same org. */
+      pickListItemId: string;
     }
   | {
       type: 'range';
@@ -78,6 +87,47 @@ export interface FeatureField {
   storage?: FeatureFieldStorage;
 }
 
+/**
+ * Provenance of the data currently on a feature-service item. Stamped
+ * when features are uploaded or bulk-replaced so authors can see at a
+ * glance what the dataset was built from. Absent on items whose data
+ * was inlined by hand or created before the field was added — the UI
+ * renders "Source not recorded" in that case rather than fabricating
+ * a value.
+ */
+export interface FeatureServiceSource {
+  /** Original filename uploaded by the user, if any. */
+  fileName?: string;
+  /** Canonical source format. 'manual' covers paste-GeoJSON + builder
+   *  seeded schemas; 'api' covers non-UI replace calls. */
+  format:
+    | 'geojson'
+    | 'kml'
+    | 'kmz'
+    | 'shapefile'
+    | 'gdb'
+    | 'xlsx'
+    | 'csv'
+    | 'manual'
+    | 'api';
+  /** Size of the original upload in bytes; optional for non-file sources. */
+  sizeBytes?: number;
+  /** When the current data landed on the item. */
+  importedAt: ISODateString;
+  /** UserId who ran the import. */
+  importedBy: string;
+  /** Per-format note (e.g. 'first sheet', 'driver: ESRI File Geodatabase'). */
+  note?: string;
+  /**
+   * The spatial reference of the source file BEFORE we reprojected
+   * to EPSG:4326 on ingest. Format: "authName:authCode" (e.g.
+   * "EPSG:26911"). Null means the source had no declared SRS so
+   * we assumed it was already 4326. Storage is always 4326 in the
+   * portal regardless of what the source was.
+   */
+  sourceSrs?: string | null;
+}
+
 /** v1: inline GeoJSON storage. */
 export interface FeatureServiceDataV1 {
   version: 1;
@@ -92,6 +142,7 @@ export interface FeatureServiceDataV1 {
     }>;
   };
   updatedAt?: ISODateString;
+  source?: FeatureServiceSource;
 }
 
 /** v2: PostGIS-backed storage. `data.data` is absent; features live in the DB. */
@@ -103,6 +154,7 @@ export interface FeatureServiceDataV2 {
   /** [minX, minY, maxX, maxY] in EPSG:4326. Null when the table is empty. */
   bbox: [number, number, number, number] | null;
   updatedAt?: ISODateString;
+  source?: FeatureServiceSource;
 }
 
 /**
@@ -151,6 +203,10 @@ export interface FeatureServiceLayer {
   featureCount?: number;
   bbox?: [number, number, number, number] | null;
   updatedAt?: ISODateString;
+  /** Provenance of the most recent ingest into this layer. Per-layer
+   *  because different layers in one v3 item might be sourced from
+   *  different files. */
+  source?: FeatureServiceSource;
 }
 
 export interface FeatureServiceDataV3 {
