@@ -24,11 +24,11 @@ Authoritative user record, synced from Keycloak on first login.
 | field | type | notes |
 | --- | --- | --- |
 | id | uuid (PK) | matches Keycloak `sub` claim |
-| org\_id | uuid → Organization | |
+| org\_id | uuid â†’ Organization | |
 | username | text unique | |
 | email | text | |
 | full\_name | text | |
-| org\_role | enum | `viewer` \| `publisher` \| `admin` |
+| org\_role | enum | `viewer` \| `contributor` \| `admin` |
 | created\_at | timestamptz | |
 
 ### Group
@@ -36,19 +36,19 @@ Authoritative user record, synced from Keycloak on first login.
 | field | type | notes |
 | --- | --- | --- |
 | id | uuid (PK) | |
-| org\_id | uuid → Organization | |
+| org\_id | uuid â†’ Organization | |
 | title | text | |
 | description | text | |
 | access | enum | `private` \| `org` \| `public` |
-| owner\_id | uuid → User | |
+| owner\_id | uuid â†’ User | |
 | created\_at | timestamptz | |
 
 ### GroupMember
 
 | field | type | notes |
 | --- | --- | --- |
-| group\_id | uuid → Group | PK part |
-| user\_id | uuid → User | PK part |
+| group\_id | uuid â†’ Group | PK part |
+| user\_id | uuid â†’ User | PK part |
 | role | enum | `member` \| `admin` |
 | joined\_at | timestamptz | |
 
@@ -61,8 +61,8 @@ table, etc.).
 | field | type | notes |
 | --- | --- | --- |
 | id | uuid (PK) | |
-| org\_id | uuid → Organization | |
-| owner\_id | uuid → User | |
+| org\_id | uuid â†’ Organization | |
+| owner\_id | uuid â†’ User | |
 | type | enum `ItemType` | see below |
 | title | text | |
 | description | text | |
@@ -91,7 +91,7 @@ feature-service, see the `feature-view` pattern in
 
 | field | type | notes |
 | --- | --- | --- |
-| item\_id | uuid → Item | PK part |
+| item\_id | uuid â†’ Item | PK part |
 | principal\_type | enum | `user` \| `group`. PK part |
 | principal\_id | uuid | references `user.id` or `group.id` per type. PK part |
 | permission | enum | `view` \| `edit` \| `admin` |
@@ -130,11 +130,11 @@ Given a user `U` and an item `I`, access is granted iff any of:
 3. `I.access == 'org' && I.org_id == U.org_id`
 4. There exists an `ItemShare` row with `item_id = I.id` and either
    `(principal_type='user', principal_id=U.id)` or
-   `(principal_type='group', principal_id ∈ groups(U))`.
+   `(principal_type='group', principal_id âˆˆ groups(U))`.
 
 `groups(U)` is the set of groups the user is a member of. Admin permission
 on an item is granted to the owner and any org admin; edit is granted to
-owner + org admin + users with `ItemShare.permission ∈ {edit, admin}`.
+owner + org admin + users with `ItemShare.permission âˆˆ {edit, admin}`.
 
 ## Spatial Storage Layout
 

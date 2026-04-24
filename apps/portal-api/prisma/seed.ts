@@ -1,5 +1,5 @@
 /**
- * Dev seed. Mirrors the Keycloak realm seed: org `acme` with Mateo (publisher)
+ * Dev seed. Mirrors the Keycloak realm seed: org `acme` with Mateo (contributor)
  * and Bob (admin), plus a group and a couple of example items.
  *
  * Run: `pnpm --filter @gratis-gis/portal-api db:seed`
@@ -16,28 +16,28 @@ const BOB_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const GROUP_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
 async function main() {
-  console.log('→ seeding organization');
+  console.log('â†’ seeding organization');
   const org = await prisma.organization.upsert({
     where: { id: ACME_ID },
     update: {},
     create: { id: ACME_ID, slug: 'acme', name: 'Acme Corp' },
   });
 
-  console.log('→ seeding users');
+  console.log('â†’ seeding users');
   await prisma.user.upsert({
     where: { id: MATEO_ID },
     update: {
       username: 'mateo',
       email: 'mateo@acme.test',
-      fullName: 'Mateo García',
+      fullName: 'Mateo GarcÃ­a',
     },
     create: {
       id: MATEO_ID,
       orgId: org.id,
       username: 'mateo',
       email: 'mateo@acme.test',
-      fullName: 'Mateo García',
-      orgRole: 'publisher',
+      fullName: 'Mateo GarcÃ­a',
+      orgRole: 'contributor',
     },
   });
   await prisma.user.upsert({
@@ -53,7 +53,7 @@ async function main() {
     },
   });
 
-  console.log('→ seeding group');
+  console.log('â†’ seeding group');
   await prisma.group.upsert({
     where: { id: GROUP_ID },
     update: {},
@@ -77,7 +77,7 @@ async function main() {
     create: { groupId: GROUP_ID, userId: BOB_ID, role: 'admin' },
   });
 
-  console.log('→ seeding items');
+  console.log('â†’ seeding items');
 
   // Small demo feature service: a handful of points around the Acme HQ
   // neighborhood with a category attribute so unique-value and filter
@@ -162,7 +162,7 @@ async function main() {
     },
   });
 
-  console.log('✓ seed complete');
+  console.log('âœ“ seed complete');
 }
 
 main()

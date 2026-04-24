@@ -129,7 +129,7 @@
   "roles": {
     "realm": [
       { "name": "viewer", "description": "Can view shared items" },
-      { "name": "publisher", "description": "Can create and share items" },
+      { "name": "contributor", "description": "Can create and share items" },
       { "name": "admin", "description": "Organization administrator" }
     ]
   },
@@ -142,10 +142,10 @@
       "enabled": true,
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "devpassword", "temporary": false }],
-      "realmRoles": ["publisher"],
+      "realmRoles": ["contributor"],
       "attributes": {
         "org": ["acme"],
-        "org_role": ["publisher"]
+        "org_role": ["contributor"]
       }
     },
     {

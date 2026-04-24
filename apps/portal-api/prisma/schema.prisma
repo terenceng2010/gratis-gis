@@ -16,7 +16,7 @@ datasource db {
 
 enum OrgRole {
   viewer
-  publisher
+  contributor
   admin
 }
 

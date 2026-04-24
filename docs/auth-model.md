@@ -33,11 +33,11 @@ Clients:
 | claim | meaning |
 | --- | --- |
 | `sub` | Keycloak user id: becomes `user.id` |
-| `preferred_username` | → `user.username` |
-| `email` | → `user.email` |
-| `name` | → `user.full_name` |
+| `preferred_username` | â†’ `user.username` |
+| `email` | â†’ `user.email` |
+| `name` | â†’ `user.full_name` |
 | `org` (custom) | Organization slug: mapped to `user.org_id` at first login |
-| `org_role` (custom) | `viewer` \| `publisher` \| `admin` |
+| `org_role` (custom) | `viewer` \| `contributor` \| `admin` |
 
 Org assignment and org-role are set in Keycloak via user attributes; the
 portal-api `auth.service` looks them up and upserts the local `User` row on
@@ -52,7 +52,7 @@ gets a typed `AuthUser` injected:
 type AuthUser = {
   id: string;        // user.id
   orgId: string;
-  orgRole: 'viewer' | 'publisher' | 'admin';
+  orgRole: 'viewer' | 'contributor' | 'admin';
   groupIds: string[]; // cached per request, resolved from DB
 };
 ```

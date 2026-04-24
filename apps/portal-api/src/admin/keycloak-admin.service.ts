@@ -56,7 +56,7 @@ export interface KeycloakUserCreateInput {
   /** Optional initial org role attribute; stored as user attribute
    *  `org_role` since Keycloak doesn't have a first-class role field
    *  mapping here without custom mappers. */
-  orgRole?: 'viewer' | 'publisher' | 'admin';
+  orgRole?: 'viewer' | 'contributor' | 'admin';
   /** Optional org slug; stored on the user attribute `org`. */
   org?: string;
   enabled?: boolean;
@@ -67,7 +67,7 @@ export interface KeycloakUserUpdateInput {
   lastName?: string;
   email?: string;
   enabled?: boolean;
-  orgRole?: 'viewer' | 'publisher' | 'admin';
+  orgRole?: 'viewer' | 'contributor' | 'admin';
 }
 
 @Injectable()

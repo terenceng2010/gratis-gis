@@ -40,15 +40,15 @@ export type AdminUserRep = KeycloakUserRep & {
   lastSeenAt: string | null;
 };
 
-type OrgRole = 'viewer' | 'publisher' | 'admin';
+type OrgRole = 'viewer' | 'contributor' | 'admin';
 
 class InviteUserDto {
   @IsString() @MinLength(2) @MaxLength(60) username!: string;
   @IsEmail() email!: string;
   @IsOptional() @IsString() @MaxLength(60) firstName?: string;
   @IsOptional() @IsString() @MaxLength(60) lastName?: string;
-  @IsOptional() @IsEnum(['viewer', 'publisher', 'admin']) orgRole?: OrgRole;
-  /** Defaults to true — the normal invitation flow. */
+  @IsOptional() @IsEnum(['viewer', 'contributor', 'admin']) orgRole?: OrgRole;
+  /** Defaults to true â€” the normal invitation flow. */
   @IsOptional() @IsBoolean() sendSetupEmail?: boolean;
 }
 
@@ -57,12 +57,12 @@ class UpdateUserDto {
   @IsOptional() @IsString() @MaxLength(60) lastName?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
-  @IsOptional() @IsEnum(['viewer', 'publisher', 'admin']) orgRole?: OrgRole;
+  @IsOptional() @IsEnum(['viewer', 'contributor', 'admin']) orgRole?: OrgRole;
 }
 
 /**
  * Admin-only CRUD endpoints for managing users in the built-in
- * Keycloak realm. All paths are gated by AdminGuard — non-admins
+ * Keycloak realm. All paths are gated by AdminGuard â€” non-admins
  * get a 403 regardless of whether the resource exists.
  *
  * Responses are the raw Keycloak user representation plus a

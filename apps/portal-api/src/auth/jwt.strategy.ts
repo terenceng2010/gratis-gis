@@ -42,5 +42,5 @@ export interface KeycloakClaims {
   email: string;
   name: string;
   org?: string;
-  org_role?: 'viewer' | 'publisher' | 'admin';
+  org_role?: 'viewer' | 'contributor' | 'admin';
 }

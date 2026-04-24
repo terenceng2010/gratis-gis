@@ -27,6 +27,20 @@ export class AuthSyncService {
     if (!orgSlug) {
       throw new UnauthorizedException('JWT is missing required "org" claim');
     }
+    // Backward-compat: the role was renamed publisher -> contributor
+    // (see migration 20260424230000) but existing JWTs minted before
+    // the Keycloak realm was re-imported still carry 'publisher'.
+    // Translate at the edge so a stale token doesn't crash the upsert
+    // with an invalid enum value. Safe to remove after every user has
+    // signed out + back in at least once against the updated realm.
+    // Cast to string for the comparison because the claim type no
+    // longer lists 'publisher' — if the runtime value matches we
+    // still want to coerce it.
+    const rawRole = claims.org_role as string | undefined;
+    const normalisedRole: OrgRole =
+      rawRole === 'publisher'
+        ? 'contributor'
+        : ((rawRole as OrgRole | undefined) ?? 'viewer');
 
     const org = await this.prisma.organization.upsert({
       where: { slug: orgSlug },
@@ -45,7 +59,7 @@ export class AuthSyncService {
       update: {
         email: claims.email,
         fullName: claims.name,
-        orgRole: claims.org_role ?? 'viewer',
+        orgRole: normalisedRole,
         orgId: org.id,
         // Every authenticated request touches this record so the
         // housekeeping page can tell "user who last signed in 8
@@ -63,7 +77,7 @@ export class AuthSyncService {
         username: claims.preferred_username,
         email: claims.email,
         fullName: claims.name,
-        orgRole: claims.org_role ?? 'viewer',
+        orgRole: normalisedRole,
         lastSeenAt: new Date(),
       },
     });

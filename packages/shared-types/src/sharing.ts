@@ -5,7 +5,7 @@ export type ItemAccess = 'private' | 'org' | 'public';
 export type SharePermission = 'view' | 'edit' | 'admin';
 
 /** Role a user holds within their Organization. */
-export type OrgRole = 'viewer' | 'publisher' | 'admin';
+export type OrgRole = 'viewer' | 'contributor' | 'admin';
 
 /** Role a user holds within a specific Group. */
 export type GroupRole = 'member' | 'admin';
