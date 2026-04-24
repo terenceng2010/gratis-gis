@@ -18,11 +18,13 @@ import type {
   User as UserT,
   ArcgisServiceData,
   FeatureServiceData,
+  PickListData,
   WebMapData,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
   DEFAULT_FEATURE_SERVICE,
+  DEFAULT_PICK_LIST,
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
@@ -31,10 +33,12 @@ import { apiFetch } from '@/lib/api';
 import { SharingPanel } from './sharing-panel';
 import { ItemDependencies } from './item-dependencies';
 import { DeleteItemButton } from './delete-button';
+import { ReassignOwnerButton } from './reassign-owner-button';
 import { MapEditor } from './web-map/map-editor';
 import { FeatureServiceEditor } from './feature-service/editor';
 import { FeatureServiceV3SchemaEditor } from './feature-service/v3-schema-editor';
 import { ArcgisServiceEditor } from './arcgis-service/editor';
+import { PickListEditor } from './pick-list/editor';
 import { ComingSoon } from './coming-soon';
 
 interface Props {
@@ -170,6 +174,22 @@ export default async function ItemDetailPage({ params }: Props) {
               <Pencil className="h-3.5 w-3.5" />
               Edit
             </Link>
+            <ReassignOwnerButton
+              itemId={item.id}
+              itemTitle={item.title}
+              currentOwnerId={item.ownerId}
+              currentOwnerLabel={(() => {
+                if (item.ownerId === me.id) return 'you';
+                const ownerInfo = (
+                  item as unknown as {
+                    owner?: { fullName?: string; username?: string } | null;
+                  }
+                ).owner;
+                if (ownerInfo?.fullName?.trim()) return ownerInfo.fullName;
+                if (ownerInfo?.username) return ownerInfo.username;
+                return item.ownerId.slice(0, 8);
+              })()}
+            />
             <DeleteItemButton itemId={item.id} itemTitle={item.title} />
           </div>
         ) : null}
@@ -190,7 +210,11 @@ export default async function ItemDetailPage({ params }: Props) {
               <span className="inline-flex items-center gap-1">
                 <User className="h-3 w-3" />
                 Owner:{' '}
-                {item.ownerId === me.id ? 'you' : item.ownerId.slice(0, 8)}
+                {item.ownerId === me.id
+                  ? 'you'
+                  : (item as unknown as { owner?: { fullName?: string; username?: string } | null }).owner?.fullName?.trim() ||
+                    (item as unknown as { owner?: { username?: string } | null }).owner?.username ||
+                    item.ownerId.slice(0, 8)}
               </span>
               {item.tags.length > 0 ? (
                 <span className="text-muted">
@@ -229,7 +253,12 @@ export default async function ItemDetailPage({ params }: Props) {
           </span>
           <span className="inline-flex items-center gap-1">
             <User className="h-3 w-3" />
-            Owner: {item.ownerId === me.id ? 'you' : item.ownerId.slice(0, 8)}
+            Owner:{' '}
+            {item.ownerId === me.id
+              ? 'you'
+              : (item as unknown as { owner?: { fullName?: string; username?: string } | null }).owner?.fullName?.trim() ||
+                (item as unknown as { owner?: { username?: string } | null }).owner?.username ||
+                item.ownerId.slice(0, 8)}
           </span>
         </div>
       )}
@@ -286,6 +315,17 @@ export default async function ItemDetailPage({ params }: Props) {
             initial={{
               ...DEFAULT_ARCGIS_SERVICE,
               ...((item.data ?? {}) as Partial<ArcgisServiceData>),
+            }}
+            canEdit={canManage}
+          />
+        </section>
+      ) : item.type === 'pick_list' ? (
+        <section className="mb-6">
+          <PickListEditor
+            itemId={item.id}
+            initial={{
+              ...DEFAULT_PICK_LIST,
+              ...((item.data ?? {}) as Partial<PickListData>),
             }}
             canEdit={canManage}
           />

@@ -76,6 +76,7 @@ const TYPE_LABELS: Record<ItemType, string> = {
   notebook: 'Notebook',
   tool: 'Tool',
   widget_package: 'Widget package',
+  pick_list: 'Pick list',
 };
 
 const ACCESS_LABELS: Record<string, string> = {
@@ -498,10 +499,11 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
           a chevron-sized trailing span) so the data rows — whose
           first cell is a 1rem icon and whose last cell is a
           1rem chevron — line up pixel-for-pixel with the headers. */}
-      <li className="hidden grid-cols-[auto_minmax(0,1fr)_8rem_7rem_9rem_auto] items-center gap-3 border-b border-border bg-surface-2 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted sm:grid">
+      <li className="hidden grid-cols-[auto_minmax(0,1fr)_8rem_8rem_7rem_9rem_auto] items-center gap-3 border-b border-border bg-surface-2 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted sm:grid">
         <span className="h-4 w-4" aria-hidden="true" />
         <span>Title</span>
         <span>Type</span>
+        <span>Owner</span>
         <span>Updated</span>
         <span>Sharing</span>
         <span className="h-3.5 w-3.5" aria-hidden="true" />
@@ -511,9 +513,17 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
           currentUser.id === item.ownerId || currentUser.orgRole === 'admin';
         const Icon = getItemTypeIcon(item.type);
         const accent = getItemTypeAccent(item.type);
+        // Prefer the lean owner projection joined by the API. Fall
+        // back to a truncated id for pre-existing rows that somehow
+        // reach us without it (shouldn't happen in practice).
+        const ownerLabel = item.owner
+          ? item.owner.id === currentUser.id
+            ? 'you'
+            : (item.owner.fullName?.trim() || item.owner.username)
+          : item.ownerId.slice(0, 8);
         return (
           <li key={item.id} className="group">
-            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-surface-2 sm:grid-cols-[auto_minmax(0,1fr)_8rem_7rem_9rem_auto]">
+            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-surface-2 sm:grid-cols-[auto_minmax(0,1fr)_8rem_8rem_7rem_9rem_auto]">
               <Link
                 href={`/items/${item.id}`}
                 className="contents"
@@ -532,6 +542,12 @@ function ItemGrid({ items, viewMode, currentUser }: GridProps) {
                 </div>
                 <p className="hidden truncate text-[11px] text-muted sm:block">
                   {TYPE_LABELS[item.type] ?? item.type}
+                </p>
+                <p
+                  className="hidden truncate text-[11px] text-muted sm:block"
+                  title={item.owner?.username ?? item.ownerId}
+                >
+                  {ownerLabel}
                 </p>
                 <p className="hidden text-[11px] text-muted sm:block">
                   {new Date(item.updatedAt).toLocaleDateString()}
