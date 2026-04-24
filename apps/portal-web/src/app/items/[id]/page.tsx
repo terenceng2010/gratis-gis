@@ -39,6 +39,7 @@ import { FeatureServiceEditor } from './feature-service/editor';
 import { FeatureServiceV3SchemaEditor } from './feature-service/v3-schema-editor';
 import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { PickListEditor } from './pick-list/editor';
+import { FeatureServiceProvenance } from './feature-service/provenance-panel';
 import { ComingSoon } from './coming-soon';
 
 interface Props {
@@ -273,41 +274,44 @@ export default async function ItemDetailPage({ params }: Props) {
           />
         </section>
       ) : item.type === 'feature_service' ? (
-        // v3 items route to the new multi-layer schema editor. v1/v2
-        // continue to use the legacy single-layer editor so existing
-        // items keep working exactly as before.
-        (item.data as FeatureServiceData | null)?.version === 3 ? (
-          <section className="mb-6">
-            <FeatureServiceV3SchemaEditor
-              itemId={item.id}
-              // Runtime version check above guarantees the v3 shape;
-              // cast through unknown to sidestep conditional-type
-              // acrobatics.
-              initial={
-                item.data as unknown as import('@gratis-gis/shared-types').FeatureServiceDataV3
-              }
-              canEdit={canManage}
-            />
-          </section>
-        ) : (
-        <section className="mb-6">
-          <FeatureServiceEditor
-            itemId={item.id}
-            initial={
-              // For v2 items, item.data is already the correct shape.
-              // For v1 items (or brand-new items with no data), merge
-              // defaults so the editor always receives a complete object.
-              (item.data as FeatureServiceData | null)?.version === 2
-                ? (item.data as FeatureServiceData)
-                : ({
-                    ...DEFAULT_FEATURE_SERVICE,
-                    ...((item.data ?? {}) as Partial<FeatureServiceData>),
-                  } as FeatureServiceData)
-            }
-            canEdit={canManage}
+        <>
+          {/* Provenance panel runs above the schema editor so 'where
+              did this come from?' is answered before 'here's the
+              field list.' Silent when the item has no source block
+              recorded (legacy / hand-seeded). */}
+          <FeatureServiceProvenance
+            data={item.data as FeatureServiceData | null}
           />
-        </section>
-        )
+          {/* v3 items route to the new multi-layer schema editor. v1/v2
+              continue to use the legacy single-layer editor so existing
+              items keep working exactly as before. */}
+          {(item.data as FeatureServiceData | null)?.version === 3 ? (
+            <section className="mb-6">
+              <FeatureServiceV3SchemaEditor
+                itemId={item.id}
+                initial={
+                  item.data as unknown as import('@gratis-gis/shared-types').FeatureServiceDataV3
+                }
+                canEdit={canManage}
+              />
+            </section>
+          ) : (
+            <section className="mb-6">
+              <FeatureServiceEditor
+                itemId={item.id}
+                initial={
+                  (item.data as FeatureServiceData | null)?.version === 2
+                    ? (item.data as FeatureServiceData)
+                    : ({
+                        ...DEFAULT_FEATURE_SERVICE,
+                        ...((item.data ?? {}) as Partial<FeatureServiceData>),
+                      } as FeatureServiceData)
+                }
+                canEdit={canManage}
+              />
+            </section>
+          )}
+        </>
       ) : item.type === 'arcgis_service' ? (
         <section className="mb-6">
           <ArcgisServiceEditor
