@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -25,6 +26,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import type { CreateItemInput, UpdateItemInput } from './items.service.js';
 import { ItemsService } from './items.service.js';
+import { DataSnapshotService } from './data-snapshot.service.js';
 
 const ITEM_TYPE_VALUES = [
   'web_map',
@@ -108,7 +110,10 @@ class ShareDto {
 @ApiBearerAuth()
 @Controller('items')
 export class ItemsController {
-  constructor(private readonly items: ItemsService) {}
+  constructor(
+    private readonly items: ItemsService,
+    private readonly snapshots: DataSnapshotService,
+  ) {}
 
   @Get()
   list(
@@ -262,6 +267,46 @@ export class ItemsController {
       patch.keepPreviousOwnerAccess = dto.keepPreviousOwnerAccess;
     }
     return this.items.reassignOwner(user, id, patch);
+  }
+
+  /**
+   * List data-replace snapshots for an item. The payload doesn't
+   * include the full data blob (just metadata) so the history
+   * panel can render cheaply. Caller must have edit access —
+   * snapshots are authorship history, not public.
+   */
+  @Get(':id/snapshots')
+  async listSnapshots(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ) {
+    await this.items.assertCanEdit(user, id);
+    return this.snapshots.list(id);
+  }
+
+  /**
+   * Revert an item's data to a prior snapshot. Captures the current
+   * state as a fresh snapshot first, so un-revert is possible for
+   * the retention window. Caller must have edit access.
+   *
+   * The snapshotId must belong to the item in the URL — we don't want
+   * /items/A/snapshots/{snap-from-B}/revert to quietly mutate B just
+   * because the caller happens to have edit access on A.
+   */
+  @Post(':id/snapshots/:snapshotId/revert')
+  async revertSnapshot(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('snapshotId') snapshotId: string,
+  ) {
+    await this.items.assertCanEdit(user, id);
+    const snap = await this.snapshots.get(snapshotId);
+    if (snap.itemId !== id) {
+      throw new BadRequestException(
+        'Snapshot does not belong to this item',
+      );
+    }
+    return this.snapshots.revert(snapshotId, user.id);
   }
 
   @Post('bulk/reassign-owner')

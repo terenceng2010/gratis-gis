@@ -41,6 +41,7 @@ import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { PickListEditor } from './pick-list/editor';
 import { FeatureServiceProvenance } from './feature-service/provenance-panel';
 import { FeatureServiceSchema } from './feature-service/schema-panel';
+import { VersionHistoryPanel } from './feature-service/version-history-panel';
 import { ComingSoon } from './coming-soon';
 
 interface Props {
@@ -289,6 +290,10 @@ export default async function ItemDetailPage({ params }: Props) {
           <FeatureServiceSchema
             data={item.data as FeatureServiceData | null}
           />
+          {/* Version history: prior snapshots of item.data with
+              point-in-time revert. Editors / admins only; the panel
+              itself guards on canEdit so the mount here is cheap. */}
+          <VersionHistoryPanel itemId={item.id} canEdit={canManage} />
           {/* v3 items route to the new multi-layer schema editor. v1/v2
               continue to use the legacy single-layer editor so existing
               items keep working exactly as before. */}

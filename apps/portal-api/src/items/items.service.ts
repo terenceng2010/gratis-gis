@@ -4,6 +4,7 @@ import type { ItemAccess, ItemType, PrincipalType, Prisma, SharePermission } fro
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { SharingService } from './sharing.service.js';
+import { DataSnapshotService } from './data-snapshot.service.js';
 import {
   extractDependencies,
   normalizeArcgisUrl,
@@ -58,6 +59,7 @@ export class ItemsService {
     private readonly prisma: PrismaService,
     private readonly sharing: SharingService,
     private readonly v3Tables: V3TablesService,
+    private readonly snapshots: DataSnapshotService,
   ) {}
 
   list(
@@ -362,6 +364,13 @@ export class ItemsService {
     }
     const prevLayers =
       item.type === 'feature_service' ? readV3Layers(item.data) : null;
+    // If this update replaces the data blob, snapshot what was there
+    // first so an admin can revert within the retention window.
+    // Non-data updates (title / tags / access / thumbnail) skip the
+    // snapshot since reverting those is trivially an edit away.
+    if (input.data !== undefined && item.type === 'feature_service') {
+      await this.snapshots.snapshot(id, user.id, 'pre-update');
+    }
     const updated = await this.prisma.item.update({
       where: { id },
       data: {

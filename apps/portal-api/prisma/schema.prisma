@@ -186,6 +186,7 @@ model Item {
   owner       User                @relation("ItemOwner", fields: [ownerId], references: [id])
   shares      ItemShare[]
   attachments FeatureAttachment[]
+  snapshots   ItemDataSnapshot[]
 
   @@index([orgId, access])
   @@index([ownerId])
@@ -199,6 +200,29 @@ model Item {
 /// nullable FK columns so the composite primary key is always valid.
 /// Enforcement that the principalId actually references the correct table
 /// is handled by a CHECK constraint + trigger in an SQL migration.
+/// Point-in-time snapshot of an Item's `data` blob. Written every
+/// time someone replaces the data (upload / paste / bulk import) so
+/// an admin can revert to a prior state if the new data was wrong
+/// or corrupt. Retention is configurable but defaults to 30 days
+/// AND the latest 20 per item, whichever is stricter; older rows
+/// are auto-purged by MaintenanceModule.
+model ItemDataSnapshot {
+  id        String   @id @default(uuid()) @db.Uuid
+  itemId    String   @map("item_id") @db.Uuid
+  /// The pre-replace data blob. Full copy, not a diff — simpler
+  /// revert + forward-compatible as the item data shape evolves.
+  data      Json
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  /// User who caused the snapshot (by replacing the data).
+  createdBy String   @map("created_by") @db.Uuid
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, createdAt])
+  @@map("item_data_snapshot")
+}
+
 model ItemShare {
   itemId        String          @map("item_id") @db.Uuid
   principalType PrincipalType   @map("principal_type")

@@ -1,14 +1,17 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 
+import { ItemsModule } from '../items/items.module.js';
 import { TrashPurgeService } from './trash-purge.service.js';
+import { SnapshotPurgeService } from './snapshot-purge.service.js';
 
 /**
- * Home for scheduled maintenance work (trash purge today; more later,
- * e.g. thumbnail garbage collection, storage reconciliation).
+ * Home for scheduled maintenance work (trash purge, snapshot prune;
+ * more later, e.g. thumbnail garbage collection, storage
+ * reconciliation).
  */
 @Module({
-  imports: [ScheduleModule.forRoot()],
-  providers: [TrashPurgeService],
+  imports: [ScheduleModule.forRoot(), ItemsModule],
+  providers: [TrashPurgeService, SnapshotPurgeService],
 })
 export class MaintenanceModule {}
