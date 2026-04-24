@@ -224,24 +224,22 @@ export function MapEditor({
 
   // Maps layer id → backing item id (null for geojson-url / inline).
   // Matrix uses this to know which layers can have item-level gaps.
+  //
+  // For arcgis-rest sources we NOW carry an optional `sourceItemId`
+  // back-reference (set when the layer was added from a portal
+  // arcgis_service item via the item picker). When present, that's
+  // the backing item the matrix should gate access against — the
+  // ArcGIS service is proxied through the portal, and gaps on the
+  // arcgis_service item's shares translate to "this principal can
+  // see the web map but not this ArcGIS layer's data". Layers added
+  // by raw-URL paste still have no backing item id.
   const layerItemIds = useMemo<Record<string, string | null>>(() => {
     const out: Record<string, string | null> = {};
     for (const l of map.layers) {
-      if (
-        l.source.kind === 'feature-service' ||
-        l.source.kind === 'arcgis-rest'
-      ) {
-        // arcgis-rest layers don't have an item id — the ArcGIS
-        // service lives outside the portal's own sharing. The
-        // matrix treats them like geojson-url (no gap). When we
-        // have an arcgis_service item referring to the URL, that
-        // item would be the target; the layer source doesn't name
-        // the item directly today, so this stays null for now.
-        if (l.source.kind === 'arcgis-rest') {
-          out[l.id] = null;
-        } else {
-          out[l.id] = l.source.itemId;
-        }
+      if (l.source.kind === 'feature-service') {
+        out[l.id] = l.source.itemId;
+      } else if (l.source.kind === 'arcgis-rest') {
+        out[l.id] = l.source.sourceItemId ?? null;
       } else {
         out[l.id] = null;
       }

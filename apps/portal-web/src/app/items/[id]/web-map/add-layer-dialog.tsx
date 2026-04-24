@@ -296,6 +296,10 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
           url: d.url,
           layerId,
           serviceType: d.serviceType ?? 'MapServer',
+          // Stash the source item id so the server-side dependency
+          // tracker can resolve this layer back to the portal item
+          // without relying on fragile URL matching.
+          sourceItemId: item.id,
         }),
       );
     } else {

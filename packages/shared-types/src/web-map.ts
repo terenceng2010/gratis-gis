@@ -248,6 +248,15 @@ export type WebMapLayerSource =
       layerId: number;
       /** MapServer or FeatureServer — persisted so we skip a probe. */
       serviceType: 'MapServer' | 'FeatureServer';
+      /**
+       * Optional back-reference to the arcgis_service portal item the
+       * layer was added from, if any. When present, the dependency
+       * tracker uses this id directly instead of doing URL-based
+       * resolution. Layers added by pasting a raw URL (no portal item
+       * backing them) simply omit this field and fall back to URL
+       * matching.
+       */
+      sourceItemId?: string;
     };
 
 /**
