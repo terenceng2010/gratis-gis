@@ -5,11 +5,15 @@ import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronRight,
   Database,
   Loader2,
+  Table2,
   Upload,
 } from 'lucide-react';
 import type { FeatureServiceLayer } from '@gratis-gis/shared-types';
+import { V3FeatureBrowser } from './v3-feature-browser';
 
 /**
  * Per-layer data panel for a v3 feature_service item on the detail
@@ -70,6 +74,7 @@ interface RowProps {
 function LayerRow({ itemId, layer, canEdit }: RowProps) {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
   const [message, setMessage] = useState<
     | { kind: 'success'; text: string }
     | { kind: 'error'; text: string }
@@ -144,6 +149,20 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
             ) : null}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setBrowseOpen((v) => !v)}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2"
+          title={browseOpen ? 'Hide features' : 'Browse & edit features'}
+        >
+          {browseOpen ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+          <Table2 className="h-3.5 w-3.5" />
+          {browseOpen ? 'Hide' : 'Browse'}
+        </button>
         {canEdit ? (
           <>
             <input
@@ -187,6 +206,14 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
           )}
           {message.text}
         </p>
+      ) : null}
+      {browseOpen ? (
+        <V3FeatureBrowser
+          itemId={itemId}
+          layer={layer}
+          canEdit={canEdit}
+          onRefreshCounts={() => router.refresh()}
+        />
       ) : null}
     </li>
   );
