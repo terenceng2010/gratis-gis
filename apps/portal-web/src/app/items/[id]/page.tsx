@@ -18,12 +18,14 @@ import type {
   User as UserT,
   ArcgisServiceData,
   FeatureServiceData,
+  GeoBoundaryData,
   PickListData,
   WebMapData,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
   DEFAULT_FEATURE_SERVICE,
+  DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
@@ -39,6 +41,7 @@ import { FeatureServiceEditor } from './feature-service/editor';
 import { FeatureServiceV3SchemaEditor } from './feature-service/v3-schema-editor';
 import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { PickListEditor } from './pick-list/editor';
+import { GeoBoundaryEditor } from './geo-boundary/editor';
 import { FeatureServiceProvenance } from './feature-service/provenance-panel';
 import { FeatureServiceSchema } from './feature-service/schema-panel';
 import { VersionHistoryPanel } from './feature-service/version-history-panel';
@@ -346,6 +349,15 @@ export default async function ItemDetailPage({ params }: Props) {
             canEdit={canManage}
           />
         </section>
+      ) : item.type === 'geo_boundary' ? (
+        <GeoBoundaryEditor
+          itemId={item.id}
+          initial={{
+            ...DEFAULT_GEO_BOUNDARY,
+            ...((item.data ?? {}) as Partial<GeoBoundaryData>),
+          }}
+          canEdit={canManage}
+        />
       ) : (
         <section className="mb-6">
           <ComingSoon type={item.type} data={item.data} />

@@ -202,6 +202,12 @@ importers:
       shpjs:
         specifier: ^6.1.0
         version: 6.2.0
+      terra-draw:
+        specifier: ^1.28.8
+        version: 1.28.8
+      terra-draw-maplibre-gl-adapter:
+        specifier: ^1.3.0
+        version: 1.3.0(maplibre-gl@4.7.1)(terra-draw@1.28.8)
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
@@ -4628,6 +4634,15 @@ packages:
   tar@7.5.13:
     resolution: {integrity: sha512-tOG/7GyXpFevhXVh8jOPJrmtRpOTsYqUIkVdVooZYJS/z8WhfQUX8RJILmeuJNinGAMSu1veBr4asSHFt5/hng==}
     engines: {node: '>=18'}
+
+  terra-draw-maplibre-gl-adapter@1.3.0:
+    resolution: {integrity: sha512-Q0Kds+IxLIcMPv3xYAJ3TDXp1Ml1uGk2xFN8Xx5tKpVdU9AhlTkpGxJ7i+Is1v6PC4t+O7MfyGP4Tl+R+qdYeQ==}
+    peerDependencies:
+      maplibre-gl: '>=4'
+      terra-draw: ^1.0.0
+
+  terra-draw@1.28.8:
+    resolution: {integrity: sha512-Tq3Ny8Klnhnu2B0skgG/+apYwdLyygm+SVY5MjWbK2Gd7r7pG+OzZzE0RJBBIxVe4EM2wYiy0mTa8Vdttg/xew==}
 
   terser-webpack-plugin@5.4.0:
     resolution: {integrity: sha512-Bn5vxm48flOIfkdl5CaD2+1CiUVbonWQ3KQPyP7/EuIl9Gbzq/gQFOzaMFUEgVjB1396tcK0SG8XcNJ/2kDH8g==}
@@ -10483,6 +10498,13 @@ snapshots:
       minipass: 7.1.3
       minizlib: 3.1.0
       yallist: 5.0.0
+
+  terra-draw-maplibre-gl-adapter@1.3.0(maplibre-gl@4.7.1)(terra-draw@1.28.8):
+    dependencies:
+      maplibre-gl: 4.7.1
+      terra-draw: 1.28.8
+
+  terra-draw@1.28.8: {}
 
   terser-webpack-plugin@5.4.0(webpack@5.97.1):
     dependencies:
