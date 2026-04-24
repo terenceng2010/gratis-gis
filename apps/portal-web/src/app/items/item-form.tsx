@@ -26,11 +26,52 @@ type Mode =
 interface Props {
   mode: Mode;
   initialValues?: Partial<
-    Pick<Item, 'type' | 'title' | 'description' | 'tags' | 'access' | 'thumbnailUrl'>
+    Pick<
+      Item,
+      | 'type'
+      | 'title'
+      | 'description'
+      | 'tags'
+      | 'access'
+      | 'thumbnailUrl'
+      | 'license'
+    >
   >;
   /** Item id in edit mode, used as a stable seed for the fallback badge. */
   itemId?: string;
 }
+
+/**
+ * Preset list for the license picker. Matches the most common
+ * open-data choices (SPDX-compatible ids where possible) plus a
+ * "custom" escape hatch for anything the portal's operators
+ * want to use that isn't in the menu. Surfaced on DCAT feeds as
+ * the dcat:license field.
+ */
+const LICENSE_OPTIONS: Array<{ value: string; label: string; hint?: string }> = [
+  { value: '', label: 'Not specified', hint: 'Treated as "rights reserved"' },
+  { value: 'CC0-1.0', label: 'CC0 (public domain)', hint: 'No rights reserved' },
+  { value: 'CC-BY-4.0', label: 'CC BY 4.0', hint: 'Reuse with attribution' },
+  {
+    value: 'CC-BY-SA-4.0',
+    label: 'CC BY-SA 4.0',
+    hint: 'Attribution + share-alike',
+  },
+  {
+    value: 'CC-BY-NC-4.0',
+    label: 'CC BY-NC 4.0',
+    hint: 'Attribution, non-commercial',
+  },
+  { value: 'OGL-UK-3.0', label: 'UK Open Government Licence v3', hint: '' },
+  { value: 'ODbL-1.0', label: 'Open Database License 1.0', hint: '' },
+  { value: 'MIT', label: 'MIT', hint: 'Permissive; common for datasets too' },
+  {
+    value: 'proprietary',
+    label: 'Proprietary / rights reserved',
+    hint: 'Internal use only',
+  },
+  { value: 'custom', label: 'Custom…', hint: 'Specify your own value' },
+];
 
 const ITEM_TYPE_OPTIONS: Array<{ value: ItemType; label: string; desc: string }> = [
   {
@@ -136,6 +177,21 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(
     initialValues?.thumbnailUrl ?? null,
   );
+  // License is authored via the picker below. We track the "preset"
+  // separately from "custom text" so switching back to a preset
+  // doesn't lose what the user typed into the custom field. A
+  // known preset whose value equals the initial license auto-picks;
+  // otherwise we drop into custom mode so the existing value shows.
+  const initialLicense = initialValues?.license ?? '';
+  const initialPreset = LICENSE_OPTIONS.find(
+    (o) => o.value === initialLicense,
+  );
+  const [licensePreset, setLicensePreset] = useState<string>(
+    initialPreset ? initialPreset.value : initialLicense ? 'custom' : '',
+  );
+  const [licenseCustom, setLicenseCustom] = useState<string>(
+    initialPreset ? '' : initialLicense,
+  );
 
   function parseTags(raw: string): string[] {
     return raw
@@ -152,12 +208,23 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
     }
     setSubmitting(true);
 
+    // Resolve the effective license value from the picker. Empty
+    // preset + empty custom = explicit "not set"; the backend accepts
+    // null to clear a previously-set license.
+    const effectiveLicense =
+      licensePreset === 'custom'
+        ? licenseCustom.trim() || null
+        : licensePreset === ''
+          ? null
+          : licensePreset;
+
     const payload: Record<string, unknown> = {
       title: title.trim(),
       description: description.trim(),
       tags: parseTags(tagsText),
       access,
       thumbnailUrl,
+      license: effectiveLicense,
     };
     if (mode.kind === 'create') {
       payload.type = type;
@@ -362,6 +429,48 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
             <>Refine with per-user or per-group shares from the detail page.</>
           )}
         </p>
+      </section>
+
+      <section>
+        <label
+          htmlFor="license-preset"
+          className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted"
+        >
+          License
+        </label>
+        <p className="mb-2 text-xs text-muted">
+          How others are allowed to reuse this item. Surfaced in the
+          org's open-data catalog (<code className="font-mono">/public/catalog.json</code>)
+          for public items.
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <select
+            id="license-preset"
+            value={licensePreset}
+            onChange={(e) => setLicensePreset(e.target.value)}
+            className="h-10 rounded-md border border-border bg-surface-1 px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 sm:w-72"
+          >
+            {LICENSE_OPTIONS.map((o) => (
+              <option key={o.value || 'none'} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          {licensePreset === 'custom' ? (
+            <input
+              type="text"
+              value={licenseCustom}
+              onChange={(e) => setLicenseCustom(e.target.value)}
+              placeholder="SPDX id or license URL (e.g. https://creativecommons.org/licenses/by/4.0/)"
+              className="h-10 flex-1 rounded-md border border-border bg-surface-1 px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />
+          ) : null}
+        </div>
+        {licensePreset && licensePreset !== 'custom' ? (
+          <p className="mt-1 text-[11px] text-muted">
+            {LICENSE_OPTIONS.find((o) => o.value === licensePreset)?.hint}
+          </p>
+        ) : null}
       </section>
 
       {error ? (

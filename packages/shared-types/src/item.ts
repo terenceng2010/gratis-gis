@@ -16,6 +16,13 @@ export interface Item<TData = unknown> {
   data: TData;
   storageRef: string | null;
   access: ItemAccess;
+  /**
+   * Open-data license for this item. SPDX identifier (e.g.
+   * "CC-BY-4.0"), a URL, or a free-form string. Null = no license
+   * recorded; consumers of the DCAT /public/catalog.json feed
+   * should treat absence as "rights reserved".
+   */
+  license: string | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
   /**

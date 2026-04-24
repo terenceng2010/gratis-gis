@@ -58,6 +58,10 @@ class CreateItemDto {
   // thumbnail during create. Optional; null/omitted falls back to the
   // auto-generated initial badge.
   @IsOptional() @IsString() @MaxLength(2048) thumbnailUrl?: string | null;
+  // Open-data license string (SPDX id, URL, or free-form). Null on
+  // create means "not recorded"; DCAT consumers treat absence as
+  // "rights reserved".
+  @IsOptional() @IsString() @MaxLength(500) license?: string | null;
 }
 
 class UpdateItemDto {
@@ -69,6 +73,9 @@ class UpdateItemDto {
   // Absolute URL produced by StorageService after the browser PUT completes.
   // Pass null to clear a previously-set thumbnail.
   @IsOptional() @IsString() @MaxLength(2048) thumbnailUrl?: string | null;
+  // Open-data license. SPDX id (CC-BY-4.0), URL, or free-form.
+  // Pass null to clear a previously-set license.
+  @IsOptional() @IsString() @MaxLength(500) license?: string | null;
 }
 
 class ReassignOwnerDto {

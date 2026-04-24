@@ -27,6 +27,8 @@ export interface CreateItemInput {
   access?: ItemAccess | undefined;
   /** Pass null or omit to start without a custom thumbnail. */
   thumbnailUrl?: string | null | undefined;
+  /** Open-data license; null / omitted = not recorded. */
+  license?: string | null | undefined;
 }
 
 export interface UpdateItemInput {
@@ -37,6 +39,8 @@ export interface UpdateItemInput {
   access?: ItemAccess | undefined;
   /** Pass null to clear. */
   thumbnailUrl?: string | null | undefined;
+  /** Pass null to clear a previously-set license. */
+  license?: string | null | undefined;
 }
 
 export interface ShareItemInput {
@@ -48,7 +52,7 @@ export interface ShareItemInput {
    * grantee only sees features that intersect this polygon (plus
    * items whose bbox does). Pass `null` to explicitly clear a
    * previously-set limit; omit the field to leave it untouched.
-   * GeoJSON in EPSG:4326 — no coordinate transform is applied.
+   * GeoJSON in EPSG:4326 â€” no coordinate transform is applied.
    */
   geoLimit?: unknown | null;
 }
@@ -70,7 +74,7 @@ export class ItemsService {
       q?: string;
       /**
        * Filter to items owned by a specific user. Intended for the
-       * admin 'user delete → reassign their items' flow. Anyone may
+       * admin 'user delete â†’ reassign their items' flow. Anyone may
        * filter by their own id (equivalent to `mine: true`); filtering
        * by anyone else's id requires org-admin, enforced below.
        */
@@ -285,7 +289,7 @@ export class ItemsService {
       out.push({
         ...rest,
         // Preserve the policy so the client knows whether limits
-        // applied, but drop the full entries array — that's who-
+        // applied, but drop the full entries array â€” that's who-
         // else-sees-what, not something a viewer should enumerate.
         access: { policy: access?.policy ?? 'inherit', entries: [] },
         effective,
@@ -307,6 +311,7 @@ export class ItemsService {
         data: input.data,
         access: input.access ?? 'private',
         ...(input.thumbnailUrl ? { thumbnailUrl: input.thumbnailUrl } : {}),
+        ...(input.license !== undefined && input.license !== null ? { license: input.license } : {}),
       },
     });
     // v3 feature-service items: provision a PostGIS table per layer
@@ -314,7 +319,7 @@ export class ItemsService {
     // $executeRawUnsafe is idempotent; if the item has no layers yet
     // (empty builder), this is a no-op.
     //
-    // If reconcile throws, the item row is already in the DB — we
+    // If reconcile throws, the item row is already in the DB â€” we
     // roll back by deleting it so the user doesn't end up with an
     // orphaned item they can't recover from. The error message is
     // surfaced back to the caller so they can see WHICH column /
@@ -380,6 +385,7 @@ export class ItemsService {
         ...(input.data !== undefined && { data: input.data }),
         ...(input.access !== undefined && { access: input.access }),
         ...(input.thumbnailUrl !== undefined && { thumbnailUrl: input.thumbnailUrl }),
+        ...(input.license !== undefined && { license: input.license }),
       },
     });
     // v3: reconcile layer tables against the updated schema. prev lets
@@ -550,7 +556,7 @@ export class ItemsService {
   /**
    * Change the owner of an item. Gated to the current owner + org
    * admins. Optionally adds a `view` share for the previous owner so
-   * they don't lose access entirely — handy for "I'm leaving the
+   * they don't lose access entirely â€” handy for "I'm leaving the
    * team, please take this from me" and audit-friendly reassigns.
    */
   async reassignOwner(
@@ -568,10 +574,10 @@ export class ItemsService {
       );
     }
     if (input.newOwnerId === item.ownerId) {
-      return item; // no-op — already owned by the target user
+      return item; // no-op â€” already owned by the target user
     }
     // Target user must exist AND be in the same org. Cross-org
-    // reassignment is out of scope — that would leak content across
+    // reassignment is out of scope â€” that would leak content across
     // org boundaries.
     const newOwner = await this.prisma.user.findUnique({
       where: { id: input.newOwnerId },
@@ -623,7 +629,7 @@ export class ItemsService {
   /**
    * Count how many items a given user owns. Used by the admin-delete
    * flow to decide whether to force a reassignment step. Respects the
-   * caller's org — the count only includes items in the caller's org
+   * caller's org â€” the count only includes items in the caller's org
    * so admins don't see cross-org bleed.
    */
   async ownedItemCount(
@@ -642,7 +648,7 @@ export class ItemsService {
   /**
    * Bulk reassignment. Applies reassignOwner() across many items in
    * a single transaction, stopping on the first failure. Useful for
-   * the "delete this user → move their stuff first" flow and for
+   * the "delete this user â†’ move their stuff first" flow and for
    * bulk-select in the items list.
    */
   async bulkReassignOwner(
@@ -738,14 +744,14 @@ export class ItemsService {
   }
 
   // ---------------------------------------------------------------
-  // Dependency tracking — "Used by" / "Depends on"
+  // Dependency tracking â€” "Used by" / "Depends on"
   // ---------------------------------------------------------------
 
   /**
    * Return the items that THIS item references (forward edges). For a
    * web_map, that's each layer's feature_service / arcgis_service.
    *
-   * Results are scoped to items the caller can see — if the map
+   * Results are scoped to items the caller can see â€” if the map
    * references something private that the caller isn't shared on, it
    * simply doesn't appear in the list (instead of 403'ing, which
    * would leak the existence of a hidden dependency).
@@ -828,7 +834,7 @@ export class ItemsService {
   ) {
     // Caller must be able to see the item itself before asking who
     // depends on it. We keep the returned row so downstream logic can
-    // decide how to match — by uuid for most items, by normalized URL
+    // decide how to match â€” by uuid for most items, by normalized URL
     // when the target is an arcgis_service (whose web-map layer refs
     // are URL-based, not id-based).
     const target = await this.get(user, id);
@@ -840,7 +846,7 @@ export class ItemsService {
       ? normalizeArcgisUrl(targetUrl)
       : null;
 
-    // Pull every referencer-type item in the org — we need their data
+    // Pull every referencer-type item in the org â€” we need their data
     // to extract refs. We'll filter for visibility when shaping the
     // response.
     const referencers = await this.prisma.item.findMany({

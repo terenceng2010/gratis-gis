@@ -175,6 +175,13 @@ model Item {
   description  String     @default("")
   tags         String[]   @default([])
   thumbnailUrl String?    @map("thumbnail_url")
+  /// Open-data licensing for this item. Free-form so a deployment
+  /// can pick any license; the UI offers a curated preset list
+  /// (CC-BY, CC0, OGL, proprietary…) plus a custom URL. Surfaces
+  /// on the /public/catalog.json DCAT feed so downstream data
+  /// consumers can respect the license. Null = no license recorded;
+  /// treat as "rights reserved" by default.
+  license      String?    @map("license")
   /// Type-specific content payload. The underlying column is
   /// `data_json` so existing migrations are undisturbed; exposing the
   /// TS property as `data` keeps the API response shape aligned with

@@ -53,6 +53,7 @@ export default async function EditItemPage({ params }: Props) {
           tags: item.tags,
           access: item.access,
           thumbnailUrl: item.thumbnailUrl,
+          license: item.license,
         }}
       />
     </div>
