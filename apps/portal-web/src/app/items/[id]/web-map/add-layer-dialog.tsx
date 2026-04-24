@@ -277,31 +277,64 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
         url?: string;
         serviceType?: 'MapServer' | 'FeatureServer';
         defaultLayerId?: number;
-        layers?: Array<{ id: number; geometryType?: string }>;
+        selectedLayerIds?: Array<string | number>;
+        layerConfig?: Record<
+          string,
+          { label?: string; visible?: boolean }
+        >;
+        layers?: Array<{ id: number; name?: string; geometryType?: string }>;
       };
       if (!d.url) {
         setError(
-          `${item.title} has no service URL yet — open it and paste one.`,
+          `${item.title} has no service URL yet. Open it and paste one.`,
         );
         return;
       }
-      const layerId =
-        d.defaultLayerId ??
-        d.layers?.find((l) => l.geometryType)?.id ??
-        d.layers?.[0]?.id ??
-        0;
-      onAdd(
-        makeLayer(item.title, {
-          kind: 'arcgis-rest',
-          url: d.url,
-          layerId,
-          serviceType: d.serviceType ?? 'MapServer',
-          // Stash the source item id so the server-side dependency
-          // tracker can resolve this layer back to the portal item
-          // without relying on fragile URL matching.
-          sourceItemId: item.id,
-        }),
-      );
+
+      // Resolve the curated subset this item exposes. Items that
+      // predate multi-layer selection lack selectedLayerIds; treat
+      // 'absent' as 'all probed layers' for backward compatibility.
+      const allLayers = d.layers ?? [];
+      const curated = d.selectedLayerIds
+        ? allLayers.filter((l) =>
+            d.selectedLayerIds!.map(String).includes(String(l.id)),
+          )
+        : allLayers;
+
+      if (curated.length === 0) {
+        setError(
+          `${item.title} has no layers selected for web-map use. Open the item and pick at least one layer.`,
+        );
+        return;
+      }
+
+      // Put the default layer first so the map's layer panel reads
+      // in a sensible order. Other selected layers follow in probe
+      // order.
+      const ordered = [
+        ...curated.filter((l) => l.id === d.defaultLayerId),
+        ...curated.filter((l) => l.id !== d.defaultLayerId),
+      ];
+      for (const l of ordered) {
+        const override = d.layerConfig?.[String(l.id)];
+        const title =
+          override?.label ??
+          (ordered.length === 1
+            ? item.title
+            : `${item.title} — ${l.name ?? `Layer ${l.id}`}`);
+        onAdd(
+          makeLayer(title, {
+            kind: 'arcgis-rest',
+            url: d.url,
+            layerId: l.id,
+            serviceType: d.serviceType ?? 'MapServer',
+            // Stash the source item id so the server-side dependency
+            // tracker can resolve this layer back to the portal item
+            // without relying on fragile URL matching.
+            sourceItemId: item.id,
+          }),
+        );
+      }
     } else {
       onAdd(
         makeLayer(item.title, { kind: 'feature-service', itemId: item.id }),

@@ -86,14 +86,88 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
         ...(stagedDefault !== undefined
           ? { defaultLayerId: stagedDefault }
           : {}),
+        // Re-probing preserves existing selection when the probed
+        // layer ids overlap; new ids discovered in the probe are
+        // added to the selection so the 'all layers selected' default
+        // extends to new additions. Items without a prior selection
+        // (legacy) get 'all' on probe.
+        selectedLayerIds: (() => {
+          const prev = data.selectedLayerIds
+            ? new Set(data.selectedLayerIds.map(String))
+            : null;
+          const ids = probeResult.layers.map((l) => l.id);
+          if (!prev) return ids;
+          const keptOrAdded = ids.filter(
+            (id) => prev.has(String(id)) || !data.layers.some((dl) => dl.id === id),
+          );
+          return keptOrAdded.length > 0 ? keptOrAdded : ids;
+        })(),
         probedAt: new Date().toISOString() as ISODateString,
       }
     : data;
 
+  // Current effective selection (incl. 'all' fallback for legacy items).
+  const effectiveSelected = new Set(
+    (staged.selectedLayerIds
+      ? staged.selectedLayerIds.map(String)
+      : staged.layers.map((l) => String(l.id))),
+  );
+
   const hasChanges =
     probeResult !== null ||
     staged.defaultLayerId !== data.defaultLayerId ||
-    staged.url !== data.url;
+    staged.url !== data.url ||
+    // Selection or config diffs
+    !sameIdSet(
+      staged.selectedLayerIds ?? staged.layers.map((l) => l.id),
+      data.selectedLayerIds ?? data.layers.map((l) => l.id),
+    ) ||
+    JSON.stringify(staged.layerConfig ?? {}) !==
+      JSON.stringify(data.layerConfig ?? {});
+
+  const toggleSelected = (id: number) => {
+    const currentIds = staged.selectedLayerIds
+      ? staged.selectedLayerIds.map(String)
+      : staged.layers.map((l) => String(l.id));
+    const asStr = String(id);
+    const next = currentIds.includes(asStr)
+      ? currentIds.filter((i) => i !== asStr)
+      : [...currentIds, asStr];
+    setData((prev) => ({
+      ...prev,
+      selectedLayerIds: next.map((s) => Number(s)),
+    }));
+  };
+
+  const setLayerLabel = (id: number, label: string) => {
+    const key = String(id);
+    const next = { ...(staged.layerConfig ?? {}) };
+    const trimmed = label.trim();
+    if (trimmed) {
+      next[key] = { ...next[key], label: trimmed };
+    } else if (next[key]) {
+      const { label: _l, ...rest } = next[key]!;
+      void _l;
+      if (Object.keys(rest).length === 0) delete next[key];
+      else next[key] = rest;
+    }
+    setData((prev) => ({ ...prev, layerConfig: next }));
+  };
+
+  const selectAll = () =>
+    setData((prev) => ({
+      ...prev,
+      selectedLayerIds: staged.layers.map((l) => l.id),
+    }));
+  const selectNone = () =>
+    setData((prev) => ({ ...prev, selectedLayerIds: [] }));
+  const selectSpatial = () =>
+    setData((prev) => ({
+      ...prev,
+      selectedLayerIds: staged.layers
+        .filter((l) => l.geometryType)
+        .map((l) => l.id),
+    }));
 
   const runProbe = useCallback(async () => {
     const raw = urlDraft.trim();
@@ -207,64 +281,131 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
 
       {staged.layers.length > 0 ? (
         <div className="rounded-lg border border-border bg-surface-1 p-4">
-          <div className="mb-2 flex items-baseline justify-between gap-2">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold">
-                Default sublayer
+                Layers
+                <span className="ml-1.5 text-xs font-normal text-muted">
+                  ({effectiveSelected.size} of {staged.layers.length}{' '}
+                  selected)
+                </span>
               </h3>
               <p className="text-xs text-muted">
-                Maps that pick this item from Portal load this layer by
-                default. Authors can override per-map.
+                Check which layers this item exposes. Unchecked layers
+                stay in the upstream service but won&apos;t appear when
+                maps consume this item. Star the default layer.
               </p>
             </div>
-            {probeResult ? (
-              <button
-                type="button"
-                onClick={() => setProbeResult(null)}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2"
-                title="Discard probe result"
-              >
-                <RefreshCw className="h-3 w-3" />
-                Discard probe
-              </button>
-            ) : null}
+            <div className="flex items-center gap-1">
+              {canEdit ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={selectAll}
+                    className="h-7 rounded border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectNone}
+                    className="h-7 rounded border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+                  >
+                    None
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectSpatial}
+                    title="Only layers with geometry"
+                    className="h-7 rounded border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+                  >
+                    Spatial only
+                  </button>
+                </>
+              ) : null}
+              {probeResult ? (
+                <button
+                  type="button"
+                  onClick={() => setProbeResult(null)}
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2"
+                  title="Discard probe result"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Discard probe
+                </button>
+              ) : null}
+            </div>
           </div>
-          <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-0 p-1">
+          <ul className="max-h-96 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-0 p-1">
             {staged.layers.map((l) => {
-              const active = l.id === staged.defaultLayerId;
+              const included = effectiveSelected.has(String(l.id));
+              const isDefault = l.id === staged.defaultLayerId;
+              const override = staged.layerConfig?.[String(l.id)];
+              const currentLabel = override?.label ?? '';
               return (
-                <li key={l.id}>
+                <li
+                  key={l.id}
+                  className={`grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 rounded px-2 py-1.5 text-xs ${
+                    included ? 'bg-surface-1' : 'opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={included}
+                    onChange={() => toggleSelected(l.id)}
+                    disabled={!canEdit}
+                    className="h-3.5 w-3.5 rounded border-border text-accent focus:ring-accent/30 disabled:opacity-50"
+                    aria-label={`Include layer ${l.name}`}
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-ink-1">
+                      <span className="tabular-nums text-muted">{l.id}</span>{' '}
+                      {l.name}
+                    </p>
+                    {canEdit ? (
+                      <input
+                        type="text"
+                        value={currentLabel}
+                        onChange={(e) => setLayerLabel(l.id, e.target.value)}
+                        placeholder="Override display label (optional)"
+                        disabled={!canEdit || !included}
+                        className="mt-0.5 h-6 w-full rounded border border-border bg-surface-0 px-1.5 text-[11px] focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30 disabled:opacity-50"
+                      />
+                    ) : override?.label ? (
+                      <p className="mt-0.5 text-[11px] text-muted">
+                        label override:{' '}
+                        <span className="text-ink-1">{override.label}</span>
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
+                    {geometryShort(l.geometryType)}
+                  </span>
                   <button
                     type="button"
                     onClick={() => {
-                      // If we're editing against the live (unsaved)
-                      // probe result, update it; otherwise update the
-                      // persisted data directly so Save can pick it up.
-                      if (probeResult) {
-                        setProbeResult({
-                          ...probeResult,
-                          // Preserve the rest; defaultLayerId lives on
-                          // the merged view, not probeResult itself.
-                        });
-                        setData((prev) => ({ ...prev, defaultLayerId: l.id }));
-                      } else {
-                        setData((prev) => ({ ...prev, defaultLayerId: l.id }));
+                      if (!included) {
+                        // Auto-include a layer when the user marks it
+                        // as default, since a default that isn't in
+                        // the selection makes no sense.
+                        toggleSelected(l.id);
                       }
+                      setData((prev) => ({ ...prev, defaultLayerId: l.id }));
                     }}
                     disabled={!canEdit}
-                    className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                      active
-                        ? 'bg-accent/10 text-ink-0 ring-1 ring-accent/40'
-                        : 'text-ink-1 hover:bg-surface-2'
-                    }`}
+                    aria-pressed={isDefault}
+                    title={
+                      isDefault
+                        ? 'Default layer for maps consuming this item'
+                        : 'Make this the default layer'
+                    }
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                      isDefault
+                        ? 'bg-accent/15 text-accent'
+                        : 'text-muted hover:bg-surface-2 hover:text-ink-1'
+                    } disabled:opacity-50`}
                   >
-                    <span className="truncate">
-                      <span className="tabular-nums text-muted">{l.id}</span>{' '}
-                      {l.name}
-                    </span>
-                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
-                      {geometryShort(l.geometryType)}
-                    </span>
+                    {isDefault ? 'DEFAULT' : 'set default'}
                   </button>
                 </li>
               );
@@ -322,4 +463,19 @@ function formatDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * Set-equality check for two id lists (strings or numbers), order
+ * and duplicate insensitive. Used by the dirty check to decide
+ * whether the selected-layer list differs from the saved state.
+ */
+function sameIdSet(
+  a: Array<string | number>,
+  b: Array<string | number>,
+): boolean {
+  if (a.length !== b.length) return false;
+  const sa = new Set(a.map(String));
+  for (const x of b) if (!sa.has(String(x))) return false;
+  return true;
 }

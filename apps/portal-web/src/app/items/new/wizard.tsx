@@ -176,6 +176,13 @@ export function NewItemWizard() {
   const [arcgisDefaultLayerId, setArcgisDefaultLayerId] = useState<
     number | null
   >(null);
+  // Which layers the user wants to include in this item. Default on
+  // probe is 'all layers selected' so the most common case ('I want
+  // the whole service') is zero clicks. User can deselect the few
+  // they don't want before hitting Create.
+  const [arcgisSelectedLayerIds, setArcgisSelectedLayerIds] = useState<
+    Set<number>
+  >(new Set());
   const arcgisAbortRef = useRef<AbortController | null>(null);
   const userEditedTitleRef = useRef(false);
   const userEditedDescRef = useRef(false);
@@ -233,6 +240,10 @@ export function NewItemWizard() {
       const firstGeom = desc.layers.find((l) => l.geometryType);
       const pick = firstGeom?.id ?? desc.layers[0]?.id ?? null;
       setArcgisDefaultLayerId(pick);
+      // Default selection on probe is 'everything' so the common
+      // 'pull the whole service' case is zero clicks. The user can
+      // uncheck layers they don't want before clicking Create.
+      setArcgisSelectedLayerIds(new Set(desc.layers.map((l) => l.id)));
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') return;
       setError(
@@ -262,6 +273,22 @@ export function NewItemWizard() {
         );
         return;
       }
+      // Validate: selection must be non-empty. A zero-layer item
+      // would be a dead reference nobody can use.
+      if (arcgisSelectedLayerIds.size === 0) {
+        setError(
+          'Select at least one layer to include in this item. All layers are selected by default after probe.',
+        );
+        return;
+      }
+      // Default layer must be one of the selected layers — otherwise
+      // a map consuming this item would land on a layer the item
+      // claims not to own.
+      const effectiveDefault =
+        arcgisDefaultLayerId !== null &&
+        arcgisSelectedLayerIds.has(arcgisDefaultLayerId)
+          ? arcgisDefaultLayerId
+          : (Array.from(arcgisSelectedLayerIds)[0] ?? null);
       const staged: ArcgisServiceData = {
         ...DEFAULT_ARCGIS_SERVICE,
         url: arcgisProbeResult.url,
@@ -274,9 +301,12 @@ export function NewItemWizard() {
           if (l.geometryType) base.geometryType = l.geometryType;
           return base;
         }),
+        selectedLayerIds: Array.from(arcgisSelectedLayerIds).sort(
+          (a, b) => a - b,
+        ),
         ...(arcgisProbeResult.bbox ? { bbox: arcgisProbeResult.bbox } : {}),
-        ...(arcgisDefaultLayerId !== null
-          ? { defaultLayerId: arcgisDefaultLayerId }
+        ...(effectiveDefault !== null
+          ? { defaultLayerId: effectiveDefault }
           : {}),
         probedAt: new Date().toISOString() as ISODateString,
       };
@@ -590,8 +620,13 @@ export function NewItemWizard() {
           probeResult={arcgisProbeResult}
           defaultLayerId={arcgisDefaultLayerId}
           onDefaultLayerChange={setArcgisDefaultLayerId}
+          selectedLayerIds={arcgisSelectedLayerIds}
+          onSelectedLayerIdsChange={setArcgisSelectedLayerIds}
           onProbe={runArcgisProbe}
-          onDiscardProbe={() => setArcgisProbeResult(null)}
+          onDiscardProbe={() => {
+            setArcgisProbeResult(null);
+            setArcgisSelectedLayerIds(new Set());
+          }}
         />
       ) : null}
 
@@ -655,6 +690,9 @@ interface ArcgisConfigProps {
   probeResult: ArcgisServiceDescription | null;
   defaultLayerId: number | null;
   onDefaultLayerChange: (id: number) => void;
+  /** Set of layer ids the user wants to include in this item. */
+  selectedLayerIds: Set<number>;
+  onSelectedLayerIdsChange: (next: Set<number>) => void;
   onProbe: () => void | Promise<void>;
   onDiscardProbe: () => void;
 }
@@ -671,9 +709,32 @@ function ArcgisConfigSection({
   probeResult,
   defaultLayerId,
   onDefaultLayerChange,
+  selectedLayerIds,
+  onSelectedLayerIdsChange,
   onProbe,
   onDiscardProbe,
 }: ArcgisConfigProps) {
+  const toggleLayer = (id: number) => {
+    const next = new Set(selectedLayerIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onSelectedLayerIdsChange(next);
+  };
+  const selectAll = () => {
+    if (!probeResult) return;
+    onSelectedLayerIdsChange(new Set(probeResult.layers.map((l) => l.id)));
+  };
+  const selectNone = () => onSelectedLayerIdsChange(new Set());
+  const selectSpatialOnly = () => {
+    if (!probeResult) return;
+    onSelectedLayerIdsChange(
+      new Set(
+        probeResult.layers
+          .filter((l) => l.geometryType)
+          .map((l) => l.id),
+      ),
+    );
+  };
   return (
     <section className="space-y-3 rounded-lg border border-border bg-surface-1 p-4">
       <div className="flex items-start gap-2">
@@ -761,40 +822,105 @@ function ArcgisConfigSection({
 
           {probeResult.layers.length > 0 ? (
             <div className="mt-3">
-              <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">
-                Default sublayer
-              </p>
-              <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-0 p-1">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                  Layers to include
+                  <span className="ml-1.5 text-muted normal-case tracking-normal">
+                    ({selectedLayerIds.size} of{' '}
+                    {probeResult.layers.length} selected)
+                  </span>
+                </p>
+                <div className="flex items-center gap-1 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={selectAll}
+                    className="rounded border border-border bg-surface-1 px-1.5 py-0.5 text-muted hover:bg-surface-2 hover:text-ink-1"
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectNone}
+                    className="rounded border border-border bg-surface-1 px-1.5 py-0.5 text-muted hover:bg-surface-2 hover:text-ink-1"
+                  >
+                    None
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectSpatialOnly}
+                    title="Only layers with geometry (skip attribute-only related tables)"
+                    className="rounded border border-border bg-surface-1 px-1.5 py-0.5 text-muted hover:bg-surface-2 hover:text-ink-1"
+                  >
+                    Spatial only
+                  </button>
+                </div>
+              </div>
+              <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-0 p-1">
                 {probeResult.layers.map((l) => {
-                  const active = l.id === defaultLayerId;
+                  const included = selectedLayerIds.has(l.id);
+                  const isDefault = l.id === defaultLayerId;
                   return (
-                    <li key={l.id}>
+                    <li
+                      key={l.id}
+                      className={`flex items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
+                        included
+                          ? 'bg-surface-1 text-ink-1'
+                          : 'text-muted opacity-60'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={included}
+                        onChange={() => toggleLayer(l.id)}
+                        className="h-3.5 w-3.5 shrink-0 rounded border-border text-accent focus:ring-accent/30"
+                        aria-label={`Include layer ${l.name}`}
+                      />
+                      <span className="flex-1 truncate">
+                        <span className="tabular-nums text-muted">
+                          {l.id}
+                        </span>{' '}
+                        {l.name}
+                      </span>
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
+                        {geometryShort(l.geometryType)}
+                      </span>
+                      {/* Default-layer star: radio-like, lit only for
+                           the layer currently picked as default. Click
+                           sets default and, if layer isn't already
+                           selected, includes it. */}
                       <button
                         type="button"
-                        onClick={() => onDefaultLayerChange(l.id)}
-                        className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors ${
-                          active
-                            ? 'bg-accent/10 text-ink-0 ring-1 ring-accent/40'
-                            : 'text-ink-1 hover:bg-surface-2'
+                        onClick={() => {
+                          if (!included) {
+                            const next = new Set(selectedLayerIds);
+                            next.add(l.id);
+                            onSelectedLayerIdsChange(next);
+                          }
+                          onDefaultLayerChange(l.id);
+                        }}
+                        title={
+                          isDefault
+                            ? 'Default layer for maps consuming this item'
+                            : 'Make this the default layer'
+                        }
+                        aria-pressed={isDefault}
+                        className={`shrink-0 rounded px-1 text-[10px] font-semibold ${
+                          isDefault
+                            ? 'bg-accent/15 text-accent'
+                            : 'text-muted hover:bg-surface-2 hover:text-ink-1'
                         }`}
                       >
-                        <span className="truncate">
-                          <span className="tabular-nums text-muted">
-                            {l.id}
-                          </span>{' '}
-                          {l.name}
-                        </span>
-                        <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
-                          {geometryShort(l.geometryType)}
-                        </span>
+                        {isDefault ? 'DEFAULT' : 'set default'}
                       </button>
                     </li>
                   );
                 })}
               </ul>
               <p className="mt-1 text-[11px] text-muted">
-                Maps that pick this item from Portal load this layer by
-                default. Authors can override per-map.
+                Unchecked layers stay in the upstream service but this
+                item will not expose them. The default layer is loaded
+                when a map picks this item without a specific layer
+                choice.
               </p>
             </div>
           ) : null}
