@@ -80,6 +80,19 @@ model Organization {
   name      String
   createdAt DateTime @default(now()) @map("created_at")
 
+  /// Landing-page customization for unauthenticated visitors.
+  /// All optional — defaults render a clean page using `name` as the
+  /// title and showing publicly-shared items. An org that wants a
+  /// minimal logo-only page turns off landingShowPublicItems and
+  /// leaves the rest empty.
+  landingTitle           String?  @map("landing_title")
+  landingSubtitle        String?  @map("landing_subtitle")
+  landingHeroImageUrl    String?  @map("landing_hero_image_url")
+  landingShowPublicItems Boolean  @default(true) @map("landing_show_public_items")
+  /// Ordered list of item ids to feature on the landing. Empty /
+  /// null renders all public items in the org, newest-first.
+  landingFeaturedItemIds String[] @default([]) @map("landing_featured_item_ids") @db.Uuid
+
   users    User[]
   groups   Group[]
   items    Item[]
