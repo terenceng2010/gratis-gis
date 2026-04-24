@@ -40,6 +40,7 @@ import { FeatureServiceV3SchemaEditor } from './feature-service/v3-schema-editor
 import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { PickListEditor } from './pick-list/editor';
 import { FeatureServiceProvenance } from './feature-service/provenance-panel';
+import { FeatureServiceSchema } from './feature-service/schema-panel';
 import { ComingSoon } from './coming-soon';
 
 interface Props {
@@ -280,6 +281,12 @@ export default async function ItemDetailPage({ params }: Props) {
               field list.' Silent when the item has no source block
               recorded (legacy / hand-seeded). */}
           <FeatureServiceProvenance
+            data={item.data as FeatureServiceData | null}
+          />
+          {/* Schema inspector collapses by default (the editor below
+              is the primary surface); opens to show the field table
+              and a raw JSON disclosure for debugging. */}
+          <FeatureServiceSchema
             data={item.data as FeatureServiceData | null}
           />
           {/* v3 items route to the new multi-layer schema editor. v1/v2
