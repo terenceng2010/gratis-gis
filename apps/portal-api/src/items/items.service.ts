@@ -6,6 +6,7 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import { SharingService } from './sharing.service.js';
 import {
   extractDependencies,
+  normalizeArcgisUrl,
   REFERENCER_TYPES,
 } from './dependency-extractor.js';
 
@@ -484,15 +485,43 @@ export class ItemsService {
    */
   async listDependencies(user: AuthUser, id: string) {
     const item = await this.get(user, id);
-    const depIds = extractDependencies(item);
-    if (depIds.length === 0) return [];
+    const { itemIds, urls } = extractDependencies(item);
+    if (itemIds.length === 0 && urls.length === 0) return [];
 
-    // Respect the same visibility rules as list(): only return items
-    // the caller has the right to see.
     const visible = this.sharing.visibleWhere(user);
+
+    // Resolve URL refs by scanning arcgis_service items in the org and
+    // matching their persisted `data.url` against any url the extractor
+    // collected. Normalization on both sides makes the match trailing-
+    // slash and trailing-layer-index tolerant.
+    let urlResolvedIds: string[] = [];
+    if (urls.length > 0) {
+      const normalized = new Set(urls.map((u) => normalizeArcgisUrl(u)));
+      const candidates = await this.prisma.item.findMany({
+        where: {
+          orgId: user.orgId,
+          type: 'arcgis_service',
+          deletedAt: null,
+        },
+        select: { id: true, data: true },
+      });
+      for (const c of candidates) {
+        const rowUrl = (c.data as { url?: unknown } | null)?.url;
+        if (
+          typeof rowUrl === 'string' &&
+          normalized.has(normalizeArcgisUrl(rowUrl))
+        ) {
+          urlResolvedIds.push(c.id);
+        }
+      }
+    }
+
+    const allIds = Array.from(new Set([...itemIds, ...urlResolvedIds]));
+    if (allIds.length === 0) return [];
+
     return this.prisma.item.findMany({
       where: {
-        id: { in: depIds },
+        id: { in: allIds },
         deletedAt: null,
         ...visible,
       },
@@ -531,8 +560,18 @@ export class ItemsService {
     opts: { transitive?: boolean } = {},
   ) {
     // Caller must be able to see the item itself before asking who
-    // depends on it.
-    await this.get(user, id);
+    // depends on it. We keep the returned row so downstream logic can
+    // decide how to match — by uuid for most items, by normalized URL
+    // when the target is an arcgis_service (whose web-map layer refs
+    // are URL-based, not id-based).
+    const target = await this.get(user, id);
+    const targetUrl =
+      target.type === 'arcgis_service'
+        ? ((target.data as { url?: unknown } | null)?.url as string | undefined)
+        : undefined;
+    const normalizedTargetUrl = targetUrl
+      ? normalizeArcgisUrl(targetUrl)
+      : null;
 
     // Pull every referencer-type item in the org — we need their data
     // to extract refs. We'll filter for visibility when shaping the
@@ -556,21 +595,36 @@ export class ItemsService {
       },
     });
 
-    // Reverse index: target-id -> list of referrer ids that depend on it.
+    // Reverse index: target key -> referrer ids. Target keys are
+    // either item UUIDs ("id:<uuid>") or normalized arcgis URLs
+    // ("url:<normalized>"). Keeps both kinds of reference in one
+    // map so BFS stays simple.
     const reverse = new Map<string, string[]>();
     for (const r of referencers) {
       const deps = extractDependencies({ type: r.type, data: r.data });
-      for (const d of deps) {
-        const arr = reverse.get(d) ?? [];
+      for (const d of deps.itemIds) {
+        const key = `id:${d}`;
+        const arr = reverse.get(key) ?? [];
         arr.push(r.id);
-        reverse.set(d, arr);
+        reverse.set(key, arr);
+      }
+      for (const u of deps.urls) {
+        const key = `url:${u}`;
+        const arr = reverse.get(key) ?? [];
+        arr.push(r.id);
+        reverse.set(key, arr);
       }
     }
 
-    // BFS from `id` outward. Direct-only = depth 1; transitive = full
-    // walk, guarded against cycles by the `seen` set.
+    // BFS from the target key outward. For arcgis_service we seed with
+    // both the url-key AND the id-key (some other item type might one
+    // day reference an arcgis_service by id); for everything else just
+    // the id-key. Cycle-guarded by `seen`.
     const seen = new Set<string>();
-    const frontier = [id];
+    const seedKeys = normalizedTargetUrl
+      ? [`id:${id}`, `url:${normalizedTargetUrl}`]
+      : [`id:${id}`];
+    const frontier: string[] = [...seedKeys];
     const hits = new Set<string>();
     while (frontier.length > 0) {
       const next = frontier.shift()!;
@@ -579,7 +633,7 @@ export class ItemsService {
         if (seen.has(a)) continue;
         seen.add(a);
         hits.add(a);
-        if (opts.transitive) frontier.push(a);
+        if (opts.transitive) frontier.push(`id:${a}`);
       }
     }
 
