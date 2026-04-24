@@ -29,8 +29,8 @@ import { ItemsService } from './items.service.js';
 import { DataSnapshotService } from './data-snapshot.service.js';
 
 const ITEM_TYPE_VALUES = [
-  'web_map',
-  'feature_service',
+  'map',
+  'data_layer',
   'arcgis_service',
   'form',
   'form_submission_collection',
@@ -165,7 +165,7 @@ export class ItemsController {
   }
 
   /** Items that reference THIS one. Pass ?transitive=true to walk
-   *  further (e.g. a layer used by a web_map used by a dashboard). */
+   *  further (e.g. a layer used by a map used by a dashboard). */
   @Get(':id/dependents')
   dependents(
     @CurrentUser() user: AuthUser,
@@ -178,7 +178,7 @@ export class ItemsController {
   }
 
   /**
-   * GeoJSON-only view of a feature_service item. Handles both v1 (inline
+   * GeoJSON-only view of a data_layer item. Handles both v1 (inline
    * JSON) and v2 (PostGIS) storage transparently.
    *
    * For v2 items, accepts ?bbox=minX,minY,maxX,maxY and ?at=<ISO timestamp>
@@ -279,7 +279,7 @@ export class ItemsController {
   /**
    * List data-replace snapshots for an item. The payload doesn't
    * include the full data blob (just metadata) so the history
-   * panel can render cheaply. Caller must have edit access —
+   * panel can render cheaply. Caller must have edit access â€”
    * snapshots are authorship history, not public.
    */
   @Get(':id/snapshots')
@@ -296,7 +296,7 @@ export class ItemsController {
    * state as a fresh snapshot first, so un-revert is possible for
    * the retention window. Caller must have edit access.
    *
-   * The snapshotId must belong to the item in the URL — we don't want
+   * The snapshotId must belong to the item in the URL â€” we don't want
    * /items/A/snapshots/{snap-from-B}/revert to quietly mutate B just
    * because the caller happens to have edit access on A.
    */

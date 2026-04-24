@@ -89,7 +89,7 @@ export class V3AttachmentsController {
     await this.attachments.remove(itemId, layerId, featureId, attachmentId);
   }
 
-  /** Verify the item exists, is a v3 feature_service with this layer
+  /** Verify the item exists, is a v3 data_layer with this layer
    *  in its schema, and the caller has the right permission level. */
   private async assertFeatureAccess(
     user: AuthUser,
@@ -98,8 +98,8 @@ export class V3AttachmentsController {
     mode: 'read' | 'write',
   ): Promise<void> {
     const item = await this.items.get(user, itemId);
-    if (item.type !== 'feature_service') {
-      throw new NotFoundException('Not a feature_service item');
+    if (item.type !== 'data_layer') {
+      throw new NotFoundException('Not a data_layer item');
     }
     const data = item.data as {
       version?: number;

@@ -12,11 +12,11 @@ import {
   Table2,
   Upload,
 } from 'lucide-react';
-import type { FeatureServiceLayer } from '@gratis-gis/shared-types';
+import type { DataLayerSublayer } from '@gratis-gis/shared-types';
 import { V3FeatureBrowser } from './v3-feature-browser';
 
 /**
- * Per-layer data panel for a v3 feature_service item on the detail
+ * Per-layer data panel for a v3 data_layer item on the detail
  * page. Lists each layer with an "Import features" button that POSTs
  * a spatial file to /items/:id/layers/:layerId/import. The server's
  * ingest controller parses via GDAL and bulk-inserts into the layer's
@@ -32,7 +32,7 @@ import { V3FeatureBrowser } from './v3-feature-browser';
  */
 interface Props {
   itemId: string;
-  layers: FeatureServiceLayer[];
+  layers: DataLayerSublayer[];
   canEdit: boolean;
 }
 
@@ -67,7 +67,7 @@ export function V3LayerDataPanel({ itemId, layers, canEdit }: Props) {
 
 interface RowProps {
   itemId: string;
-  layer: FeatureServiceLayer;
+  layer: DataLayerSublayer;
   canEdit: boolean;
 }
 
@@ -138,11 +138,11 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
             <span className="uppercase">
               {layer.geometryType ?? 'table'}
             </span>
-            {' · '}
+            {' Â· '}
             <span className="font-mono">{layer.name}</span>
             {typeof layer.featureCount === 'number' ? (
               <>
-                {' · '}
+                {' Â· '}
                 {layer.featureCount.toLocaleString()} feature
                 {layer.featureCount === 1 ? '' : 's'}
               </>

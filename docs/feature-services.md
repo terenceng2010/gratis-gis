@@ -1,13 +1,13 @@
 # Feature services
 
-A `feature_service` item holds vector data — points, lines, polygons,
-mixed — that can be consumed as a layer source in web maps, as the
+A `data_layer` item holds vector data â€” points, lines, polygons,
+mixed â€” that can be consumed as a layer source in web maps, as the
 target of a form's submissions, or as the body of a dashboard panel.
 
 ## Today: inline GeoJSON
 
 v1 stores the feature collection inline in `item.data` as a typed
-`FeatureServiceData` (see `packages/shared-types/src/feature-service.ts`).
+`DataLayerData` (see `packages/shared-types/src/feature-service.ts`).
 That keeps the moving parts to a minimum: one Postgres row per
 feature service, one API surface (`GET /api/items/:id/geojson`), one
 client-side editor.
@@ -45,7 +45,7 @@ Robust `.gdb` parsers live inside GDAL; there is no production-grade
 JS equivalent. When the user drops a `.gdb` or `.gdb.zip`, the upload
 handler detects it and routes through **server-side GDAL** at
 `POST /api/items/:id/ingest`. That endpoint uses `gdal-async` (Node
-bindings, ships prebuilt binaries — no system GDAL install required in
+bindings, ships prebuilt binaries â€” no system GDAL install required in
 dev) to read the uploaded archive via GDAL's `/vsizip/` virtual
 filesystem, iterate every layer, emit a merged GeoJSON collection, and
 write it straight back to the item.

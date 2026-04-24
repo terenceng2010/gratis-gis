@@ -1,5 +1,5 @@
 /**
- * Canonical shape stored in an Item's dataJson when `type = 'web_map'`.
+ * Canonical shape stored in an Item's dataJson when `type = 'map'`.
  *
  * Versioned for forward compatibility: when we need a breaking change to
  * layer structure, bump the `version` field and write a migrator. The
@@ -13,10 +13,10 @@ export type BasemapKey =
   | 'voyager'
   | 'satellite';
 
-export interface WebMapData {
+export interface MapData {
   version: 1;
   /**
-   * Built-in basemap choice. Always set — acts as the fallback when
+   * Built-in basemap choice. Always set â€” acts as the fallback when
    * `customBasemapId` is also set but the custom basemap has been
    * deleted from the org's library.
    */
@@ -33,16 +33,16 @@ export interface WebMapData {
   zoom: number;
   bearing: number;
   pitch: number;
-  layers: WebMapLayer[];
-  search: WebMapSearchConfig;
+  layers: MapLayer[];
+  search: MapSearchConfig;
 }
 
 /**
  * Map-level search settings. Per-layer attribute search is configured
- * on each WebMapLayer; this controls how address geocoding works and
+ * on each MapLayer; this controls how address geocoding works and
  * whether the search bar shows up at all.
  */
-export interface WebMapSearchConfig {
+export interface MapSearchConfig {
   /** Whether the search bar is visible on the map. Default on. */
   enabled: boolean;
   /**
@@ -53,52 +53,52 @@ export interface WebMapSearchConfig {
   geocoding: boolean;
 }
 
-export interface WebMapLayer {
+export interface MapLayer {
   id: string;
   title: string;
   visible: boolean;
   /** 0-1 multiplier applied to all paint fill / stroke / circle alpha. */
   opacity: number;
-  source: WebMapLayerSource;
-  style: WebMapLayerStyle;
+  source: MapLayerSource;
+  style: MapLayerStyle;
   /**
    * How to color features: one color for everything, or one color per
    * distinct value of an attribute. `null` means use the simple style
    * colors as-is.
    */
-  renderer: WebMapLayerRenderer;
-  popup: WebMapLayerPopup;
-  interactions: WebMapLayerInteractions;
-  labels: WebMapLayerLabels;
-  search: WebMapLayerSearch;
+  renderer: MapLayerRenderer;
+  popup: MapLayerPopup;
+  interactions: MapLayerInteractions;
+  labels: MapLayerLabels;
+  search: MapLayerSearch;
   /**
    * Optional single-clause attribute filter. Null means "show every
    * feature". A multi-clause boolean builder can land later; one
    * clause covers most real-world filtering needs and keeps the
    * editor small.
    */
-  filter: WebMapLayerFilter | null;
+  filter: MapLayerFilter | null;
   /**
    * Per-layer scale visibility. `null` on either bound means
    * "unconstrained"; MapLibre's min/maxzoom properties clamp to
    * 0 / 24 at the extremes. Zoom is stored rather than scale
-   * denominator so the shape matches MapLibre directly — the editor
+   * denominator so the shape matches MapLibre directly â€” the editor
    * surfaces a human-readable scale hint next to each slider.
    */
-  scale: WebMapLayerScale;
+  scale: MapLayerScale;
   /**
    * Per-layer access policy. Default `policy: 'inherit'` means the
    * underlying item's sharing decides everything. `'custom'` enables
-   * the matrix — each principal the webmap is shared with gets an
+   * the matrix â€” each principal the webmap is shared with gets an
    * entry with explicit view / query / edit flags. Server enforcement
    * always caps by item-level access: the matrix can subtract (hide
    * a layer from a specific principal on this map) but can never
    * grant access the underlying item didn't already allow.
    */
-  access: WebMapLayerAccess;
+  access: MapLayerAccess;
   /**
    * Server-computed permissions for the current viewer. Only present
-   * on responses the server filtered for a non-editor viewer — the
+   * on responses the server filtered for a non-editor viewer â€” the
    * editor's view of the webmap sees full `access.entries` and no
    * `effective` field. Client honors `effective.query === false` by
    * disabling popups / attribute access for the layer.
@@ -116,7 +116,7 @@ export interface WebMapLayer {
  * true. `query` gates popups / attribute-table / search; `edit`
  * reserves future feature-editing once that pillar ships.
  */
-export interface WebMapLayerAccessEntry {
+export interface MapLayerAccessEntry {
   principalType: 'user' | 'group';
   principalId: string;
   view: boolean;
@@ -124,17 +124,17 @@ export interface WebMapLayerAccessEntry {
   edit: boolean;
 }
 
-export interface WebMapLayerAccess {
+export interface MapLayerAccess {
   /**
    * `'inherit'`: no per-layer restriction beyond item-level sharing.
-   * `'custom'`: apply `entries` — a principal not listed (and not a
+   * `'custom'`: apply `entries` â€” a principal not listed (and not a
    * member of a listed group) defaults to the layer being hidden for
    * them. Authors flip to `'custom'` the first time they adjust the
    * matrix; until then, everyone who can see the webmap can see
    * every layer they have item access to.
    */
   policy: 'inherit' | 'custom';
-  entries: WebMapLayerAccessEntry[];
+  entries: MapLayerAccessEntry[];
 }
 
 /**
@@ -143,7 +143,7 @@ export interface WebMapLayerAccess {
  * their own range because it's common to want a feature visible while
  * hiding its labels at distant zooms.
  */
-export interface WebMapLayerScale {
+export interface MapLayerScale {
   minZoom: number | null;
   maxZoom: number | null;
   /**
@@ -160,7 +160,7 @@ export interface WebMapLayerScale {
 /**
  * Rendering strategies.
  *
- * - `simple`: use the colors in `WebMapLayerStyle` for every feature.
+ * - `simple`: use the colors in `MapLayerStyle` for every feature.
  * - `unique-values`: pick a color per distinct value of `field` from
  *   `categories`; fall back to the simple color for anything not in
  *   the list.
@@ -169,12 +169,12 @@ export interface WebMapLayerScale {
  *   `stops.length + 1` entries, the first for input < stops[0], the
  *   last for input >= stops[stops.length - 1].
  */
-export type WebMapLayerRenderer =
+export type MapLayerRenderer =
   | { kind: 'simple' }
   | {
       kind: 'unique-values';
       field: string;
-      categories: WebMapUniqueValueCategory[];
+      categories: MapUniqueValueCategory[];
     }
   | {
       kind: 'class-breaks';
@@ -183,13 +183,13 @@ export type WebMapLayerRenderer =
       colors: string[];
     };
 
-export interface WebMapUniqueValueCategory {
+export interface MapUniqueValueCategory {
   /** Distinct value of the field, coerced to string. */
   value: string;
   color: string;
 }
 
-export type WebMapFilterOp =
+export type MapFilterOp =
   | '=='
   | '!='
   | '>'
@@ -204,9 +204,9 @@ export type WebMapFilterOp =
  * A single where-clause. Stays string-typed so the editor stores a
  * stable shape; the viewer coerces numeric comparisons at render time.
  */
-export interface WebMapLayerFilterClause {
+export interface MapLayerFilterClause {
   field: string;
-  op: WebMapFilterOp;
+  op: MapFilterOp;
   /** Unused for is-null / is-not-null. */
   value: string;
 }
@@ -214,19 +214,19 @@ export interface WebMapLayerFilterClause {
 /**
  * Multi-clause filter. `combinator: 'all'` is AND (every clause must
  * match), `any` is OR (at least one). A single-clause filter is just a
- * WebMapLayerFilter with one entry; multi-clause boolean trees (nested
+ * MapLayerFilter with one entry; multi-clause boolean trees (nested
  * AND/OR) can land later if real workloads ask for them.
  */
-export interface WebMapLayerFilter {
+export interface MapLayerFilter {
   combinator: 'all' | 'any';
-  clauses: WebMapLayerFilterClause[];
+  clauses: MapLayerFilterClause[];
 }
 
 /**
  * Layer data sources.
  *   - `geojson-url`: pulls from a public URL at load time.
  *   - `geojson-inline`: stores the GeoJSON body directly in the item
- *     (small datasets only — it lives in dataJson).
+ *     (small datasets only â€” it lives in dataJson).
  *   - `feature-service`: references a portal item and will light up
  *     once that pillar ships.
  *   - `arcgis-rest`: points at a layer inside an ArcGIS Server
@@ -236,17 +236,17 @@ export interface WebMapLayerFilter {
  *     `serviceType` field is persisted so callers don't have to re-
  *     probe just to tell which REST vocabulary the server uses.
  */
-export type WebMapLayerSource =
+export type MapLayerSource =
   | { kind: 'geojson-url'; url: string }
   | { kind: 'geojson-inline'; geojson: unknown }
-  | { kind: 'feature-service'; itemId: string }
+  | { kind: 'data-layer'; itemId: string }
   | {
       kind: 'arcgis-rest';
       /** Root service URL, without the trailing /<layerId>. */
       url: string;
       /** Sub-layer id inside the service (usually a small integer). */
       layerId: number;
-      /** MapServer or FeatureServer — persisted so we skip a probe. */
+      /** MapServer or FeatureServer â€” persisted so we skip a probe. */
       serviceType: 'MapServer' | 'FeatureServer';
       /**
        * Optional back-reference to the arcgis_service portal item the
@@ -274,7 +274,7 @@ export type WebMapLayerSource =
  */
 export type PointSymbol = 'circle' | 'icon';
 
-export interface WebMapLayerStyle {
+export interface MapLayerStyle {
   point: {
     color: string;
     radius: number;
@@ -317,7 +317,7 @@ export interface WebMapLayerStyle {
  * layer entirely.
  *
  * `mode` picks how the body is rendered:
- *   - `all`: show every property on the feature (the default — zero-
+ *   - `all`: show every property on the feature (the default â€” zero-
  *     config for "just give me a popup").
  *   - `picked`: only show fields in `fields`, in that exact order.
  *   - `template`: render `bodyTemplate` as a Handlebars-lite string.
@@ -329,7 +329,7 @@ export interface WebMapLayerStyle {
  * `titleTemplate` is an optional {{field}}-style string used for the
  * popup header. Empty falls back to the layer's own title.
  */
-export interface WebMapLayerPopup {
+export interface MapLayerPopup {
   enabled: boolean;
   mode: 'all' | 'picked' | 'template';
   fields: string[];
@@ -343,14 +343,14 @@ export interface WebMapLayerPopup {
  * forward-compatibility hint; editing UI only attaches to layers whose
  * source supports writes (feature-service, once it ships).
  */
-export interface WebMapLayerInteractions {
+export interface MapLayerInteractions {
   hoverHighlight: boolean;
   editingEnabled: boolean;
   /**
    * When true (the default), features on this layer can be picked via
    * the attribute table checkboxes, map click/rectangle/lasso/polygon
    * tools, and programmatic selection. When false, the layer is
-   * effectively read-only for selection purposes — useful for
+   * effectively read-only for selection purposes â€” useful for
    * basemap-style overlays that shouldn't compete for attention.
    */
   selectable: boolean;
@@ -365,7 +365,7 @@ export interface WebMapLayerInteractions {
  * `labelTemplate` follows the same {{field}}-with-formatter grammar as
  * popups; empty means "use the first matching field's value".
  */
-export interface WebMapLayerSearch {
+export interface MapLayerSearch {
   enabled: boolean;
   fields: string[];
   labelTemplate: string;
@@ -386,7 +386,7 @@ export interface WebMapLayerSearch {
  * Y is *down* on screen; positive X is right. Typical usage is a small
  * positive Y to push a label below a point marker.
  */
-export interface WebMapLayerLabels {
+export interface MapLayerLabels {
   enabled: boolean;
   /**
    * Handlebars-lite text expression. Empty string means "no label even
@@ -404,7 +404,7 @@ export interface WebMapLayerLabels {
 }
 
 /** Freshly-created map with the defaults we want every new map to carry. */
-export const DEFAULT_WEB_MAP: WebMapData = {
+export const DEFAULT_MAP: MapData = {
   version: 1,
   basemap: 'positron',
   center: [-98.5795, 39.8283],
@@ -419,7 +419,7 @@ export const DEFAULT_WEB_MAP: WebMapData = {
 };
 
 /** Default paint for a fresh layer. Accent-adjacent so it's visible on any basemap. */
-export const DEFAULT_LAYER_STYLE: WebMapLayerStyle = {
+export const DEFAULT_LAYER_STYLE: MapLayerStyle = {
   point: {
     color: '#6366f1',
     radius: 6,
@@ -442,7 +442,7 @@ export const DEFAULT_LAYER_STYLE: WebMapLayerStyle = {
   },
 };
 
-export const DEFAULT_LAYER_POPUP: WebMapLayerPopup = {
+export const DEFAULT_LAYER_POPUP: MapLayerPopup = {
   enabled: true,
   mode: 'all',
   fields: [],
@@ -450,19 +450,19 @@ export const DEFAULT_LAYER_POPUP: WebMapLayerPopup = {
   bodyTemplate: '',
 };
 
-export const DEFAULT_LAYER_INTERACTIONS: WebMapLayerInteractions = {
+export const DEFAULT_LAYER_INTERACTIONS: MapLayerInteractions = {
   hoverHighlight: true,
   editingEnabled: false,
   selectable: true,
 };
 
-export const DEFAULT_LAYER_SEARCH: WebMapLayerSearch = {
+export const DEFAULT_LAYER_SEARCH: MapLayerSearch = {
   enabled: false,
   fields: [],
   labelTemplate: '',
 };
 
-export const DEFAULT_LAYER_LABELS: WebMapLayerLabels = {
+export const DEFAULT_LAYER_LABELS: MapLayerLabels = {
   enabled: false,
   template: '',
   size: 12,
@@ -475,9 +475,9 @@ export const DEFAULT_LAYER_LABELS: WebMapLayerLabels = {
   offsetY: 1.1,
 };
 
-export const DEFAULT_LAYER_RENDERER: WebMapLayerRenderer = { kind: 'simple' };
+export const DEFAULT_LAYER_RENDERER: MapLayerRenderer = { kind: 'simple' };
 
-export const DEFAULT_LAYER_SCALE: WebMapLayerScale = {
+export const DEFAULT_LAYER_SCALE: MapLayerScale = {
   minZoom: null,
   maxZoom: null,
   scaleWithZoom: true,
@@ -485,14 +485,14 @@ export const DEFAULT_LAYER_SCALE: WebMapLayerScale = {
   labelsMaxZoom: null,
 };
 
-export const DEFAULT_LAYER_ACCESS: WebMapLayerAccess = {
+export const DEFAULT_LAYER_ACCESS: MapLayerAccess = {
   policy: 'inherit',
   entries: [],
 };
 
 /**
  * MapLibre's widest permissible zoom range. We use these when a
- * layer's scale bound is `null` — MapLibre's default min/maxzoom
+ * layer's scale bound is `null` â€” MapLibre's default min/maxzoom
  * props have the same effect but being explicit keeps the emitted
  * layer spec easy to diff.
  */
@@ -501,7 +501,7 @@ export const ZOOM_MAX = 24;
 
 /**
  * Palette used to auto-assign colors to unique-value categories. Chosen
- * to be colorblind-aware (Okabe–Ito–style distinctness) and to sit well
+ * to be colorblind-aware (Okabeâ€“Itoâ€“style distinctness) and to sit well
  * on both light and dark basemaps. Extend by appending; existing
  * categories keep the color that was picked at creation time.
  */

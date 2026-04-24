@@ -12,10 +12,10 @@ import {
 import maplibregl from 'maplibre-gl';
 import type {
   BasemapKey,
-  WebMapData,
-  WebMapLayer,
-  WebMapLayerFilter,
-  WebMapLayerFilterClause,
+  MapData,
+  MapLayer,
+  MapLayerFilter,
+  MapLayerFilterClause,
 } from '@gratis-gis/shared-types';
 import { DEFAULT_LAYER_SCALE, ZOOM_MAX, ZOOM_MIN } from '@gratis-gis/shared-types';
 import { BASEMAPS } from '@/lib/basemaps';
@@ -36,16 +36,16 @@ import type { SelectToolMode } from './select-tool';
 
 interface Props {
   /** Controlled camera + basemap + layer list. */
-  map: WebMapData;
+  map: MapData;
   /**
-   * Custom basemaps from the org's library. If the WebMap's
+   * Custom basemaps from the org's library. If the Map's
    * `customBasemapId` is set and present in this list, we
    * materialize a MapLibre style from the row instead of the
    * built-in `map.basemap` key.
    */
   customBasemaps?: CustomBasemap[];
   /** Fired whenever the user pans, zooms, rotates, or pitches. */
-  onCameraChange: (next: Pick<WebMapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
+  onCameraChange: (next: Pick<MapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
   /** Per-layer sets of selected feature ids (identical to feature indexes). */
   selection: Record<string, Set<number>>;
   /**
@@ -57,7 +57,7 @@ interface Props {
   /**
    * Commit a new selection. Called by the click / rectangle / polygon
    * handlers once they resolve a feature set. The canvas never mutates
-   * the selection state directly — parent owns the canonical copy.
+   * the selection state directly â€” parent owns the canonical copy.
    */
   onSelectionChange: (
     next: Record<string, Set<number>>,
@@ -83,11 +83,11 @@ export interface MapCanvasHandle {
 }
 
 /**
- * MapLibre canvas wired up to the declarative WebMapData shape.
+ * MapLibre canvas wired up to the declarative MapData shape.
  *
  * Why this is a "dumb" component: all editing actions (add layer,
  * restyle, reorder) happen outside this file. The canvas just mirrors
- * the current state — so a state update anywhere else always produces
+ * the current state â€” so a state update anywhere else always produces
  * a correct render with no hand-synced imperative code.
  *
  * The synchronization strategy is blunt by design: on any layer-list
@@ -225,10 +225,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
   // Remember the last selection we applied to MapLibre's feature-state,
   // so we know which ids to clear when the selection shrinks. A bare
-  // ref is enough — we don't need this in React state.
+  // ref is enough â€” we don't need this in React state.
   const appliedSelectionRef = useRef<Record<string, Set<number>>>({});
 
-  // Sync shared selection state → MapLibre feature-state. Diffs against
+  // Sync shared selection state â†’ MapLibre feature-state. Diffs against
   // the previously-applied map so we only touch what changed rather
   // than walking every feature on every render.
   useEffect(() => {
@@ -243,7 +243,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     ])) {
       const sourceId = `gg:${layerId}`;
       // If the source isn't in the style (layer was deleted or still
-      // loading), skip — the next syncOverlays will handle it.
+      // loading), skip â€” the next syncOverlays will handle it.
       if (!m.getSource(sourceId)) continue;
 
       const prev = prevApplied[layerId] ?? new Set<number>();
@@ -271,7 +271,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     onCameraChangeRef.current = onCameraChange;
   }, [onCameraChange]);
 
-  // Resolve the MapLibre style for the current WebMapData. Custom
+  // Resolve the MapLibre style for the current MapData. Custom
   // basemap wins if still present in the library; otherwise fall back
   // to the built-in key. MapLibre's setStyle() accepts either a
   // StyleSpecification or a URL string, so this returns whichever
@@ -355,7 +355,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // Basemap swap. Preserves camera + overlays so it feels seamless.
   //
   // Polling isStyleLoaded on a short interval turned out to be more
-  // reliable than hooking `styledata` — when MapLibre falls back to
+  // reliable than hooking `styledata` â€” when MapLibre falls back to
   // "rebuild from scratch" (which the console warning flagged),
   // `styledata` events can fire in a state where `isStyleLoaded`
   // briefly returns true but the style isn't really ready for
@@ -390,10 +390,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
     const resolved = resolveStyle();
     if (typeof resolved === 'string') {
-      // Vector style.json URL — MapLibre fetches it. We can't tag the
+      // Vector style.json URL â€” MapLibre fetches it. We can't tag the
       // style object directly, so fall back to marking after it loads.
       // eslint-disable-next-line no-console
-      console.debug('[basemap] setStyle URL →', desiredTag);
+      console.debug('[basemap] setStyle URL â†’', desiredTag);
       m.setStyle(resolved);
       m.once('styledata', () => {
         // Best-effort tag so the `current !== desired` check above
@@ -409,7 +409,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         metadata: { ...(resolved.metadata ?? {}), basemapTag: desiredTag },
       };
       // eslint-disable-next-line no-console
-      console.debug('[basemap] setStyle →', desiredTag);
+      console.debug('[basemap] setStyle â†’', desiredTag);
       m.setStyle(style);
     }
 
@@ -427,8 +427,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       setIconsTick((t) => t + 1);
     };
 
-    // Primary trigger: `idle` fires once everything — style, tiles,
-    // pending data — has settled. MapLibre emits it on style swaps
+    // Primary trigger: `idle` fires once everything â€” style, tiles,
+    // pending data â€” has settled. MapLibre emits it on style swaps
     // reliably, so it's the right "fully ready" signal.
     const onIdle = () => {
       m.off('idle', onIdle);
@@ -465,7 +465,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
   // Keep overlay layers (everything after the basemap) in sync with
   // props. Depends on iconsTick so the sync re-runs once each icon
-  // batch finishes registering — otherwise a symbol layer can be
+  // batch finishes registering â€” otherwise a symbol layer can be
   // added referencing an image that MapLibre hasn't received yet,
   // and it silently renders nothing.
   //
@@ -543,7 +543,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
           })
           .catch((err) => {
             if ((err as Error)?.name === 'AbortError') return;
-            // Surface errors via console — a user-facing banner can
+            // Surface errors via console â€” a user-facing banner can
             // land with the item detail page rather than scattering
             // fetch notifications across the canvas.
             // eslint-disable-next-line no-console
@@ -578,7 +578,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     const interactiveLayerIds = (): string[] => {
       // getStyle() can return undefined before the initial style load
       // completes and during style transitions. Bail out with an empty
-      // list — the hover / popup / click paths all no-op cleanly when
+      // list â€” the hover / popup / click paths all no-op cleanly when
       // there are no interactive layer ids to query.
       const style = m.getStyle();
       if (!style) return [];
@@ -648,7 +648,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     }
     function onClick(e: maplibregl.MapMouseEvent) {
       const tool = selectToolRef.current;
-      // Rectangle & polygon tools have their own handlers — a plain
+      // Rectangle & polygon tools have their own handlers â€” a plain
       // click should never compete with their drag/vertex logic.
       if (tool === 'rectangle' || tool === 'polygon') return;
       const hits = m!.queryRenderedFeatures(e.point, {
@@ -680,7 +680,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         return;
       }
 
-      // tool === 'off' → popup behaviour.
+      // tool === 'off' â†’ popup behaviour.
       const hit = hits[0];
       if (!hit) {
         popupRef.current?.remove();
@@ -690,7 +690,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const layer = map.layers.find((l) =>
         overlayLayerIds(l.id).some((id) => id === hit.layer.id),
       );
-      // Honour server-computed permissions when present — viewers
+      // Honour server-computed permissions when present â€” viewers
       // get `effective.query === false` for any layer the access
       // matrix narrowed to view-only, and popups should stay closed.
       if (!layer || !layer.popup.enabled) return;
@@ -1101,8 +1101,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 /**
  * Load an SVG string onto a canvas and return the raw pixels. Used to
  * turn the bundled icon library into images MapLibre can register via
- * addImage(). We render at 2x physical pixels (96 × 96 pixels for a
- * 48 × 48 icon) so high-DPI displays stay crisp.
+ * addImage(). We render at 2x physical pixels (96 Ã— 96 pixels for a
+ * 48 Ã— 48 icon) so high-DPI displays stay crisp.
  */
 async function rasterizeSvg(svg: string, size: number): Promise<ImageData> {
   const scale = 2;
@@ -1131,7 +1131,7 @@ async function rasterizeSvg(svg: string, size: number): Promise<ImageData> {
 
 /**
  * Register every bundled icon (plain + SDF variant) with the map.
- * Idempotent via `hasImage` checks — caller is free to invoke this
+ * Idempotent via `hasImage` checks â€” caller is free to invoke this
  * on every basemap swap or style event without risking duplicates.
  * Failures are per-icon and silent so one bad SVG doesn't kill the
  * whole batch. Module-scoped so the init useEffect and the basemap
@@ -1210,7 +1210,7 @@ function applySelectionMutation({
   apply,
 }: {
   current: Record<string, Set<number>>;
-  layers: WebMapLayer[];
+  layers: MapLayer[];
   hit: { layerId: string; featureId: number } | null;
   mods: { shift: boolean; meta: boolean };
   apply: (next: Record<string, Set<number>>) => void;
@@ -1242,13 +1242,13 @@ function applySelectionMutation({
 
 /**
  * Ask MapLibre which features intersect a pixel bbox, then group the
- * hits by WebMapLayer id. Skips layers whose `interactions.selectable`
+ * hits by MapLayer id. Skips layers whose `interactions.selectable`
  * is explicitly false. Feature ids come from the source's generateId
- * setting — matches the indexes the attribute table uses.
+ * setting â€” matches the indexes the attribute table uses.
  */
 function collectFeaturesInBbox(
   m: maplibregl.Map,
-  layers: WebMapLayer[],
+  layers: MapLayer[],
   bbox: [[number, number], [number, number]],
 ): Record<string, Set<number>> {
   const wanted = layers
@@ -1267,7 +1267,7 @@ function collectFeaturesInBbox(
  * Pick features whose geometry centroid lies inside a polygon (vertex
  * list is lng/lat). We bbox-query MapLibre first to narrow the
  * candidate set, then ray-cast each candidate's centroid. Using the
- * centroid is a deliberate simplification — it doesn't distinguish a
+ * centroid is a deliberate simplification â€” it doesn't distinguish a
  * feature straddling the polygon's edge from one fully inside, but
  * it lands within a few percent of the right answer on typical
  * parcel/building datasets and keeps us out of the turf.js size
@@ -1275,7 +1275,7 @@ function collectFeaturesInBbox(
  */
 function collectFeaturesInPolygon(
   m: maplibregl.Map,
-  layers: WebMapLayer[],
+  layers: MapLayer[],
   polygon: Array<[number, number]>,
 ): Record<string, Set<number>> {
   if (polygon.length < 3) return {};
@@ -1313,7 +1313,7 @@ function collectFeaturesInPolygon(
 
 function hitsByLayer(
   hits: maplibregl.MapGeoJSONFeature[],
-  layers: WebMapLayer[],
+  layers: MapLayer[],
 ): Record<string, Set<number>> {
   const result: Record<string, Set<number>> = {};
   for (const hit of hits) {
@@ -1333,7 +1333,7 @@ function hitsByLayer(
 
 /**
  * Classic ray-casting point-in-polygon. Polygon is a flat vertex
- * ring (no holes for now — selection polygons are user-drawn, always
+ * ring (no holes for now â€” selection polygons are user-drawn, always
  * simple). 1e-12 epsilon avoids divide-by-zero on horizontal edges.
  */
 function pointInRing(
@@ -1395,7 +1395,7 @@ function geometryCentroid(
   return [(minX + maxX) / 2, (minY + maxY) / 2];
 }
 
-/** Ids of the MapLibre style-layers this WebMapLayer may contribute. */
+/** Ids of the MapLibre style-layers this MapLayer may contribute. */
 function overlayLayerIds(layerId: string): string[] {
   return [
     `gg:${layerId}-fill`,
@@ -1410,7 +1410,7 @@ function overlayLayerIds(layerId: string): string[] {
 /**
  * Cursor definitions for each select tool. Each entry is an inline
  * SVG + the (x, y) hot-spot in SVG pixel coords. Rendered as a
- * data-URI cursor so the browser handles the rest — no asset files,
+ * data-URI cursor so the browser handles the rest â€” no asset files,
  * no preload timing. Cursor size is capped at 24px which is the
  * largest all major browsers render reliably.
  *
@@ -1456,7 +1456,7 @@ function toolCursor(mode: SelectToolMode): string {
  */
 function syncOverlays(
   m: maplibregl.Map,
-  layers: WebMapLayer[],
+  layers: MapLayer[],
   hoveredRef: React.MutableRefObject<{ sourceId: string; featureId: string | number } | null>,
 ) {
   // Remove previously-added overlay layers. Everything we own starts
@@ -1529,7 +1529,7 @@ function syncOverlays(
     // Point sizes grow smoothly with zoom so features don't dominate
     // the view at continent-level zooms and stay legible at street
     // level. Baseline at zoom 14 (roughly neighbourhood scale) with
-    // gentle shrink below and mild growth above — tuned to match the
+    // gentle shrink below and mild growth above â€” tuned to match the
     // "feels right" curve most web map styles ship. When the layer
     // opts out of zoom scaling, the helpers return the flat value.
     const ZOOM_SCALE_STOPS: Array<[number, number]> = [
@@ -1650,7 +1650,7 @@ function syncOverlays(
     const iconReady = wantsIcon && m.hasImage(preferredId);
     if (iconReady) {
       // Selection halo under the icon. Rendered as a separate circle
-      // layer so it reads through whatever the symbol shows on top —
+      // layer so it reads through whatever the symbol shows on top â€”
       // works for both SDF and plain icon variants.
       m.addLayer({
         id: `gg:${layer.id}-icon-halo`,
@@ -1682,7 +1682,7 @@ function syncOverlays(
           'icon-image': preferredId,
           // Zoom-interpolated size. Feature-state expressions aren't
           // allowed in layout properties, so the halo circle above
-          // carries selected/hover — this property only tracks zoom.
+          // carries selected/hover â€” this property only tracks zoom.
           'icon-size': zoomScaleNumber(
             s.point.iconSize,
           ) as unknown as number,
@@ -1812,7 +1812,7 @@ function templateToExpression(template: string): unknown {
  * MapLibre's expression language (upper/lower/number with locale
  * coercion) are inlined; formatters MapLibre can't express
  * (currency with a specific locale, date with a style) fall back to
- * plain to-string with a comment — the popup renderer still honors
+ * plain to-string with a comment â€” the popup renderer still honors
  * them on click, this just means the *label* won't format them.
  */
 function formatterExpression(
@@ -1847,7 +1847,7 @@ type MlFilter = maplibregl.FilterSpecification;
  * null if the clause is incomplete / unfit for the chosen operator
  * (e.g. a numeric comparison whose value is not a valid number).
  */
-function clauseToExpr(clause: WebMapLayerFilterClause): unknown[] | null {
+function clauseToExpr(clause: MapLayerFilterClause): unknown[] | null {
   if (!clause.field) return null;
   const prop = ['get', clause.field];
   switch (clause.op) {
@@ -1881,7 +1881,7 @@ function clauseToExpr(clause: WebMapLayerFilterClause): unknown[] | null {
  */
 function combineFilter(
   geomFilter: unknown[],
-  filter: WebMapLayerFilter | null,
+  filter: MapLayerFilter | null,
 ): MlFilter {
   if (!filter || filter.clauses.length === 0) return geomFilter as MlFilter;
   const exprs = filter.clauses
@@ -1894,8 +1894,8 @@ function combineFilter(
 
 /**
  * Build a MapLibre paint color for a given style slot, honoring the
- * layer's renderer. Simple renderer → raw hex. Unique-values renderer
- * → a `match` expression against the field, defaulting to the simple
+ * layer's renderer. Simple renderer â†’ raw hex. Unique-values renderer
+ * â†’ a `match` expression against the field, defaulting to the simple
  * color for anything unlisted.
  *
  * Returns `any` because MapLibre paint values are typed as massive
@@ -1907,7 +1907,7 @@ function combineFilter(
 // keep the call sites clean; the runtime shape is exactly what the
 // paint-property validator expects.
 function rendererColor(
-  layer: WebMapLayer,
+  layer: MapLayer,
   fallback: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
@@ -1956,12 +1956,12 @@ function rendererColor(
  * (and its own cache / cancellation). The API route passes through
  * our auth, so no credentials juggling client-side.
  */
-function sourceData(layer: WebMapLayer): GeoJSON.FeatureCollection | string | null {
+function sourceData(layer: MapLayer): GeoJSON.FeatureCollection | string | null {
   if (layer.source.kind === 'geojson-url') return layer.source.url;
   if (layer.source.kind === 'geojson-inline') {
     return layer.source.geojson as GeoJSON.FeatureCollection;
   }
-  if (layer.source.kind === 'feature-service') {
+  if (layer.source.kind === 'data-layer') {
     // The server-side API endpoint emits the GeoJSON directly; see
     // apps/portal-api/src/items/items.controller.ts `@Get(':id/geojson')`.
     return `/api/portal/items/${layer.source.itemId}/geojson`;
@@ -1985,7 +1985,7 @@ function sourceData(layer: WebMapLayer): GeoJSON.FeatureCollection | string | nu
  * Values are HTML-escaped because they're user-provided data.
  */
 function renderPopupHtml(
-  layer: WebMapLayer,
+  layer: MapLayer,
   props: Record<string, unknown>,
 ): string {
   const title = layer.popup.titleTemplate
@@ -2033,13 +2033,13 @@ function renderPopupHtml(
 /**
  * Handlebars-lite interpolation.
  *
- *   {{field}}               → raw value
- *   {{field | upper}}       → uppercased
- *   {{field | lower}}       → lowercased
- *   {{price | number}}      → locale-formatted number
- *   {{price | currency}}    → locale currency (user's default)
- *   {{date | date}}         → locale-formatted date/time
- *   {{date | date:short}}   → short date
+ *   {{field}}               â†’ raw value
+ *   {{field | upper}}       â†’ uppercased
+ *   {{field | lower}}       â†’ lowercased
+ *   {{price | number}}      â†’ locale-formatted number
+ *   {{price | currency}}    â†’ locale currency (user's default)
+ *   {{date | date}}         â†’ locale-formatted date/time
+ *   {{date | date:short}}   â†’ short date
  *
  * Template literals are rendered as HTML so authors can use small
  * markup (`<br>`, `<strong>`). Values are always HTML-escaped, so a

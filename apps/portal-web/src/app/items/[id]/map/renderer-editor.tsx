@@ -2,8 +2,8 @@
 
 import { BarChart3, Plus, Shuffle, Trash2 } from 'lucide-react';
 import type {
-  WebMapLayerRenderer,
-  WebMapUniqueValueCategory,
+  MapLayerRenderer,
+  MapUniqueValueCategory,
 } from '@gratis-gis/shared-types';
 import {
   CLASS_BREAK_RAMPS,
@@ -14,9 +14,9 @@ import {
 import type { LayerMetadata } from './layer-metadata';
 
 interface Props {
-  value: WebMapLayerRenderer;
+  value: MapLayerRenderer;
   metadata: LayerMetadata;
-  onChange: (next: WebMapLayerRenderer) => void;
+  onChange: (next: MapLayerRenderer) => void;
 }
 
 /**
@@ -60,14 +60,14 @@ export function RendererEditor({ value, metadata, onChange }: Props) {
 
   function autoPopulate(field: string) {
     const values = metadata.valuesByField[field] ?? [];
-    const categories: WebMapUniqueValueCategory[] = values.map((v, i) => ({
+    const categories: MapUniqueValueCategory[] = values.map((v, i) => ({
       value: v,
       color: UNIQUE_VALUE_PALETTE[i % UNIQUE_VALUE_PALETTE.length]!,
     }));
     onChange({ kind: 'unique-values', field, categories });
   }
 
-  function patchCategory(idx: number, patch: Partial<WebMapUniqueValueCategory>) {
+  function patchCategory(idx: number, patch: Partial<MapUniqueValueCategory>) {
     if (!isUnique) return;
     const next = value.categories.map((c, i) => (i === idx ? { ...c, ...patch } : c));
     onChange({ ...value, categories: next });
@@ -240,9 +240,9 @@ function ClassBreaksEditor({
   metadata,
   onChange,
 }: {
-  value: Extract<WebMapLayerRenderer, { kind: 'class-breaks' }>;
+  value: Extract<MapLayerRenderer, { kind: 'class-breaks' }>;
   metadata: LayerMetadata;
-  onChange: (next: WebMapLayerRenderer) => void;
+  onChange: (next: MapLayerRenderer) => void;
 }) {
   const numericFields = metadata.fields.filter((f) => {
     const vals = metadata.valuesByField[f] ?? [];
@@ -255,7 +255,7 @@ function ClassBreaksEditor({
     onChange({ ...value, colors });
   }
 
-  function patch(p: Partial<Extract<WebMapLayerRenderer, { kind: 'class-breaks' }>>) {
+  function patch(p: Partial<Extract<MapLayerRenderer, { kind: 'class-breaks' }>>) {
     onChange({ ...value, ...p });
   }
 
@@ -384,7 +384,7 @@ function ClassBreaksEditor({
               label={
                 i < value.stops.length - 1
                   ? `${stop} to < ${value.stops[i + 1]}`
-                  : `≥ ${stop}`
+                  : `â‰¥ ${stop}`
               }
               color={value.colors[i + 1] ?? '#000'}
               onColor={(c) => updateColor(i + 1, c)}

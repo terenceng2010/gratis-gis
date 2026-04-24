@@ -3,12 +3,12 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2, Save } from 'lucide-react';
-import type { FeatureServiceDataV3 } from '@gratis-gis/shared-types';
-import { FeatureServiceBuilder } from '@/app/items/new/feature-service-builder';
+import type { DataLayerDataV3 } from '@gratis-gis/shared-types';
+import { DataLayerBuilder } from '@/app/items/new/data-layer-builder';
 import { V3LayerDataPanel } from './v3-layer-data-panel';
 
 /**
- * Detail-page schema editor for v3 feature_service items.
+ * Detail-page schema editor for v3 data_layer items.
  *
  * Mounts the same multi-layer builder the /items/new wizard uses,
  * pre-filled with the item's current v3 config, and PATCHes the
@@ -22,17 +22,17 @@ import { V3LayerDataPanel } from './v3-layer-data-panel';
  */
 interface Props {
   itemId: string;
-  initial: FeatureServiceDataV3;
+  initial: DataLayerDataV3;
   canEdit: boolean;
 }
 
-export function FeatureServiceV3SchemaEditor({
+export function DataLayerV3SchemaEditor({
   itemId,
   initial,
   canEdit,
 }: Props) {
   const router = useRouter();
-  const [data, setData] = useState<FeatureServiceDataV3>(initial);
+  const [data, setData] = useState<DataLayerDataV3>(initial);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +114,7 @@ export function FeatureServiceV3SchemaEditor({
         disabled={!canEdit}
         className={canEdit ? undefined : 'pointer-events-none opacity-60'}
       >
-        <FeatureServiceBuilder value={data} onChange={setData} />
+        <DataLayerBuilder value={data} onChange={setData} />
       </fieldset>
 
       {error ? (

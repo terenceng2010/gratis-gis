@@ -2,16 +2,16 @@
 
 import { Plus, Trash2, X } from 'lucide-react';
 import type {
-  WebMapFilterOp,
-  WebMapLayerFilter,
-  WebMapLayerFilterClause,
+  MapFilterOp,
+  MapLayerFilter,
+  MapLayerFilterClause,
 } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
 
 interface Props {
-  value: WebMapLayerFilter | null;
+  value: MapLayerFilter | null;
   metadata: LayerMetadata;
-  onChange: (next: WebMapLayerFilter | null) => void;
+  onChange: (next: MapLayerFilter | null) => void;
 }
 
 /**
@@ -30,7 +30,7 @@ export function FilterEditor({ value, metadata, onChange }: Props) {
     onChange({ combinator: 'all', clauses: [{ field: '', op: '==', value: '' }] });
   }
 
-  function update(next: WebMapLayerFilter) {
+  function update(next: MapLayerFilter) {
     onChange(next);
   }
 
@@ -42,7 +42,7 @@ export function FilterEditor({ value, metadata, onChange }: Props) {
     });
   }
 
-  function patchClause(idx: number, patch: Partial<WebMapLayerFilterClause>) {
+  function patchClause(idx: number, patch: Partial<MapLayerFilterClause>) {
     if (!value) return;
     update({
       ...value,
@@ -137,9 +137,9 @@ function Clause({
   onChange,
   onRemove,
 }: {
-  clause: WebMapLayerFilterClause;
+  clause: MapLayerFilterClause;
   metadata: LayerMetadata;
-  onChange: (patch: Partial<WebMapLayerFilterClause>) => void;
+  onChange: (patch: Partial<MapLayerFilterClause>) => void;
   onRemove: () => void;
 }) {
   const needsValue = clause.op !== 'is-null' && clause.op !== 'is-not-null';
@@ -174,7 +174,7 @@ function Clause({
           <div className="flex gap-1.5">
             <select
               value={clause.op}
-              onChange={(e) => onChange({ op: e.target.value as WebMapFilterOp })}
+              onChange={(e) => onChange({ op: e.target.value as MapFilterOp })}
               className="h-7 rounded border border-border bg-surface-1 px-1 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
             >
               <option value="==">==</option>

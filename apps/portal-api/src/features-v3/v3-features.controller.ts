@@ -47,7 +47,7 @@ class UpdateFeatureBodyDto {
 }
 
 /**
- * Per-layer feature CRUD for v3 feature_service items.
+ * Per-layer feature CRUD for v3 data_layer items.
  *
  * Routes sit under /items/:id/layers/:layerId/... so they live
  * alongside the item-level routes but don't collide with v1/v2's
@@ -92,7 +92,7 @@ export class V3FeaturesController {
     return this.v3.listFeatures(itemId, layerId, opts);
   }
 
-  /** GeoJSON view of a single layer — the map editor's overlay source
+  /** GeoJSON view of a single layer â€” the map editor's overlay source
    *  hits this per-layer URL for v3 items, the same way v2 items use
    *  /items/:id/geojson. */
   @Get('geojson')
@@ -144,11 +144,11 @@ export class V3FeaturesController {
     await this.v3.deleteFeature(itemId, layerId, featureId, user);
   }
 
-  /** Verify the item exists, is a v3 feature_service, the caller can
+  /** Verify the item exists, is a v3 data_layer, the caller can
    *  read (or edit) it, and the named layer is part of its schema.
    *  Returns the geographic restriction (if any) that applies to this
    *  caller on this item so the query can clip rows to the allowed
-   *  area. Null means no restriction — either because the caller has
+   *  area. Null means no restriction â€” either because the caller has
    *  unrestricted access (owner / admin / org / public) or because
    *  their share(s) don't carry a polygon. */
   private async assertV3Layer(
@@ -158,8 +158,8 @@ export class V3FeaturesController {
     mode: 'read' | 'write',
   ): Promise<{ geoLimit: unknown | null }> {
     const item = await this.items.get(user, itemId);
-    if (item.type !== 'feature_service') {
-      throw new NotFoundException('Not a feature_service item');
+    if (item.type !== 'data_layer') {
+      throw new NotFoundException('Not a data_layer item');
     }
     const data = item.data as {
       version?: number;
@@ -167,7 +167,7 @@ export class V3FeaturesController {
     } | null;
     if (data?.version !== 3) {
       throw new NotFoundException(
-        'Item is not a v3 multi-layer feature_service',
+        'Item is not a v3 multi-layer data_layer',
       );
     }
     const layers = data.layers ?? [];
@@ -181,7 +181,7 @@ export class V3FeaturesController {
       // Authoritative edit gate: same helper update() uses.
       await this.items.assertCanEdit(user, itemId);
     }
-    // Geo-limit is only meaningful on read — writes go through
+    // Geo-limit is only meaningful on read â€” writes go through
     // canEdit which doesn't use a polygon today (the share either
     // grants edit or doesn't). For reads, consult every matching
     // share's polygon to build the union. Owners / admins return

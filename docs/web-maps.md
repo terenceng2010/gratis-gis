@@ -1,8 +1,8 @@
 # Web maps
 
-A web_map is an item whose `dataJson` describes a MapLibre camera, a
+A map is an item whose `dataJson` describes a MapLibre camera, a
 basemap choice, and (eventually) an ordered stack of overlay layers.
-It is the first full pillar: create a web_map, choose a basemap, pan to
+It is the first full pillar: create a map, choose a basemap, pan to
 the area you care about, save, share.
 
 ## Data shape
@@ -21,7 +21,7 @@ minimal in v1 and extends additively:
 }
 ```
 
-Tolerate missing fields on read. `DEFAULT_WEB_MAP` provides a fallback
+Tolerate missing fields on read. `DEFAULT_MAP` provides a fallback
 so old items keep rendering after additive changes.
 
 ## Basemaps
@@ -55,23 +55,23 @@ Design principles:
 
 ## Overlay layers (v2)
 
-A WebMapData carries an ordered `layers` array. Each layer declares its
+A MapData carries an ordered `layers` array. Each layer declares its
 source, style, popup behavior, and interaction toggles. The top of the
 list draws on top (same mental model as every design tool).
 
 Per-layer controls available today:
 
-- **Source** — GeoJSON URL or inline GeoJSON (small datasets only;
+- **Source** â€” GeoJSON URL or inline GeoJSON (small datasets only;
   inline features live in the item's dataJson). Feature-service as a
   source is stubbed; it lights up when that pillar ships.
-- **Visibility + opacity** — toggle and 0-100% slider.
-- **Simple-renderer style** — per geometry family (point / line /
+- **Visibility + opacity** â€” toggle and 0-100% slider.
+- **Simple-renderer style** â€” per geometry family (point / line /
   polygon), with color, width/radius, outline color, outline width,
   and fill opacity. A GeoJSON source that mixes geometries renders
   all three styles at once, each filtered to its matching geometry.
-- **Click popup** — on/off. v2 shows every feature property by
+- **Click popup** â€” on/off. v2 shows every feature property by
   default; field selection + templating ship next.
-- **Hover highlight** — brightens the fill, thickens the outline, and
+- **Hover highlight** â€” brightens the fill, thickens the outline, and
   bumps circle radius under the cursor. Cursor also switches to a
   pointer whenever the mouse is over a feature.
 

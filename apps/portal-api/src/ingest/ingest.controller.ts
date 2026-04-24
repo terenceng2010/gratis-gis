@@ -28,7 +28,7 @@ import { IngestService } from './ingest.service.js';
  * features into a PostGIS table (v2 storage). The item metadata is
  * updated to reflect the new storage type.
  *
- * Only feature_service items are accepted as targets. The caller must
+ * Only data_layer items are accepted as targets. The caller must
  * have edit rights (owner or org admin, same rule as PATCH /items/:id).
  */
 @ApiTags('ingest')
@@ -87,9 +87,9 @@ export class IngestController {
     }
 
     const item = await this.items.get(user, id);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       throw new BadRequestException(
-        'Server-side ingest only targets feature_service items.',
+        'Server-side ingest only targets data_layer items.',
       );
     }
     const shares = await this.prisma.itemShare.findMany({ where: { itemId: id } });
@@ -166,7 +166,7 @@ export class IngestController {
    * Per-layer ingest for v3 multi-layer items. Accepts a file + the
    * optional name of a source layer inside a multi-layer archive
    * (GDB, shapefile zip with several .shp). Features get bulk-
-   * inserted into the target layer's PostGIS table — which must
+   * inserted into the target layer's PostGIS table â€” which must
    * already exist (provisioned on item create by ItemsService).
    */
   @Post('items/:id/layers/:layerId/import')
@@ -188,9 +188,9 @@ export class IngestController {
       );
     }
     const item = await this.items.get(user, itemId);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       throw new BadRequestException(
-        'Ingest only targets feature_service items.',
+        'Ingest only targets data_layer items.',
       );
     }
     const data = item.data as {
@@ -287,7 +287,7 @@ export class IngestController {
 
 /**
  * Map GDAL driver strings we emit to the format enum the shared
- * FeatureServiceSource type exposes. Unknown drivers fall through to
+ * DataLayerSource type exposes. Unknown drivers fall through to
  * 'api' so the shape stays strict on the client side.
  */
 function driverToFormat(

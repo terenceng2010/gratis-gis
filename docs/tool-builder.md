@@ -30,11 +30,11 @@ draggable widget in the app builder.
 
 | category | examples |
 | --- | --- |
-| Source | FeatureService, FormSubmissions, UploadedFile, HTTPFetch, Constant |
+| Source | DataLayer, FormSubmissions, UploadedFile, HTTPFetch, Constant |
 | Spatial | Buffer, Intersect, Union, Dissolve, Clip, Reproject, Simplify |
 | Attribute | Filter, JoinByAttr, JoinBySpatial, Aggregate, Calculate |
 | Enrichment | Geocode, ElevationLookup, Weather (via plugin) |
-| Output | FeatureServiceSink, Chart, MapLayer, FileExport, ReportPanel |
+| Output | DataLayerSink, Chart, MapLayer, FileExport, ReportPanel |
 | Compute | SQL, JavaScript, **NotebookStep** (delegates to a Python kernel) |
 | Control | Switch, Loop, Try/Catch (later phases) |
 
@@ -47,8 +47,8 @@ be installed per-org.
 {
   "version": 1,
   "inputs": [
-    { "id": "parcels", "type": "feature-service", "label": "Parcels" },
-    { "id": "floodplain", "type": "feature-service", "label": "Floodplain" }
+    { "id": "parcels", "type": "data-layer", "label": "Parcels" },
+    { "id": "floodplain", "type": "data-layer", "label": "Floodplain" }
   ],
   "nodes": [
     {
@@ -96,7 +96,7 @@ A tool can be published as a widget. The widget manifest declares:
 
 - Which graph inputs are user-facing (e.g. a layer picker, a number input)
 - Which outputs render as UI (map layer, chart, list)
-- A React Flow → runtime binding that lives in `apps/app-builder`
+- A React Flow â†’ runtime binding that lives in `apps/app-builder`
 
 This means every tool is dual-use: run-as-analysis or drag-and-drop widget.
 
@@ -114,7 +114,7 @@ Beyond what traditional geoprocessing model builders offer:
 
 Phase 7 delivers:
 
-- Canvas + node catalog (baseline 20–30 nodes)
+- Canvas + node catalog (baseline 20â€“30 nodes)
 - SQL-pushdown runner for common spatial ops
 - Save/run/view-results flow
 - Widget export MVP (map-layer + chart outputs)

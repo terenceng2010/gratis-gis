@@ -16,27 +16,27 @@ const BOB_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const GROUP_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
 async function main() {
-  console.log('â†’ seeding organization');
+  console.log('Ã¢â€ â€™ seeding organization');
   const org = await prisma.organization.upsert({
     where: { id: ACME_ID },
     update: {},
     create: { id: ACME_ID, slug: 'acme', name: 'Acme Corp' },
   });
 
-  console.log('â†’ seeding users');
+  console.log('Ã¢â€ â€™ seeding users');
   await prisma.user.upsert({
     where: { id: MATEO_ID },
     update: {
       username: 'mateo',
       email: 'mateo@acme.test',
-      fullName: 'Mateo GarcÃ­a',
+      fullName: 'Mateo GarcÃƒÂ­a',
     },
     create: {
       id: MATEO_ID,
       orgId: org.id,
       username: 'mateo',
       email: 'mateo@acme.test',
-      fullName: 'Mateo GarcÃ­a',
+      fullName: 'Mateo GarcÃƒÂ­a',
       orgRole: 'contributor',
     },
   });
@@ -53,7 +53,7 @@ async function main() {
     },
   });
 
-  console.log('â†’ seeding group');
+  console.log('Ã¢â€ â€™ seeding group');
   await prisma.group.upsert({
     where: { id: GROUP_ID },
     update: {},
@@ -77,7 +77,7 @@ async function main() {
     create: { groupId: GROUP_ID, userId: BOB_ID, role: 'admin' },
   });
 
-  console.log('â†’ seeding items');
+  console.log('Ã¢â€ â€™ seeding items');
 
   // Small demo feature service: a handful of points around the Acme HQ
   // neighborhood with a category attribute so unique-value and filter
@@ -120,7 +120,7 @@ async function main() {
       id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
       orgId: org.id,
       ownerId: MATEO_ID,
-      type: 'feature_service',
+      type: 'data_layer',
       title: 'Acme Buildings',
       description: 'Demo feature service with the Acme campus buildings.',
       tags: ['campus', 'buildings', 'demo'],
@@ -145,7 +145,7 @@ async function main() {
       id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
       orgId: org.id,
       ownerId: MATEO_ID,
-      type: 'web_map',
+      type: 'map',
       title: 'Acme HQ Campus Map',
       description: 'Basemap + building outlines, shared to the Field Team.',
       tags: ['campus', 'buildings'],
@@ -162,7 +162,7 @@ async function main() {
     },
   });
 
-  console.log('âœ“ seed complete');
+  console.log('Ã¢Å“â€œ seed complete');
 }
 
 main()

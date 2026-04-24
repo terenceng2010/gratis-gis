@@ -14,8 +14,8 @@ import {
 import type { Item, ItemAccess, ItemType } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
-  DEFAULT_FEATURE_SERVICE,
-  DEFAULT_WEB_MAP,
+  DEFAULT_DATA_LAYER,
+  DEFAULT_MAP,
 } from '@gratis-gis/shared-types';
 import { ImageUploader } from '@/components/image-uploader';
 
@@ -70,17 +70,17 @@ const LICENSE_OPTIONS: Array<{ value: string; label: string; hint?: string }> = 
     label: 'Proprietary / rights reserved',
     hint: 'Internal use only',
   },
-  { value: 'custom', label: 'Custom…', hint: 'Specify your own value' },
+  { value: 'custom', label: 'Customâ€¦', hint: 'Specify your own value' },
 ];
 
 const ITEM_TYPE_OPTIONS: Array<{ value: ItemType; label: string; desc: string }> = [
   {
-    value: 'web_map' as ItemType,
+    value: 'map' as ItemType,
     label: 'Web map',
     desc: 'A basemap + overlay layers with styling.',
   },
   {
-    value: 'feature_service' as ItemType,
+    value: 'data_layer' as ItemType,
     label: 'Feature service',
     desc: 'A shareable vector layer backed by PostGIS.',
   },
@@ -148,7 +148,7 @@ const accessOptions: Array<{
 ];
 
 /**
- * Create/edit form for item metadata. Data payload is not edited here —
+ * Create/edit form for item metadata. Data payload is not edited here â€”
  * type-specific editors (map authoring, form designer, etc.) ship with
  * their respective pillars. On create, the payload defaults to {}.
  */
@@ -160,7 +160,7 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [type, setType] = useState<ItemType>(
-    (initialValues?.type as ItemType) ?? 'web_map',
+    (initialValues?.type as ItemType) ?? 'map',
   );
   const [title, setTitle] = useState(initialValues?.title ?? '');
   const [description, setDescription] = useState(
@@ -232,10 +232,10 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
       // meaningful immediately. Other types can fall through to {} and
       // get populated by their dedicated editor on the detail page.
       payload.data =
-        type === 'web_map'
-          ? DEFAULT_WEB_MAP
-          : type === 'feature_service'
-            ? DEFAULT_FEATURE_SERVICE
+        type === 'map'
+          ? DEFAULT_MAP
+          : type === 'data_layer'
+            ? DEFAULT_DATA_LAYER
             : type === 'arcgis_service'
               ? DEFAULT_ARCGIS_SERVICE
               : {};
@@ -263,11 +263,11 @@ export function ItemForm({ mode, initialValues, itemId }: Props) {
 
     if (mode.kind === 'create') {
       // Navigate to the new item's detail page. For types whose first
-      // job on arrival is to bring data in (feature_service), jump
+      // job on arrival is to bring data in (data_layer), jump
       // directly to the ingest anchor so the upload panel is the very
       // first thing the user sees.
       const anchor =
-        type === 'feature_service'
+        type === 'data_layer'
           ? '#add-data'
           : type === 'arcgis_service'
             ? '#configure-arcgis'

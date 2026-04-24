@@ -14,13 +14,13 @@ export interface ItemCardProps {
   href?: string;
   /**
    * Optional per-type icon rendered on the thumbnail tile when the item
-   * has no custom thumbnailUrl. Callers supply this from a type-→icon
+   * has no custom thumbnailUrl. Callers supply this from a type-â†’icon
    * registry they own (keeps this package lucide-free). If omitted, the
    * card falls back to the legacy colored-initials EntityBadge tile.
    */
   fallbackIcon?: ReactNode;
   /** Optional trailing slot rendered at the top of the card (above the
-   *  thumbnail area) — used for things like sharing indicators. */
+   *  thumbnail area) â€” used for things like sharing indicators. */
   headerExtra?: ReactNode;
   className?: string;
 }
@@ -31,8 +31,8 @@ export interface ItemCardProps {
  * caller via `fallbackIcon` so this package stays free of lucide.
  */
 const typeTileBg: Record<string, string> = {
-  web_map: 'bg-emerald-500/90 text-white',
-  feature_service: 'bg-sky-500/90 text-white',
+  map: 'bg-emerald-500/90 text-white',
+  data_layer: 'bg-sky-500/90 text-white',
   arcgis_service: 'bg-cyan-600/90 text-white',
   form: 'bg-violet-500/90 text-white',
   form_submission_collection: 'bg-violet-400/90 text-white',
@@ -47,8 +47,8 @@ const typeTileBg: Record<string, string> = {
 };
 
 const typeBadgeColor: Record<string, string> = {
-  web_map: 'bg-emerald-100 text-emerald-800',
-  feature_service: 'bg-sky-100 text-sky-800',
+  map: 'bg-emerald-100 text-emerald-800',
+  data_layer: 'bg-sky-100 text-sky-800',
   arcgis_service: 'bg-cyan-100 text-cyan-800',
   form: 'bg-violet-100 text-violet-800',
   form_submission_collection: 'bg-violet-100 text-violet-800',

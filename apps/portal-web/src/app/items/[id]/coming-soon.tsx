@@ -16,7 +16,7 @@ interface PillarInfo {
  * or pick a different tool for now.
  */
 const PILLARS: Partial<Record<ItemType, PillarInfo>> = {
-  feature_service: {
+  data_layer: {
     label: 'Feature service',
     blurb:
       'A shareable vector layer backed by PostGIS. Upload GeoJSON or shapefiles, tile them on demand, and share column by column.',
@@ -48,7 +48,7 @@ const PILLARS: Partial<Record<ItemType, PillarInfo>> = {
   dashboard: {
     label: 'Dashboard',
     blurb:
-      'Live panels powered by your feature services — charts, counters, maps, filters.',
+      'Live panels powered by your feature services â€” charts, counters, maps, filters.',
     doc: 'docs/app-builder.md',
   },
   notebook: {

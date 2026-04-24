@@ -1,10 +1,10 @@
 import { Calendar, FileInput, Globe } from 'lucide-react';
 import type {
-  FeatureServiceData,
-  FeatureServiceDataV1,
-  FeatureServiceDataV2,
-  FeatureServiceDataV3,
-  FeatureServiceSource,
+  DataLayerData,
+  DataLayerDataV1,
+  DataLayerDataV2,
+  DataLayerDataV3,
+  DataLayerSource,
 } from '@gratis-gis/shared-types';
 
 /**
@@ -18,11 +18,11 @@ import type {
  *
  * Renders the same shape for v1/v2 (top-level `source`) and v3 (a
  * source block per layer, one row each). Silently renders nothing
- * when the item has no source block recorded — that's the "legacy /
+ * when the item has no source block recorded â€” that's the "legacy /
  * hand-seeded / not-recorded" path.
  */
 interface Props {
-  data: FeatureServiceData | null | undefined;
+  data: DataLayerData | null | undefined;
   /**
    * Optional map of userId -> display name. When present, the panel
    * uses it to render 'by Mateo Garcia' instead of the raw uuid
@@ -31,14 +31,14 @@ interface Props {
   userNames?: Record<string, string>;
 }
 
-export function FeatureServiceProvenance({ data, userNames }: Props) {
+export function DataLayerProvenance({ data, userNames }: Props) {
   if (!data) return null;
 
   if (data.version === 3) {
     return <V3Provenance data={data} userNames={userNames ?? {}} />;
   }
 
-  const src = (data as FeatureServiceDataV1 | FeatureServiceDataV2).source;
+  const src = (data as DataLayerDataV1 | DataLayerDataV2).source;
   if (!src) return null;
 
   return (
@@ -59,7 +59,7 @@ function V3Provenance({
   data,
   userNames,
 }: {
-  data: FeatureServiceDataV3;
+  data: DataLayerDataV3;
   userNames: Record<string, string>;
 }) {
   const stamped = data.layers.filter((l) => !!l.source);
@@ -73,7 +73,7 @@ function V3Provenance({
           Data sources
         </h2>
         <span className="text-[11px] text-muted">
-          · {stamped.length} of {data.layers.length}{' '}
+          Â· {stamped.length} of {data.layers.length}{' '}
           {data.layers.length === 1 ? 'layer' : 'layers'} imported
         </span>
       </header>
@@ -104,7 +104,7 @@ function ProvenanceRow({
   source,
   userNames,
 }: {
-  source: FeatureServiceSource;
+  source: DataLayerSource;
   userNames: Record<string, string>;
 }) {
   const importedBy =
@@ -141,7 +141,7 @@ function ProvenanceRow({
  * happened on ingest. Absent source SRS (legacy / GeoJSON with no
  * declared CRS) falls back to a simpler 'Storage: EPSG:4326' line.
  */
-function SpatialRefRow({ source }: { source: FeatureServiceSource }) {
+function SpatialRefRow({ source }: { source: DataLayerSource }) {
   const srs = source.sourceSrs;
   const wasReprojected = srs && srs !== 'EPSG:4326' && srs !== 'CRS:unknown';
   return (
@@ -150,7 +150,7 @@ function SpatialRefRow({ source }: { source: FeatureServiceSource }) {
       Storage: EPSG:4326 (WGS 84)
       {wasReprojected ? (
         <span>
-          · reprojected from{' '}
+          Â· reprojected from{' '}
           <a
             href={`https://epsg.io/${srs.replace(/^EPSG:/, '')}`}
             target="_blank"
@@ -163,7 +163,7 @@ function SpatialRefRow({ source }: { source: FeatureServiceSource }) {
           on ingest
         </span>
       ) : srs === 'CRS:unknown' ? (
-        <span>· source file had no declared CRS (assumed 4326)</span>
+        <span>Â· source file had no declared CRS (assumed 4326)</span>
       ) : null}
     </p>
   );

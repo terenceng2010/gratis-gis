@@ -18,10 +18,10 @@ import { getItemTypeIcon, getItemTypeAccent } from '@/lib/item-type-icon';
  * Item dependency panel shown on the detail page. Two lists:
  *
  *   - Used by: items that reference THIS one. Toggle "Transitive"
- *     to include indirect dependents (a layer used by a web_map used
- *     by a dashboard — the dashboard shows up too).
+ *     to include indirect dependents (a layer used by a map used
+ *     by a dashboard â€” the dashboard shows up too).
  *   - Depends on: items that THIS one references (e.g. the feature
- *     services powering each of a web_map's layers).
+ *     services powering each of a map's layers).
  *
  * Data comes from portal-api:
  *   GET /api/items/:id/dependents?transitive=true
@@ -106,7 +106,7 @@ export function ItemDependencies({ itemId }: Props) {
             title={
               'When on, this walks the full chain of references. ' +
               'Example: a feature layer is used by a web map, which is ' +
-              'used by an app — all of those show up. When off, only ' +
+              'used by an app â€” all of those show up. When off, only ' +
               'items that reference this one directly appear.'
             }
           >
@@ -147,7 +147,7 @@ export function ItemDependencies({ itemId }: Props) {
           title="Used by"
           help={
             transitive
-              ? 'Every item that references this one — directly, or through a chain of other items.'
+              ? 'Every item that references this one â€” directly, or through a chain of other items.'
               : 'Items that reference this one directly.'
           }
           icon={<ArrowUpRight className="h-3.5 w-3.5" />}
@@ -202,7 +202,7 @@ function DependencyList({
       </div>
 
       {rows === null && loading ? (
-        <p className="px-2 py-3 text-[11px] text-muted">Loading…</p>
+        <p className="px-2 py-3 text-[11px] text-muted">Loadingâ€¦</p>
       ) : rows && rows.length > 0 ? (
         <ul className="space-y-0.5">
           {rows.map((r) => (

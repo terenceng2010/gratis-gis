@@ -52,7 +52,7 @@ export interface ShareItemInput {
    * grantee only sees features that intersect this polygon (plus
    * items whose bbox does). Pass `null` to explicitly clear a
    * previously-set limit; omit the field to leave it untouched.
-   * GeoJSON in EPSG:4326 â€” no coordinate transform is applied.
+   * GeoJSON in EPSG:4326 Ã¢â‚¬â€ no coordinate transform is applied.
    */
   geoLimit?: unknown | null;
 }
@@ -74,7 +74,7 @@ export class ItemsService {
       q?: string;
       /**
        * Filter to items owned by a specific user. Intended for the
-       * admin 'user delete â†’ reassign their items' flow. Anyone may
+       * admin 'user delete Ã¢â€ â€™ reassign their items' flow. Anyone may
        * filter by their own id (equivalent to `mine: true`); filtering
        * by anyone else's id requires org-admin, enforced below.
        */
@@ -174,10 +174,10 @@ export class ItemsService {
     // acts as actual enforcement (not just UI). Editors and admins
     // see the raw data so they can edit the matrix itself.
     if (
-      item.type === 'web_map' &&
+      item.type === 'map' &&
       !this.sharing.canEdit(user, item, item.shares)
     ) {
-      const filtered = await this.filterWebMapForViewer(user, item.data);
+      const filtered = await this.filterMapForViewer(user, item.data);
       // Cast back to the original shape: filter returns `unknown`
       // because the dataJson contract is loose, but the rest of the
       // service expects Prisma's `JsonValue` so callers of get() see
@@ -191,7 +191,7 @@ export class ItemsService {
    * Apply per-layer access for a viewer. Walks each layer in the
    * web map and:
    *   1. Drops it if the viewer has no item-level access to the
-   *      layer's backing source (feature_service today; arcgis_service
+   *      layer's backing source (data_layer today; arcgis_service
    *      + future types slot in the same way).
    *   2. Drops it if the layer's access policy is `custom` and the
    *      viewer has neither a direct entry nor a group entry with
@@ -204,7 +204,7 @@ export class ItemsService {
    * Backing items are fetched in a single batched query. Items the
    * caller can't read are treated the same as "doesn't exist".
    */
-  private async filterWebMapForViewer(
+  private async filterMapForViewer(
     viewer: AuthUser,
     rawData: unknown,
   ): Promise<unknown> {
@@ -213,7 +213,7 @@ export class ItemsService {
       layers?: Array<Record<string, unknown>>;
     };
     const layers = Array.isArray(data.layers) ? data.layers : [];
-    // Fetch each backing feature_service / arcgis_service item and
+    // Fetch each backing data_layer / arcgis_service item and
     // its shares in one round-trip. Only layers that use an item id
     // are relevant; url / inline sources have no separate gatekeeping.
     const backingItemIds = new Set<string>();
@@ -222,7 +222,7 @@ export class ItemsService {
         .source;
       if (
         src &&
-        (src.kind === 'feature-service' || src.kind === 'arcgis_service') &&
+        (src.kind === 'data-layer' || src.kind === 'arcgis_service') &&
         typeof src.itemId === 'string'
       ) {
         backingItemIds.add(src.itemId);
@@ -243,7 +243,7 @@ export class ItemsService {
         .source;
       if (
         src &&
-        (src.kind === 'feature-service' || src.kind === 'arcgis_service') &&
+        (src.kind === 'data-layer' || src.kind === 'arcgis_service') &&
         typeof src.itemId === 'string'
       ) {
         const target = byId.get(src.itemId);
@@ -289,7 +289,7 @@ export class ItemsService {
       out.push({
         ...rest,
         // Preserve the policy so the client knows whether limits
-        // applied, but drop the full entries array â€” that's who-
+        // applied, but drop the full entries array Ã¢â‚¬â€ that's who-
         // else-sees-what, not something a viewer should enumerate.
         access: { policy: access?.policy ?? 'inherit', entries: [] },
         effective,
@@ -319,13 +319,13 @@ export class ItemsService {
     // $executeRawUnsafe is idempotent; if the item has no layers yet
     // (empty builder), this is a no-op.
     //
-    // If reconcile throws, the item row is already in the DB â€” we
+    // If reconcile throws, the item row is already in the DB Ã¢â‚¬â€ we
     // roll back by deleting it so the user doesn't end up with an
     // orphaned item they can't recover from. The error message is
     // surfaced back to the caller so they can see WHICH column /
     // layer / DDL failed instead of a bare 500.
     const layers = readV3Layers(row.data);
-    if (row.type === 'feature_service' && layers !== null) {
+    if (row.type === 'data_layer' && layers !== null) {
       try {
         await this.v3Tables.reconcile(row.id, [], layers);
       } catch (err) {
@@ -368,12 +368,12 @@ export class ItemsService {
       throw new ForbiddenException('You do not have edit permission on this item');
     }
     const prevLayers =
-      item.type === 'feature_service' ? readV3Layers(item.data) : null;
+      item.type === 'data_layer' ? readV3Layers(item.data) : null;
     // If this update replaces the data blob, snapshot what was there
     // first so an admin can revert within the retention window.
     // Non-data updates (title / tags / access / thumbnail) skip the
     // snapshot since reverting those is trivially an edit away.
-    if (input.data !== undefined && item.type === 'feature_service') {
+    if (input.data !== undefined && item.type === 'data_layer') {
       await this.snapshots.snapshot(id, user.id, 'pre-update');
     }
     const updated = await this.prisma.item.update({
@@ -392,7 +392,7 @@ export class ItemsService {
     // us drop tables for layers that were removed from the schema;
     // reconcile is idempotent for layers that stayed.
     const nextLayers =
-      updated.type === 'feature_service' ? readV3Layers(updated.data) : null;
+      updated.type === 'data_layer' ? readV3Layers(updated.data) : null;
     if (nextLayers !== null) {
       await this.v3Tables.reconcile(
         updated.id,
@@ -439,7 +439,7 @@ export class ItemsService {
 
   /**
    * Permanently delete a trashed item. Cascades to item_share rows. If
-   * the item is a v2 feature_service (storageType === 'postgis'), also
+   * the item is a v2 data_layer (storageType === 'postgis'), also
    * drops the backing PostGIS table so we don't leak orphaned tables.
    */
   async purge(user: AuthUser, id: string) {
@@ -452,7 +452,7 @@ export class ItemsService {
     }
     // Drop any backing PostGIS tables before removing the item row so
     // we can still reference the item id to build the table name(s).
-    if (item.type === 'feature_service') {
+    if (item.type === 'data_layer') {
       const data = item.data as { version?: number; storageType?: string } | null;
       // v2 (single table per item)
       if (data?.storageType === 'postgis' && data?.version !== 3) {
@@ -469,7 +469,7 @@ export class ItemsService {
   }
 
   /**
-   * Return the GeoJSON FeatureCollection for a feature_service item.
+   * Return the GeoJSON FeatureCollection for a data_layer item.
    * Handles both v1 (inline JSON) and v2 (PostGIS table) storage transparently.
    *
    * Accepts an optional bbox filter for v2; v1 always returns all features.
@@ -480,7 +480,7 @@ export class ItemsService {
     opts: { bbox?: [number, number, number, number]; at?: string } = {},
   ): Promise<{ type: 'FeatureCollection'; features: unknown[] }> {
     const item = await this.get(user, id);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       return { type: 'FeatureCollection', features: [] };
     }
 
@@ -556,7 +556,7 @@ export class ItemsService {
   /**
    * Change the owner of an item. Gated to the current owner + org
    * admins. Optionally adds a `view` share for the previous owner so
-   * they don't lose access entirely â€” handy for "I'm leaving the
+   * they don't lose access entirely Ã¢â‚¬â€ handy for "I'm leaving the
    * team, please take this from me" and audit-friendly reassigns.
    */
   async reassignOwner(
@@ -574,10 +574,10 @@ export class ItemsService {
       );
     }
     if (input.newOwnerId === item.ownerId) {
-      return item; // no-op â€” already owned by the target user
+      return item; // no-op Ã¢â‚¬â€ already owned by the target user
     }
     // Target user must exist AND be in the same org. Cross-org
-    // reassignment is out of scope â€” that would leak content across
+    // reassignment is out of scope Ã¢â‚¬â€ that would leak content across
     // org boundaries.
     const newOwner = await this.prisma.user.findUnique({
       where: { id: input.newOwnerId },
@@ -629,7 +629,7 @@ export class ItemsService {
   /**
    * Count how many items a given user owns. Used by the admin-delete
    * flow to decide whether to force a reassignment step. Respects the
-   * caller's org â€” the count only includes items in the caller's org
+   * caller's org Ã¢â‚¬â€ the count only includes items in the caller's org
    * so admins don't see cross-org bleed.
    */
   async ownedItemCount(
@@ -648,7 +648,7 @@ export class ItemsService {
   /**
    * Bulk reassignment. Applies reassignOwner() across many items in
    * a single transaction, stopping on the first failure. Useful for
-   * the "delete this user â†’ move their stuff first" flow and for
+   * the "delete this user Ã¢â€ â€™ move their stuff first" flow and for
    * bulk-select in the items list.
    */
   async bulkReassignOwner(
@@ -744,14 +744,14 @@ export class ItemsService {
   }
 
   // ---------------------------------------------------------------
-  // Dependency tracking â€” "Used by" / "Depends on"
+  // Dependency tracking Ã¢â‚¬â€ "Used by" / "Depends on"
   // ---------------------------------------------------------------
 
   /**
    * Return the items that THIS item references (forward edges). For a
-   * web_map, that's each layer's feature_service / arcgis_service.
+   * map, that's each layer's data_layer / arcgis_service.
    *
-   * Results are scoped to items the caller can see â€” if the map
+   * Results are scoped to items the caller can see Ã¢â‚¬â€ if the map
    * references something private that the caller isn't shared on, it
    * simply doesn't appear in the list (instead of 403'ing, which
    * would leak the existence of a hidden dependency).
@@ -816,11 +816,11 @@ export class ItemsService {
    * Two modes:
    *   - direct (default): every item whose data.* names this item id.
    *   - transitive: plus every item that indirectly references it
-   *     through another dependent. E.g. a layer used by a web_map,
+   *     through another dependent. E.g. a layer used by a map,
    *     which is in turn used by a dashboard.
    *
    * Implementation: scan every referencer-type item in the org (small
-   * set: today just web_map), build a reverse index, then either
+   * set: today just map), build a reverse index, then either
    * return the direct hits or BFS outward for the transitive mode.
    *
    * For O(100k) items per org this is fine; if catalogs get bigger,
@@ -834,7 +834,7 @@ export class ItemsService {
   ) {
     // Caller must be able to see the item itself before asking who
     // depends on it. We keep the returned row so downstream logic can
-    // decide how to match â€” by uuid for most items, by normalized URL
+    // decide how to match Ã¢â‚¬â€ by uuid for most items, by normalized URL
     // when the target is an arcgis_service (whose web-map layer refs
     // are URL-based, not id-based).
     const target = await this.get(user, id);
@@ -846,7 +846,7 @@ export class ItemsService {
       ? normalizeArcgisUrl(targetUrl)
       : null;
 
-    // Pull every referencer-type item in the org â€” we need their data
+    // Pull every referencer-type item in the org Ã¢â‚¬â€ we need their data
     // to extract refs. We'll filter for visibility when shaping the
     // response.
     const referencers = await this.prisma.item.findMany({
@@ -940,7 +940,7 @@ export class ItemsService {
 
 /**
  * Narrow an item's data payload to the v3 layer list when it's a v3
- * feature_service. Returns null for v1/v2 items (so callers can skip
+ * data_layer. Returns null for v1/v2 items (so callers can skip
  * the v3 reconcile path) or when the payload doesn't look like a
  * valid v3 shape.
  */

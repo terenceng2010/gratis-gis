@@ -30,7 +30,7 @@ class CreateRelationshipDto {
 }
 
 /**
- * Manages parent-child relationships between feature_service items.
+ * Manages parent-child relationships between data_layer items.
  *
  * POST /items/:id/relationships
  *   Register a new relationship. Adds a UUID FK column to the child table
@@ -40,7 +40,7 @@ class CreateRelationshipDto {
  *   List relationships for a feature service (both parent and child roles).
  *
  * DELETE /items/:id/relationships/:relId
- *   Remove a registered relationship. Does NOT drop the FK column — that
+ *   Remove a registered relationship. Does NOT drop the FK column â€” that
  *   would destroy data. The column becomes unmanaged.
  */
 @ApiTags('relationships')
@@ -60,7 +60,7 @@ export class RelationshipsController {
 
   private async requireAdmin(user: AuthUser, itemId: string) {
     const item = await this.items.get(user, itemId);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       throw new BadRequestException('Item is not a feature service');
     }
     if (!this.sharing.canAdmin(user, item)) {
@@ -76,7 +76,7 @@ export class RelationshipsController {
   @Get()
   async list(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     const item = await this.items.get(user, id);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       return { relationships: [], parentRelationship: null };
     }
     const data = item.data as Record<string, unknown> | null;
@@ -109,8 +109,8 @@ export class RelationshipsController {
 
     // Validate the child item.
     const childItem = await this.items.get(user, dto.relatedItemId);
-    if (childItem.type !== 'feature_service') {
-      throw new BadRequestException('relatedItemId must reference a feature_service item');
+    if (childItem.type !== 'data_layer') {
+      throw new BadRequestException('relatedItemId must reference a data_layer item');
     }
 
     if (!(await this.features.tableExists(id))) {

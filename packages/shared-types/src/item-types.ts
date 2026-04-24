@@ -9,8 +9,8 @@
  * Add a new value here when introducing a new kind of platform content.
  */
 export const ITEM_TYPES = [
-  'web_map',
-  'feature_service',
+  'map',
+  'data_layer',
   'arcgis_service',
   'form',
   'form_submission_collection',

@@ -16,7 +16,7 @@ Proposed data shape:
 {
   version: 1,
   source: {
-    kind: 'form' | 'feature-service' | 'query',
+    kind: 'form' | 'data-layer' | 'query',
     itemId: string,
   },
   sections: Section[],
@@ -32,8 +32,8 @@ type Section =
 
 ## Rendering
 
-Server-side. HTML is the canonical render; PDF is `html → wkhtmltopdf
-or puppeteer-chrome` and Word is `html → pandoc` or a templated .docx.
+Server-side. HTML is the canonical render; PDF is `html â†’ wkhtmltopdf
+or puppeteer-chrome` and Word is `html â†’ pandoc` or a templated .docx.
 One pipeline keeps fonts, margins, and page breaks consistent across
 formats.
 

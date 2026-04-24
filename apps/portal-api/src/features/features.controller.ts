@@ -40,7 +40,7 @@ import {
 
 class FeatureGeometryDto {
   @IsString() type!: string;
-  // coordinates can be any nested array — left loose intentionally.
+  // coordinates can be any nested array â€” left loose intentionally.
   coordinates!: unknown;
 }
 
@@ -67,7 +67,7 @@ class UpdateFeatureDto {
 // ---------------------------------------------------------------------------
 
 /**
- * REST endpoints for individual features within a feature_service item.
+ * REST endpoints for individual features within a data_layer item.
  *
  * All routes sit under /items/:id/features so the item-level sharing
  * check is the outer authorization gate, consistent with how the rest
@@ -94,7 +94,7 @@ export class FeaturesController {
 
   private async requireReadAccess(user: AuthUser, itemId: string) {
     const item = await this.items.get(user, itemId);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       throw new BadRequestException('Item is not a feature service');
     }
     if (!(await this.features.tableExists(itemId))) {
@@ -118,7 +118,7 @@ export class FeaturesController {
    */
   private async requireEditAccessAndProvision(user: AuthUser, itemId: string) {
     const item = await this.items.get(user, itemId);
-    if (item.type !== 'feature_service') {
+    if (item.type !== 'data_layer') {
       throw new BadRequestException('Item is not a feature service');
     }
     const shares = await this.prisma.itemShare.findMany({ where: { itemId } });
@@ -186,7 +186,7 @@ export class FeaturesController {
 
   /**
    * Append one or more features to the service. Does NOT replace existing
-   * features — use POST /import to replace all.
+   * features â€” use POST /import to replace all.
    */
   @Post()
   async append(
@@ -297,9 +297,9 @@ export class FeaturesController {
    * List child records related to a specific parent feature.
    *
    * URL: GET /items/:id/features/:fid/related/:childItemId
-   *   :id         — parent feature-service item
-   *   :fid        — parent feature global_id
-   *   :childItemId — child feature-service item
+   *   :id         â€” parent feature-service item
+   *   :fid        â€” parent feature global_id
+   *   :childItemId â€” child feature-service item
    *
    * Query: ?fkColumn=parent_global_id (defaults to "parent_global_id")
    *        ?at=<ISO timestamp>

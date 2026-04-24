@@ -19,9 +19,9 @@ import {
   X,
 } from 'lucide-react';
 import type {
-  WebMapLayer,
-  WebMapLayerScale,
-  WebMapLayerSearch,
+  MapLayer,
+  MapLayerScale,
+  MapLayerSearch,
 } from '@gratis-gis/shared-types';
 import { DEFAULT_LAYER_SCALE, ZOOM_MAX, ZOOM_MIN } from '@gratis-gis/shared-types';
 import { StyleEditor } from './style-editor';
@@ -32,7 +32,7 @@ import { LabelsEditor } from './labels-editor';
 import type { LayerMetadata } from './layer-metadata';
 
 interface Props {
-  layers: WebMapLayer[];
+  layers: MapLayer[];
   metadata: Record<string, LayerMetadata>;
   canEdit: boolean;
   /**
@@ -42,7 +42,7 @@ interface Props {
    */
   currentZoom: number;
   onOpenAdd: () => void;
-  onChange: (next: WebMapLayer[]) => void;
+  onChange: (next: MapLayer[]) => void;
 }
 
 const DRAG_MIME = 'application/x-gg-layer';
@@ -69,7 +69,7 @@ export function LayerPanel({
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
 
-  function updateLayer(id: string, patch: Partial<WebMapLayer>) {
+  function updateLayer(id: string, patch: Partial<MapLayer>) {
     onChange(layers.map((l) => (l.id === id ? { ...l, ...patch } : l)));
   }
   function removeLayer(id: string) {
@@ -154,7 +154,7 @@ export function LayerPanel({
 }
 
 interface RowProps {
-  layer: WebMapLayer;
+  layer: MapLayer;
   index: number;
   metadata: LayerMetadata;
   canEdit: boolean;
@@ -168,7 +168,7 @@ interface RowProps {
   onToggle: () => void;
   onOpacity: (n: number) => void;
   onRemove: () => void;
-  onPatch: (patch: Partial<WebMapLayer>) => void;
+  onPatch: (patch: Partial<MapLayer>) => void;
 }
 
 type SectionKey =
@@ -495,11 +495,11 @@ function SearchConfig({
   fields,
   onChange,
 }: {
-  value: WebMapLayerSearch;
+  value: MapLayerSearch;
   fields: string[];
-  onChange: (next: WebMapLayerSearch) => void;
+  onChange: (next: MapLayerSearch) => void;
 }) {
-  function patch(p: Partial<WebMapLayerSearch>) {
+  function patch(p: Partial<MapLayerSearch>) {
     onChange({ ...value, ...p });
   }
   function addField(name: string) {
@@ -595,7 +595,7 @@ function SearchConfig({
               type="text"
               value={value.labelTemplate}
               onChange={(e) => patch({ labelTemplate: e.target.value })}
-              placeholder={`{{apn}} — {{situs}}`}
+              placeholder={`{{apn}} â€” {{situs}}`}
               className="h-7 w-full rounded border border-border bg-surface-1 px-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
             />
             <p className="mt-1 text-[11px] text-muted">
@@ -643,7 +643,7 @@ function Toggle({
  * 22 = street). The slider reads cartographically from large scale on
  * the left (zoomed-in / building) to small scale on the right (zoomed-
  * out / world), mirroring how scale ranges are typically written
- * ("1:500 – 1:500,000"). A small tick tracks the current camera zoom
+ * ("1:500 â€“ 1:500,000"). A small tick tracks the current camera zoom
  * so authors can see whether their bounds bracket the live view.
  */
 function ScaleEditor({
@@ -651,11 +651,11 @@ function ScaleEditor({
   currentZoom,
   onChange,
 }: {
-  value: WebMapLayerScale;
+  value: MapLayerScale;
   currentZoom: number;
-  onChange: (next: WebMapLayerScale) => void;
+  onChange: (next: MapLayerScale) => void;
 }) {
-  function patch(p: Partial<WebMapLayerScale>) {
+  function patch(p: Partial<MapLayerScale>) {
     onChange({ ...value, ...p });
   }
 
@@ -712,7 +712,7 @@ function ZoomRange({
 }) {
   // Clamp nullable bounds to the slider range for positioning. Storing
   // null when a thumb rests on the extreme keeps the persisted map's
-  // intent clear — "no minimum" vs. "minimum happens to be zero".
+  // intent clear â€” "no minimum" vs. "minimum happens to be zero".
   const minV = minZoom ?? ZOOM_MIN;
   const maxV = maxZoom ?? ZOOM_MAX;
   const span = ZOOM_MAX - ZOOM_MIN;
@@ -721,8 +721,8 @@ function ZoomRange({
   // position math so a higher zoom value sits further to the left.
   const posOf = (z: number) => ((ZOOM_MAX - z) / span) * 100;
   const pctCurrent = Math.max(0, Math.min(100, posOf(currentZoom)));
-  const leftEdge = posOf(maxV); // zoomed-in thumb — on the left
-  const rightEdge = posOf(minV); // zoomed-out thumb — on the right
+  const leftEdge = posOf(maxV); // zoomed-in thumb â€” on the left
+  const rightEdge = posOf(minV); // zoomed-out thumb â€” on the right
   // Mirror MapLibre exactly: minzoom is inclusive, maxzoom is
   // exclusive (the layer is hidden *at* maxzoom and above). Using the
   // same comparison the renderer uses keeps the tick's color honest
@@ -737,7 +737,7 @@ function ZoomRange({
         <span>{label}</span>
         <span className="tabular-nums normal-case tracking-normal text-muted">
           {maxZoom == null ? 'any' : `z${maxZoom}`}
-          {'  –  '}
+          {'  â€“  '}
           {minZoom == null ? 'any' : `z${minZoom}`}
         </span>
       </div>
@@ -762,7 +762,7 @@ function ZoomRange({
           aria-hidden="true"
           title={
             `Current zoom: z${currentZoom.toFixed(1)} (${zoomToScaleLabel(currentZoom)})` +
-            ` — ${inRange ? 'in range' : 'outside range'}`
+            ` â€” ${inRange ? 'in range' : 'outside range'}`
           }
         />
         {/* Left thumb controls the zoomed-in (max) side. RTL on the
@@ -802,8 +802,8 @@ function ZoomRange({
         />
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
-        {/* Left label describes the zoomed-in end — large scale.
-            Right label the zoomed-out end — small scale. */}
+        {/* Left label describes the zoomed-in end â€” large scale.
+            Right label the zoomed-out end â€” small scale. */}
         <span className="tabular-nums">
           {maxZoom == null ? 'building' : zoomToScaleLabel(maxZoom)}
         </span>
@@ -816,9 +816,9 @@ function ZoomRange({
 }
 
 /**
- * Rough zoom → scale denominator conversion. Web Mercator ~1:500M at
+ * Rough zoom â†’ scale denominator conversion. Web Mercator ~1:500M at
  * zoom 0, halving per zoom level. Just a hint so users familiar with
- * scale-denominator thinking can orient — not a precise projection.
+ * scale-denominator thinking can orient â€” not a precise projection.
  */
 function zoomToScaleLabel(zoom: number): string {
   const base = 500_000_000;

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { WebMapLayerStyle, PointSymbol } from '@gratis-gis/shared-types';
+import type { MapLayerStyle, PointSymbol } from '@gratis-gis/shared-types';
 import type { GeometryFamily } from './layer-metadata';
 import {
   MAP_ICONS,
@@ -10,11 +10,11 @@ import {
 } from './map-icons';
 
 interface Props {
-  value: WebMapLayerStyle;
-  onChange: (next: WebMapLayerStyle) => void;
+  value: MapLayerStyle;
+  onChange: (next: MapLayerStyle) => void;
   /**
    * Which geometry families to surface. Empty (or undefined) means
-   * "show everything" — appropriate while metadata is still loading.
+   * "show everything" â€” appropriate while metadata is still loading.
    * Once the layer's data is sampled we narrow to only what's present.
    */
   geometryTypes?: Set<GeometryFamily>;
@@ -24,16 +24,16 @@ interface Props {
  * Simple renderer editor. Shows one section per geometry family that
  * the layer's data actually contains. When the metadata sampler hasn't
  * told us what's in the source yet, we fall back to showing all three
- * so a brand-new layer isn't missing controls — geometry narrowing
+ * so a brand-new layer isn't missing controls â€” geometry narrowing
  * takes over as soon as the first sample comes back.
  *
  * Deliberately spartan: color + size are 80% of styling decisions.
  * Unique-value / class-break renderers ship as a separate panel.
  */
 export function StyleEditor({ value, onChange, geometryTypes }: Props) {
-  function patch<K extends keyof WebMapLayerStyle>(
+  function patch<K extends keyof MapLayerStyle>(
     section: K,
-    patch: Partial<WebMapLayerStyle[K]>,
+    patch: Partial<MapLayerStyle[K]>,
   ) {
     onChange({
       ...value,

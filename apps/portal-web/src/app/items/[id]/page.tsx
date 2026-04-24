@@ -17,17 +17,17 @@ import type {
   Group,
   User as UserT,
   ArcgisServiceData,
-  FeatureServiceData,
+  DataLayerData,
   GeoBoundaryData,
   PickListData,
-  WebMapData,
+  MapData,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
-  DEFAULT_FEATURE_SERVICE,
+  DEFAULT_DATA_LAYER,
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
-  DEFAULT_WEB_MAP,
+  DEFAULT_MAP,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
 import { ItemTypeBadge } from '@/lib/item-type-icon';
@@ -36,15 +36,15 @@ import { SharingPanel } from './sharing-panel';
 import { ItemDependencies } from './item-dependencies';
 import { DeleteItemButton } from './delete-button';
 import { ReassignOwnerButton } from './reassign-owner-button';
-import { MapEditor } from './web-map/map-editor';
-import { FeatureServiceEditor } from './feature-service/editor';
-import { FeatureServiceV3SchemaEditor } from './feature-service/v3-schema-editor';
+import { MapEditor } from './map/map-editor';
+import { DataLayerEditor } from './data-layer/editor';
+import { DataLayerV3SchemaEditor } from './data-layer/v3-schema-editor';
 import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { PickListEditor } from './pick-list/editor';
 import { GeoBoundaryEditor } from './geo-boundary/editor';
-import { FeatureServiceProvenance } from './feature-service/provenance-panel';
-import { FeatureServiceSchema } from './feature-service/schema-panel';
-import { VersionHistoryPanel } from './feature-service/version-history-panel';
+import { DataLayerProvenance } from './data-layer/provenance-panel';
+import { DataLayerSchema } from './data-layer/schema-panel';
+import { VersionHistoryPanel } from './data-layer/version-history-panel';
 import { ComingSoon } from './coming-soon';
 
 interface Props {
@@ -54,8 +54,8 @@ interface Props {
 type ItemWithShares = Item & { shares: ItemShare[] };
 
 const typeBadge: Record<string, string> = {
-  web_map: 'bg-emerald-100 text-emerald-800',
-  feature_service: 'bg-sky-100 text-sky-800',
+  map: 'bg-emerald-100 text-emerald-800',
+  data_layer: 'bg-sky-100 text-sky-800',
   arcgis_service: 'bg-cyan-100 text-cyan-800',
   form: 'bg-violet-100 text-violet-800',
   web_app: 'bg-amber-100 text-amber-800',
@@ -89,9 +89,9 @@ export default async function ItemDetailPage({ params }: Props) {
 
   // For web maps, fetch the org's custom basemap library so the
   // editor's basemap picker can list them alongside the built-ins.
-  // Failure is non-fatal — the editor falls back to built-ins only.
+  // Failure is non-fatal Ã¢â‚¬â€ the editor falls back to built-ins only.
   const customBasemaps =
-    item.type === 'web_map'
+    item.type === 'map'
       ? await apiFetch<
           Array<{
             id: string;
@@ -119,8 +119,8 @@ export default async function ItemDetailPage({ params }: Props) {
   // the standard, richer header because their "content" is basically
   // metadata + some small payload anyway.
   const isWorkspace =
-    item.type === 'web_map' ||
-    item.type === 'feature_service' ||
+    item.type === 'map' ||
+    item.type === 'data_layer' ||
     item.type === 'arcgis_service';
   // Bump the container up for workspace types so the map gets more
   // horizontal room; other pages keep the old 6xl width.
@@ -224,7 +224,7 @@ export default async function ItemDetailPage({ params }: Props) {
               </span>
               {item.tags.length > 0 ? (
                 <span className="text-muted">
-                  · {item.tags.length}{' '}
+                  Ã‚Â· {item.tags.length}{' '}
                   {item.tags.length === 1 ? 'tag' : 'tags'}
                 </span>
               ) : null}
@@ -269,29 +269,29 @@ export default async function ItemDetailPage({ params }: Props) {
         </div>
       )}
 
-      {item.type === 'web_map' ? (
+      {item.type === 'map' ? (
         <section className="mb-6">
           <MapEditor
             itemId={item.id}
-            initial={{ ...DEFAULT_WEB_MAP, ...((item.data ?? {}) as Partial<WebMapData>) }}
+            initial={{ ...DEFAULT_MAP, ...((item.data ?? {}) as Partial<MapData>) }}
             canEdit={canManage}
             customBasemaps={customBasemaps}
           />
         </section>
-      ) : item.type === 'feature_service' ? (
+      ) : item.type === 'data_layer' ? (
         <>
           {/* Provenance panel runs above the schema editor so 'where
               did this come from?' is answered before 'here's the
               field list.' Silent when the item has no source block
               recorded (legacy / hand-seeded). */}
-          <FeatureServiceProvenance
-            data={item.data as FeatureServiceData | null}
+          <DataLayerProvenance
+            data={item.data as DataLayerData | null}
           />
           {/* Schema inspector collapses by default (the editor below
               is the primary surface); opens to show the field table
               and a raw JSON disclosure for debugging. */}
-          <FeatureServiceSchema
-            data={item.data as FeatureServiceData | null}
+          <DataLayerSchema
+            data={item.data as DataLayerData | null}
           />
           {/* Version history: prior snapshots of item.data with
               point-in-time revert. Editors / admins only; the panel
@@ -300,27 +300,27 @@ export default async function ItemDetailPage({ params }: Props) {
           {/* v3 items route to the new multi-layer schema editor. v1/v2
               continue to use the legacy single-layer editor so existing
               items keep working exactly as before. */}
-          {(item.data as FeatureServiceData | null)?.version === 3 ? (
+          {(item.data as DataLayerData | null)?.version === 3 ? (
             <section className="mb-6">
-              <FeatureServiceV3SchemaEditor
+              <DataLayerV3SchemaEditor
                 itemId={item.id}
                 initial={
-                  item.data as unknown as import('@gratis-gis/shared-types').FeatureServiceDataV3
+                  item.data as unknown as import('@gratis-gis/shared-types').DataLayerDataV3
                 }
                 canEdit={canManage}
               />
             </section>
           ) : (
             <section className="mb-6">
-              <FeatureServiceEditor
+              <DataLayerEditor
                 itemId={item.id}
                 initial={
-                  (item.data as FeatureServiceData | null)?.version === 2
-                    ? (item.data as FeatureServiceData)
+                  (item.data as DataLayerData | null)?.version === 2
+                    ? (item.data as DataLayerData)
                     : ({
-                        ...DEFAULT_FEATURE_SERVICE,
-                        ...((item.data ?? {}) as Partial<FeatureServiceData>),
-                      } as FeatureServiceData)
+                        ...DEFAULT_DATA_LAYER,
+                        ...((item.data ?? {}) as Partial<DataLayerData>),
+                      } as DataLayerData)
                 }
                 canEdit={canManage}
               />
@@ -364,7 +364,7 @@ export default async function ItemDetailPage({ params }: Props) {
         </section>
       )}
 
-      {/* Dependency panel runs above Sharing for everyone — knowing
+      {/* Dependency panel runs above Sharing for everyone Ã¢â‚¬â€ knowing
           what else will break if you touch this item is the same
           shape of question whether you're the owner or a viewer. */}
       <section className="mb-8">

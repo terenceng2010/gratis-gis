@@ -13,10 +13,10 @@ import type {
   BasemapKey,
   Group,
   ItemShare,
-  WebMapData,
-  WebMapFilterOp,
-  WebMapLayer,
-  WebMapLayerAccess,
+  MapData,
+  MapFilterOp,
+  MapLayer,
+  MapLayerAccess,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_LAYER_ACCESS,
@@ -27,7 +27,7 @@ import {
   DEFAULT_LAYER_SCALE,
   DEFAULT_LAYER_SEARCH,
   DEFAULT_LAYER_STYLE,
-  DEFAULT_WEB_MAP,
+  DEFAULT_MAP,
 } from '@gratis-gis/shared-types';
 import { BASEMAPS, BASEMAP_KEYS } from '@/lib/basemaps';
 import type { CustomBasemap } from '@/lib/custom-basemap';
@@ -47,24 +47,24 @@ import { discoverLayerMetadata, type LayerMetadata } from './layer-metadata';
 
 interface Props {
   itemId: string;
-  initial: WebMapData;
+  initial: MapData;
   canEdit: boolean;
   /**
    * Custom basemaps registered at /admin/basemaps in this org, merged
    * into the basemap picker alongside the hardcoded built-ins. Empty
-   * array is fine — the picker falls back to built-ins only.
+   * array is fine â€” the picker falls back to built-ins only.
    */
   customBasemaps?: CustomBasemap[];
 }
 
 /**
- * Top-level web map surface. Owns the canonical WebMapData state; the
+ * Top-level web map surface. Owns the canonical MapData state; the
  * canvas renders it and the side panels edit it. Save is explicit so
  * a viewer can explore the map without side effects while an owner
  * only persists changes they actually want.
  *
  * Layout: left sidebar with layer panel, right side the map. On narrow
- * viewports the sidebar collapses into a drawer (future) — for v2 we
+ * viewports the sidebar collapses into a drawer (future) â€” for v2 we
  * use a fixed-width sidebar and let horizontal scroll handle anything
  * below that.
  */
@@ -76,28 +76,28 @@ export function MapEditor({
 }: Props) {
   // Hydrate older persisted maps. Each bump in the schema lands a new
   // migrator here; the goal is that any v2.x map still opens cleanly.
-  const seed = useMemo<WebMapData>(() => {
+  const seed = useMemo<MapData>(() => {
     const layers = (initial.layers ?? []).map((rawLayer) => {
-      const l = rawLayer as WebMapLayer & {
+      const l = rawLayer as MapLayer & {
         // Pre-v2.2 shape had a single-clause filter.
         filter?: unknown;
-        popup?: Partial<WebMapLayer['popup']> & { fields?: unknown };
+        popup?: Partial<MapLayer['popup']> & { fields?: unknown };
       };
 
       // Migrate filter: v2.1 single-clause { field, op, value }
-      // → v2.2 { combinator: 'all', clauses: [...] }.
-      let filter: WebMapLayer['filter'] = null;
+      // â†’ v2.2 { combinator: 'all', clauses: [...] }.
+      let filter: MapLayer['filter'] = null;
       if (l.filter && typeof l.filter === 'object') {
         const f = l.filter as unknown as Record<string, unknown>;
         if (Array.isArray(f.clauses) && typeof f.combinator === 'string') {
-          filter = f as unknown as WebMapLayer['filter'];
+          filter = f as unknown as MapLayer['filter'];
         } else if (typeof f.field === 'string' && typeof f.op === 'string') {
           filter = {
             combinator: 'all',
             clauses: [
               {
                 field: String(f.field),
-                op: f.op as WebMapFilterOp,
+                op: f.op as MapFilterOp,
                 value: typeof f.value === 'string' ? f.value : String(f.value ?? ''),
               },
             ],
@@ -114,7 +114,7 @@ export function MapEditor({
           : Array.isArray(popupRaw.fields) && popupRaw.fields.length > 0
             ? 'picked'
             : 'all';
-      const popup: WebMapLayer['popup'] = {
+      const popup: MapLayer['popup'] = {
         ...structuredClone(DEFAULT_LAYER_POPUP),
         ...popupRaw,
         mode,
@@ -141,17 +141,17 @@ export function MapEditor({
         ),
         search: {
           ...structuredClone(DEFAULT_LAYER_SEARCH),
-          ...(((l as unknown) as { search?: Partial<WebMapLayer['search']> })
+          ...(((l as unknown) as { search?: Partial<MapLayer['search']> })
             .search ?? {}),
         },
         scale: {
           ...structuredClone(DEFAULT_LAYER_SCALE),
-          ...(((l as unknown) as { scale?: Partial<WebMapLayer['scale']> })
+          ...(((l as unknown) as { scale?: Partial<MapLayer['scale']> })
             .scale ?? {}),
         },
         access: {
           ...structuredClone(DEFAULT_LAYER_ACCESS),
-          ...(((l as unknown) as { access?: Partial<WebMapLayer['access']> })
+          ...(((l as unknown) as { access?: Partial<MapLayer['access']> })
             .access ?? {}),
         },
         style: {
@@ -164,19 +164,19 @@ export function MapEditor({
         },
         opacity: typeof l.opacity === 'number' ? l.opacity : 1,
         visible: l.visible ?? true,
-      } as WebMapLayer;
+      } as MapLayer;
     });
     return {
-      ...DEFAULT_WEB_MAP,
+      ...DEFAULT_MAP,
       ...initial,
       search: {
-        ...DEFAULT_WEB_MAP.search,
+        ...DEFAULT_MAP.search,
         ...(initial.search ?? {}),
       },
       layers,
     };
   }, [initial]);
-  const [map, setMap] = useState<WebMapData>(seed);
+  const [map, setMap] = useState<MapData>(seed);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -190,7 +190,7 @@ export function MapEditor({
    * Shared selection state: per-layer set of feature ids. Because
    * every geojson source is added with `generateId: true`, these ids
    * are the same as the feature's array index in the cached
-   * FeatureCollection — which is what the attribute table uses for
+   * FeatureCollection â€” which is what the attribute table uses for
    * its row selection. That alignment lets one Set serve both the
    * map highlight and the table checkboxes without translation.
    */
@@ -222,13 +222,13 @@ export function MapEditor({
     Record<string, string[]>
   >({});
 
-  // Maps layer id → backing item id (null for geojson-url / inline).
+  // Maps layer id â†’ backing item id (null for geojson-url / inline).
   // Matrix uses this to know which layers can have item-level gaps.
   //
   // For arcgis-rest sources we NOW carry an optional `sourceItemId`
   // back-reference (set when the layer was added from a portal
   // arcgis_service item via the item picker). When present, that's
-  // the backing item the matrix should gate access against — the
+  // the backing item the matrix should gate access against â€” the
   // ArcGIS service is proxied through the portal, and gaps on the
   // arcgis_service item's shares translate to "this principal can
   // see the web map but not this ArcGIS layer's data". Layers added
@@ -236,7 +236,7 @@ export function MapEditor({
   const layerItemIds = useMemo<Record<string, string | null>>(() => {
     const out: Record<string, string | null> = {};
     for (const l of map.layers) {
-      if (l.source.kind === 'feature-service') {
+      if (l.source.kind === 'data-layer') {
         out[l.id] = l.source.itemId;
       } else if (l.source.kind === 'arcgis-rest') {
         out[l.id] = l.source.sourceItemId ?? null;
@@ -248,7 +248,7 @@ export function MapEditor({
   }, [map.layers]);
 
   async function loadMatrixData() {
-    // Webmap's own shares — drives the principal column list.
+    // Webmap's own shares â€” drives the principal column list.
     try {
       const res = await fetch(`/api/portal/items/${itemId}`);
       if (res.ok) {
@@ -256,9 +256,9 @@ export function MapEditor({
         setWebmapShares(j.shares ?? []);
       }
     } catch {
-      /* non-fatal — matrix shows empty principals list */
+      /* non-fatal â€” matrix shows empty principals list */
     }
-    // Each distinct backing item — pulls its shares for gap detection.
+    // Each distinct backing item â€” pulls its shares for gap detection.
     const uniqItemIds = Array.from(
       new Set(
         Object.values(layerItemIds).filter(
@@ -274,7 +274,7 @@ export function MapEditor({
           const j = (await r.json()) as { shares?: ItemShare[] };
           setItemShares((prev) => ({ ...prev, [id]: j.shares ?? [] }));
         } catch {
-          /* non-fatal — cell falls back to "no warning" */
+          /* non-fatal â€” cell falls back to "no warning" */
         }
       }),
     );
@@ -289,12 +289,12 @@ export function MapEditor({
         setGroupDirectory(dir);
       }
     } catch {
-      /* non-fatal — groups show as short ids */
+      /* non-fatal â€” groups show as short ids */
     }
 
     // Users: batch-resolve names + group memberships for every
     // principal on the webmap's share list. One call covers the
-    // whole matrix — avoids a per-row fetch during render.
+    // whole matrix â€” avoids a per-row fetch during render.
     try {
       // Snapshot webmapShares here; the list was just refreshed at
       // the top of loadMatrixData so whatever's in state now is
@@ -339,7 +339,7 @@ export function MapEditor({
         }
       }
     } catch {
-      /* non-fatal — users show as short ids, memberships empty */
+      /* non-fatal â€” users show as short ids, memberships empty */
     }
   }
 
@@ -353,7 +353,7 @@ export function MapEditor({
   }, [matrixOpen, itemId]);
 
   // Deduplicate shares into a principal list. Filters to principals
-  // who actually have view-or-better access to the webmap — the
+  // who actually have view-or-better access to the webmap â€” the
   // matrix exists to narrow their access, not to create new ones.
   const matrixPrincipals = useMemo<MatrixPrincipal[]>(() => {
     return webmapShares.map((s) => {
@@ -365,7 +365,7 @@ export function MapEditor({
     });
   }, [webmapShares, groupDirectory, userNames]);
 
-  function patchLayerAccess(layerId: string, next: WebMapLayerAccess) {
+  function patchLayerAccess(layerId: string, next: MapLayerAccess) {
     setLayers(
       map.layers.map((l) => (l.id === layerId ? { ...l, access: next } : l)),
     );
@@ -393,7 +393,7 @@ export function MapEditor({
         setItemShares((prev) => ({ ...prev, [bitemId]: j.shares ?? [] }));
       }
     } catch {
-      /* non-fatal — matrix may show stale state until close/reopen */
+      /* non-fatal â€” matrix may show stale state until close/reopen */
     }
   }
 
@@ -436,7 +436,7 @@ export function MapEditor({
   const abortsRef = useRef<Record<string, AbortController>>({});
 
   // Discover metadata for any layer we haven't seen yet. The key here is
-  // layer id + a stable hash of the source — if a user swaps the URL in
+  // layer id + a stable hash of the source â€” if a user swaps the URL in
   // place we need a fresh fetch, not a stale cache.
   const sourceKeys = map.layers.map(
     (l) => `${l.id}|${JSON.stringify(l.source)}`,
@@ -529,12 +529,12 @@ export function MapEditor({
     ? customBasemaps.find((b) => b.id === map.customBasemapId)
     : undefined;
 
-  function setLayers(next: WebMapLayer[]) {
+  function setLayers(next: MapLayer[]) {
     setMap((m) => ({ ...m, layers: next }));
     markDirty();
   }
 
-  function addLayer(layer: WebMapLayer) {
+  function addLayer(layer: MapLayer) {
     setMap((m) => ({ ...m, layers: [layer, ...m.layers] }));
     markDirty();
   }
@@ -542,7 +542,7 @@ export function MapEditor({
   // Camera changes from user interaction get folded into the canonical
   // state so Save view captures whatever the user is currently looking at.
   const onCameraChange = useCallback(
-    (next: Pick<WebMapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => {
+    (next: Pick<MapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => {
       setMap((m) => ({ ...m, ...next }));
       if (canEdit) markDirty();
     },
@@ -616,7 +616,7 @@ export function MapEditor({
           <span className="hidden text-xs text-muted sm:inline">
             {selectedCustom
               ? selectedCustom.description ||
-                `Custom basemap — ${selectedCustom.sourceKind}`
+                `Custom basemap â€” ${selectedCustom.sourceKind}`
               : BASEMAPS[map.basemap].description}
           </span>
 
@@ -788,9 +788,9 @@ export function MapEditor({
  */
 function hydrateLabels(
   raw: Record<string, unknown>,
-): WebMapLayer['labels'] {
+): MapLayer['labels'] {
   const base = structuredClone(DEFAULT_LAYER_LABELS);
-  const merged = { ...base, ...(raw as Partial<WebMapLayer['labels']>) };
+  const merged = { ...base, ...(raw as Partial<MapLayer['labels']>) };
   if (
     typeof (raw as { template?: unknown }).template !== 'string' &&
     typeof (raw as { field?: unknown }).field === 'string' &&

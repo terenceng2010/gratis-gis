@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, MapPin, Search, Tag, X } from 'lucide-react';
-import type { WebMapLayer } from '@gratis-gis/shared-types';
+import type { MapLayer } from '@gratis-gis/shared-types';
 import {
   geocode,
   searchArcgisLayers,
@@ -11,7 +11,7 @@ import {
 } from './search-sources';
 
 interface Props {
-  layers: WebMapLayer[];
+  layers: MapLayer[];
   featuresByLayer: Record<string, GeoJSON.FeatureCollection | null>;
   geocodingEnabled: boolean;
   /**
@@ -33,7 +33,7 @@ interface Props {
  *     AbortController when the query changes so a slow network can't
  *     clobber the latest results.
  *
- * Keyboard support follows the WAI-ARIA combobox pattern: ↑ / ↓ move
+ * Keyboard support follows the WAI-ARIA combobox pattern: â†‘ / â†“ move
  * the highlight, Enter picks, Escape closes.
  */
 export function SearchBar({
@@ -61,7 +61,7 @@ export function SearchBar({
     (l) => l.search?.enabled && l.search.fields.length > 0,
   );
 
-  // Debounced geocoder. Don't run for super-short queries — every
+  // Debounced geocoder. Don't run for super-short queries â€” every
   // keystroke triggers a network request and Nominatim asks nicely
   // that we keep volume low.
   useEffect(() => {
@@ -257,12 +257,12 @@ export function SearchBar({
                   />
                 ))}
                 <div className="px-3 py-1 text-[10px] text-muted">
-                  Places via © OpenStreetMap contributors (Nominatim)
+                  Places via Â© OpenStreetMap contributors (Nominatim)
                 </div>
               </Section>
             ) : query.trim().length >= 3 && !geocodeLoading ? (
               <div className="px-3 py-2 text-xs text-muted">
-                No matches{anyLayerSearchable ? '' : ' — try a longer query'}.
+                No matches{anyLayerSearchable ? '' : ' â€” try a longer query'}.
               </div>
             ) : null
           ) : null}
@@ -324,7 +324,7 @@ function ResultRow({
           <span className="block truncate text-ink-0">{result.label}</span>
           <span className="block truncate text-xs text-muted">
             {result.kind === 'feature'
-              ? result.layerTitle + (result.subtitle ? ` · ${result.subtitle}` : '')
+              ? result.layerTitle + (result.subtitle ? ` Â· ${result.subtitle}` : '')
               : result.subtitle}
           </span>
         </span>

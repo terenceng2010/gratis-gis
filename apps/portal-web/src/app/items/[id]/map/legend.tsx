@@ -1,13 +1,13 @@
 'use client';
 
 import { List, X } from 'lucide-react';
-import type { WebMapLayer } from '@gratis-gis/shared-types';
+import type { MapLayer } from '@gratis-gis/shared-types';
 import type { GeometryFamily, LayerMetadata } from './layer-metadata';
 import { renderIconSvg } from './map-icons';
 
 interface Props {
   open: boolean;
-  layers: WebMapLayer[];
+  layers: MapLayer[];
   metadata: Record<string, LayerMetadata>;
   onClose: () => void;
 }
@@ -20,7 +20,7 @@ interface Props {
  *
  * Kept as a presentational component: it doesn't subscribe to map
  * events or manage its own selection, it just renders the current
- * WebMapLayer[] shape. That keeps the legend honest about what the
+ * MapLayer[] shape. That keeps the legend honest about what the
  * map is actually drawing.
  */
 export function Legend({ open, layers, metadata, onClose }: Props) {
@@ -84,7 +84,7 @@ function LayerSwatch({
   layer,
   geometryTypes,
 }: {
-  layer: WebMapLayer;
+  layer: MapLayer;
   geometryTypes?: Set<GeometryFamily>;
 }) {
   const r = layer.renderer;
@@ -137,7 +137,7 @@ function LayerSwatch({
               i === 0
                 ? `< ${r.stops[0]}`
                 : i === r.colors.length - 1
-                  ? `≥ ${r.stops[r.stops.length - 1]}`
+                  ? `â‰¥ ${r.stops[r.stops.length - 1]}`
                   : `${r.stops[i - 1]} to < ${r.stops[i]}`;
             return (
               <li key={i} className="flex items-center gap-2">
@@ -157,7 +157,7 @@ function LayerSwatch({
 
   // Simple renderer (or an in-progress unique-values / class-breaks).
   // Only show swatches for geometries the layer actually contains.
-  // If metadata hasn't told us yet, show everything — it's better than
+  // If metadata hasn't told us yet, show everything â€” it's better than
   // missing a mark for a geometry the user knows is there.
   return (
     <SimpleSwatches
@@ -171,7 +171,7 @@ function SimpleSwatches({
   layer,
   geometryTypes,
 }: {
-  layer: WebMapLayer;
+  layer: MapLayer;
   geometryTypes?: Set<GeometryFamily>;
 }) {
   const s = layer.style;
@@ -219,7 +219,7 @@ function SimpleSwatches({
   );
 }
 
-function FallbackRow({ layer }: { layer: WebMapLayer }) {
+function FallbackRow({ layer }: { layer: MapLayer }) {
   return (
     <li className="flex items-center gap-2 text-xs">
       <span

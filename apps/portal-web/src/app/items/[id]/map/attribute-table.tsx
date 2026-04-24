@@ -12,14 +12,14 @@ import {
   X,
 } from 'lucide-react';
 import type {
-  WebMapLayer,
-  WebMapLayerFilter,
+  MapLayer,
+  MapLayerFilter,
 } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
 
 interface Props {
   open: boolean;
-  layers: WebMapLayer[];
+  layers: MapLayer[];
   /**
    * Cached feature collections keyed by layer id. The parent fetches
    * these lazily when the table opens so we don't refetch per render.
@@ -40,7 +40,7 @@ interface Props {
   /** Fly to a bbox in the map canvas. */
   onZoomTo: (bbox: [number, number, number, number]) => void;
   /** Replace the layer filter (used by "convert selection to filter"). */
-  onPatchLayer: (layerId: string, patch: Partial<WebMapLayer>) => void;
+  onPatchLayer: (layerId: string, patch: Partial<MapLayer>) => void;
 }
 
 type SortDir = 'asc' | 'desc';
@@ -111,7 +111,7 @@ export function AttributeTable({
     setLastPicked(null);
     setSortBy(null);
     setQuery('');
-    // Note: we deliberately don't clear the shared selection here —
+    // Note: we deliberately don't clear the shared selection here â€”
     // switching layers should preserve the picks on other layers.
   }, [open, queryableLayers, activeLayerId]);
 
@@ -223,7 +223,7 @@ export function AttributeTable({
     if (values.length === 0) return;
     // A single multi-clause filter with OR'd == clauses keeps it
     // compatible with the existing filter editor.
-    const filter: WebMapLayerFilter = {
+    const filter: MapLayerFilter = {
       combinator: 'any',
       clauses: values.map((v) => ({ field: idField, op: '==' as const, value: v })),
     };
@@ -244,7 +244,7 @@ export function AttributeTable({
             value={activeLayerId ?? ''}
             onChange={(e) => {
               setActiveLayerId(e.target.value);
-              // Preserve selection across layer switches — picks on
+              // Preserve selection across layer switches â€” picks on
               // other layers keep their highlight on the map.
               setQuery('');
               setSortBy(null);
@@ -272,7 +272,7 @@ export function AttributeTable({
           </label>
           <span className="text-[11px] text-muted">
             {visibleIndexes.length.toLocaleString()} rows
-            {activeSelection.size > 0 ? ` · ${activeSelection.size} selected` : ''}
+            {activeSelection.size > 0 ? ` Â· ${activeSelection.size} selected` : ''}
           </span>
         </div>
         <button

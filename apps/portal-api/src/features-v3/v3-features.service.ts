@@ -5,7 +5,7 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import { toV3TableName } from './v3-tables.service.js';
 
 /**
- * Per-layer feature CRUD for v3 feature_service items.
+ * Per-layer feature CRUD for v3 data_layer items.
  *
  * Lifecycle (create/alter/drop tables) lives in V3TablesService; this
  * service only handles row-level operations against already-provisioned
@@ -138,7 +138,7 @@ export class V3FeaturesService {
   }
 
   /** Update a feature by expiring the current row and inserting a new
-   *  one — same temporal-versioning pattern as the v2 features service. */
+   *  one â€” same temporal-versioning pattern as the v2 features service. */
   async updateFeature(
     itemId: string,
     layerId: string,

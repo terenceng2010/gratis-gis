@@ -1,20 +1,20 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import type { WebMapLayerLabels } from '@gratis-gis/shared-types';
+import type { MapLayerLabels } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
 
 interface Props {
-  value: WebMapLayerLabels;
+  value: MapLayerLabels;
   metadata: LayerMetadata;
-  onChange: (next: WebMapLayerLabels) => void;
+  onChange: (next: MapLayerLabels) => void;
 }
 
 /**
  * Label-engine editor.
  *
- * The label text is an expression — the same `{{field | formatter}}`
- * grammar as popups — rather than a single field name. That means a
+ * The label text is an expression â€” the same `{{field | formatter}}`
+ * grammar as popups â€” rather than a single field name. That means a
  * user can produce "Population: 1,234" instead of just "1234", or
  * combine multiple fields ("{{name}} ({{pop | number}})"). Insert-field
  * and insert-formatter menus drop canned snippets at the caret so the
@@ -31,7 +31,7 @@ export function LabelsEditor({ value, metadata, onChange }: Props) {
   // older layer was stuck on `line` but only has points/polygons now.
   const hasLine = metadata.geometryTypes.has('line');
 
-  function patch(p: Partial<WebMapLayerLabels>) {
+  function patch(p: Partial<MapLayerLabels>) {
     onChange({ ...value, ...p });
   }
 
@@ -187,7 +187,7 @@ export function LabelsEditor({ value, metadata, onChange }: Props) {
             <select
               value={value.anchor}
               onChange={(e) =>
-                patch({ anchor: e.target.value as WebMapLayerLabels['anchor'] })
+                patch({ anchor: e.target.value as MapLayerLabels['anchor'] })
               }
               className="h-8 w-full rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
             >
@@ -220,7 +220,7 @@ export function LabelsEditor({ value, metadata, onChange }: Props) {
                 onChange={(n) => patch({ offsetX: n })}
               />
               <Slider
-                label="Y (↓ is positive)"
+                label="Y (â†“ is positive)"
                 min={-4}
                 max={4}
                 step={0.1}

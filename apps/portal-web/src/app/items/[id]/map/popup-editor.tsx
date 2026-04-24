@@ -2,13 +2,13 @@
 
 import { useMemo, useRef } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
-import type { WebMapLayerPopup } from '@gratis-gis/shared-types';
+import type { MapLayerPopup } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
 
 interface Props {
-  value: WebMapLayerPopup;
+  value: MapLayerPopup;
   metadata: LayerMetadata;
-  onChange: (next: WebMapLayerPopup) => void;
+  onChange: (next: MapLayerPopup) => void;
 }
 
 /**
@@ -24,7 +24,7 @@ interface Props {
  * naturally from the independent title template + body mode knobs.
  */
 export function PopupEditor({ value, metadata, onChange }: Props) {
-  function patch(p: Partial<WebMapLayerPopup>) {
+  function patch(p: Partial<MapLayerPopup>) {
     onChange({ ...value, ...p });
   }
 
@@ -84,9 +84,9 @@ function TitleEditor({
   metadata,
   onPatch,
 }: {
-  value: WebMapLayerPopup;
+  value: MapLayerPopup;
   metadata: LayerMetadata;
-  onPatch: (p: Partial<WebMapLayerPopup>) => void;
+  onPatch: (p: Partial<MapLayerPopup>) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
 
@@ -149,9 +149,9 @@ function PickedEditor({
   metadata,
   onPatch,
 }: {
-  value: WebMapLayerPopup;
+  value: MapLayerPopup;
   metadata: LayerMetadata;
-  onPatch: (p: Partial<WebMapLayerPopup>) => void;
+  onPatch: (p: Partial<MapLayerPopup>) => void;
 }) {
   function moveField(idx: number, dir: -1 | 1) {
     const target = idx + dir;
@@ -258,9 +258,9 @@ function TemplateEditor({
   metadata,
   onPatch,
 }: {
-  value: WebMapLayerPopup;
+  value: MapLayerPopup;
   metadata: LayerMetadata;
-  onPatch: (p: Partial<WebMapLayerPopup>) => void;
+  onPatch: (p: Partial<MapLayerPopup>) => void;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
 

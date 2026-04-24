@@ -7,13 +7,13 @@
  *      entirely client-side.
  *
  *   2. Geocoding via Nominatim (https://nominatim.openstreetmap.org/).
- *      Free, no API key, rate-limited to 1 req/sec per their policy —
+ *      Free, no API key, rate-limited to 1 req/sec per their policy â€”
  *      so we debounce in the UI. We send a descriptive User-Agent as
  *      required, credit OSM in the results footer, and do NOT cache
  *      beyond the single session.
  */
 
-import type { WebMapLayer } from '@gratis-gis/shared-types';
+import type { MapLayer } from '@gratis-gis/shared-types';
 
 export type SearchResult =
   | {
@@ -46,7 +46,7 @@ const MAX_ATTRIBUTE_HITS_PER_LAYER = 8;
 /**
  * Client talks to our own proxy, not Nominatim directly. The proxy
  * (apps/portal-web/src/app/api/geocode/route.ts) forwards to whatever
- * NOMINATIM_URL is configured for the deployment — local docker
+ * NOMINATIM_URL is configured for the deployment â€” local docker
  * container for self-hosted, a regional cluster in prod, or the
  * public OSM endpoint for demos. Doing it this way keeps one env var
  * as the swap point, lets us set the required User-Agent from Node,
@@ -60,7 +60,7 @@ const GEOCODE_URL = '/api/geocode';
  */
 export function searchLayers(
   query: string,
-  layers: WebMapLayer[],
+  layers: MapLayer[],
   featuresByLayer: Record<string, GeoJSON.FeatureCollection | null>,
 ): SearchResult[] {
   const q = query.trim().toLowerCase();
@@ -69,7 +69,7 @@ export function searchLayers(
 
   for (const layer of layers) {
     if (!layer.search?.enabled) continue;
-    // Honour server-enforced matrix permissions — a layer the viewer
+    // Honour server-enforced matrix permissions â€” a layer the viewer
     // has view-only access to shouldn't surface feature attributes
     // through search any more than through a popup.
     if (layer.effective && layer.effective.query === false) continue;
@@ -113,7 +113,7 @@ export function searchLayers(
             return val ? `${ff}: ${val}` : null;
           })
           .filter(Boolean)
-          .join(' · ') || null,
+          .join(' Â· ') || null,
         bbox: featureBbox(f),
         center: featureCenter(f),
         feature: f,
@@ -128,7 +128,7 @@ export function searchLayers(
  * Search ArcGIS REST layers by hitting each service's /query endpoint
  * with a WHERE clause against the layer's configured searchable
  * fields. Unlike the local-cache search above this reaches features
- * that aren't in the current viewport — important because ArcGIS-REST
+ * that aren't in the current viewport â€” important because ArcGIS-REST
  * layers only have the last bbox query in memory, and a hit like a
  * parcel APN is almost never visible when the user starts typing.
  *
@@ -138,12 +138,12 @@ export function searchLayers(
  * numeric since ArcGIS implicitly coerces the right-hand side. Single
  * quotes in the query are doubled per standard SQL escaping.
  *
- * Per-layer failures are logged to the console and swallowed — one
+ * Per-layer failures are logged to the console and swallowed â€” one
  * misconfigured field shouldn't nuke search for the rest of the map.
  */
 export async function searchArcgisLayers(
   query: string,
-  layers: WebMapLayer[],
+  layers: MapLayer[],
   signal?: AbortSignal,
 ): Promise<SearchResult[]> {
   const q = query.trim();
@@ -246,7 +246,7 @@ export async function searchArcgisLayers(
                     return val ? `${ff}: ${val}` : null;
                   })
                   .filter(Boolean)
-                  .join(' · ') || null,
+                  .join(' Â· ') || null,
               bbox: featureBbox(f),
               center: featureCenter(f),
               feature: f,
@@ -314,7 +314,7 @@ export async function geocode(
       kind: 'place' as const,
       label: row.display_name,
       subtitle: row.class
-        ? `${row.class}${row.type ? ` · ${row.type}` : ''}`
+        ? `${row.class}${row.type ? ` Â· ${row.type}` : ''}`
         : null,
       bbox,
       center: Number.isFinite(lat) && Number.isFinite(lon) ? [lon, lat] : null,

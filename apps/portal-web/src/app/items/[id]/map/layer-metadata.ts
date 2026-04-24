@@ -1,4 +1,4 @@
-import type { WebMapLayer } from '@gratis-gis/shared-types';
+import type { MapLayer } from '@gratis-gis/shared-types';
 
 export type GeometryFamily = 'point' | 'line' | 'polygon';
 
@@ -58,7 +58,7 @@ const VALUES_PER_FIELD_CAP = 64;
  *     categorical renderer" rather than pretending to list them all.
  */
 export async function discoverLayerMetadata(
-  layer: WebMapLayer,
+  layer: MapLayer,
   signal?: AbortSignal,
 ): Promise<LayerMetadata> {
   let raw: unknown;

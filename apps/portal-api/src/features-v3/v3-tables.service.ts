@@ -3,7 +3,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 /**
- * Lifecycle helpers for v3 (multi-layer) feature_service items.
+ * Lifecycle helpers for v3 (multi-layer) data_layer items.
  *
  * Lives in its own module with zero dependencies beyond PrismaService so
  * ItemsModule can import it for reconcile-on-create/update/purge without

@@ -4,11 +4,11 @@ import { useState } from 'react';
 import { Braces, ChevronDown, ExternalLink, Table2 } from 'lucide-react';
 import type {
   FeatureField,
-  FeatureServiceData,
-  FeatureServiceDataV1,
-  FeatureServiceDataV2,
-  FeatureServiceDataV3,
-  FeatureServiceLayer,
+  DataLayerData,
+  DataLayerDataV1,
+  DataLayerDataV2,
+  DataLayerDataV3,
+  DataLayerSublayer,
   FieldDomain,
 } from '@gratis-gis/shared-types';
 
@@ -17,25 +17,25 @@ import type {
  * (v1/v2 single-field-set or v3 per-layer) and renders a dense
  * field table: name, type, required, domain summary, storage
  * constraints. Also exposes a "Raw JSON" disclosure for power
- * users who want to see the underlying item.data blob. Read-only —
+ * users who want to see the underlying item.data blob. Read-only â€”
  * editing schemas happens in the wizard or detail-page builder;
  * this panel is the "what does this service ACTUALLY look like"
  * answer you reach for when debugging or writing client code.
  *
- * Runs on any feature_service item regardless of version; unknown
+ * Runs on any data_layer item regardless of version; unknown
  * shapes render a minimal "schema unavailable" stub rather than
  * crashing.
  */
 interface Props {
-  data: FeatureServiceData | null | undefined;
+  data: DataLayerData | null | undefined;
 }
 
-export function FeatureServiceSchema({ data }: Props) {
+export function DataLayerSchema({ data }: Props) {
   const [open, setOpen] = useState(false);
   const [rawOpen, setRawOpen] = useState(false);
   if (!data) return null;
 
-  const fieldSets: Array<{ label: string; layer?: FeatureServiceLayer; fields: FeatureField[] }> =
+  const fieldSets: Array<{ label: string; layer?: DataLayerSublayer; fields: FeatureField[] }> =
     data.version === 3
       ? data.layers.map((l) => ({
           label: l.label || l.name || 'Layer',
@@ -46,7 +46,7 @@ export function FeatureServiceSchema({ data }: Props) {
           {
             label: 'Fields',
             fields:
-              (data as FeatureServiceDataV1 | FeatureServiceDataV2).fields ??
+              (data as DataLayerDataV1 | DataLayerDataV2).fields ??
               [],
           },
         ];
@@ -116,7 +116,7 @@ function SchemaTable({
   fields,
 }: {
   heading: string;
-  layer?: FeatureServiceLayer;
+  layer?: DataLayerSublayer;
   fields: FeatureField[];
 }) {
   return (
@@ -130,7 +130,7 @@ function SchemaTable({
             </span>
             {typeof layer.featureCount === 'number' ? (
               <span className="text-[11px] text-muted">
-                · {layer.featureCount.toLocaleString()} feature
+                Â· {layer.featureCount.toLocaleString()} feature
                 {layer.featureCount === 1 ? '' : 's'}
               </span>
             ) : null}
@@ -160,16 +160,16 @@ function SchemaTable({
                   <td className="px-2 py-1 font-mono text-ink-0">{f.name}</td>
                   <td className="px-2 py-1 text-muted">{f.type}</td>
                   <td className="px-2 py-1 text-ink-1">
-                    {f.label || <span className="text-muted">—</span>}
+                    {f.label || <span className="text-muted">â€”</span>}
                   </td>
                   <td className="px-2 py-1 text-center text-muted">
-                    {f.nullable ? '' : '●'}
+                    {f.nullable ? '' : 'â—'}
                   </td>
                   <td className="px-2 py-1">
-                    {f.domain ? <DomainCell domain={f.domain} /> : <span className="text-muted">—</span>}
+                    {f.domain ? <DomainCell domain={f.domain} /> : <span className="text-muted">â€”</span>}
                   </td>
                   <td className="px-2 py-1">
-                    {f.storage ? <StorageCell storage={f.storage} /> : <span className="text-muted">—</span>}
+                    {f.storage ? <StorageCell storage={f.storage} /> : <span className="text-muted">â€”</span>}
                   </td>
                 </tr>
               ))}
@@ -185,7 +185,7 @@ function DomainCell({ domain }: { domain: FieldDomain }) {
   if (domain.type === 'coded-value') {
     return (
       <span className="text-ink-1">
-        pick list ·{' '}
+        pick list Â·{' '}
         <span className="text-muted">
           {domain.values.length} value{domain.values.length === 1 ? '' : 's'}
         </span>
@@ -195,7 +195,7 @@ function DomainCell({ domain }: { domain: FieldDomain }) {
   if (domain.type === 'coded-value-ref') {
     return (
       <span className="inline-flex items-center gap-1 text-ink-1">
-        shared list ·
+        shared list Â·
         <a
           href={`/items/${domain.pickListItemId}`}
           className="inline-flex items-center gap-0.5 underline hover:text-ink-1"
@@ -208,7 +208,7 @@ function DomainCell({ domain }: { domain: FieldDomain }) {
   if (domain.type === 'range') {
     return (
       <span className="text-ink-1">
-        range · {domain.min} to {domain.max}
+        range Â· {domain.min} to {domain.max}
       </span>
     );
   }
@@ -234,8 +234,8 @@ function StorageCell({
     parts.push(`NUMERIC(${storage.precision ?? '?'}, ${storage.scale ?? '?'})`);
   }
   return parts.length > 0 ? (
-    <span className="text-ink-1">{parts.join(' · ')}</span>
+    <span className="text-ink-1">{parts.join(' Â· ')}</span>
   ) : (
-    <span className="text-muted">—</span>
+    <span className="text-muted">â€”</span>
   );
 }

@@ -1,12 +1,12 @@
 /**
- * Canonical shape stored in an Item's dataJson when `type = 'feature_service'`.
+ * Canonical shape stored in an Item's dataJson when `type = 'data_layer'`.
  *
  * Two storage strategies exist:
  *
- * **v1** — inline GeoJSON in `item.data.data`. Works for demos and small
+ * **v1** â€” inline GeoJSON in `item.data.data`. Works for demos and small
  * datasets; hard cap around 25 MB upload / a few MB parsed JSON.
  *
- * **v2** — PostGIS table per item. `item.data` holds only metadata
+ * **v2** â€” PostGIS table per item. `item.data` holds only metadata
  * (field schema, feature count, bbox, updatedAt). The actual geometry
  * and properties live in a table named `fs_<uuid_no_dashes>` in the
  * database. `GET /api/items/:id/geojson` streams from PostGIS with
@@ -53,16 +53,16 @@ export type FieldDomain =
 
 /**
  * Optional storage hints attached to a field. None of these are
- * required — PostgreSQL's TEXT and NUMERIC are loose enough to carry
- * anything — but they let authors capture Esri-style declarations
+ * required â€” PostgreSQL's TEXT and NUMERIC are loose enough to carry
+ * anything â€” but they let authors capture Esri-style declarations
  * (field widths, integer vs decimal) that come in handy when exporting
  * to shapefile / File GDB or doing client-side validation. The
  * backend applies them when provisioning the PostGIS table:
  *
- *   - `maxLength` on a string field → `VARCHAR(maxLength)` instead of `TEXT`.
- *   - `numberKind: 'integer'`        → `INTEGER` instead of `NUMERIC`.
+ *   - `maxLength` on a string field â†’ `VARCHAR(maxLength)` instead of `TEXT`.
+ *   - `numberKind: 'integer'`        â†’ `INTEGER` instead of `NUMERIC`.
  *   - `numberKind: 'decimal'` + both precision/scale set
- *                                    → `NUMERIC(precision, scale)`.
+ *                                    â†’ `NUMERIC(precision, scale)`.
  */
 export interface FeatureFieldStorage {
   /** Cap on string length in characters. Leave unset for unlimited. */
@@ -91,11 +91,11 @@ export interface FeatureField {
  * Provenance of the data currently on a feature-service item. Stamped
  * when features are uploaded or bulk-replaced so authors can see at a
  * glance what the dataset was built from. Absent on items whose data
- * was inlined by hand or created before the field was added — the UI
+ * was inlined by hand or created before the field was added â€” the UI
  * renders "Source not recorded" in that case rather than fabricating
  * a value.
  */
-export interface FeatureServiceSource {
+export interface DataLayerSource {
   /** Original filename uploaded by the user, if any. */
   fileName?: string;
   /** Canonical source format. 'manual' covers paste-GeoJSON + builder
@@ -129,7 +129,7 @@ export interface FeatureServiceSource {
 }
 
 /** v1: inline GeoJSON storage. */
-export interface FeatureServiceDataV1 {
+export interface DataLayerDataV1 {
   version: 1;
   storageType?: never;
   fields: FeatureField[];
@@ -142,11 +142,11 @@ export interface FeatureServiceDataV1 {
     }>;
   };
   updatedAt?: ISODateString;
-  source?: FeatureServiceSource;
+  source?: DataLayerSource;
 }
 
 /** v2: PostGIS-backed storage. `data.data` is absent; features live in the DB. */
-export interface FeatureServiceDataV2 {
+export interface DataLayerDataV2 {
   version: 2;
   storageType: 'postgis';
   fields: FeatureField[];
@@ -154,11 +154,11 @@ export interface FeatureServiceDataV2 {
   /** [minX, minY, maxX, maxY] in EPSG:4326. Null when the table is empty. */
   bbox: [number, number, number, number] | null;
   updatedAt?: ISODateString;
-  source?: FeatureServiceSource;
+  source?: DataLayerSource;
 }
 
 /**
- * v3: multi-layer feature service (like an ArcGIS FeatureService).
+ * v3: multi-layer feature service (like an ArcGIS DataLayer).
  *
  * One item contains an ordered list of "layers". A layer with a
  * geometry type is a spatial layer and gets a PostGIS table; a layer
@@ -169,7 +169,7 @@ export interface FeatureServiceDataV2 {
  * and may participate in zero or more parent/child relationships with
  * other layers in the same item.
  *
- * Persistence (Phase C — not yet wired):
+ * Persistence (Phase C â€” not yet wired):
  * - Each layer maps to a PostGIS table `fs_<itemIdNoDashes>_<layerId>`.
  * - Per-layer feature CRUD lives at `/items/:id/layers/:layerId/features`.
  * - Relationships are enforced by a FK column on the child layer's
@@ -177,7 +177,7 @@ export interface FeatureServiceDataV2 {
  */
 export type LayerGeometryType = 'point' | 'line' | 'polygon' | null;
 
-export interface FeatureServiceLayer {
+export interface DataLayerSublayer {
   /** Stable within the item. Used in table name + API paths. */
   id: string;
   /** Display name: what appears in the legend and layer list. */
@@ -206,23 +206,23 @@ export interface FeatureServiceLayer {
   /** Provenance of the most recent ingest into this layer. Per-layer
    *  because different layers in one v3 item might be sourced from
    *  different files. */
-  source?: FeatureServiceSource;
+  source?: DataLayerSource;
 }
 
-export interface FeatureServiceDataV3 {
+export interface DataLayerDataV3 {
   version: 3;
   storageType: 'postgis';
-  layers: FeatureServiceLayer[];
+  layers: DataLayerSublayer[];
   /** Item-level updatedAt. Layer-level updatedAt lives on each layer. */
   updatedAt?: ISODateString;
 }
 
-export type FeatureServiceData =
-  | FeatureServiceDataV1
-  | FeatureServiceDataV2
-  | FeatureServiceDataV3;
+export type DataLayerData =
+  | DataLayerDataV1
+  | DataLayerDataV2
+  | DataLayerDataV3;
 
-export const DEFAULT_FEATURE_SERVICE: FeatureServiceDataV1 = {
+export const DEFAULT_DATA_LAYER: DataLayerDataV1 = {
   version: 1,
   fields: [],
   data: { type: 'FeatureCollection', features: [] },
@@ -234,7 +234,7 @@ export const DEFAULT_FEATURE_SERVICE: FeatureServiceDataV1 = {
  * hasn't added any layers we still want `version: 3` so the backend
  * knows to treat this item as multi-layer from birth.
  */
-export const DEFAULT_FEATURE_SERVICE_V3: FeatureServiceDataV3 = {
+export const DEFAULT_DATA_LAYER_V3: DataLayerDataV3 = {
   version: 3,
   storageType: 'postgis',
   layers: [],
@@ -271,7 +271,7 @@ export interface FeatureCollection {
 /** Body for POST /items/:id/features (append one or more features). */
 export interface AppendFeaturesInput {
   features: Array<{
-    /** Client-generated UUID — provide for offline-created features so
+    /** Client-generated UUID â€” provide for offline-created features so
      *  parent/child GUIDs established offline survive the sync. */
     globalId?: string;
     geometry?: unknown;
@@ -293,12 +293,12 @@ export interface UpdateFeatureInput {
  * Registered relationship between two feature-service items.
  * Stored in the parent item's data.relationships array.
  *
- * Example: nest points (parent) → annual_inspections (child).
+ * Example: nest points (parent) â†’ annual_inspections (child).
  * The child table has a `parent_global_id` UUID column (indexed) that
  * references the parent feature's global_id.
  */
 export interface FeatureRelationship {
-  /** Stable UUID for this relationship — used in API paths. */
+  /** Stable UUID for this relationship â€” used in API paths. */
   id: string;
   /** Display name shown in map popups and forms. */
   label: string;
@@ -324,7 +324,7 @@ export interface ChildRelationshipRef {
   relationshipId: string;
 }
 
-/** Body for POST /items/:id/relationships — register a new relationship. */
+/** Body for POST /items/:id/relationships â€” register a new relationship. */
 export interface CreateRelationshipInput {
   label: string;
   /** Item ID of the child feature service. */

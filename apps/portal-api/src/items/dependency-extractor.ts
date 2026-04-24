@@ -12,8 +12,8 @@ import type { ItemType } from '@prisma/client';
  * Keeping these separate lets the service build two reverse indexes
  * and match each kind of reference without a schema-wide JSON scan.
  *
- * Today's coverage for web_map layers (shared-types WebMapLayerSource):
- *   - source.kind === 'feature-service'  -> itemIds += source.itemId
+ * Today's coverage for map layers (shared-types MapLayerSource):
+ *   - source.kind === 'data-layer'  -> itemIds += source.itemId
  *   - source.kind === 'arcgis-rest'      -> urls    += source.url
  *   - source.kind === 'geojson-url'      -> (not tracked; external URL)
  *   - source.kind === 'geojson-inline'   -> (not tracked; inline data)
@@ -37,7 +37,7 @@ export function extractDependencies(
   const urls = new Set<string>();
   if (!data) return { itemIds: [], urls: [] };
 
-  if (item.type === 'web_map') {
+  if (item.type === 'map') {
     const layers = Array.isArray((data as { layers?: unknown }).layers)
       ? ((data as { layers: unknown[] }).layers as Array<Record<string, unknown>>)
       : [];
@@ -45,12 +45,12 @@ export function extractDependencies(
       const source = l?.source as Record<string, unknown> | undefined;
       if (!source || typeof source !== 'object') continue;
       const kind = source.kind;
-      if (kind === 'feature-service') {
+      if (kind === 'data-layer') {
         const id = source.itemId;
         if (typeof id === 'string' && id.length > 0) itemIds.add(id);
       } else if (kind === 'arcgis-rest') {
         // Prefer the direct back-reference when the layer was added
-        // from a portal item — URL matching is brittle (trailing
+        // from a portal item â€” URL matching is brittle (trailing
         // slashes, alternate hostnames, query strings). Fall back to
         // URL matching for layers added by raw-URL paste.
         const direct = source.sourceItemId;
@@ -65,7 +65,7 @@ export function extractDependencies(
     }
   }
 
-  if (item.type === 'feature_service') {
+  if (item.type === 'data_layer') {
     // v3 multi-layer: walk each layer's fields and collect pick-list
     // refs (domain type === 'coded-value-ref'). v1/v2 items store
     // `fields` at the top level; handle both shapes.
@@ -95,7 +95,7 @@ export function extractDependencies(
     }
   }
 
-  // Hook points for other types — extend as those item types come online.
+  // Hook points for other types â€” extend as those item types come online.
 
   return { itemIds: Array.from(itemIds), urls: Array.from(urls) };
 }
@@ -110,7 +110,7 @@ export function extractDependencies(
  */
 export function normalizeArcgisUrl(u: string): string {
   let s = u.trim();
-  // Strip query + fragment — these are presentation artifacts, not
+  // Strip query + fragment â€” these are presentation artifacts, not
   // part of the service identity.
   const q = s.indexOf('?');
   if (q >= 0) s = s.slice(0, q);
@@ -129,4 +129,4 @@ export function normalizeArcgisUrl(u: string): string {
 
 /** Item types that can reference other items. If we expand this,
  *  update the service's dependents scan to include the new types. */
-export const REFERENCER_TYPES: ItemType[] = ['web_map', 'feature_service'];
+export const REFERENCER_TYPES: ItemType[] = ['map', 'data_layer'];

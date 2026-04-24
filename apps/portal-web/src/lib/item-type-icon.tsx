@@ -24,13 +24,13 @@ import type { ItemType } from '@gratis-gis/shared-types';
  * render an item card or thumbnail pass this icon in explicitly.
  *
  * The colored tile background used behind the icon lives in
- * @gratis-gis/ui's ItemCard — keeping the palette there so every
+ * @gratis-gis/ui's ItemCard â€” keeping the palette there so every
  * render shares the same colors, and keeping the icon component here
  * so portal-web owns the lucide surface.
  */
 const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
-  web_map: MapIcon,
-  feature_service: Layers,
+  map: MapIcon,
+  data_layer: Layers,
   arcgis_service: Plug,
   form: ClipboardList,
   form_submission_collection: Inbox,
@@ -51,8 +51,8 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
  *  Mirrors the tile palette in @gratis-gis/ui so the two contexts
  *  stay visually coherent. */
 const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
-  web_map: 'text-emerald-600',
-  feature_service: 'text-sky-600',
+  map: 'text-emerald-600',
+  data_layer: 'text-sky-600',
   arcgis_service: 'text-cyan-600',
   form: 'text-violet-600',
   form_submission_collection: 'text-violet-500',
@@ -72,8 +72,8 @@ const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
  *  thumbnails (e.g. detail-page header badge). Kept in sync with the
  *  ItemCard full-bleed tile colors. */
 const ITEM_TYPE_TILE: Record<ItemType, string> = {
-  web_map: 'bg-emerald-500/90 text-white',
-  feature_service: 'bg-sky-500/90 text-white',
+  map: 'bg-emerald-500/90 text-white',
+  data_layer: 'bg-sky-500/90 text-white',
   arcgis_service: 'bg-cyan-600/90 text-white',
   form: 'bg-violet-500/90 text-white',
   form_submission_collection: 'bg-violet-400/90 text-white',
