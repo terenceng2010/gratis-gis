@@ -67,7 +67,6 @@
       "bearerOnly": true
     },
     {
-      "_comment": "Confidential service-account client used by portal-api to call the Keycloak Admin REST API (list/create/update/delete users under /admin/users). Requires the realm-management 'manage-users' role on its service account. Secret is set per-environment via Keycloak admin console or KEYCLOAK_ADMIN_CLIENT_SECRET at import time.",
       "clientId": "portal-api-admin",
       "name": "GratisGIS Portal API (admin)",
       "enabled": true,

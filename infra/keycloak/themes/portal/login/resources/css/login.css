@@ -1,76 +1,206 @@
 /*
- * Portal login styles.
+ * Portal login theme — minimal skin over keycloak.v2 (Keycloak 26 /
+ * PatternFly 5). We inherit the parent theme's layout entirely and
+ * only recolor + typographically nudge things. Layout-level rules
+ * (positioning, grid, flex) were removed because Keycloak 26's PF5
+ * layout uses a two-column grid on large viewports — forcing flex
+ * on the containers collapses that layout onto itself.
  *
- * Keycloak's v2 login theme is a PatternFly-flavored card centered on
- * a dark-photo background. We keep the structural layout (it's solid)
- * and re-skin it to match the portal: soft neutral background, white
- * card with a thin border, the portal accent color on the primary
- * submit button, and the portal's geometric sans-serif.
- *
- * Everything here is additive — no rules target the FTL structure, so
- * Keycloak upgrades don't silently break this sheet.
+ * Design intent: light page, white card, portal accent on the
+ * primary button, portal system sans-serif, and the portal compass
+ * mark at the top of the card.
  */
 
 :root {
-  /* These mirror the portal's own CSS variables so login feels
-     visually continuous with the rest of the app. */
-  --portal-accent: #0ea5e9;         /* sky-500 */
-  --portal-accent-hover: #0284c7;   /* sky-600 */
+  --portal-accent: #0ea5e9;
+  --portal-accent-hover: #0284c7;
   --portal-accent-foreground: #ffffff;
-  --portal-ink-0: #0f172a;          /* slate-900 */
-  --portal-ink-1: #1e293b;          /* slate-800 */
-  --portal-muted: #64748b;          /* slate-500 */
-  --portal-border: #e2e8f0;         /* slate-200 */
-  --portal-surface-0: #f8fafc;      /* slate-50 */
+  --portal-ink-0: #0f172a;
+  --portal-ink-1: #1e293b;
+  --portal-muted: #64748b;
+  --portal-border: #e2e8f0;
+  --portal-surface-0: #f8fafc;
   --portal-surface-1: #ffffff;
-  --portal-danger: #dc2626;         /* red-600 */
+  --portal-danger: #dc2626;
+
+  /* PF5 exposes color tokens as CSS variables. Re-map the ones the
+     parent theme actually uses so every downstream rule picks up our
+     palette without needing per-component overrides. */
+  --pf-v5-global--palette--black-900: var(--portal-ink-0);
+  --pf-v5-global--palette--black-800: var(--portal-ink-1);
+  --pf-v5-global--palette--black-600: var(--portal-muted);
+  --pf-v5-global--palette--black-400: var(--portal-muted);
+  --pf-v5-global--palette--black-300: var(--portal-border);
+  --pf-v5-global--palette--black-200: var(--portal-border);
+  --pf-v5-global--palette--black-150: var(--portal-surface-0);
+  --pf-v5-global--palette--black-100: var(--portal-surface-0);
+  --pf-v5-global--BackgroundColor--100: var(--portal-surface-1);
+  --pf-v5-global--BackgroundColor--light-100: var(--portal-surface-1);
+  --pf-v5-global--BackgroundColor--200: var(--portal-surface-0);
+  --pf-v5-global--Color--100: var(--portal-ink-1);
+  --pf-v5-global--Color--200: var(--portal-muted);
+  --pf-v5-global--link--Color: var(--portal-accent);
+  --pf-v5-global--link--Color--hover: var(--portal-accent-hover);
+  --pf-v5-global--primary-color--100: var(--portal-accent);
+  --pf-v5-global--primary-color--200: var(--portal-accent-hover);
+  --pf-v5-global--active-color--100: var(--portal-accent);
+  --pf-v5-global--BorderRadius--sm: 8px;
+  --pf-v5-global--BorderColor--100: var(--portal-border);
+  --pf-v5-global--BorderColor--300: var(--portal-border);
 }
 
+/* Page background — replace keycloak.v2's dark photo with a soft
+   neutral. Font-family too, so the login surface matches the app. */
 html,
 body {
-  background: var(--portal-surface-0) !important;
+  background: var(--portal-surface-0);
+  background-image: none;
   color: var(--portal-ink-1);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, "Helvetica Neue", Arial, sans-serif;
 }
-
-/* Kill the photo background; replace with a subtle color wash so the
-   card remains the focal point without feeling floaty. */
 body.login-pf,
-.login-pf,
-.login-pf body,
 .login-pf-page {
   background: var(--portal-surface-0) !important;
   background-image: none !important;
+  min-height: 100vh;
 }
 
-/* Main card */
+/* Centering the login card — both axes.
+ *
+ * PF5's login layout is a grid with a dedicated brand column plus
+ * internal paddings that reliably push the card off-center when the
+ * brand is hidden. Fighting it via flex-centering the wrapper chain
+ * kept losing to PF5's own rules. The reliable approach is to pull
+ * the card out of normal flow entirely: absolute-position it at the
+ * viewport's center and ignore whatever layout PF5 applies to its
+ * wrappers.
+ *
+ * Trade-off: the `.pf-v5-c-login__footer` (language selector, links)
+ * would normally sit at the bottom of the page; we hide it since
+ * we don't surface those controls in the portal login flow.
+ */
+.pf-v5-c-login__main {
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  width: calc(100% - 2rem) !important;
+  max-width: 30rem !important;
+  margin: 0 !important;
+  /* Ensure the card paints above whatever PF5's wrappers laid down. */
+  z-index: 1 !important;
+}
+/* Hide the PF5 page-level footer (language selector + extra links).
+ * With the card absolutely positioned, the footer would otherwise
+ * float at the top of the page in an awkward strip. */
+.pf-v5-c-login__footer,
+.login-pf-page-footer {
+  display: none !important;
+}
+
+/* The card itself. keycloak.v2's stylesheet gives .pf-v5-c-login__main
+   an explicit dark background in some builds; override to the portal
+   surface-1 (white) so the slate-900 title reads cleanly. Same for
+   the header + body sub-sections since PF5 can set backgrounds per
+   sub-region. !important here only — the PF5 cascade has inline-style
+   specificity in places we can't rely on. */
+.pf-v5-c-login__main,
+.pf-v5-c-login__main-header,
+.pf-v5-c-login__main-body,
+.pf-v5-c-login__main-footer,
 .login-pf-page .card-pf,
-.login-pf-page .kc-body,
-#kc-content {
-  background: var(--portal-surface-1);
-  border: 1px solid var(--portal-border);
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04),
-    0 4px 12px rgba(15, 23, 42, 0.06);
-  padding: 28px 28px 32px;
+#kc-content,
+#kc-content-wrapper {
+  background: var(--portal-surface-1) !important;
+  color: var(--portal-ink-1) !important;
+  border-color: var(--portal-border) !important;
+}
+.pf-v5-c-login__main {
+  border: 1px solid var(--portal-border) !important;
+  border-radius: 12px !important;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 12px rgba(15, 23, 42, 0.06) !important;
 }
 
-/* Header: we hide Keycloak's default PF header and draw our own with
-   the portal brand mark + app name. */
-#kc-header {
-  display: none;
+/* The input fields inherit a dark background from keycloak.v2's
+   dark-pane rules when the card is dark. Force white there too. */
+.pf-v5-c-form-control,
+.pf-v5-c-form-control__input,
+#kc-form input[type="text"],
+#kc-form input[type="email"],
+#kc-form input[type="password"],
+#kc-form input[type="tel"] {
+  background: var(--portal-surface-1) !important;
+  color: var(--portal-ink-0) !important;
+  border: 1px solid var(--portal-border) !important;
 }
-#kc-header-wrapper {
-  color: var(--portal-ink-0);
-  text-align: center;
-  padding: 0;
+
+/* Primary button — the bits PF5 tokens don't quite cover. */
+button.pf-v5-c-button.pf-m-primary,
+input[type="submit"].pf-v5-c-button.pf-m-primary,
+#kc-login,
+button[type="submit"].pf-m-primary {
+  background: var(--portal-accent);
+  border-color: var(--portal-accent);
+  color: var(--portal-accent-foreground);
+  border-radius: 8px;
   font-weight: 600;
-  font-size: 1.125rem;
+}
+button.pf-v5-c-button.pf-m-primary:hover,
+#kc-login:hover,
+button[type="submit"].pf-m-primary:hover {
+  background: var(--portal-accent-hover);
+  border-color: var(--portal-accent-hover);
 }
 
-/* Add a portal-marked header inside the card */
-.login-pf-page .card-pf::before {
+/* Inputs — keep the parent shape, just soften borders + focus ring
+   to the portal accent. */
+.pf-v5-c-form-control,
+.pf-v5-c-form-control__input,
+#kc-form input[type="text"],
+#kc-form input[type="email"],
+#kc-form input[type="password"] {
+  border-radius: 8px;
+}
+.pf-v5-c-form-control:focus-within,
+.pf-v5-c-form-control__input:focus,
+#kc-form input:focus {
+  outline: none;
+  border-color: var(--portal-accent);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.25);
+}
+
+/* Labels — PF5 renders them in a specific color; nudge to our muted
+   shade so they match the app's form labels. */
+.pf-v5-c-form__label-text,
+.pf-v5-c-form__group-label-main,
+label {
+  color: var(--portal-muted);
+}
+
+/* Page title in the card ("Sign in to Portal"). keycloak.v2 puts it
+   inside .pf-v5-c-login__main-header with a nested h1. */
+.pf-v5-c-login__main-header-title,
+.pf-v5-c-login__main-header h1,
+#kc-page-title {
+  color: var(--portal-ink-0);
+  font-weight: 600;
+}
+
+/* Subtitle / descriptive text. */
+.pf-v5-c-login__main-header-desc,
+.pf-v5-c-login__footer-band,
+.pf-v5-c-login__main-footer-links a {
+  color: var(--portal-muted);
+}
+
+/* Inject the portal compass above the card header. Scoped to the
+   header element (not ::before on the whole card) so it sits above
+   the "Sign in to Portal" title exactly like a brand mark. */
+.pf-v5-c-login__main-header::before,
+#kc-header-wrapper::before {
   content: "";
   display: block;
   width: 40px;
@@ -81,134 +211,31 @@ body.login-pf,
   background-repeat: no-repeat;
 }
 
-/* Form elements */
-#kc-form input[type="text"],
-#kc-form input[type="email"],
-#kc-form input[type="password"],
-#kc-form input[type="tel"],
-.pf-c-form-control {
-  appearance: none;
-  background: var(--portal-surface-1);
-  border: 1px solid var(--portal-border);
-  border-radius: 8px !important;
-  color: var(--portal-ink-0);
-  font-size: 0.875rem;
-  height: 40px;
-  padding: 8px 12px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  width: 100%;
-}
-#kc-form input[type="text"]:focus,
-#kc-form input[type="email"]:focus,
-#kc-form input[type="password"]:focus,
-#kc-form input[type="tel"]:focus,
-.pf-c-form-control:focus {
-  border-color: var(--portal-accent);
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.25);
-  outline: none;
+/* Hide keycloak.v2's own top-of-page brand block — we put the mark
+   inside the card instead. */
+.login-pf-page-header,
+#kc-header {
+  display: none;
 }
 
-label,
-.pf-c-form__label,
-.pf-c-form__label-text {
-  color: var(--portal-muted) !important;
-  font-size: 0.75rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  margin-bottom: 4px;
-}
-
-/* Primary submit button */
-.pf-c-button.pf-m-primary,
-.pf-c-button.pf-m-block.pf-m-primary,
-input[type="submit"].pf-c-button,
-#kc-login,
-#kc-register-button {
-  background: var(--portal-accent) !important;
-  border-color: var(--portal-accent) !important;
-  border-radius: 8px !important;
-  color: var(--portal-accent-foreground) !important;
-  font-weight: 600;
-  height: 40px;
-  padding: 0 16px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-  transition: background 0.15s ease;
-}
-.pf-c-button.pf-m-primary:hover,
-input[type="submit"].pf-c-button:hover,
-#kc-login:hover {
-  background: var(--portal-accent-hover) !important;
-  border-color: var(--portal-accent-hover) !important;
-}
-
-/* Secondary / link buttons */
-.pf-c-button.pf-m-link,
-a.login-pf-settings,
+/* Link buttons + footer links */
+.pf-v5-c-button.pf-m-link,
 #kc-registration a,
-#kc-info a,
-.pf-c-login__main-footer-links a {
-  color: var(--portal-accent) !important;
-  text-decoration: none;
+#kc-info a {
+  color: var(--portal-accent);
 }
-.pf-c-button.pf-m-link:hover,
+.pf-v5-c-button.pf-m-link:hover,
 #kc-registration a:hover,
-#kc-info a:hover,
-.pf-c-login__main-footer-links a:hover {
+#kc-info a:hover {
+  color: var(--portal-accent-hover);
   text-decoration: underline;
 }
 
-/* "Remember me" checkbox row */
-#kc-form-options .checkbox {
-  color: var(--portal-muted);
-  font-size: 0.75rem;
-}
-
-/* Error / alert banners */
-.pf-c-alert.pf-m-danger,
-.kc-feedback-text.error,
-.alert-error {
-  background: #fef2f2 !important;
-  border: 1px solid #fecaca !important;
-  border-radius: 8px;
-  color: var(--portal-danger) !important;
-}
-
-/* Social / IdP buttons — outline with portal border/text so they
-   blend with the card even when icons vary. */
-#kc-social-providers ul li a,
-.pf-c-button.kc-social-provider-link {
-  background: var(--portal-surface-1) !important;
-  border: 1px solid var(--portal-border) !important;
-  border-radius: 8px !important;
-  color: var(--portal-ink-1) !important;
-}
-#kc-social-providers ul li a:hover,
-.pf-c-button.kc-social-provider-link:hover {
-  background: var(--portal-surface-0) !important;
-}
-
-/* Footer / "Sign in" vs "Register" switcher */
-#kc-page-title {
-  color: var(--portal-ink-0);
-  font-size: 1rem;
-  font-weight: 600;
-  margin: 4px 0 16px;
-  text-align: center;
-}
-
-/* Tighten the overall page padding */
-.login-pf-page {
-  padding: 40px 16px !important;
-}
-
-/* Mobile: make the card full-width comfortably */
-@media (max-width: 480px) {
-  .login-pf-page .card-pf,
-  #kc-content {
-    border-radius: 0;
-    border-left: 0;
-    border-right: 0;
-    padding: 24px 16px 32px;
-  }
+/* Error / alert banners — tint to soft red so they fit the palette. */
+.pf-v5-c-alert.pf-m-danger,
+.alert-error,
+.kc-feedback-text.error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: var(--portal-danger);
 }
