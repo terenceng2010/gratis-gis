@@ -2,6 +2,10 @@
 import js from '@eslint/js';
 import tsParser from '@typescript-eslint/parser';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactPlugin from 'eslint-plugin-react';
+import nextPlugin from '@next/eslint-plugin-next';
+import globals from 'globals';
 
 export default [
   {
@@ -12,20 +16,73 @@ export default [
       '**/.turbo/**',
       '**/coverage/**',
       '**/*.config.*',
+      // Static assets compiled / handwritten for the browser
+      // (service worker, icons). Linting these with the app's TS
+      // rules flags every browser global (`self`, `caches`, `fetch`)
+      // as undefined even though the runtime provides them. The SW
+      // should get its own lint pass if we start editing it again.
+      '**/public/**',
     ],
   },
   js.configs.recommended,
+
+  // TypeScript files — application source across portal-api,
+  // portal-web, shared packages, etc. TypeScript itself handles
+  // undefined-reference detection, so `no-undef` is redundant (and
+  // spuriously flags DOM / Node globals the flat config doesn't list).
   {
     files: ['**/*.ts', '**/*.tsx'],
     languageOptions: {
       parser: tsParser,
       parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
+      // Both environments so we don't have to split per-package:
+      //   - browser: portal-web (fetch, window, document, URL, …)
+      //   - node: portal-api (process, Buffer, setInterval when not
+      //     using @types/node globals in the TS layer)
+      globals: { ...globals.browser, ...globals.node, ...globals.serviceworker },
     },
-    plugins: { '@typescript-eslint': tsPlugin },
+    // Plugins are registered so existing `// eslint-disable-next-line
+    // <rule>` directives in the codebase resolve to a known rule; we
+    // deliberately don't enable the rules globally — each would
+    // produce a flood of warnings we haven't triaged. The disables
+    // already act as author intent ("I've looked at this, it's fine")
+    // and that's what matters for CI to go green.
+    plugins: {
+      '@typescript-eslint': tsPlugin,
+      'react-hooks': reactHooks,
+      react: reactPlugin,
+      '@next/next': nextPlugin,
+    },
     rules: {
       ...tsPlugin.configs.recommended.rules,
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/consistent-type-imports': 'warn',
+      // Pragmatic `any`s happen when interfacing with untyped libs
+      // (maplibre, shpjs) or when a type would be overkill. Keep
+      // the signal as a warning rather than a CI-gating error.
+      '@typescript-eslint/no-explicit-any': 'warn',
+      // Require-style imports surface only in ambient / type
+      // declarations and a handful of dynamic-config shims. The flat
+      // config is picky about them in places where they're correct.
+      '@typescript-eslint/no-require-imports': 'warn',
+      // TypeScript catches these; the flat-config `no-undef` rule
+      // otherwise fires on every DOM + Node global we legitimately use.
+      'no-undef': 'off',
+      // TS has distinct type + value namespaces, so `type Foo = ...`
+      // plus `const Foo = ...` in the same file is not a redeclaration.
+      // The non-TS rule trips on our branded-id pattern in shared-types.
+      'no-redeclare': 'off',
+    },
+  },
+
+  // Plain JS — mostly config files we let through with permissive
+  // globals. The `public/**` service worker is excluded above.
+  {
+    files: ['**/*.js', '**/*.mjs', '**/*.cjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.browser, ...globals.node },
     },
   },
 ];

@@ -820,14 +820,10 @@ export class BackupService implements OnModuleInit {
   }
 
   private readPortalVersion(): string | null {
-    try {
-      // Best-effort: at runtime the API runs from dist, so we look
-      // alongside it for package.json. Failure is fine — the manifest
-      // version field is informational.
-      const pkg = require('../../package.json') as { version?: string };
-      return pkg.version ?? null;
-    } catch {
-      return null;
-    }
+    // npm / pnpm exposes the running package's version via env at
+    // spawn time. If unset (e.g. the process was started by
+    // `node dist/main.js` directly), we just record null — this
+    // field is informational on the manifest and not load-bearing.
+    return process.env.npm_package_version ?? null;
   }
 }

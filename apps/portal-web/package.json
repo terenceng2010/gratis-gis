@@ -6,7 +6,7 @@
     "build": "next build",
     "dev": "next dev --port 3000",
     "start": "next start --port 3000",
-    "lint": "next lint",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
