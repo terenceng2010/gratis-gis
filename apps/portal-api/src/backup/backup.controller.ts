@@ -44,12 +44,14 @@ import { PrismaService } from '../prisma/prisma.service.js';
 const SCHEDULE_MODES = ['off', 'daily', 'weekly', 'monthly', 'custom'] as const;
 
 class RestoreConfirmDto {
-  /** Must match the org slug of the portal the admin is restoring
-   *  onto. This catches the "wrong portal" finger-memory mistake:
-   *  you can't accidentally restore acme-corp's archive onto
-   *  beta-industries just by clicking the button. */
-  @IsString() @MaxLength(100)
-  confirmSlug!: string;
+  /** Must match the portal's display name (case-insensitive, trimmed).
+   *  This catches the "wrong portal" finger-memory mistake: you can't
+   *  accidentally restore Acme Corp's archive onto Beta Industries
+   *  just by clicking the button. We compare to `org.name` instead of
+   *  `org.slug` so the admin-facing prompt can use the same string
+   *  they see in the top bar and on the login page. */
+  @IsString() @MaxLength(200)
+  confirmName!: string;
 }
 
 class UpdateConfigDto {
@@ -195,19 +197,23 @@ export class BackupController {
     @Param('id') id: string,
     @Body() dto: RestoreConfirmDto,
   ) {
-    // The current org slug is the confirmation token. This is the
-    // cheapest "are you sure?" gate that actually catches the
-    // common mistake (wrong portal / wrong archive).
+    // The portal's display name is the confirmation phrase. This is
+    // the cheapest "are you sure?" gate that actually catches the
+    // common mistake (wrong portal / wrong archive). Comparison is
+    // case-insensitive and whitespace-trimmed, matching the client
+    // so admins don't get bounced on a cap / trailing-space mismatch.
     const org = await this.prisma.organization.findFirst({
       where: { id: user.orgId },
-      select: { slug: true },
+      select: { name: true },
     });
     if (!org) {
       throw new BadRequestException('Could not resolve your organization.');
     }
-    if (dto.confirmSlug !== org.slug) {
+    const typed = (dto.confirmName ?? '').trim().toLowerCase();
+    const expected = org.name.trim().toLowerCase();
+    if (typed !== expected) {
       throw new BadRequestException(
-        `Confirmation slug "${dto.confirmSlug}" does not match this portal's slug "${org.slug}". Refusing to restore.`,
+        `The name you typed doesn't match this portal's name. Expected "${org.name}".`,
       );
     }
 

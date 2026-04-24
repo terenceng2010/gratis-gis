@@ -50,10 +50,11 @@ export interface BackupRun {
 interface Props {
   initialConfig: BackupConfig;
   initialRuns: BackupRun[];
-  orgSlug: string;
+  /** Portal display name, used as the confirm phrase on Restore. */
+  orgName: string;
 }
 
-export function BackupView({ initialConfig, initialRuns, orgSlug }: Props) {
+export function BackupView({ initialConfig, initialRuns, orgName }: Props) {
   const [config, setConfig] = useState<BackupConfig>(initialConfig);
   const [runs, setRuns] = useState<BackupRun[]>(initialRuns);
   const [running, setRunning] = useState(false);
@@ -220,7 +221,7 @@ export function BackupView({ initialConfig, initialRuns, orgSlug }: Props) {
         <RestoreDialog
           runId={restoringRun.id}
           filename={restoringRun.filename ?? ''}
-          orgSlug={orgSlug}
+          orgName={orgName}
           onClose={() => setRestoringRun(null)}
         />
       ) : null}
@@ -626,7 +627,7 @@ function RunRow({
                   type="button"
                   onClick={onRestore}
                   className="inline-flex items-center gap-1 rounded border border-danger/40 bg-danger/5 px-2 py-0.5 text-[11px] font-medium text-danger hover:bg-danger/10"
-                  title="Restore the portal from this archive (destructive)"
+                  title="Roll the whole portal back to this backup. Anything changed since then will be lost."
                 >
                   <ShieldAlert className="h-3 w-3" />
                   Restore

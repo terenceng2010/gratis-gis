@@ -43,11 +43,12 @@ interface Preview {
 interface Props {
   runId: string;
   filename: string;
-  orgSlug: string;
+  /** Plain-language portal name the admin must type to confirm. */
+  orgName: string;
   onClose: () => void;
 }
 
-export function RestoreDialog({ runId, filename, orgSlug, onClose }: Props) {
+export function RestoreDialog({ runId, filename, orgName, onClose }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState('');
@@ -79,7 +80,13 @@ export function RestoreDialog({ runId, filename, orgSlug, onClose }: Props) {
     };
   }, [runId]);
 
-  const canRestore = !restoring && !result && confirmText === orgSlug;
+  // Case-insensitive, whitespace-trimmed match so an admin typing
+  // "Acme Corp" vs "acme corp" doesn't get bounced by a capitalisation
+  // mismatch. The wire-level check on the server mirrors this.
+  const canRestore =
+    !restoring &&
+    !result &&
+    confirmText.trim().toLowerCase() === orgName.trim().toLowerCase();
 
   async function handleRestore() {
     setRestoring(true);
@@ -90,7 +97,7 @@ export function RestoreDialog({ runId, filename, orgSlug, onClose }: Props) {
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ confirmSlug: confirmText }),
+          body: JSON.stringify({ confirmName: confirmText.trim() }),
         },
       );
       if (!res.ok) {
@@ -127,8 +134,10 @@ export function RestoreDialog({ runId, filename, orgSlug, onClose }: Props) {
               Restore from backup
             </h2>
             <p className="text-xs text-muted">
-              This will replace every item, user, file, and setting in
-              the portal with the contents of this archive.
+              This replaces all of the portal's items, files, and
+              settings with the contents of the backup you chose.
+              Anything you've changed since that backup was taken
+              will be lost.
             </p>
           </div>
           {!restoring && !result ? (
@@ -183,11 +192,12 @@ export function RestoreDialog({ runId, filename, orgSlug, onClose }: Props) {
 
         <div className="space-y-1">
           <p className="text-xs text-ink-0">
-            To continue, type this portal's slug{' '}
-            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[11px]">
-              {orgSlug}
-            </code>{' '}
-            below.
+            To continue, type this portal's name{' '}
+            <strong className="rounded bg-surface-2 px-1 py-0.5 text-[11px]">
+              {orgName}
+            </strong>{' '}
+            below. We ask for this so you can't accidentally restore
+            the wrong backup onto the wrong portal.
           </p>
           <input
             type="text"
@@ -195,20 +205,23 @@ export function RestoreDialog({ runId, filename, orgSlug, onClose }: Props) {
             onChange={(e) => setConfirmText(e.target.value)}
             disabled={restoring || !!result}
             autoFocus
-            className={`w-full rounded border px-2 py-1.5 font-mono text-sm ${
-              confirmText && confirmText !== orgSlug
+            className={`w-full rounded border px-2 py-1.5 text-sm ${
+              confirmText &&
+              confirmText.trim().toLowerCase() !== orgName.trim().toLowerCase()
                 ? 'border-amber-400 bg-amber-50'
                 : 'border-border bg-surface-0'
             }`}
+            placeholder={orgName}
           />
         </div>
 
         <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
           <AlertTriangle className="mr-1 inline h-3 w-3" />
-          While the restore runs, the portal will return 503 to every
-          other request. Ask your team to stop editing before you
-          click Restore — any edits in flight are going to be
-          overwritten.
+          While the restore is running, the portal will be temporarily
+          unavailable to everyone — other people will see a
+          "maintenance mode" message for a minute or two. Ask your
+          team to stop editing before you click below, because any
+          changes in progress right now will be overwritten.
         </p>
 
         {result === 'failed' ? (

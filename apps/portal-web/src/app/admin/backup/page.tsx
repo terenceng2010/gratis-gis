@@ -22,18 +22,17 @@ export default async function AdminBackupPage() {
   }
   if (me.orgRole !== 'admin') redirect('/items');
 
-  // Slug is the confirmation token on the restore dialog; fetched
-  // server-side so the client doesn't need an extra round trip just
-  // to render the confirmation prompt.
-  let orgSlug = '';
+  // Portal display name is the confirmation phrase on Restore —
+  // plain "Acme Corp" rather than the URL slug "acme-corp". Fetched
+  // server-side so the dialog can prefill the prompt without an
+  // extra round trip.
+  let orgName = '';
   try {
-    const org = await apiFetch<{ slug: string }>(
-      `/api/admin/branding`,
-    );
-    orgSlug = org.slug;
+    const org = await apiFetch<{ name: string }>(`/api/admin/branding`);
+    orgName = org.name;
   } catch {
     // Swallow; the restore dialog will still refuse to submit when
-    // the empty slug doesn't match the API's own check.
+    // the empty name doesn't match the API's own check.
   }
 
   // Load config + runs in parallel. If either fails we still render
@@ -90,7 +89,7 @@ export default async function AdminBackupPage() {
         <BackupView
           initialConfig={config}
           initialRuns={runs}
-          orgSlug={orgSlug}
+          orgName={orgName}
         />
       ) : null}
     </div>
