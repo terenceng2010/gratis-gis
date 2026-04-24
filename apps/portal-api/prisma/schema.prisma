@@ -167,9 +167,10 @@ model Item {
   // Soft-delete. See Group.deletedAt for rationale.
   deletedAt    DateTime?  @map("deleted_at")
 
-  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  owner  User         @relation("ItemOwner", fields: [ownerId], references: [id])
-  shares ItemShare[]
+  org         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  owner       User                @relation("ItemOwner", fields: [ownerId], references: [id])
+  shares      ItemShare[]
+  attachments FeatureAttachment[]
 
   @@index([orgId, access])
   @@index([ownerId])
@@ -205,6 +206,40 @@ model ItemShare {
 /// sourceKind tells the renderer which flavor we're dealing with so
 /// the picker can build the right MapLibre style on the fly without
 /// having to sniff content types at request time.
+/// A file attached to a specific feature inside a v3 feature-service
+/// layer. The bytes live in MinIO at `storageKey` and are served via
+/// the long-lived `storageUrl`. We never embed the bytes here — only
+/// metadata + the CDN-style URL the viewer dereferences at render time.
+///
+/// (itemId, layerId, featureId) form the logical parent tuple; we
+/// don't FK on featureId because features live in a dynamically-named
+/// PostGIS table per layer (fs_<itemId>_<layerId>), which Prisma can't
+/// model directly. Item-level cascade still catches the common case
+/// when an item is purged — app-level cleanup handles feature deletes.
+model FeatureAttachment {
+  id         String   @id @default(uuid()) @db.Uuid
+  itemId     String   @map("item_id") @db.Uuid
+  /// Layer id as it appears in item.data.layers[].id (sanitized slug,
+  /// not a UUID). Kept as TEXT so the v3 id format can grow.
+  layerId    String   @map("layer_id")
+  /// global_id of the feature inside the layer's PostGIS table.
+  featureId  String   @map("feature_id") @db.Uuid
+  fileName   String   @map("file_name")
+  mime       String
+  sizeBytes  Int      @map("size_bytes")
+  /// MinIO object key under the configured bucket.
+  storageKey String   @map("storage_key")
+  /// Stable public URL the viewer can cache/share.
+  storageUrl String   @map("storage_url")
+  createdAt  DateTime @default(now()) @map("created_at")
+  createdBy  String   @map("created_by") @db.Uuid
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, layerId, featureId])
+  @@map("feature_attachment")
+}
+
 model Basemap {
   id           String            @id @default(uuid()) @db.Uuid
   orgId        String            @map("org_id") @db.Uuid

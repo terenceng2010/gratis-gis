@@ -1,18 +1,24 @@
 import { BadRequestException, Body, Controller, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsEnum, IsIn } from 'class-validator';
+import { IsEnum, IsString, MaxLength } from 'class-validator';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import type { AssetKind } from './storage.service.js';
 import { StorageService } from './storage.service.js';
 
-const ASSET_KINDS: AssetKind[] = ['item-thumb', 'group-thumb', 'user-avatar'];
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const ASSET_KINDS: AssetKind[] = [
+  'item-thumb',
+  'group-thumb',
+  'user-avatar',
+  'feature-attachment',
+];
 
 class PresignUploadDto {
   @IsEnum(ASSET_KINDS) kind!: AssetKind;
-  @IsIn(ALLOWED_TYPES) contentType!: string;
+  /** Thumbnails stay image-only (the service layer enforces); feature
+   *  attachments accept any MIME so we only validate non-empty here. */
+  @IsString() @MaxLength(255) contentType!: string;
 }
 
 /**

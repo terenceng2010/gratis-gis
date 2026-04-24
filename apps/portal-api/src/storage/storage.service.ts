@@ -16,7 +16,11 @@ import { ConfigService } from '@nestjs/config';
  * bucket so retention rules and browsing stay simple. Keep additions
  * aligned with the Prisma models that actually reference storage.
  */
-export type AssetKind = 'item-thumb' | 'group-thumb' | 'user-avatar';
+export type AssetKind =
+  | 'item-thumb'
+  | 'group-thumb'
+  | 'user-avatar'
+  | 'feature-attachment';
 
 const ALLOWED_CONTENT_TYPES = new Set([
   'image/png',
@@ -24,6 +28,11 @@ const ALLOWED_CONTENT_TYPES = new Set([
   'image/webp',
   'image/gif',
 ]);
+
+/** Feature attachments are any MIME (images, PDFs, office docs, etc.)
+ *  up to a higher cap. The picker on the client side is what decides
+ *  how to render them; the service just stores bytes. */
+const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB; thumbnails should be small.
 
@@ -168,7 +177,12 @@ export class StorageService implements OnModuleInit {
    * URL we'll persist on the entity once upload succeeds.
    */
   async presignUpload(kind: AssetKind, contentType: string): Promise<PresignResult> {
-    if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+    // Thumbnails/avatars stay image-only. Feature attachments accept
+    // any MIME type because they legitimately include PDFs, audio,
+    // CAD exports, whatever the field team captures. The caller's
+    // kind choice determines which rule applies.
+    const isAttachment = kind === 'feature-attachment';
+    if (!isAttachment && !ALLOWED_CONTENT_TYPES.has(contentType)) {
       throw new Error(`Unsupported content type: ${contentType}`);
     }
     // Lazy retry: if bootstrap was deferred because MinIO wasn't up at
@@ -191,16 +205,35 @@ export class StorageService implements OnModuleInit {
       ContentType: contentType,
     });
     // Tight expiry: 60s is enough for a 5 MB thumbnail and short enough
-    // that a leaked URL is effectively harmless.
-    const uploadUrl = await getSignedUrl(this.client, cmd, { expiresIn: 60 });
+    // that a leaked URL is effectively harmless. Attachments bump to
+    // 300s because 25 MB over slow mobile links takes longer.
+    const expiresIn = isAttachment ? 300 : 60;
+    const uploadUrl = await getSignedUrl(this.client, cmd, { expiresIn });
     const publicUrl = `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
     return {
       uploadUrl,
       publicUrl,
       key,
       contentType,
-      maxBytes: MAX_UPLOAD_BYTES,
+      maxBytes: isAttachment ? ATTACHMENT_MAX_BYTES : MAX_UPLOAD_BYTES,
     };
+  }
+
+  /** Delete an object by key. Idempotent. Used when a feature
+   *  attachment row is removed so we don't leak bytes in MinIO. */
+  async deleteObject(key: string): Promise<void> {
+    try {
+      const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
+      await this.client.send(
+        new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+    } catch (err) {
+      // Non-fatal: log, don't throw. A stuck metadata row is worse
+      // than a leaked 25 MB object.
+      this.log.warn(
+        `Failed to delete ${key}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   /** Exposed for DTO tests and error messages. */
