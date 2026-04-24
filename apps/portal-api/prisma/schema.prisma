@@ -223,6 +223,51 @@ model ItemDataSnapshot {
   @@map("item_data_snapshot")
 }
 
+/// One row per backup attempt. Recorded whether the run succeeded
+/// or failed so operators can see history at a glance. Intentionally
+/// NOT scoped by org — backup is infrastructure-level. The target
+/// file path is relative to BACKUP_DIR so backups stay portable if
+/// the deployment moves to a different host.
+enum BackupStatus {
+  running
+  succeeded
+  failed
+}
+
+model BackupRun {
+  id         String       @id @default(uuid()) @db.Uuid
+  startedAt  DateTime     @default(now()) @map("started_at")
+  finishedAt DateTime?    @map("finished_at")
+  status     BackupStatus @default(running)
+
+  /// Filename (NOT full path) relative to BACKUP_DIR. Null while the
+  /// run is in progress; set atomically at finish. Kept opaque so
+  /// operators can move the file to cold storage and just update the
+  /// row if they need to.
+  filename String?
+  /// Bytes on disk after compression. Null if the run failed before
+  /// the archive was sealed.
+  sizeBytes BigInt? @map("size_bytes")
+
+  /// 'manual' or 'scheduled' — lets the UI separate ad-hoc runs from
+  /// cron-driven ones, and lets retention treat manual backups more
+  /// gently (operators may want a just-ran manual one to survive an
+  /// aggressive retention window).
+  trigger String @default("manual")
+
+  /// Keycloak user id that kicked off a manual run; null for
+  /// scheduled runs.
+  startedBy String? @map("started_by") @db.Uuid
+
+  /// Short error summary (first 500 chars). Full stack is in the
+  /// server log; here we just want enough for the admin table to
+  /// show a tooltip.
+  error String?
+
+  @@index([startedAt])
+  @@map("backup_run")
+}
+
 model ItemShare {
   itemId        String          @map("item_id") @db.Uuid
   principalType PrincipalType   @map("principal_type")

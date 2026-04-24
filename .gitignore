@@ -42,14 +42,11 @@ infra/data/
 *.tmp
 tmp/
 
+# Backup archives (BACKUP_DIR default; production should point
+# BACKUP_DIR at an on-host volume outside the repo).
+backups/
+
 # Local dev helpers (launching detached dev servers from inside an SSH session)
 run-api.bat
 run-web.bat
 run-dev.bat
-
-# Local dev secrets / logs that should not hit the remote
-*.kc-admin-secret
-apps/*/dev.out
-
-# Agent worktree storage used by local tooling
-.claude/worktrees/

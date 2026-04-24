@@ -16,6 +16,7 @@ import { AdminModule } from './admin/admin.module.js';
 import { BasemapsModule } from './basemaps/basemaps.module.js';
 import { V3FeaturesModule } from './features-v3/v3-features.module.js';
 import { PublicModule } from './public/public.module.js';
+import { BackupModule } from './backup/backup.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
 @Module({
@@ -34,6 +35,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     BasemapsModule,
     V3FeaturesModule,
     PublicModule,
+    BackupModule,
   ],
   controllers: [HealthController],
   providers: [

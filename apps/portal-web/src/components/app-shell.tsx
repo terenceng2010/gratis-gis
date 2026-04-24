@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { getServerSession } from 'next-auth';
 import {
+  Archive,
   Compass,
   Layers3,
   LayoutGrid,
@@ -95,6 +96,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 icon={<Paintbrush className="h-4 w-4" />}
               >
                 Landing page
+              </NavLink>
+              <NavLink
+                href="/admin/backup"
+                icon={<Archive className="h-4 w-4" />}
+              >
+                Backup
               </NavLink>
             </>
           ) : null}
