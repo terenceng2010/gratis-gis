@@ -2,8 +2,10 @@ import {
   BadRequestException,
   Controller,
   ForbiddenException,
+  NotFoundException,
   Param,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -17,6 +19,7 @@ import { ItemsService } from '../items/items.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { FeaturesService } from '../features/features.service.js';
+import { V3FeaturesService } from '../features-v3/v3-features.service.js';
 import { IngestService } from './ingest.service.js';
 
 /**
@@ -30,7 +33,7 @@ import { IngestService } from './ingest.service.js';
  */
 @ApiTags('ingest')
 @ApiBearerAuth()
-@Controller('items')
+@Controller()
 export class IngestController {
   constructor(
     private readonly ingest: IngestService,
@@ -38,9 +41,32 @@ export class IngestController {
     private readonly sharing: SharingService,
     private readonly prisma: PrismaService,
     private readonly features: FeaturesService,
+    private readonly v3Features: V3FeaturesService,
   ) {}
 
-  @Post(':id/ingest')
+  /**
+   * Probe an uploaded spatial file and return per-layer metadata
+   * (name, geometry type, fields, feature count) without creating or
+   * mutating any items. Backs the builder's Import tab: user picks
+   * one or more layers, we seed the v3 schema with them, then the
+   * user fills in details and creates the item.
+   */
+  @Post('ingest/probe')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 100 * 1024 * 1024 },
+    }),
+  )
+  async probe(@UploadedFile() file: Express.Multer.File | undefined) {
+    if (!file) {
+      throw new BadRequestException(
+        'No file uploaded; field name must be "file".',
+      );
+    }
+    return this.ingest.probeFile(file.buffer, file.originalname);
+  }
+
+  @Post('items/:id/ingest')
   @UseInterceptors(
     FileInterceptor('file', {
       limits: {
@@ -124,5 +150,76 @@ export class IngestController {
       bbox: stats.bbox,
       fields: nextData.fields,
     };
+  }
+
+  /**
+   * Per-layer ingest for v3 multi-layer items. Accepts a file + the
+   * optional name of a source layer inside a multi-layer archive
+   * (GDB, shapefile zip with several .shp). Features get bulk-
+   * inserted into the target layer's PostGIS table — which must
+   * already exist (provisioned on item create by ItemsService).
+   */
+  @Post('items/:id/layers/:layerId/import')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 100 * 1024 * 1024 },
+    }),
+  )
+  async ingestV3Layer(
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Query('sourceLayer') sourceLayer?: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException(
+        'No file uploaded; field name must be "file".',
+      );
+    }
+    const item = await this.items.get(user, itemId);
+    if (item.type !== 'feature_service') {
+      throw new BadRequestException(
+        'Ingest only targets feature_service items.',
+      );
+    }
+    const data = item.data as {
+      version?: number;
+      layers?: Array<{ id: string }>;
+    } | null;
+    if (data?.version !== 3) {
+      throw new BadRequestException(
+        'Per-layer ingest is v3-only. Use /items/:id/ingest for v1/v2 items.',
+      );
+    }
+    if (!(data.layers ?? []).some((l) => l.id === layerId)) {
+      throw new NotFoundException(
+        `Layer ${layerId} is not part of this item's schema.`,
+      );
+    }
+    await this.items.assertCanEdit(user, itemId);
+
+    const { geojson, driver, layerName } = await this.ingest.fileLayerToGeoJson(
+      file.buffer,
+      file.originalname,
+      sourceLayer,
+    );
+
+    const { inserted } = await this.v3Features.insertFeatures(
+      itemId,
+      layerId,
+      geojson.features.map((f) => {
+        const feat = f as {
+          geometry?: unknown;
+          properties?: Record<string, unknown> | null;
+        };
+        return {
+          geometry: feat.geometry,
+          properties: feat.properties ?? {},
+        };
+      }),
+      user,
+    );
+    return { driver, sourceLayer: layerName, inserted };
   }
 }

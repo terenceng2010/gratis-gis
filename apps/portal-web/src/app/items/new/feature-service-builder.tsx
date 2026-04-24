@@ -1139,53 +1139,162 @@ interface ImportPanelProps {
 }
 
 /**
- * Stub import panel. GeoJSON gets parsed client-side and turned into a
- * single layer whose schema is derived from the first N features.
- * Shapefile/KML/GDB ingest is Phase D backend work — the UI mentions
- * them so authors know they're coming.
+ * Import panel — multi-format.
+ *
+ * GeoJSON / JSON is still parsed client-side (fast, no server round-
+ * trip). Everything else (KML, KMZ, shapefile zip, File GDB zip) is
+ * POSTed to /api/ingest/probe, which uses GDAL on the server to list
+ * layers + fields. Authors can then pick which of those layers to add
+ * as builder layers. Feature data itself is loaded later via
+ * /items/:id/layers/:layerId/import after the item is created — this
+ * panel only seeds the schema.
  */
+
+interface ProbedLayer {
+  name: string;
+  geometryType: 'point' | 'line' | 'polygon' | null;
+  fields: Array<{ name: string; type: FeatureFieldType }>;
+  featureCount: number;
+}
+
 function ImportPanel({ onClose, onImport }: ImportPanelProps) {
   const [error, setError] = useState<string | null>(null);
-  const [parsing, setParsing] = useState(false);
+  const [busy, setBusy] = useState<'parsing' | 'probing' | null>(null);
+  const [probed, setProbed] = useState<{
+    fileName: string;
+    driver: string;
+    layers: ProbedLayer[];
+    /** Which probed-layer names the author wants to import. */
+    selected: Set<string>;
+  } | null>(null);
 
   async function handleFile(file: File) {
     setError(null);
-    setParsing(true);
+    setProbed(null);
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    // GeoJSON stays client-side — it's small and parses quickly.
+    if (ext === 'geojson' || ext === 'json') {
+      setBusy('parsing');
+      try {
+        const text = await file.text();
+        const fc = JSON.parse(text);
+        if (fc?.type !== 'FeatureCollection' || !Array.isArray(fc.features)) {
+          setError('File is not a valid GeoJSON FeatureCollection.');
+          return;
+        }
+        const first = fc.features.find(
+          (f: { geometry?: { type?: string } | null }) => f.geometry,
+        );
+        const geomKind = first?.geometry?.type?.toLowerCase() ?? '';
+        const geometryType: LayerGeometryType = geomKind.includes('point')
+          ? 'point'
+          : geomKind.includes('line')
+            ? 'line'
+            : geomKind.includes('polygon')
+              ? 'polygon'
+              : 'point';
+        const fields = deriveFieldsFromFeatures(fc.features, 500);
+        const layer = newLayer(geometryType);
+        layer.label = file.name.replace(/\.(geojson|json)$/i, '');
+        layer.name = slugify(layer.label);
+        layer.fields = fields;
+        layer.featureCount = fc.features.length;
+        onImport([layer]);
+      } catch (err) {
+        setError((err as Error).message || 'Failed to parse file.');
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
+    // KML / KMZ / shapefile zip / GDB / anything OGR-readable: send to
+    // the server's probe endpoint. Returns layer metadata without the
+    // geometry — we just need to seed the builder schema here.
+    setBusy('probing');
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      if (ext !== 'geojson' && ext !== 'json') {
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch('/api/portal/ingest/probe', {
+        method: 'POST',
+        body,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
         setError(
-          `Only GeoJSON import works today. ${file.name} looks like ${ext ?? 'something else'} — shapefile/KML/GDB coming soon.`,
+          `Probe failed (${res.status}): ${text || res.statusText || 'no body'}`,
         );
         return;
       }
-      const text = await file.text();
-      const fc = JSON.parse(text);
-      if (fc?.type !== 'FeatureCollection' || !Array.isArray(fc.features)) {
-        setError('File is not a valid GeoJSON FeatureCollection.');
+      const out = (await res.json()) as {
+        driver: string;
+        layers: ProbedLayer[];
+      };
+      if (out.layers.length === 1) {
+        // Single-layer file — add it straight away, no picker needed.
+        addProbedLayers(file.name, out.layers, out.layers[0]!.name);
         return;
       }
-      const first = fc.features.find((f: { geometry?: { type?: string } | null }) => f.geometry);
-      const geomKind = first?.geometry?.type?.toLowerCase() ?? '';
-      const geometryType: LayerGeometryType = geomKind.includes('point')
-        ? 'point'
-        : geomKind.includes('line')
-          ? 'line'
-          : geomKind.includes('polygon')
-            ? 'polygon'
-            : 'point';
-      const fields = deriveFieldsFromFeatures(fc.features, 500);
-      const layer = newLayer(geometryType);
-      layer.label = file.name.replace(/\.(geojson|json)$/i, '');
-      layer.name = slugify(layer.label);
-      layer.fields = fields;
-      layer.featureCount = fc.features.length;
-      onImport([layer]);
+      setProbed({
+        fileName: file.name,
+        driver: out.driver,
+        layers: out.layers,
+        selected: new Set(out.layers.map((l) => l.name)),
+      });
     } catch (err) {
-      setError((err as Error).message || 'Failed to parse file.');
+      setError((err as Error).message || 'Probe failed.');
     } finally {
-      setParsing(false);
+      setBusy(null);
     }
+  }
+
+  function addProbedLayers(
+    fileName: string,
+    layers: ProbedLayer[],
+    pickName?: string,
+  ) {
+    const toAdd = pickName
+      ? layers.filter((l) => l.name === pickName)
+      : layers;
+    const built: FeatureServiceLayer[] = toAdd.map((pl) => {
+      const label = pl.name || fileName;
+      const layer = newLayer(pl.geometryType);
+      layer.label = label;
+      layer.name = slugify(label);
+      layer.fields = pl.fields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        label: f.name,
+        nullable: true,
+      }));
+      layer.featureCount = pl.featureCount;
+      return layer;
+    });
+    onImport(built);
+  }
+
+  function commitSelected() {
+    if (!probed) return;
+    const chosen = probed.layers.filter((l) => probed.selected.has(l.name));
+    if (chosen.length === 0) return;
+    addProbedLayers(probed.fileName, chosen);
+    setProbed(null);
+  }
+
+  function toggleSelected(name: string) {
+    setProbed((p) =>
+      p
+        ? {
+            ...p,
+            selected: (() => {
+              const next = new Set(p.selected);
+              if (next.has(name)) next.delete(name);
+              else next.add(name);
+              return next;
+            })(),
+          }
+        : p,
+    );
   }
 
   return (
@@ -1200,33 +1309,91 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
           Close
         </button>
       </div>
-      <label
-        htmlFor="fs-builder-import"
-        className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed border-border bg-surface-1 px-3 py-4 text-xs text-muted hover:bg-surface-2"
-      >
-        <Upload className="h-4 w-4" />
-        <span>
-          Drop a <span className="font-medium">GeoJSON</span> file or click to
-          pick one.
-        </span>
-        <span className="text-[10px]">
-          Shapefile, KML/KMZ, and File GDB import coming next.
-        </span>
-        <input
-          id="fs-builder-import"
-          type="file"
-          accept=".geojson,.json"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleFile(f);
-            // Allow re-picking the same file.
-            e.target.value = '';
-          }}
-        />
-      </label>
-      {parsing ? (
-        <p className="mt-2 text-[11px] text-muted">Parsing…</p>
+
+      {probed ? (
+        <div>
+          <p className="mb-2 text-[11px] text-muted">
+            <span className="font-medium text-ink-1">{probed.fileName}</span>{' '}
+            — {probed.driver} · {probed.layers.length} layer
+            {probed.layers.length === 1 ? '' : 's'}. Pick which to add:
+          </p>
+          <ul className="mb-2 max-h-60 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-1 p-1">
+            {probed.layers.map((l) => {
+              const sel = probed.selected.has(l.name);
+              return (
+                <li key={l.name}>
+                  <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-surface-2">
+                    <input
+                      type="checkbox"
+                      checked={sel}
+                      onChange={() => toggleSelected(l.name)}
+                      className="h-3.5 w-3.5 rounded border-border"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{l.name}</span>
+                    <span className="text-[10px] uppercase text-muted">
+                      {l.geometryType ?? 'table'}
+                    </span>
+                    <span className="text-[10px] text-muted">
+                      {l.featureCount.toLocaleString()} feat ·{' '}
+                      {l.fields.length} field{l.fields.length === 1 ? '' : 's'}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setProbed(null)}
+              className="h-7 rounded border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={commitSelected}
+              disabled={probed.selected.size === 0}
+              className="inline-flex h-7 items-center gap-1 rounded bg-accent px-2 text-[11px] font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              <Plus className="h-3 w-3" />
+              Add {probed.selected.size} layer
+              {probed.selected.size === 1 ? '' : 's'}
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-muted">
+            Only the schema is added here. After you create the item, import
+            feature data per layer from the detail page.
+          </p>
+        </div>
+      ) : (
+        <label
+          htmlFor="fs-builder-import"
+          className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed border-border bg-surface-1 px-3 py-4 text-xs text-muted hover:bg-surface-2"
+        >
+          <Upload className="h-4 w-4" />
+          <span>Drop a spatial file or click to pick one.</span>
+          <span className="text-[10px]">
+            GeoJSON · KML / KMZ · Shapefile (.zip) · File Geodatabase (.gdb.zip)
+          </span>
+          <input
+            id="fs-builder-import"
+            type="file"
+            accept=".geojson,.json,.kml,.kmz,.zip,.gdb"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleFile(f);
+              e.target.value = '';
+            }}
+          />
+        </label>
+      )}
+
+      {busy ? (
+        <p className="mt-2 text-[11px] text-muted">
+          {busy === 'parsing' ? 'Parsing locally…' : 'Probing on the server…'}
+        </p>
       ) : null}
       {error ? (
         <p className="mt-2 text-[11px] text-danger" role="alert">
