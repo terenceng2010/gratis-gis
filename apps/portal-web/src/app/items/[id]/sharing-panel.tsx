@@ -8,6 +8,7 @@ import {
   Globe2,
   Loader2,
   Lock,
+  MapPin,
   Trash2,
   Users as UsersIcon,
   User as UserIcon,
@@ -22,6 +23,7 @@ import {
   PrincipalPicker,
   type PrincipalOption,
 } from '@/components/principal-picker';
+import { ShareGeoLimitDialog } from './share-geo-limit-dialog';
 
 interface Props {
   itemId: string;
@@ -199,6 +201,55 @@ export function SharingPanel({
       1500,
     );
     startTransition(() => router.refresh());
+  }
+
+  // Per-share geo-limit editor dialog state. `editingGeoLimit` is the
+  // share currently open in the restrict-to-area dialog (null when
+  // the dialog is closed). `geoLimitSaving` gates the save button
+  // while the POST is in flight.
+  const [editingGeoLimit, setEditingGeoLimit] = useState<ItemShare | null>(
+    null,
+  );
+  const [geoLimitSaving, setGeoLimitSaving] = useState(false);
+
+  async function saveGeoLimit(
+    share: ItemShare,
+    geoLimit: unknown | null,
+  ) {
+    setError(null);
+    setGeoLimitSaving(true);
+    try {
+      // The share endpoint is idempotent on (itemId, principalType,
+      // principalId), so re-POSTing with the existing permission and
+      // the new geoLimit updates only the polygon. Null clears it.
+      const res = await fetch(`/api/portal/items/${itemId}/share`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          principalType: share.principalType,
+          principalId: share.principalId,
+          permission: share.permission,
+          geoLimit,
+        }),
+      });
+      if (!res.ok) {
+        setError(`Could not save restriction: ${res.status} ${await res.text()}`);
+        return;
+      }
+      const updated: ItemShare = await res.json();
+      setShares((cur) =>
+        cur.map((s) =>
+          s.principalType === updated.principalType &&
+          s.principalId === updated.principalId
+            ? updated
+            : s,
+        ),
+      );
+      setEditingGeoLimit(null);
+      startTransition(() => router.refresh());
+    } finally {
+      setGeoLimitSaving(false);
+    }
   }
 
   async function addShare(
@@ -456,6 +507,24 @@ export function SharingPanel({
                   </span>
                   <button
                     type="button"
+                    onClick={() => setEditingGeoLimit(share)}
+                    disabled={pending}
+                    title={
+                      share.geoLimit
+                        ? 'Edit geographic restriction'
+                        : 'Restrict to a geographic area'
+                    }
+                    aria-label="Restrict to area"
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-50 ${
+                      share.geoLimit
+                        ? 'bg-accent/10 text-accent hover:bg-accent/15'
+                        : 'text-muted hover:bg-surface-2 hover:text-ink-1'
+                    }`}
+                  >
+                    <MapPin className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => removeShare(share)}
                     disabled={pending}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-danger disabled:opacity-50"
@@ -469,6 +538,22 @@ export function SharingPanel({
           })}
         </ul>
       )}
+
+      {editingGeoLimit ? (
+        <ShareGeoLimitDialog
+          principalLabel={
+            editingGeoLimit.principalType === 'group'
+              ? (groups.find((g) => g.id === editingGeoLimit.principalId)
+                  ?.title ?? editingGeoLimit.principalId.slice(0, 8))
+              : (userNames[editingGeoLimit.principalId] ??
+                editingGeoLimit.principalId.slice(0, 8))
+          }
+          initialGeoLimit={editingGeoLimit.geoLimit ?? null}
+          saving={geoLimitSaving}
+          onClose={() => setEditingGeoLimit(null)}
+          onSave={(geoLimit) => saveGeoLimit(editingGeoLimit, geoLimit)}
+        />
+      ) : null}
 
       <div className="border-t border-border p-4">
         <div className="flex flex-wrap items-start gap-2">
