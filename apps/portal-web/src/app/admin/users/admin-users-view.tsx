@@ -7,7 +7,9 @@ import {
   KeyRound,
   Loader2,
   MailPlus,
+  Pencil,
   Plus,
+  Save,
   Search,
   ShieldCheck,
   Trash2,
@@ -15,6 +17,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import type { AdminUserRow } from './page';
+import { ReassignOwnerDialog } from '@/components/reassign-owner-dialog';
 
 /**
  * Admin-side users table.
@@ -38,9 +41,16 @@ export function AdminUsersView({ initialUsers }: Props) {
   const [users, setUsers] = useState<AdminUserRow[]>(initialUsers);
   const [query, setQuery] = useState('');
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [editing, setEditing] = useState<AdminUserRow | null>(null);
   const [working, setWorking] = useState<string | null>(null); // keyed by user id
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // When a delete is blocked by owned items, stash the target + item
+  // count here so the reassign dialog can render above the table.
+  const [deleteWithItems, setDeleteWithItems] = useState<{
+    user: AdminUserRow;
+    items: Array<{ id: string; title: string; type: string }>;
+  } | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -123,14 +133,12 @@ export function AdminUsersView({ initialUsers }: Props) {
     flash(`${user.username} role set to ${orgRole}`);
   }
 
-  async function removeUser(user: AdminUserRow) {
-    if (
-      !confirm(
-        `Permanently delete ${user.username}? This cannot be undone and will remove their portal account.`,
-      )
-    ) {
-      return;
-    }
+  /**
+   * Actual delete call — assumes the caller has already verified the
+   * user has no owned items (or has reassigned them). Called either
+   * directly (clean path) or from the reassign-and-delete flow below.
+   */
+  async function performDelete(user: AdminUserRow) {
     setWorking(user.id);
     setError(null);
     const res = await fetch(`/api/portal/admin/users/${user.id}`, {
@@ -143,6 +151,77 @@ export function AdminUsersView({ initialUsers }: Props) {
     }
     setUsers((prev) => prev.filter((u) => u.id !== user.id));
     flash(`${user.username} deleted`);
+  }
+
+  async function removeUser(user: AdminUserRow) {
+    setError(null);
+    // Preflight: does this user own anything? If so, refuse to delete
+    // until the admin reassigns — otherwise their items would lose
+    // their owner pointer (FK is set-null-deferred in Prisma, but
+    // "orphaned content" is a worse UX than "please pick a new owner").
+    setWorking(user.id);
+    try {
+      const res = await fetch(
+        `/api/portal/items?ownerId=${encodeURIComponent(user.id)}`,
+      );
+      if (!res.ok) {
+        setError(`Could not check owned items: ${res.status}`);
+        return;
+      }
+      const owned = (await res.json()) as Array<{
+        id: string;
+        title: string;
+        type: string;
+      }>;
+      if (owned.length > 0) {
+        // Stash and let the dialog drive reassign-then-delete.
+        setDeleteWithItems({ user, items: owned });
+        return;
+      }
+    } finally {
+      setWorking(null);
+    }
+    if (
+      !confirm(
+        `Permanently delete ${user.username}? This cannot be undone and will remove their portal account.`,
+      )
+    ) {
+      return;
+    }
+    await performDelete(user);
+  }
+
+  /**
+   * Handler for the reassign-then-delete dialog. Does the bulk
+   * reassign in one call, then the delete.
+   */
+  async function reassignAndDelete(
+    newOwnerId: string,
+    keepPreviousOwnerAccess: 'view' | 'edit' | 'admin' | null,
+  ) {
+    if (!deleteWithItems) return;
+    setError(null);
+    const res = await fetch('/api/portal/items/bulk/reassign-owner', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        itemIds: deleteWithItems.items.map((i) => i.id),
+        newOwnerId,
+        keepPreviousOwnerAccess,
+      }),
+    });
+    if (!res.ok) {
+      setError(`Reassign failed: ${res.status} ${await res.text().catch(() => '')}`);
+      return;
+    }
+    const userToDelete = deleteWithItems.user;
+    setDeleteWithItems(null);
+    flash(
+      `Reassigned ${userToDelete.username}'s ${deleteWithItems.items.length} item${
+        deleteWithItems.items.length === 1 ? '' : 's'
+      }. Deleting account…`,
+    );
+    await performDelete(userToDelete);
   }
 
   async function sendReset(user: AdminUserRow) {
@@ -171,6 +250,14 @@ export function AdminUsersView({ initialUsers }: Props) {
     // Pull fresh data so any extra fields Keycloak sets on create
     // (emailVerified flag, etc.) are reflected.
     void refresh();
+  }
+
+  function onEdited(updated: AdminUserRow) {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === updated.id ? { ...u, ...updated } : u)),
+    );
+    setEditing(null);
+    flash(`${updated.username} updated`);
   }
 
   return (
@@ -292,6 +379,16 @@ export function AdminUsersView({ initialUsers }: Props) {
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
+                          onClick={() => setEditing(u)}
+                          disabled={busy}
+                          title="Edit name / email"
+                          className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => void sendReset(u)}
                           disabled={busy}
                           title="Send password-reset email"
@@ -336,6 +433,27 @@ export function AdminUsersView({ initialUsers }: Props) {
         <InviteUserDialog
           onClose={() => setInviteOpen(false)}
           onInvited={onInvited}
+        />
+      ) : null}
+
+      {editing ? (
+        <EditUserDialog
+          user={editing}
+          onClose={() => setEditing(null)}
+          onSaved={onEdited}
+        />
+      ) : null}
+
+      {deleteWithItems ? (
+        <ReassignOwnerDialog
+          heading={`Reassign ${deleteWithItems.user.username}'s items`}
+          subheading={`${deleteWithItems.items.length} item${
+            deleteWithItems.items.length === 1 ? '' : 's'
+          } must move to another user before this account can be deleted.`}
+          excludeUserIds={[deleteWithItems.user.id]}
+          saving={working === deleteWithItems.user.id}
+          onClose={() => setDeleteWithItems(null)}
+          onSubmit={reassignAndDelete}
         />
       ) : null}
     </div>
@@ -504,6 +622,215 @@ function InviteUserDialog({ onClose, onInvited }: InviteDialogProps) {
               <MailPlus className="h-3.5 w-3.5" />
             )}
             Send invite
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+interface EditDialogProps {
+  user: AdminUserRow;
+  onClose: () => void;
+  onSaved: (updated: AdminUserRow) => void;
+}
+
+/**
+ * Inline edit dialog for admin-side user mutations. Username is
+ * intentionally immutable — Keycloak supports renames but downstream
+ * item.createdById references are keyed by user id anyway, and letting
+ * admins rename usernames invites impersonation footguns. Email and
+ * display name are the common "please update my record" fields.
+ */
+function EditUserDialog({ user, onClose, onSaved }: EditDialogProps) {
+  const [email, setEmail] = useState(user.email ?? '');
+  const [firstName, setFirstName] = useState(user.firstName ?? '');
+  const [lastName, setLastName] = useState(user.lastName ?? '');
+  const [orgRole, setOrgRole] = useState<OrgRole>(
+    (user.attributes?.org_role?.[0] as OrgRole | undefined) ?? 'viewer',
+  );
+  const [enabled, setEnabled] = useState(Boolean(user.enabled));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!email.includes('@')) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    // Only send fields that actually changed. Keycloak tolerates full
+    // PUTs, but narrowing the patch makes audit logs much easier to
+    // read and avoids accidental clobbers when we add fields later.
+    const patch: Record<string, unknown> = {};
+    if (email.trim() !== (user.email ?? '')) patch.email = email.trim();
+    if (firstName.trim() !== (user.firstName ?? ''))
+      patch.firstName = firstName.trim();
+    if (lastName.trim() !== (user.lastName ?? ''))
+      patch.lastName = lastName.trim();
+    if (
+      orgRole !==
+      ((user.attributes?.org_role?.[0] as OrgRole | undefined) ?? 'viewer')
+    ) {
+      patch.orgRole = orgRole;
+    }
+    if (enabled !== Boolean(user.enabled)) patch.enabled = enabled;
+
+    if (Object.keys(patch).length === 0) {
+      // Nothing to save — just close. Avoids spurious PATCH round-trips
+      // that would re-render the row with an identical "updated" flash.
+      onClose();
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/portal/admin/users/${user.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        setError(
+          `Save failed: ${res.status} ${await res.text().catch(() => '')}`,
+        );
+        return;
+      }
+      const updated = (await res.json()) as AdminUserRow;
+      onSaved(updated);
+    } catch (err) {
+      setError((err as Error).message || 'Save failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-3 rounded-lg border border-border bg-surface-1 p-4 shadow-raised"
+      >
+        <div className="flex items-center gap-2">
+          <Pencil className="h-5 w-5 text-accent" />
+          <h2 className="text-lg font-semibold">Edit user</h2>
+        </div>
+        <p className="text-xs text-muted">
+          Editing{' '}
+          <span className="font-mono text-ink-1">{user.username}</span>. Username
+          can&apos;t be changed here — it&apos;s used as the stable identifier
+          for content this user created.
+        </p>
+
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block text-xs">
+            <span className="mb-1 block uppercase tracking-wide text-muted">
+              First name
+            </span>
+            <input
+              type="text"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              className="h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />
+          </label>
+          <label className="block text-xs">
+            <span className="mb-1 block uppercase tracking-wide text-muted">
+              Last name
+            </span>
+            <input
+              type="text"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              className="h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />
+          </label>
+        </div>
+
+        <label className="block text-xs">
+          <span className="mb-1 block uppercase tracking-wide text-muted">
+            Email
+          </span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+          />
+          {user.emailVerified && email.trim() !== (user.email ?? '') ? (
+            <span className="mt-1 block text-[11px] text-warning">
+              Changing the email will reset the verified flag — the user will
+              need to re-verify.
+            </span>
+          ) : null}
+        </label>
+
+        <label className="block text-xs">
+          <span className="mb-1 block uppercase tracking-wide text-muted">
+            Role
+          </span>
+          <select
+            value={orgRole}
+            onChange={(e) => setOrgRole(e.target.value as OrgRole)}
+            className="h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+          >
+            <option value="viewer">viewer</option>
+            <option value="publisher">publisher</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-border text-accent focus:ring-accent/30"
+          />
+          <span className="text-ink-1">
+            Account active{' '}
+            <span className="text-muted">
+              (disabled accounts can&apos;t sign in)
+            </span>
+          </span>
+        </label>
+
+        {error ? (
+          <p className="text-xs text-danger" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="h-9 rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {submitting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            Save changes
           </button>
         </div>
       </form>

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft, Shield } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Shield } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { AdminUsersView } from './admin-users-view';
 
@@ -43,6 +43,7 @@ export default async function AdminUsersPage() {
   // every row action 503.
   let meta: Meta;
   let users: AdminUserRow[] = [];
+  let listError: string | null = null;
   try {
     meta = await apiFetch<Meta>('/api/admin/users/_meta');
   } catch {
@@ -51,8 +52,14 @@ export default async function AdminUsersPage() {
   if (meta.configured) {
     try {
       users = await apiFetch<AdminUserRow[]>('/api/admin/users?max=200');
-    } catch {
-      users = [];
+    } catch (err) {
+      // Surface the failure instead of silently returning an empty
+      // table — an empty result indistinguishable from "no users yet"
+      // is exactly the bug report path that sent us here (admin client
+      // not live in realm, service account missing a role, etc).
+      listError =
+        (err instanceof Error && err.message) ||
+        'Could not load users from Keycloak.';
     }
   }
 
@@ -91,6 +98,26 @@ export default async function AdminUsersPage() {
             <code className="font-mono">realm-management / manage-users</code>{' '}
             role in Keycloak.
           </p>
+        </div>
+      ) : listError ? (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/5 px-4 py-3 text-sm text-danger"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">Could not load users from Keycloak</p>
+            <p className="mt-1 text-danger/90">{listError}</p>
+            <p className="mt-2 text-xs text-danger/80">
+              Common causes: the{' '}
+              <code className="font-mono">portal-api-admin</code> client is
+              missing from the realm, its service-account isn&apos;t granted
+              <code className="ml-1 font-mono">
+                realm-management / manage-users
+              </code>
+              , or the client secret in the portal-api env is stale.
+            </p>
+          </div>
         </div>
       ) : (
         <AdminUsersView initialUsers={users} />
