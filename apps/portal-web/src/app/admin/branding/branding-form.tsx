@@ -10,16 +10,16 @@ import {
   Save,
 } from 'lucide-react';
 import type { BrandingConfig } from './page';
+import { FeaturedItemsPicker } from './featured-items-picker';
 
 /**
  * Admin form for the five Organization landing-page knobs.
  *
  * Sends a sparse PATCH so only changed fields round-trip; omitted
- * fields are left untouched server-side. Featured items picker is
- * deliberately deferred — the current release accepts a comma-
- * separated list of UUIDs for power users, and a proper item picker
- * lands as a follow-up once a reusable cross-page item picker
- * exists.
+ * fields are left untouched server-side. Featured items are picked
+ * + reordered via FeaturedItemsPicker (see #54), replacing an
+ * earlier "paste UUIDs" textarea that violated the guided-before-raw
+ * design rule.
  */
 interface Props {
   initial: BrandingConfig;
@@ -35,8 +35,11 @@ export function BrandingForm({ initial }: Props) {
   const [showPublicItems, setShowPublicItems] = useState(
     initial.landingShowPublicItems,
   );
-  const [featuredIdsText, setFeaturedIdsText] = useState(
-    initial.landingFeaturedItemIds.join(', '),
+  // Featured-item ordering is the authored list itself — no string
+  // intermediate any more. The picker emits the full array on every
+  // change so the dirty check can compare directly.
+  const [featuredIds, setFeaturedIds] = useState<string[]>(
+    initial.landingFeaturedItemIds,
   );
 
   const [saving, setSaving] = useState(false);
@@ -54,11 +57,10 @@ export function BrandingForm({ initial }: Props) {
     if ((heroImageUrl.trim() || null) !== (initial.landingHeroImageUrl ?? null))
       return true;
     if (showPublicItems !== initial.landingShowPublicItems) return true;
-    const parsed = parseIds(featuredIdsText);
     const saved = initial.landingFeaturedItemIds;
-    if (parsed.length !== saved.length) return true;
-    for (let i = 0; i < parsed.length; i += 1) {
-      if (parsed[i] !== saved[i]) return true;
+    if (featuredIds.length !== saved.length) return true;
+    for (let i = 0; i < featuredIds.length; i += 1) {
+      if (featuredIds[i] !== saved[i]) return true;
     }
     return false;
   }, [
@@ -66,25 +68,12 @@ export function BrandingForm({ initial }: Props) {
     subtitle,
     heroImageUrl,
     showPublicItems,
-    featuredIdsText,
+    featuredIds,
     initial,
   ]);
 
   async function save() {
     setError(null);
-    const parsedIds = parseIds(featuredIdsText);
-    // Shallow UUID sanity check — catches obvious paste mistakes
-    // before round-tripping to the backend, where invalid ids would
-    // be filtered silently.
-    const bad = parsedIds.filter((id) => !UUID_RE.test(id));
-    if (bad.length > 0) {
-      setError(
-        `Featured item ids contain invalid UUIDs: ${bad
-          .slice(0, 3)
-          .join(', ')}${bad.length > 3 ? '…' : ''}`,
-      );
-      return;
-    }
     setSaving(true);
     try {
       const body: Record<string, unknown> = {
@@ -92,7 +81,10 @@ export function BrandingForm({ initial }: Props) {
         landingSubtitle: subtitle.trim() || null,
         landingHeroImageUrl: heroImageUrl.trim() || null,
         landingShowPublicItems: showPublicItems,
-        landingFeaturedItemIds: parsedIds,
+        // The picker only emits ids it resolved against the public
+        // items list, so per-row UUID validation isn't needed here
+        // any more — invalid pastes can't get into the state.
+        landingFeaturedItemIds: featuredIds,
       };
       const res = await fetch('/api/portal/admin/branding', {
         method: 'PATCH',
@@ -202,27 +194,19 @@ export function BrandingForm({ initial }: Props) {
         </label>
 
         <div>
-          <label
-            htmlFor="featured-ids"
-            className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted"
-          >
-            Featured item ids (advanced)
-          </label>
-          <textarea
-            id="featured-ids"
-            value={featuredIdsText}
-            onChange={(e) => setFeaturedIdsText(e.target.value)}
-            placeholder="Comma or newline separated item UUIDs"
-            rows={3}
-            className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-          />
-          <p className="mt-1 text-[11px] text-muted">
-            Ordered list of item ids to feature at the top of the grid.
-            Leave blank to show all public items newest-first. Ids must
-            belong to public items in your org. A proper in-app item
-            picker lands in a follow-up; for now, copy ids from the URL
-            of the item detail page.
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">
+            Featured items
           </p>
+          <p className="mb-2 text-[11px] text-muted">
+            Pick the public items you want pinned to the top of the
+            landing page, in the order they should appear. Leave the
+            list empty to show every public item in the org, newest
+            first.
+          </p>
+          <FeaturedItemsPicker
+            value={featuredIds}
+            onChange={setFeaturedIds}
+          />
         </div>
       </section>
 
@@ -271,12 +255,3 @@ export function BrandingForm({ initial }: Props) {
   );
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function parseIds(text: string): string[] {
-  return text
-    .split(/[,\n\s]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
