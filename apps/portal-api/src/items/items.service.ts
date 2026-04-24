@@ -257,9 +257,28 @@ export class ItemsService {
     // defined in the builder. Safe to run inline because each
     // $executeRawUnsafe is idempotent; if the item has no layers yet
     // (empty builder), this is a no-op.
+    //
+    // If reconcile throws, the item row is already in the DB — we
+    // roll back by deleting it so the user doesn't end up with an
+    // orphaned item they can't recover from. The error message is
+    // surfaced back to the caller so they can see WHICH column /
+    // layer / DDL failed instead of a bare 500.
     const layers = readV3Layers(row.data);
     if (row.type === 'feature_service' && layers !== null) {
-      await this.v3Tables.reconcile(row.id, [], layers);
+      try {
+        await this.v3Tables.reconcile(row.id, [], layers);
+      } catch (err) {
+        await this.prisma.item
+          .delete({ where: { id: row.id } })
+          .catch(() => {
+            /* best-effort cleanup; if this fails too we leave the orphan */
+          });
+        throw new BadRequestException(
+          `Could not provision layer tables: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
     return row;
   }
