@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   Map as MapIcon,
   Paintbrush,
+  Sparkles,
   Users,
   Bell,
   Search,
@@ -102,6 +103,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 icon={<Archive className="h-4 w-4" />}
               >
                 Backup
+              </NavLink>
+              <NavLink
+                href="/admin/housekeeping"
+                icon={<Sparkles className="h-4 w-4" />}
+              >
+                Housekeeping
               </NavLink>
             </>
           ) : null}

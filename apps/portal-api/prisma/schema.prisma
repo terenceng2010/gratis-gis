@@ -112,6 +112,11 @@ model User {
   /// Null falls back to the auto-generated initial badge.
   avatarUrl String?  @map("avatar_url")
   createdAt DateTime @default(now()) @map("created_at")
+  /// Last time we saw this user hit the API (populated via AuthSync
+  /// on every request). Null = never-seen (seeded or imported user
+  /// who hasn't signed in yet). Drives the housekeeping stale-user
+  /// detection on /admin/housekeeping.
+  lastSeenAt DateTime? @map("last_seen_at")
 
   org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   ownedGroups   Group[]       @relation("GroupOwner")

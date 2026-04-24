@@ -47,6 +47,13 @@ export class AuthSyncService {
         fullName: claims.name,
         orgRole: claims.org_role ?? 'viewer',
         orgId: org.id,
+        // Every authenticated request touches this record so the
+        // housekeeping page can tell "user who last signed in 8
+        // months ago" apart from "user who's active this week".
+        // Writing on every request is cheap (same upsert that was
+        // already happening) and simpler than a separate heartbeat
+        // path.
+        lastSeenAt: new Date(),
       },
       create: {
         // New users (not seeded) adopt Keycloak's sub as their local id, so
@@ -57,6 +64,7 @@ export class AuthSyncService {
         email: claims.email,
         fullName: claims.name,
         orgRole: claims.org_role ?? 'viewer',
+        lastSeenAt: new Date(),
       },
     });
 
