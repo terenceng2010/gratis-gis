@@ -33,6 +33,22 @@ docs: flesh out deployment guide
 - Shared contracts go in `packages/shared-types`. If a type is used by
   two or more apps, move it there.
 
+## UX: guided before raw input
+
+A hard product rule, not a suggestion. If a feature asks a user for a
+non-trivial input (polygon, schema, list of values, URL, color, rows
+of data), the **primary path must be visual, guided, or upload**:
+draw on a map, pick from a list, upload a file, choose an existing
+portal item, step through a wizard. Raw paste / typed-JSON / manual
+coordinate entry is an *advanced fallback* behind a disclosure, not
+the default way in. See the full rule in
+[docs/design-system.md](./docs/design-system.md#principles) (rule 7).
+
+Reviewers: if a PR adds a surface that lands on a textarea or a long
+text input as the primary entry point, push back and ask for the
+guided path first. The paste field can live in the PR, just not at
+the front.
+
 ## Writing style (code comments, docs, commits, PRs)
 
 These rules apply everywhere we write prose for this project: code
