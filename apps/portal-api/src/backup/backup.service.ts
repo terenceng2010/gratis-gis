@@ -406,8 +406,14 @@ export class BackupService implements OnModuleInit {
    * through Node, so a 5 GB dump doesn't need 5 GB of RAM.
    */
   private async runPgDump(outPath: string) {
-    const url = this.cfg.get<string>('DATABASE_URL', '');
-    if (!url) throw new Error('DATABASE_URL is not set; cannot run pg_dump');
+    const raw = this.cfg.get<string>('DATABASE_URL', '');
+    if (!raw) throw new Error('DATABASE_URL is not set; cannot run pg_dump');
+    // Prisma's DATABASE_URL carries non-libpq params (notably
+    // `?schema=public`, plus pool tuning like `connection_limit`,
+    // `pool_timeout`, `pgbouncer`). pg_dump parses the URI with libpq
+    // and rejects anything it doesn't recognise, so we sanitise the
+    // URL before handing it off.
+    const url = this.sanitizeDbUrlForPgDump(raw);
     const container = this.cfg.get<string>(
       'BACKUP_PGDUMP_DOCKER_CONTAINER',
       '',
@@ -505,6 +511,54 @@ export class BackupService implements OnModuleInit {
     // postgresql://user:pass@host:port/dbname?query
     const m = url.match(/\/([^/?]+)(\?|$)/);
     return m?.[1] ?? null;
+  }
+
+  /**
+   * Strip Prisma-specific query parameters that libpq/pg_dump doesn't
+   * understand (e.g. `schema=public` causes `invalid URI query parameter:
+   * "schema"`). We allowlist the libpq URI params we want to forward;
+   * anything else gets dropped. Empty query string is removed entirely
+   * so the URL looks clean in any logged output.
+   */
+  private sanitizeDbUrlForPgDump(url: string): string {
+    // libpq-recognised URI parameters that actually affect the dump.
+    // https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS
+    const libpqAllow = new Set([
+      'sslmode',
+      'sslrootcert',
+      'sslcert',
+      'sslkey',
+      'sslpassword',
+      'sslcrl',
+      'sslcompression',
+      'connect_timeout',
+      'application_name',
+      'fallback_application_name',
+      'client_encoding',
+      'options',
+      'keepalives',
+      'keepalives_idle',
+      'keepalives_interval',
+      'keepalives_count',
+      'tcp_user_timeout',
+      'replication',
+      'gssencmode',
+      'target_session_attrs',
+    ]);
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      // If the URL is malformed we can't sanitise — return it
+      // untouched so the pg_dump spawn surfaces a clear error.
+      return url;
+    }
+    const kept: string[] = [];
+    u.searchParams.forEach((value, key) => {
+      if (libpqAllow.has(key)) kept.push(`${key}=${encodeURIComponent(value)}`);
+    });
+    u.search = kept.length ? `?${kept.join('&')}` : '';
+    return u.toString();
   }
 
   private redactDbUrl(url: string): string {
