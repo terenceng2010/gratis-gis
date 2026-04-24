@@ -5,8 +5,9 @@ import { apiFetch } from '@/lib/api';
 import { AdminUsersView } from './admin-users-view';
 
 /** Shape we expose to the client. Matches Keycloak's user rep plus
- *  our `fullName` convenience. Kept narrow so we don't leak internal
- *  Keycloak fields we aren't actually using. */
+ *  our `fullName` convenience and `lastSeenAt` (populated by
+ *  AuthSyncService on every authenticated request). Kept narrow so
+ *  we don't leak internal Keycloak fields we aren't actually using. */
 export interface AdminUserRow {
   id: string;
   username: string;
@@ -18,6 +19,9 @@ export interface AdminUserRow {
   emailVerified?: boolean;
   createdTimestamp?: number;
   attributes?: Record<string, string[]>;
+  /** ISO timestamp of the last authenticated request we saw from
+   *  this user, or null if they've never signed in. */
+  lastSeenAt: string | null;
 }
 
 interface Meta {

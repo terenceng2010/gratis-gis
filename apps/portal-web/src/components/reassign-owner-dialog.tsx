@@ -30,6 +30,13 @@ interface Props {
   /** User ids to exclude from the picker (e.g. current owner). */
   excludeUserIds?: string[];
   saving: boolean;
+  /**
+   * Pre-selected owner shown above the picker. Typical use is "the
+   * admin doing the reassign" — one-click confirmation for the
+   * common case where the admin will take ownership themselves.
+   * Null = no default.
+   */
+  defaultOwner?: { id: string; label: string } | null;
   onClose: () => void;
   onSubmit: (
     newOwnerId: string,
@@ -44,11 +51,19 @@ export function ReassignOwnerDialog({
   subheading,
   excludeUserIds = [],
   saving,
+  defaultOwner = null,
   onClose,
   onSubmit,
 }: Props) {
-  const [pickedId, setPickedId] = useState<string | null>(null);
-  const [pickedLabel, setPickedLabel] = useState<string | null>(null);
+  // When the caller passes a default owner (e.g. "you" on the
+  // admin-disable flow), pre-select it so the admin can just click
+  // Reassign for the common case.
+  const [pickedId, setPickedId] = useState<string | null>(
+    defaultOwner?.id ?? null,
+  );
+  const [pickedLabel, setPickedLabel] = useState<string | null>(
+    defaultOwner?.label ?? null,
+  );
   const [keep, setKeep] = useState<KeepAccess>('view');
   const [error, setError] = useState<string | null>(null);
 

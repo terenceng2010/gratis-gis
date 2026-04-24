@@ -28,6 +28,17 @@ import {
 } from './keycloak-admin.service.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import { PrismaService } from '../prisma/prisma.service.js';
+
+/** Keycloak user enriched with portal-specific fields we track ourselves. */
+export type AdminUserRep = KeycloakUserRep & {
+  /**
+   * ISO timestamp of the last authenticated request we saw from this
+   * user, or null if they've never signed in to the portal. Stamped
+   * by AuthSyncService on every authenticated request.
+   */
+  lastSeenAt: string | null;
+};
 
 type OrgRole = 'viewer' | 'publisher' | 'admin';
 
@@ -64,7 +75,10 @@ class UpdateUserDto {
 @Controller('admin/users')
 @UseGuards(AdminGuard)
 export class AdminUsersController {
-  constructor(private readonly kc: KeycloakAdminService) {}
+  constructor(
+    private readonly kc: KeycloakAdminService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Get('_meta')
   meta(): { configured: boolean } {
@@ -72,16 +86,33 @@ export class AdminUsersController {
   }
 
   @Get()
-  list(
+  async list(
     @Query('q') q?: string,
     @Query('first') first?: string,
     @Query('max') max?: string,
-  ): Promise<KeycloakUserRep[]> {
+  ): Promise<AdminUserRep[]> {
     const opts: { search?: string; first?: number; max?: number } = {};
     if (q) opts.search = q;
     if (first !== undefined) opts.first = Number(first);
     if (max !== undefined) opts.max = Number(max);
-    return this.kc.listUsers(opts);
+    const kcUsers = await this.kc.listUsers(opts);
+    // Pull lastSeenAt in one query for the ids we just got back
+    // rather than N+1 per user. Users who have never hit the API
+    // are absent from the map and render as null on the client.
+    const ids = kcUsers
+      .map((u) => u.id)
+      .filter((id): id is string => typeof id === 'string');
+    const local = ids.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, lastSeenAt: true },
+        })
+      : [];
+    const byId = new Map(local.map((u) => [u.id, u.lastSeenAt]));
+    return kcUsers.map((u) => ({
+      ...u,
+      lastSeenAt: u.id ? (byId.get(u.id)?.toISOString() ?? null) : null,
+    }));
   }
 
   @Get(':id')
