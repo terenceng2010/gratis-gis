@@ -162,6 +162,42 @@ All feature data lives in PostGIS. Each feature collection is a table under
 a tenant-scoped schema (`org_<uuid>.features_<item_uuid>`). Tiles are served
 by pg\_tileserv with a permission-aware proxy layer in `portal-api`.
 
+## Spatial Reference Policy
+
+**Storage is always EPSG:4326 (WGS 84 geographic).** Every PostGIS
+geometry column in the portal is declared `GEOMETRY(<type>, 4326)`.
+Bounding boxes, geo-limits, and `ST_Intersects` filters all operate
+in lat/lng. This is the same convention ArcGIS Online hosted feature
+services use, and matches GeoJSON's RFC 7946 implicit CRS.
+
+**Ingest reprojects.** `IngestService` reads every uploaded file's
+source SRS via GDAL, builds a `CoordinateTransformation` to 4326,
+and applies it in-place before writing rows. The source SRS (as an
+`EPSG:NNNN` string) is captured on the item's `source.sourceSrs`
+provenance block so consumers can see where the data came from.
+Files with no declared SRS are assumed to be 4326; reprojection is a
+no-op when the source is already 4326.
+
+**Clients reproject for display.** MapLibre renders 4326 GeoJSON in
+Web Mercator (EPSG:3857) on the fly. We never store Web Mercator;
+it's purely a rendering concern.
+
+**What the portal does NOT do:**
+
+  - Multi-SRID storage (one canonical SRID keeps the query layer
+    simple and avoids transforming at every spatial filter)
+  - Per-feature CRS (a feature inherits its layer's declared SRID)
+  - Lossless preservation of the source projection through the
+    ingest-query cycle (the original SRS is remembered as metadata
+    only; features are stored in 4326)
+
+**For callers extending the ingest pipeline:** follow the pattern in
+`featureGeomJson()` in `apps/portal-api/src/ingest/ingest.service.ts`.
+Read `layer.srs`, build `new gdal.CoordinateTransformation(src,
+target4326)`, call `geom.transform(transform)` before `geom.toJSON()`.
+PostGIS-side transforms use `ST_Transform`; we use them only for
+display endpoints that want Web Mercator tiles, never for writes.
+
 ## Offline & Sync
 
 The field app stores local state in SQLite (via Expo's SQLite or WatermelonDB).
