@@ -46,3 +46,10 @@ tmp/
 run-api.bat
 run-web.bat
 run-dev.bat
+
+# Local dev secrets / logs that should not hit the remote
+*.kc-admin-secret
+apps/*/dev.out
+
+# Agent worktree storage used by local tooling
+.claude/worktrees/
