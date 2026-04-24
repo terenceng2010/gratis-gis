@@ -57,9 +57,10 @@ export default async function AdminBackupPage() {
           <p className="text-xs text-muted">Admin</p>
           <h1 className="text-2xl font-semibold tracking-tight">Backup</h1>
           <p className="mt-0.5 text-sm text-muted">
-            Scheduled + on-demand snapshots of the portal database and
-            object storage. Archives land in the configured directory and
-            can be downloaded here.
+            Save a complete snapshot of your portal — all items,
+            uploaded files, sharing, branding, and history — so you can
+            recover if something goes wrong. Set a schedule below or
+            take one on demand.
           </p>
         </div>
       </header>

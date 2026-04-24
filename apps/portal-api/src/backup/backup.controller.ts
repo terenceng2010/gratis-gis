@@ -1,15 +1,27 @@
 import { createReadStream } from 'node:fs';
 
 import {
+  Body,
   Controller,
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import type { Response } from 'express';
 
 import { AdminGuard } from '../admin/admin.guard.js';
@@ -18,13 +30,55 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import { BackupService } from './backup.service.js';
 
 /**
- * Admin-only surface for the backup system. The shape is deliberately
- * thin: GET config (read-only ops knobs), list runs, start a run,
- * download an archive, delete a row. Restore lives elsewhere (will
- * be added in #59-restore) because mixing "download the last good
- * copy" with "overwrite everything from this archive" in one
- * controller risks a copy-paste mistake between the two.
+ * Admin-only surface for the backup system. Scope: read config,
+ * update config, list runs, start a run, download an archive,
+ * delete a row. Restore lives in a separate flow (#62) because
+ * mixing it into the same controller invites finger-memory
+ * mistakes between "download last good" and "overwrite everything".
  */
+
+const SCHEDULE_MODES = ['off', 'daily', 'weekly', 'monthly', 'custom'] as const;
+
+class UpdateConfigDto {
+  // archiveDirectory: string | null — empty string / null clears the
+  // override so the env BACKUP_DIR default comes back into play.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(500)
+  archiveDirectory?: string | null;
+
+  @IsOptional()
+  @IsEnum(SCHEDULE_MODES)
+  scheduleMode?: (typeof SCHEDULE_MODES)[number];
+
+  @IsOptional() @IsInt() @Min(0) @Max(23)
+  scheduleHour?: number;
+
+  @IsOptional() @IsInt() @Min(0) @Max(59)
+  scheduleMinute?: number;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt() @Min(0) @Max(6)
+  scheduleDayOfWeek?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt() @Min(1) @Max(28)
+  scheduleDayOfMonth?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString() @MaxLength(120)
+  customCron?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt() @Min(1) @Max(1000)
+  retentionCount?: number | null;
+}
+
 @ApiTags('admin', 'backup')
 @ApiBearerAuth()
 @UseGuards(AdminGuard)
@@ -35,6 +89,18 @@ export class BackupController {
   @Get('config')
   getConfig() {
     return this.backup.getConfig();
+  }
+
+  @Patch('config')
+  async updateConfig(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateConfigDto,
+  ) {
+    // Passing the whole DTO works because every key matches the
+    // patch shape on the service side; the service itself does the
+    // range / enum / cron-shape validation that class-validator
+    // can't express cleanly.
+    return this.backup.updateConfig(dto, user.id);
   }
 
   @Get('runs')

@@ -3,20 +3,21 @@ import {
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 
-import { BackupService } from './backup.service.js';
+import { BackupService, type BackupConfig } from './backup.service.js';
 
 /**
- * Registers the scheduled backup job at module init. We do this
- * imperatively (via SchedulerRegistry) rather than a @Cron decorator
- * so the expression is operator-configurable via BACKUP_SCHEDULE_CRON
- * without a redeploy. The job is skipped entirely when
- * BACKUP_SCHEDULE_DISABLED=true, which gives operators a quick
- * pressure-release valve if something is going wrong with the backup
- * path and they need time to debug without cron spam.
+ * Registers the scheduled backup job and keeps it in sync with the
+ * admin-editable config. We own the single CronJob identity under
+ * SchedulerRegistry; BackupService.onConfigChange lets the admin
+ * form push a new expression here and we tear down + re-register
+ * without a restart.
+ *
+ * Mode === 'off' means no job at all: we deregister whatever's
+ * running and don't register a replacement. Flipping back to 'daily'
+ * (or whatever) from the admin form re-registers from scratch.
  */
 @Injectable()
 export class BackupCronService implements OnModuleInit {
@@ -26,43 +27,75 @@ export class BackupCronService implements OnModuleInit {
   constructor(
     private readonly backup: BackupService,
     private readonly scheduler: SchedulerRegistry,
-    private readonly cfg: ConfigService,
   ) {}
 
-  onModuleInit() {
-    const disabled =
-      (this.cfg.get<string>('BACKUP_SCHEDULE_DISABLED') || '').toLowerCase() ===
-      'true';
-    if (disabled) {
-      this.log.warn(
-        'Scheduled backups disabled (BACKUP_SCHEDULE_DISABLED=true). Manual runs still work.',
+  async onModuleInit() {
+    // Load the effective config (DB row merged over env) and
+    // register the job for the first time. Then subscribe so every
+    // subsequent admin save re-applies the schedule.
+    const cfg = await this.backup.getConfig();
+    this.apply(cfg);
+    this.backup.onConfigChange((next) => this.apply(next));
+  }
+
+  /**
+   * Tear down the existing cron (if any) and register one that
+   * matches the given effective config. Invalid cron expressions
+   * are logged loudly and left un-registered; the admin can fix
+   * them in the UI and save again without restarting the process.
+   */
+  private apply(cfg: BackupConfig) {
+    this.unregister();
+
+    if (cfg.scheduleMode === 'off') {
+      this.log.log(
+        'Automatic backups are turned off; manual runs still work.',
       );
       return;
     }
 
-    const expr = this.cfg.get<string>('BACKUP_SCHEDULE_CRON', '0 2 * * *');
+    const expr = cfg.effectiveCron;
+    if (!expr) {
+      this.log.warn(
+        `Schedule mode is "${cfg.scheduleMode}" but no cron expression ` +
+          'resolved; scheduled backups will not run until the config is fixed.',
+      );
+      return;
+    }
+
     let job: CronJob;
     try {
       job = new CronJob(expr, () => this.runSafely());
     } catch (e) {
-      // Bad cron expression: fail loud once at boot rather than
-      // silently never running. The admin UI's "scheduleDisabled"
-      // flag stays false so we still surface the intent to run.
       this.log.error(
-        `Invalid BACKUP_SCHEDULE_CRON="${expr}": ${(e as Error).message}. ` +
+        `Invalid cron expression "${expr}": ${(e as Error).message}. ` +
           'Scheduled backups will NOT run until this is fixed.',
       );
       return;
     }
     this.scheduler.addCronJob(BackupCronService.JOB_NAME, job);
     job.start();
-    this.log.log(`Scheduled backup cron registered: ${expr}`);
+    this.log.log(
+      `Scheduled backup registered: ${cfg.scheduleSummary} (${expr})`,
+    );
+  }
+
+  private unregister() {
+    try {
+      const existing = this.scheduler.getCronJob(BackupCronService.JOB_NAME);
+      if (existing) {
+        existing.stop();
+        this.scheduler.deleteCronJob(BackupCronService.JOB_NAME);
+      }
+    } catch {
+      // getCronJob throws when the name isn't registered; that's
+      // fine on first boot and after an off→on transition.
+    }
   }
 
   /**
    * Guarded wrapper so a thrown error inside runBackup doesn't kill
-   * the cron timer (CronJob swallows unhandled rejections, but we
-   * want an explicit log line).
+   * the cron timer.
    */
   private async runSafely() {
     try {

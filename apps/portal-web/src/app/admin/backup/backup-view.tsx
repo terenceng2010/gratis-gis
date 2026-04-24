@@ -4,35 +4,34 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
-  Clock,
+  ChevronDown,
   Download,
   Info,
   Loader2,
   PlayCircle,
-  RotateCcw,
+  Save,
   Trash2,
   XCircle,
 } from 'lucide-react';
 
 /**
- * Runtime-configured knobs we show read-only (operators change them
- * via environment, not through the UI — backup config is ops-level).
+ * Effective config as returned by /admin/backup/config. Matches the
+ * shape the service emits — presentation-friendly, with the schedule
+ * already summarised as English.
  */
 export interface BackupConfig {
-  backupDir: string;
-  scheduleCron: string;
+  archiveDirectory: string;
+  scheduleMode: 'off' | 'daily' | 'weekly' | 'monthly' | 'custom';
+  scheduleHour: number;
+  scheduleMinute: number;
+  scheduleDayOfWeek: number | null;
+  scheduleDayOfMonth: number | null;
+  customCron: string | null;
   retentionCount: number;
-  pgDumpMode: 'host' | 'docker';
-  pgDumpDockerContainer: string | null;
-  minioBucket: string;
-  scheduleDisabled: boolean;
+  scheduleSummary: string;
+  effectiveCron: string | null;
 }
 
-/**
- * Wire shape of a BackupRun as returned by the API. sizeBytes is a
- * string because the underlying column is BIGINT; the JSON layer
- * stringifies it to avoid JS precision loss.
- */
 export interface BackupRun {
   id: string;
   startedAt: string;
@@ -50,43 +49,32 @@ interface Props {
   initialRuns: BackupRun[];
 }
 
-/**
- * Interactive half of /admin/backup. Owns:
- *   - "Run now" button + its in-flight state.
- *   - Auto-polling while any run is still in progress, so the row
- *     flips to succeeded/failed without a manual refresh.
- *   - Delete-with-confirm on each row.
- *   - Download is a plain <a href> to the API — browsers handle
- *     streamed archive responses better than fetch blobs.
- */
 export function BackupView({ initialConfig, initialRuns }: Props) {
+  const [config, setConfig] = useState<BackupConfig>(initialConfig);
   const [runs, setRuns] = useState<BackupRun[]>(initialRuns);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
-  const config = initialConfig;
 
-  const reload = useCallback(async () => {
+  const reloadRuns = useCallback(async () => {
     try {
       const res = await fetch('/api/portal/admin/backup/runs');
       if (!res.ok) return;
       const body = (await res.json()) as BackupRun[];
       setRuns(body);
     } catch {
-      // Swallow — the next poll tick will try again.
+      // Swallow; the next poll tick tries again.
     }
   }, []);
 
-  // Poll while any run is still 'running'. Stop when nothing is in
-  // flight so we don't keep hitting the API for a page that's just
-  // sitting open. 3s is brisk enough that a fast local backup still
-  // shows "done" within one poll interval.
+  // Poll while any run is still 'running'. Stops when nothing is in
+  // flight so an idle page isn't hitting the API every few seconds.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     const anyRunning = runs.some((r) => r.status === 'running');
     if (anyRunning && !pollRef.current) {
-      pollRef.current = setInterval(reload, 3000);
+      pollRef.current = setInterval(reloadRuns, 3000);
     }
     if (!anyRunning && pollRef.current) {
       clearInterval(pollRef.current);
@@ -98,7 +86,7 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
         pollRef.current = null;
       }
     };
-  }, [runs, reload]);
+  }, [runs, reloadRuns]);
 
   async function handleRunNow() {
     setRunning(true);
@@ -108,12 +96,12 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
         method: 'POST',
       });
       if (!res.ok) {
-        setError(`Run failed: ${res.status}`);
+        setError(`Could not start backup (HTTP ${res.status}).`);
         return;
       }
-      await reload();
+      await reloadRuns();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Run failed');
+      setError(e instanceof Error ? e.message : 'Could not start backup.');
     } finally {
       setRunning(false);
     }
@@ -127,12 +115,12 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
         method: 'DELETE',
       });
       if (!res.ok) {
-        setError(`Delete failed: ${res.status}`);
+        setError(`Could not delete (HTTP ${res.status}).`);
         return;
       }
-      await reload();
+      await reloadRuns();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
+      setError(e instanceof Error ? e.message : 'Could not delete.');
     } finally {
       setDeleting(null);
       setConfirmingDelete(null);
@@ -141,16 +129,28 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
 
   return (
     <div className="space-y-6">
-      <ConfigPanel config={config} />
+      <SettingsCard
+        config={config}
+        onSaved={(next) => setConfig(next)}
+      />
 
       <section className="rounded-lg border border-border bg-surface-1">
         <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div>
-            <h2 className="text-sm font-medium text-ink-0">Recent runs</h2>
+            <h2 className="text-sm font-medium text-ink-0">Backup history</h2>
             <p className="text-xs text-muted">
-              History of scheduled and manual backups. Retention keeps the
-              latest {config.retentionCount} successful archives; failed
-              runs are preserved so you can diagnose them.
+              {config.scheduleMode === 'off' ? (
+                <>
+                  Automatic backups are turned off. Use "Run now" to take
+                  one on demand.
+                </>
+              ) : (
+                <>
+                  {config.scheduleSummary}. Keeping the{' '}
+                  <strong>{config.retentionCount}</strong> most recent
+                  successful backups.
+                </>
+              )}
             </p>
           </div>
           <button
@@ -184,12 +184,11 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
           <table className="w-full text-sm">
             <thead className="bg-surface-2 text-left text-[11px] uppercase tracking-wide text-muted">
               <tr>
-                <th className="px-4 py-2">Started</th>
-                <th className="px-4 py-2">Duration</th>
-                <th className="px-4 py-2">Trigger</th>
+                <th className="px-4 py-2">When</th>
+                <th className="px-4 py-2">Took</th>
+                <th className="px-4 py-2">Triggered by</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2">Size</th>
-                <th className="px-4 py-2">File</th>
                 <th className="px-4 py-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -210,84 +209,332 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
         )}
       </section>
 
-      <LimitationsCallout />
+      <WhatsIncluded />
     </div>
   );
 }
 
-function ConfigPanel({ config }: { config: BackupConfig }) {
+// ---------------------------------------------------------------
+// Settings card — the editable replacement for the old read-only
+// config panel. One form, one Save button, optimistic UI on the
+// summary so the cron description updates the instant you tweak a
+// picker rather than after the round trip.
+// ---------------------------------------------------------------
+
+function SettingsCard({
+  config,
+  onSaved,
+}: {
+  config: BackupConfig;
+  onSaved: (next: BackupConfig) => void;
+}) {
+  const [draft, setDraft] = useState<BackupConfig>(config);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // Keep the draft in sync if the upstream config ever changes from
+  // underneath us (e.g. another admin saves). Comparing by stringify
+  // is fine for this shape.
+  useEffect(() => {
+    setDraft(config);
+  }, [config]);
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(config);
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch('/api/portal/admin/backup/config', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          archiveDirectory: draft.archiveDirectory,
+          scheduleMode: draft.scheduleMode,
+          scheduleHour: draft.scheduleHour,
+          scheduleMinute: draft.scheduleMinute,
+          scheduleDayOfWeek:
+            draft.scheduleMode === 'weekly' ? draft.scheduleDayOfWeek ?? 0 : null,
+          scheduleDayOfMonth:
+            draft.scheduleMode === 'monthly'
+              ? draft.scheduleDayOfMonth ?? 1
+              : null,
+          customCron:
+            draft.scheduleMode === 'custom' ? draft.customCron : null,
+          retentionCount: draft.retentionCount,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const msg =
+          (body as { message?: string | string[] }).message ??
+          `HTTP ${res.status}`;
+        setSaveError(Array.isArray(msg) ? msg.join('; ') : msg);
+        return;
+      }
+      const next = (await res.json()) as BackupConfig;
+      onSaved(next);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setSaveError(
+        e instanceof Error ? e.message : 'Could not save settings.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <section className="rounded-lg border border-border bg-surface-1 p-4">
-      <header className="mb-3 flex items-center gap-2">
-        <Clock className="h-3.5 w-3.5 text-muted" />
-        <h2 className="text-sm font-medium text-ink-0">Configuration</h2>
-        <span className="text-xs text-muted">(read-only; set via environment)</span>
+    <section className="rounded-lg border border-border bg-surface-1">
+      <header className="border-b border-border px-4 py-3">
+        <h2 className="text-sm font-medium text-ink-0">Settings</h2>
+        <p className="text-xs text-muted">
+          Control how often backups run and how many to keep. Changes
+          apply the moment you click Save — no restart needed.
+        </p>
       </header>
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
-        <ConfigRow
-          label="Archive directory"
-          value={<code className="font-mono">{config.backupDir}</code>}
-          hint="BACKUP_DIR"
-        />
-        <ConfigRow
-          label="Schedule"
-          value={
-            config.scheduleDisabled ? (
-              <span className="text-danger">Disabled</span>
-            ) : (
-              <code className="font-mono">{config.scheduleCron}</code>
-            )
-          }
-          hint="BACKUP_SCHEDULE_CRON"
-        />
-        <ConfigRow
-          label="Retention"
-          value={<>{config.retentionCount} successful</>}
-          hint="BACKUP_RETENTION_COUNT"
-        />
-        <ConfigRow
-          label="pg_dump"
-          value={
-            config.pgDumpMode === 'docker' ? (
+
+      <div className="space-y-5 px-4 py-4">
+        {/* Schedule block. Mode picker drives which secondary fields show. */}
+        <fieldset>
+          <legend className="mb-1 text-xs font-medium text-ink-0">
+            Backup schedule
+          </legend>
+          <p className="mb-2 text-[11px] text-muted">
+            How often the portal automatically takes a backup. You can
+            also use "Run now" below any time to take one on demand.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={draft.scheduleMode}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  scheduleMode: e.target.value as BackupConfig['scheduleMode'],
+                })
+              }
+              className="rounded border border-border bg-surface-0 px-2 py-1 text-sm"
+            >
+              <option value="off">Off (never automatically)</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+              <option value="monthly">Every month</option>
+              <option value="custom">Custom schedule</option>
+            </select>
+
+            {draft.scheduleMode === 'weekly' ? (
               <>
-                docker exec{' '}
-                <code className="font-mono">{config.pgDumpDockerContainer}</code>
+                <span className="text-xs text-muted">on</span>
+                <select
+                  value={draft.scheduleDayOfWeek ?? 0}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      scheduleDayOfWeek: Number(e.target.value),
+                    })
+                  }
+                  className="rounded border border-border bg-surface-0 px-2 py-1 text-sm"
+                >
+                  {[
+                    'Sunday',
+                    'Monday',
+                    'Tuesday',
+                    'Wednesday',
+                    'Thursday',
+                    'Friday',
+                    'Saturday',
+                  ].map((d, i) => (
+                    <option key={d} value={i}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
               </>
+            ) : null}
+
+            {draft.scheduleMode === 'monthly' ? (
+              <>
+                <span className="text-xs text-muted">on day</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={28}
+                  value={draft.scheduleDayOfMonth ?? 1}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      scheduleDayOfMonth: clampInt(e.target.value, 1, 28, 1),
+                    })
+                  }
+                  className="w-20 rounded border border-border bg-surface-0 px-2 py-1 text-sm"
+                />
+                <span className="text-[11px] text-muted">
+                  (1-28 so it works in every month)
+                </span>
+              </>
+            ) : null}
+
+            {draft.scheduleMode === 'daily' ||
+            draft.scheduleMode === 'weekly' ||
+            draft.scheduleMode === 'monthly' ? (
+              <>
+                <span className="text-xs text-muted">at</span>
+                <input
+                  type="time"
+                  value={`${String(draft.scheduleHour).padStart(2, '0')}:${String(
+                    draft.scheduleMinute,
+                  ).padStart(2, '0')}`}
+                  onChange={(e) => {
+                    const [h, m] = e.target.value.split(':').map(Number);
+                    setDraft({
+                      ...draft,
+                      scheduleHour: clampInt(String(h ?? 0), 0, 23, 0),
+                      scheduleMinute: clampInt(String(m ?? 0), 0, 59, 0),
+                    });
+                  }}
+                  className="rounded border border-border bg-surface-0 px-2 py-1 text-sm"
+                />
+              </>
+            ) : null}
+
+            {draft.scheduleMode === 'custom' ? (
+              <input
+                type="text"
+                value={draft.customCron ?? ''}
+                onChange={(e) =>
+                  setDraft({ ...draft, customCron: e.target.value })
+                }
+                placeholder="e.g. 0 2 * * *"
+                className="w-56 rounded border border-border bg-surface-0 px-2 py-1 font-mono text-xs"
+              />
+            ) : null}
+          </div>
+          {draft.scheduleMode === 'custom' ? (
+            <p className="mt-1 text-[11px] text-muted">
+              5-field cron expression (minute hour day-of-month month
+              day-of-week).
+            </p>
+          ) : null}
+        </fieldset>
+
+        {/* Retention. Plain number + an inline explanation. */}
+        <fieldset>
+          <legend className="mb-1 text-xs font-medium text-ink-0">
+            How many backups to keep
+          </legend>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={1000}
+              value={draft.retentionCount}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  retentionCount: clampInt(e.target.value, 1, 1000, 7),
+                })
+              }
+              className="w-24 rounded border border-border bg-surface-0 px-2 py-1 text-sm"
+            />
+            <p className="text-[11px] text-muted">
+              Older successful backups are removed once this many newer
+              ones exist. Failed runs are kept so you can diagnose them
+              and aren't counted against this number.
+            </p>
+          </div>
+        </fieldset>
+
+        {/* Advanced: archive directory. Folded away because 99% of
+            admins shouldn't have to touch it. */}
+        <div className="rounded border border-border bg-surface-0">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs text-muted hover:bg-surface-2"
+          >
+            <span className="font-medium uppercase tracking-wide">
+              Advanced
+            </span>
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
+          {advancedOpen ? (
+            <div className="space-y-3 border-t border-border px-3 py-3">
+              <div>
+                <label className="block text-xs font-medium text-ink-0">
+                  Where backups are saved
+                </label>
+                <p className="mb-1 text-[11px] text-muted">
+                  Absolute path on the portal server. Leave blank to
+                  use the deployment's default location.
+                </p>
+                <input
+                  type="text"
+                  value={draft.archiveDirectory}
+                  onChange={(e) =>
+                    setDraft({ ...draft, archiveDirectory: e.target.value })
+                  }
+                  className="w-full rounded border border-border bg-surface-0 px-2 py-1 font-mono text-xs"
+                  placeholder="e.g. D:\\gratis-gis-backups"
+                />
+                <p className="mt-1 text-[10px] text-muted">
+                  Moving this doesn't move existing backup files — any
+                  backups in the old folder stay there (but won't show
+                  in the list).
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {saveError ? (
+          <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+            <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+            {saveError}
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <>Host binary (pg_dump on PATH)</>
-            )
-          }
-          hint="BACKUP_PGDUMP_DOCKER_CONTAINER"
-        />
-        <ConfigRow
-          label="Object-storage bucket"
-          value={<code className="font-mono">{config.minioBucket}</code>}
-          hint="MINIO_BUCKET"
-        />
-      </dl>
+              <Save className="h-4 w-4" />
+            )}
+            {saving ? 'Saving…' : 'Save settings'}
+          </button>
+          {saved ? (
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Saved
+            </span>
+          ) : dirty ? (
+            <span className="text-xs text-muted">Unsaved changes</span>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }
 
-function ConfigRow({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: React.ReactNode;
-  hint: string;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <dt className="text-[10px] uppercase tracking-wide text-muted">
-        {label}
-      </dt>
-      <dd className="text-ink-0">{value}</dd>
-      <dd className="text-[10px] text-muted">{hint}</dd>
-    </div>
-  );
+function clampInt(raw: string, lo: number, hi: number, fallback: number): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
 }
+
+// ---------------------------------------------------------------
+// Per-row history
+// ---------------------------------------------------------------
 
 function RunRow({
   run,
@@ -308,6 +555,7 @@ function RunRow({
   const finished = run.finishedAt ? new Date(run.finishedAt) : null;
   const durationMs = finished ? finished.getTime() - started.getTime() : null;
   const size = run.sizeBytes ? formatBytes(BigInt(run.sizeBytes)) : '—';
+  const triggeredBy = run.trigger === 'scheduled' ? 'Scheduled' : 'Manual';
 
   return (
     <tr className="hover:bg-surface-2/50">
@@ -317,18 +565,11 @@ function RunRow({
       <td className="px-4 py-2 text-muted">
         {durationMs === null ? '—' : formatDuration(durationMs)}
       </td>
-      <td className="px-4 py-2">
-        <span className="inline-flex items-center rounded bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-          {run.trigger}
-        </span>
-      </td>
+      <td className="px-4 py-2 text-muted">{triggeredBy}</td>
       <td className="px-4 py-2">
         <StatusBadge status={run.status} error={run.error} />
       </td>
       <td className="px-4 py-2 text-muted">{size}</td>
-      <td className="px-4 py-2 font-mono text-[11px] text-muted">
-        {run.filename ?? '—'}
-      </td>
       <td className="px-4 py-2 text-right">
         {confirming ? (
           <span className="inline-flex items-center gap-1">
@@ -351,7 +592,7 @@ function RunRow({
               ) : (
                 <Trash2 className="h-3 w-3" />
               )}
-              Delete file
+              Delete
             </button>
           </span>
         ) : (
@@ -392,14 +633,14 @@ function StatusBadge({
       return (
         <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
           <Loader2 className="h-3 w-3 animate-spin" />
-          Running
+          In progress
         </span>
       );
     case 'succeeded':
       return (
         <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800">
           <CheckCircle2 className="h-3 w-3" />
-          Succeeded
+          Success
         </span>
       );
     case 'failed':
@@ -415,46 +656,45 @@ function StatusBadge({
   }
 }
 
-function LimitationsCallout() {
+function WhatsIncluded() {
   return (
     <section className="rounded-lg border border-border bg-surface-0 p-4">
       <header className="mb-2 flex items-center gap-2">
         <Info className="h-3.5 w-3.5 text-muted" />
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
-          What's in a backup (and what isn't)
+          What's in a backup
         </h3>
       </header>
       <ul className="list-inside list-disc space-y-1 text-xs text-ink-1">
         <li>
-          <span className="font-medium">Included:</span> the GratisGIS
-          Postgres database (items, users, groups, shares, basemaps,
-          features, snapshots, feature attachments metadata) and every
-          object in the configured MinIO bucket (hero images,
-          thumbnails, feature attachments).
+          <span className="font-medium">All your portal content</span> —
+          maps, layers, data, forms, groups, sharing settings, basemaps,
+          branding, and the full revision history of feature data.
         </li>
         <li>
-          <span className="font-medium">Not included (yet):</span>{' '}
-          Keycloak state. The dev configuration stores Keycloak data in
-          a file inside the container (ephemeral); production deployments
-          with a JDBC Keycloak need a separate snapshot strategy.
+          <span className="font-medium">All uploaded files</span> —
+          item thumbnails, hero images, and every attachment on a
+          feature (photos, PDFs, etc.).
         </li>
         <li>
-          <span className="font-medium">Not included:</span> secrets
-          (.env, Keycloak admin password), Docker compose definitions,
-          and TLS material — these live in the deployment repo or your
-          secret store.
+          <span className="font-medium">Not included (yet):</span> user
+          accounts, which are stored in the portal's identity provider
+          and need a separate backup for now. Items keep a record of
+          their owner's id, so restoring a backup onto a fresh
+          deployment works as long as the same users are re-created.
         </li>
         <li>
-          <span className="font-medium">Restore:</span> not yet wired
-          into the admin UI. Archives are a standard{' '}
-          <code className="font-mono">.tar.gz</code> containing{' '}
-          <code className="font-mono">postgres/*.dump</code> (pg_dump
-          custom format) and{' '}
-          <code className="font-mono">minio/*</code>, so a manual
-          pg_restore + bucket sync works today; a guided restore flow is
-          tracked as a follow-up.
+          <span className="font-medium">Not included:</span> server
+          secrets, SSL material, and Docker configuration — those live
+          in your deployment repo or secret store.
         </li>
       </ul>
+      <p className="mt-3 text-[11px] text-muted">
+        Each backup is a single <code className="font-mono">.tar.gz</code>{' '}
+        file in the folder shown under Advanced settings. You can copy
+        them to external storage, object storage, or a backup service —
+        they're portable files.
+      </p>
     </section>
   );
 }

@@ -21,27 +21,52 @@ import * as tar from 'tar';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 
+export type ScheduleMode = 'off' | 'daily' | 'weekly' | 'monthly' | 'custom';
+
 /**
- * Shape returned by getConfig() — a read-only view of the environment
- * knobs that drive the backup system. The admin UI renders these as
- * informational rows (ops-level, not org-level, so they're not
- * editable from the app).
+ * User-facing config shape the admin page edits. All values are
+ * effective values — i.e. the DB row merged over the env defaults —
+ * so the UI can show what's actually running without having to
+ * know the fallback order.
  */
 export interface BackupConfig {
-  /** Absolute path of the directory where archives are written. */
-  backupDir: string;
-  /** Cron expression the scheduled run uses (default 0 2 * * *). */
-  scheduleCron: string;
+  /** Absolute path where archives are written. */
+  archiveDirectory: string;
+  /** 'off' disables the scheduler entirely. */
+  scheduleMode: ScheduleMode;
+  /** Local-time hour of day (0-23) the scheduled run fires. */
+  scheduleHour: number;
+  scheduleMinute: number;
+  /** Only meaningful when scheduleMode === 'weekly'. 0=Sun..6=Sat. */
+  scheduleDayOfWeek: number | null;
+  /** Only meaningful when scheduleMode === 'monthly'. 1-28. */
+  scheduleDayOfMonth: number | null;
+  /** Raw cron expression used when scheduleMode === 'custom'. */
+  customCron: string | null;
   /** How many successful backups to keep before the oldest drops. */
   retentionCount: number;
-  /** Human-readable description of how pg_dump is invoked. */
-  pgDumpMode: 'host' | 'docker';
-  /** Name of the docker container when pgDumpMode === 'docker'. */
-  pgDumpDockerContainer: string | null;
-  /** MinIO bucket being backed up (display-only). */
-  minioBucket: string;
-  /** True when scheduled runs are disabled (BACKUP_SCHEDULE_DISABLED). */
-  scheduleDisabled: boolean;
+  /** Display-only: a plain-English summary of the schedule. */
+  scheduleSummary: string;
+  /** Display-only: the cron expression the scheduler is actually
+   *  registered with right now, or null when mode==='off'. */
+  effectiveCron: string | null;
+}
+
+/**
+ * Patch shape accepted by updateConfig(). Each field is optional;
+ * omitted fields keep their current value. Null on archiveDirectory
+ * / retentionCount / customCron explicitly clears the DB override
+ * so the env default takes over again.
+ */
+export interface BackupConfigPatch {
+  archiveDirectory?: string | null;
+  scheduleMode?: ScheduleMode;
+  scheduleHour?: number;
+  scheduleMinute?: number;
+  scheduleDayOfWeek?: number | null;
+  scheduleDayOfMonth?: number | null;
+  customCron?: string | null;
+  retentionCount?: number | null;
 }
 
 /**
@@ -118,49 +143,275 @@ export class BackupService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // Ensure BACKUP_DIR exists at startup so a "run now" click
-    // doesn't race with a missing directory. If the operator has
-    // pointed this at a path the process can't write to, we want
-    // that failure to surface in the log before the first run.
-    const dir = this.resolveBackupDir();
+    // Ensure the archive directory exists at startup so a "Run now"
+    // click doesn't race with a missing directory. If the operator
+    // has pointed this at a path the process can't write to, we
+    // want that failure to surface in the log before the first run.
+    const config = await this.getConfig();
     try {
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(config.archiveDirectory, { recursive: true });
     } catch (e) {
       this.log.error(
-        `BACKUP_DIR ${dir} is not creatable; backups will fail until this is fixed: ${(e as Error).message}`,
+        `Archive directory ${config.archiveDirectory} is not creatable; backups will fail until this is fixed: ${(e as Error).message}`,
       );
     }
   }
 
   // ---------------------------------------------------------------
-  // Config
+  // Config — DB row merged over env defaults
   // ---------------------------------------------------------------
 
-  getConfig(): BackupConfig {
-    const dockerContainer =
-      this.cfg.get<string>('BACKUP_PGDUMP_DOCKER_CONTAINER') || null;
+  /**
+   * Listener hook the cron service registers so it can re-register
+   * its CronJob whenever the schedule changes. Keeps BackupService
+   * from having to know about the scheduler directly.
+   */
+  private configListeners: Array<(cfg: BackupConfig) => void | Promise<void>> =
+    [];
+  onConfigChange(fn: (cfg: BackupConfig) => void | Promise<void>) {
+    this.configListeners.push(fn);
+  }
+
+  /**
+   * Fetch the effective config. Reads the singleton backup_config
+   * row (creating it on first call) and merges it over env defaults.
+   * Also computes display-only fields (plain-English summary,
+   * effective cron) so the admin UI doesn't have to reproduce the
+   * mapping logic.
+   */
+  async getConfig(): Promise<BackupConfig> {
+    const row = await this.ensureConfigRow();
+    const mode = (row.scheduleMode as ScheduleMode) ?? 'daily';
+    const hour = row.scheduleHour;
+    const minute = row.scheduleMinute;
+    const dow = row.scheduleDayOfWeek;
+    const dom = row.scheduleDayOfMonth;
+    const customCron = row.customCron;
+    const effectiveCron = this.buildCron({
+      mode,
+      hour,
+      minute,
+      dayOfWeek: dow,
+      dayOfMonth: dom,
+      customCron,
+    });
     return {
-      backupDir: this.resolveBackupDir(),
-      scheduleCron: this.cfg.get<string>('BACKUP_SCHEDULE_CRON', '0 2 * * *'),
-      retentionCount: this.resolveRetentionCount(),
-      pgDumpMode: dockerContainer ? 'docker' : 'host',
-      pgDumpDockerContainer: dockerContainer,
-      minioBucket: this.bucket,
-      scheduleDisabled:
-        (this.cfg.get<string>('BACKUP_SCHEDULE_DISABLED') || '').toLowerCase() ===
-        'true',
+      archiveDirectory:
+        row.archiveDirectory && row.archiveDirectory.length > 0
+          ? row.archiveDirectory
+          : this.envBackupDir(),
+      scheduleMode: mode,
+      scheduleHour: hour,
+      scheduleMinute: minute,
+      scheduleDayOfWeek: dow,
+      scheduleDayOfMonth: dom,
+      customCron,
+      retentionCount:
+        row.retentionCount !== null && row.retentionCount > 0
+          ? row.retentionCount
+          : this.envRetentionCount(),
+      scheduleSummary: this.summarizeSchedule({
+        mode,
+        hour,
+        minute,
+        dayOfWeek: dow,
+        dayOfMonth: dom,
+        customCron,
+      }),
+      effectiveCron,
     };
   }
 
-  private resolveBackupDir(): string {
-    // BACKUP_DIR is absolute. Default lives inside the repo so dev
-    // setups "just work"; production should point it at an on-host
-    // volume outside the container filesystem.
+  /**
+   * Apply an admin patch. Writes the changed columns to the
+   * singleton row, re-ensures the archive directory exists if the
+   * admin moved it, and notifies any registered listeners (i.e. the
+   * cron service) so the scheduler can pick up a new expression
+   * without a restart.
+   */
+  async updateConfig(patch: BackupConfigPatch, updatedBy: string | null) {
+    // Validate before we touch the DB: nothing worse than committing
+    // half a change and then bailing.
+    if (patch.scheduleMode && !this.isScheduleMode(patch.scheduleMode)) {
+      throw new Error(`Unknown scheduleMode: ${patch.scheduleMode}`);
+    }
+    if (patch.scheduleHour !== undefined) {
+      this.requireRange('scheduleHour', patch.scheduleHour, 0, 23);
+    }
+    if (patch.scheduleMinute !== undefined) {
+      this.requireRange('scheduleMinute', patch.scheduleMinute, 0, 59);
+    }
+    if (patch.scheduleDayOfWeek !== undefined && patch.scheduleDayOfWeek !== null) {
+      this.requireRange('scheduleDayOfWeek', patch.scheduleDayOfWeek, 0, 6);
+    }
+    if (patch.scheduleDayOfMonth !== undefined && patch.scheduleDayOfMonth !== null) {
+      this.requireRange('scheduleDayOfMonth', patch.scheduleDayOfMonth, 1, 28);
+    }
+    if (patch.retentionCount !== undefined && patch.retentionCount !== null) {
+      this.requireRange('retentionCount', patch.retentionCount, 1, 1000);
+    }
+    if (patch.customCron !== undefined && patch.customCron !== null) {
+      // Bare minimum shape check; the cron library is authoritative.
+      // We just want to reject obviously-wrong input before saving.
+      if (!/^(\S+\s+){4}\S+$/.test(patch.customCron.trim())) {
+        throw new Error(
+          'Custom schedule must be a 5-field cron expression (e.g. "0 2 * * *")',
+        );
+      }
+    }
+
+    const row = await this.ensureConfigRow();
+    const updated = await this.prisma.backupConfig.update({
+      where: { id: row.id },
+      data: {
+        ...(patch.archiveDirectory !== undefined && {
+          archiveDirectory:
+            typeof patch.archiveDirectory === 'string'
+              ? patch.archiveDirectory.trim() || null
+              : null,
+        }),
+        ...(patch.scheduleMode !== undefined && {
+          scheduleMode: patch.scheduleMode,
+        }),
+        ...(patch.scheduleHour !== undefined && {
+          scheduleHour: patch.scheduleHour,
+        }),
+        ...(patch.scheduleMinute !== undefined && {
+          scheduleMinute: patch.scheduleMinute,
+        }),
+        ...(patch.scheduleDayOfWeek !== undefined && {
+          scheduleDayOfWeek: patch.scheduleDayOfWeek,
+        }),
+        ...(patch.scheduleDayOfMonth !== undefined && {
+          scheduleDayOfMonth: patch.scheduleDayOfMonth,
+        }),
+        ...(patch.customCron !== undefined && {
+          customCron: patch.customCron,
+        }),
+        ...(patch.retentionCount !== undefined && {
+          retentionCount: patch.retentionCount,
+        }),
+        ...(updatedBy ? { updatedBy } : {}),
+      },
+    });
+    // Make sure the directory actually exists so the very next run
+    // doesn't need to think about it. Failure here is not fatal —
+    // the run-time attempt will surface the real error if the
+    // operator typed a path the process can't write to.
+    const dir =
+      updated.archiveDirectory && updated.archiveDirectory.length > 0
+        ? updated.archiveDirectory
+        : this.envBackupDir();
+    try {
+      await fs.mkdir(dir, { recursive: true });
+    } catch (e) {
+      this.log.warn(
+        `Admin set archiveDirectory to ${dir}, but it could not be created: ${(e as Error).message}`,
+      );
+    }
+    const effective = await this.getConfig();
+    for (const fn of this.configListeners) {
+      try {
+        await fn(effective);
+      } catch (e) {
+        this.log.warn(
+          `Config-change listener threw: ${(e as Error).message}`,
+        );
+      }
+    }
+    return effective;
+  }
+
+  /**
+   * Upsert the singleton backup_config row, returning its current
+   * state. Keeping all callers routed through here means only one
+   * place has to know that this table has at most one row.
+   */
+  private async ensureConfigRow() {
+    const existing = await this.prisma.backupConfig.findFirst();
+    if (existing) return existing;
+    return this.prisma.backupConfig.create({ data: {} });
+  }
+
+  /**
+   * Compose a cron expression from the structured schedule fields.
+   * Returns null for mode==='off' (caller should unregister the job).
+   */
+  private buildCron(s: {
+    mode: ScheduleMode;
+    hour: number;
+    minute: number;
+    dayOfWeek: number | null;
+    dayOfMonth: number | null;
+    customCron: string | null;
+  }): string | null {
+    switch (s.mode) {
+      case 'off':
+        return null;
+      case 'daily':
+        return `${s.minute} ${s.hour} * * *`;
+      case 'weekly':
+        return `${s.minute} ${s.hour} * * ${s.dayOfWeek ?? 0}`;
+      case 'monthly':
+        return `${s.minute} ${s.hour} ${s.dayOfMonth ?? 1} * *`;
+      case 'custom':
+        return s.customCron?.trim() || null;
+    }
+  }
+
+  /** Human-readable version of the schedule for the admin UI. */
+  private summarizeSchedule(s: {
+    mode: ScheduleMode;
+    hour: number;
+    minute: number;
+    dayOfWeek: number | null;
+    dayOfMonth: number | null;
+    customCron: string | null;
+  }): string {
+    const time = `${String(s.hour).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`;
+    const days = [
+      'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+    ];
+    switch (s.mode) {
+      case 'off':
+        return 'Automatic backups are turned off';
+      case 'daily':
+        return `Every day at ${time}`;
+      case 'weekly': {
+        const day = days[s.dayOfWeek ?? 0] ?? 'Sunday';
+        return `Every ${day} at ${time}`;
+      }
+      case 'monthly':
+        return `On day ${s.dayOfMonth ?? 1} of each month at ${time}`;
+      case 'custom':
+        return s.customCron
+          ? `Custom schedule (${s.customCron})`
+          : 'Custom schedule (not set)';
+    }
+  }
+
+  private isScheduleMode(v: string): v is ScheduleMode {
+    return ['off', 'daily', 'weekly', 'monthly', 'custom'].includes(v);
+  }
+
+  private requireRange(field: string, v: number, lo: number, hi: number) {
+    if (!Number.isInteger(v) || v < lo || v > hi) {
+      throw new Error(`${field} must be an integer between ${lo} and ${hi}`);
+    }
+  }
+
+  private envBackupDir(): string {
     const raw = this.cfg.get<string>('BACKUP_DIR', './backups');
     return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
   }
 
-  private resolveRetentionCount(): number {
+  private envRetentionCount(): number {
     const raw = Number(this.cfg.get<string>('BACKUP_RETENTION_COUNT', '7'));
     return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 7;
   }
@@ -210,7 +461,7 @@ export class BackupService implements OnModuleInit {
     });
     this.log.log(`Backup ${run.id} started (${trigger})`);
 
-    const backupDir = this.resolveBackupDir();
+    const { archiveDirectory: backupDir } = await this.getConfig();
     const timestamp = run.startedAt
       .toISOString()
       .replace(/[:.]/g, '-')
@@ -338,7 +589,8 @@ export class BackupService implements OnModuleInit {
     if (run.status !== 'succeeded' || !run.filename) {
       throw new NotFoundException('Backup archive is not available');
     }
-    const p = path.join(this.resolveBackupDir(), run.filename);
+    const { archiveDirectory } = await this.getConfig();
+    const p = path.join(archiveDirectory, run.filename);
     try {
       await fs.access(p);
     } catch {
@@ -358,7 +610,8 @@ export class BackupService implements OnModuleInit {
   async deleteRun(runId: string) {
     const run = await this.getRun(runId);
     if (run.filename) {
-      const p = path.join(this.resolveBackupDir(), run.filename);
+      const { archiveDirectory } = await this.getConfig();
+      const p = path.join(archiveDirectory, run.filename);
       await fs.rm(p, { force: true });
     }
     await this.prisma.backupRun.delete({ where: { id: run.id } });
@@ -372,7 +625,7 @@ export class BackupService implements OnModuleInit {
    * on disk. Called by the scheduler after a successful run.
    */
   async enforceRetention(): Promise<{ removed: number }> {
-    const cap = this.resolveRetentionCount();
+    const cap = (await this.getConfig()).retentionCount;
     const successful = await this.prisma.backupRun.findMany({
       where: { status: 'succeeded' },
       orderBy: { startedAt: 'desc' },

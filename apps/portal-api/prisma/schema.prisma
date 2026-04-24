@@ -234,6 +234,48 @@ enum BackupStatus {
   failed
 }
 
+/// Singleton row holding admin-editable backup settings. Env vars
+/// (BACKUP_DIR, BACKUP_SCHEDULE_CRON, BACKUP_RETENTION_COUNT) stay
+/// as the defaults on first boot; once an admin saves the config
+/// form the DB row wins.
+///
+/// Schedule is stored in structured form (mode + time + day) rather
+/// than as a raw cron expression so the UI can render "Weekly on
+/// Monday at 02:00" without having to parse cron. A 'custom' mode
+/// keeps `customCron` as an escape hatch for operators who want an
+/// expression our presets don't cover.
+model BackupConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Where archives land. Absolute path; null = fall back to env.
+  archiveDirectory String? @map("archive_directory")
+
+  /// 'off' | 'daily' | 'weekly' | 'monthly' | 'custom'
+  scheduleMode String @default("daily") @map("schedule_mode")
+
+  /// Time of day in the API host's local timezone. 0-23 / 0-59.
+  scheduleHour   Int @default(2) @map("schedule_hour")
+  scheduleMinute Int @default(0) @map("schedule_minute")
+
+  /// 0 (Sunday) through 6 (Saturday); used when mode=weekly.
+  scheduleDayOfWeek Int? @map("schedule_day_of_week")
+
+  /// 1 through 28; capped at 28 so the cron never silently skips
+  /// months (31st → no-op in February).
+  scheduleDayOfMonth Int? @map("schedule_day_of_month")
+
+  /// Raw cron expression used when scheduleMode === 'custom'.
+  customCron String? @map("custom_cron")
+
+  /// How many successful backups to keep. Null = fall back to env.
+  retentionCount Int? @map("retention_count")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  @@map("backup_config")
+}
+
 model BackupRun {
   id         String       @id @default(uuid()) @db.Uuid
   startedAt  DateTime     @default(now()) @map("started_at")
