@@ -14,13 +14,27 @@ export default async function AdminBackupPage() {
   // Client-side admin guard; matches the pattern used on /admin/branding.
   // The API enforces via AdminGuard regardless; this just avoids a
   // raw 403 landing page for non-admins who hit the URL by accident.
-  let me: { orgRole: string };
+  let me: { orgRole: string; orgId: string };
   try {
-    me = await apiFetch<{ orgRole: string }>('/api/users/me');
+    me = await apiFetch<{ orgRole: string; orgId: string }>('/api/users/me');
   } catch {
     redirect('/items');
   }
   if (me.orgRole !== 'admin') redirect('/items');
+
+  // Slug is the confirmation token on the restore dialog; fetched
+  // server-side so the client doesn't need an extra round trip just
+  // to render the confirmation prompt.
+  let orgSlug = '';
+  try {
+    const org = await apiFetch<{ slug: string }>(
+      `/api/admin/branding`,
+    );
+    orgSlug = org.slug;
+  } catch {
+    // Swallow; the restore dialog will still refuse to submit when
+    // the empty slug doesn't match the API's own check.
+  }
 
   // Load config + runs in parallel. If either fails we still render
   // the page with an error banner — operators need to be able to see
@@ -72,7 +86,13 @@ export default async function AdminBackupPage() {
         </div>
       ) : null}
 
-      {config ? <BackupView initialConfig={config} initialRuns={runs} /> : null}
+      {config ? (
+        <BackupView
+          initialConfig={config}
+          initialRuns={runs}
+          orgSlug={orgSlug}
+        />
+      ) : null}
     </div>
   );
 }

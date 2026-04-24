@@ -10,9 +10,12 @@ import {
   Loader2,
   PlayCircle,
   Save,
+  ShieldAlert,
   Trash2,
   XCircle,
 } from 'lucide-react';
+
+import { RestoreDialog } from './restore-dialog';
 
 /**
  * Effective config as returned by /admin/backup/config. Matches the
@@ -47,15 +50,17 @@ export interface BackupRun {
 interface Props {
   initialConfig: BackupConfig;
   initialRuns: BackupRun[];
+  orgSlug: string;
 }
 
-export function BackupView({ initialConfig, initialRuns }: Props) {
+export function BackupView({ initialConfig, initialRuns, orgSlug }: Props) {
   const [config, setConfig] = useState<BackupConfig>(initialConfig);
   const [runs, setRuns] = useState<BackupRun[]>(initialRuns);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [restoringRun, setRestoringRun] = useState<BackupRun | null>(null);
 
   const reloadRuns = useCallback(async () => {
     try {
@@ -202,6 +207,7 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
                   onConfirmDelete={() => setConfirmingDelete(r.id)}
                   onCancelDelete={() => setConfirmingDelete(null)}
                   onDelete={() => handleDelete(r.id)}
+                  onRestore={() => setRestoringRun(r)}
                 />
               ))}
             </tbody>
@@ -210,6 +216,14 @@ export function BackupView({ initialConfig, initialRuns }: Props) {
       </section>
 
       <WhatsIncluded />
+      {restoringRun ? (
+        <RestoreDialog
+          runId={restoringRun.id}
+          filename={restoringRun.filename ?? ''}
+          orgSlug={orgSlug}
+          onClose={() => setRestoringRun(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -543,6 +557,7 @@ function RunRow({
   onConfirmDelete,
   onCancelDelete,
   onDelete,
+  onRestore,
 }: {
   run: BackupRun;
   confirming: boolean;
@@ -550,6 +565,7 @@ function RunRow({
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
   onDelete: () => void;
+  onRestore: () => void;
 }) {
   const started = new Date(run.startedAt);
   const finished = run.finishedAt ? new Date(run.finishedAt) : null;
@@ -598,13 +614,24 @@ function RunRow({
         ) : (
           <span className="inline-flex items-center gap-1">
             {run.status === 'succeeded' && run.filename ? (
-              <a
-                href={`/api/portal/admin/backup/runs/${run.id}/download`}
-                className="inline-flex items-center gap-1 rounded border border-border bg-surface-1 px-2 py-0.5 text-[11px] text-ink-1 hover:bg-surface-2"
-              >
-                <Download className="h-3 w-3" />
-                Download
-              </a>
+              <>
+                <a
+                  href={`/api/portal/admin/backup/runs/${run.id}/download`}
+                  className="inline-flex items-center gap-1 rounded border border-border bg-surface-1 px-2 py-0.5 text-[11px] text-ink-1 hover:bg-surface-2"
+                >
+                  <Download className="h-3 w-3" />
+                  Download
+                </a>
+                <button
+                  type="button"
+                  onClick={onRestore}
+                  className="inline-flex items-center gap-1 rounded border border-danger/40 bg-danger/5 px-2 py-0.5 text-[11px] font-medium text-danger hover:bg-danger/10"
+                  title="Restore the portal from this archive (destructive)"
+                >
+                  <ShieldAlert className="h-3 w-3" />
+                  Restore
+                </button>
+              </>
             ) : null}
             <button
               type="button"

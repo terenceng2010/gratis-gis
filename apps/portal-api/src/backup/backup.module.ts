@@ -1,23 +1,38 @@
-import { Module } from '@nestjs/common';
+import {
+  MiddlewareConsumer,
+  Module,
+  NestModule,
+} from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 
 import { AdminGuard } from '../admin/admin.guard.js';
 import { BackupController } from './backup.controller.js';
 import { BackupCronService } from './backup-cron.service.js';
+import { BackupRestoreService } from './backup-restore.service.js';
 import { BackupService } from './backup.service.js';
+import { MaintenanceModeMiddleware } from './maintenance-mode.middleware.js';
+import { MaintenanceModeService } from './maintenance-mode.service.js';
 
 /**
- * Bundles the backup controller, the core BackupService, and the
- * cron registrar. ScheduleModule is forRoot'd once elsewhere
- * (MaintenanceModule) but NestJS tolerates re-forRoot in another
- * module tree — the underlying scheduler is a singleton — so we do
- * it here too to keep BackupModule self-contained and independently
- * movable.
+ * Bundles backup creation + scheduled run registration + restore.
+ * The maintenance-mode middleware is applied globally (forRoutes
+ * '*') so every request in the system is gated, not just the ones
+ * that happen to land on a BackupModule controller.
  */
 @Module({
   imports: [ScheduleModule.forRoot()],
   controllers: [BackupController],
-  providers: [BackupService, BackupCronService, AdminGuard],
-  exports: [BackupService],
+  providers: [
+    BackupService,
+    BackupCronService,
+    BackupRestoreService,
+    MaintenanceModeService,
+    AdminGuard,
+  ],
+  exports: [BackupService, MaintenanceModeService],
 })
-export class BackupModule {}
+export class BackupModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(MaintenanceModeMiddleware).forRoutes('*');
+  }
+}
