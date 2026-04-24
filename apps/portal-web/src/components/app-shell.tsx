@@ -6,6 +6,7 @@ import {
   Layers3,
   LayoutGrid,
   Map as MapIcon,
+  Paintbrush,
   Users,
   Bell,
   Search,
@@ -88,6 +89,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
                 icon={<Layers3 className="h-4 w-4" />}
               >
                 Basemaps
+              </NavLink>
+              <NavLink
+                href="/admin/branding"
+                icon={<Paintbrush className="h-4 w-4" />}
+              >
+                Landing page
               </NavLink>
             </>
           ) : null}

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AdminUsersController } from './admin-users.controller.js';
+import { AdminBrandingController } from './admin-branding.controller.js';
 import { AdminGuard } from './admin.guard.js';
 import { KeycloakAdminService } from './keycloak-admin.service.js';
 
@@ -15,7 +16,7 @@ import { KeycloakAdminService } from './keycloak-admin.service.js';
  * running for operators who haven't enabled user management yet.
  */
 @Module({
-  controllers: [AdminUsersController],
+  controllers: [AdminUsersController, AdminBrandingController],
   providers: [KeycloakAdminService, AdminGuard],
   exports: [KeycloakAdminService],
 })
