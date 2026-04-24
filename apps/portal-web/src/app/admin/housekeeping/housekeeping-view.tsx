@@ -383,7 +383,7 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<Database className="h-4 w-4" />}
         title="Largest items by stored size"
         empty="No items yet."
-        caption="Bytes of the serialised item.data blob. A proxy, not exact — feature-service rows in PostGIS and MinIO attachments are separate. Rough signal for 'which item is heaviest in the DB.'"
+        caption="Rough size of the item's settings and metadata. Heavier items are the ones most likely to be slow to load or copy around. Actual map tiles, feature rows, and uploaded files live in separate storage and aren't counted here."
       >
         {largeItems.length === 0 ? null : (
           <LargeItemsTable rows={largeItems} />

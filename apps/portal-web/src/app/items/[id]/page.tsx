@@ -30,7 +30,7 @@ import {
   DEFAULT_MAP,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
-import { ItemTypeBadge } from '@/lib/item-type-icon';
+import { ItemTypeBadge, getItemTypeLabel } from '@/lib/item-type-icon';
 import { apiFetch } from '@/lib/api';
 import { SharingPanel } from './sharing-panel';
 import { ItemDependencies } from './item-dependencies';
@@ -161,9 +161,9 @@ export default async function ItemDetailPage({ params }: Props) {
               {item.title}
             </h1>
             <span
-              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${badgeClass}`}
+              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium tracking-wide ${badgeClass}`}
             >
-              {item.type}
+              {getItemTypeLabel(item.type)}
             </span>
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">
               {accessIcon[item.access]}

@@ -68,13 +68,13 @@ interface TypeOption {
 const TYPE_OPTIONS: TypeOption[] = [
   {
     value: 'map',
-    label: 'Web map',
+    label: 'Map',
     desc: 'A basemap with overlay layers and styling.',
     Icon: MapIcon,
   },
   {
     value: 'data_layer',
-    label: 'Feature service',
+    label: 'Data layer',
     desc: 'A shareable vector layer backed by PostGIS.',
     Icon: Layers,
   },
@@ -92,7 +92,7 @@ const TYPE_OPTIONS: TypeOption[] = [
   },
   {
     value: 'geo_boundary',
-    label: 'Geo boundary',
+    label: 'Boundary',
     desc: 'A named region (polygon) reused across shares, maps, and filters.',
     Icon: MapIcon,
   },
@@ -231,7 +231,7 @@ export function NewItemWizard() {
       if (controller.signal.aborted) return;
       setArcgisProbeResult(desc);
       // Auto-fill title/description from the service only if the user
-      // hasn't typed anything of their own Ã¢â‚¬â€ never clobber user input.
+      // hasn't typed anything of their own ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never clobber user input.
       if (!userEditedTitleRef.current && !title.trim() && desc.name) {
         setTitle(desc.name);
       }
@@ -288,7 +288,7 @@ export function NewItemWizard() {
         );
         return;
       }
-      // Default layer must be one of the selected layers Ã¢â‚¬â€ otherwise
+      // Default layer must be one of the selected layers ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise
       // a map consuming this item would land on a layer the item
       // claims not to own.
       const effectiveDefault =
@@ -322,7 +322,7 @@ export function NewItemWizard() {
       data = DEFAULT_MAP;
     } else if (type === 'data_layer') {
       // Gentle validation: require at least one layer, each labeled.
-      // Anything beyond that is advisory Ã¢â‚¬â€ a user may legitimately
+      // Anything beyond that is advisory ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a user may legitimately
       // want an empty layer to start and populate later.
       const missing = featureServiceData.layers.find(
         (l) => !l.label.trim() || !l.name.trim(),
@@ -333,7 +333,7 @@ export function NewItemWizard() {
         );
         return;
       }
-      // Field name uniqueness within a layer Ã¢â‚¬â€ PostGIS won't let two
+      // Field name uniqueness within a layer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PostGIS won't let two
       // columns share a name, so catch it here before the server
       // has to reject the create.
       for (const layer of featureServiceData.layers) {
@@ -385,11 +385,11 @@ export function NewItemWizard() {
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         setError(
-          `Create failed: ${res.status}${body ? ` Ã¢â‚¬â€ ${body}` : ''}`,
+          `Create failed: ${res.status}${body ? ` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${body}` : ''}`,
         );
         return;
       }
-      // Parse defensively Ã¢â‚¬â€ a missing / malformed body used to fall
+      // Parse defensively ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a missing / malformed body used to fall
       // through silently and leave the user stranded on the create
       // page with no redirect and no error.
       let saved: Item | null = null;
@@ -405,7 +405,7 @@ export function NewItemWizard() {
         const typeLabel =
           TYPE_OPTIONS.find((o) => o.value === type)?.label ?? 'Item';
         setSuccessMsg(
-          `${typeLabel} created. Redirecting to your itemsÃ¢â‚¬Â¦`,
+          `${typeLabel} created. Redirecting to your itemsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦`,
         );
         startTransition(() => router.push('/items'));
         return;
@@ -416,7 +416,7 @@ export function NewItemWizard() {
       const typeLabel =
         TYPE_OPTIONS.find((o) => o.value === type)?.label ?? 'Item';
       setSuccessMsg(
-        `${typeLabel} "${saved.title}" created. Opening it nowÃ¢â‚¬Â¦`,
+        `${typeLabel} "${saved.title}" created. Opening it nowÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦`,
       );
       // data_layer still wants the ingest panel front and centre.
       // arcgis_service no longer needs #configure-arcgis because we baked
@@ -424,7 +424,7 @@ export function NewItemWizard() {
       const anchor = type === 'data_layer' ? '#add-data' : '';
       startTransition(() => router.push(`/items/${saved!.id}${anchor}`));
     } catch (err) {
-      // Network failure or thrown error inside fetch Ã¢â‚¬â€ surface it
+      // Network failure or thrown error inside fetch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â surface it
       // rather than leaving the user staring at a silent form.
       console.error('Create request failed:', err);
       setError(
@@ -687,7 +687,7 @@ export function NewItemWizard() {
           ) : (
             <Sparkles className="h-4 w-4" />
           )}
-          {successMsg !== null ? 'RedirectingÃ¢â‚¬Â¦' : 'Create item'}
+          {successMsg !== null ? 'RedirectingÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦' : 'Create item'}
         </button>
       </div>
     </div>
@@ -806,12 +806,12 @@ function ArcgisConfigSection({
               </p>
               <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted">
                 <span>{probeResult.serviceType}</span>
-                <span>Ã¢â‚¬Â¢</span>
+                <span>ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                 <span>
                   {probeResult.layers.length}{' '}
                   {probeResult.layers.length === 1 ? 'layer' : 'layers'}
                 </span>
-                <span>Ã¢â‚¬Â¢</span>
+                <span>ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢</span>
                 <a
                   href={`${probeResult.url}?f=html`}
                   target="_blank"
@@ -938,7 +938,7 @@ function ArcgisConfigSection({
         </div>
       ) : (
         <p className="text-[11px] text-muted">
-          Probe first Ã¢â‚¬â€ the Create button stays disabled-looking until the
+          Probe first ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the Create button stays disabled-looking until the
           service is read.
         </p>
       )}

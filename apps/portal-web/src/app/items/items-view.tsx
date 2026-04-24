@@ -66,8 +66,8 @@ const SORT_LABELS: Record<SortBy, string> = {
 };
 
 const TYPE_LABELS: Record<ItemType, string> = {
-  map: 'Web map',
-  data_layer: 'Feature service',
+  map: 'Map',
+  data_layer: 'Data layer',
   arcgis_service: 'ArcGIS service',
   form: 'Form',
   form_submission_collection: 'Form submissions',
@@ -80,7 +80,7 @@ const TYPE_LABELS: Record<ItemType, string> = {
   tool: 'Tool',
   widget_package: 'Widget package',
   pick_list: 'Pick list',
-  geo_boundary: 'Geo boundary',
+  geo_boundary: 'Boundary',
 };
 
 const ACCESS_LABELS: Record<string, string> = {

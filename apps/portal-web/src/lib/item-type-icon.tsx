@@ -46,6 +46,36 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
   geo_boundary: MapPin,
 };
 
+/**
+ * Human-readable label for every item type. Single source of truth
+ * so the type badge on the detail page, filter chips on the items
+ * list, wizard tile heading, and create-form dropdown all say the
+ * same thing. Anywhere the raw enum value would otherwise leak into
+ * the UI ("data_layer" as uppercase tracking-wide text) should read
+ * from here instead.
+ */
+const ITEM_TYPE_LABELS: Record<ItemType, string> = {
+  map: 'Map',
+  data_layer: 'Data layer',
+  arcgis_service: 'ArcGIS service',
+  form: 'Form',
+  form_submission_collection: 'Form submissions',
+  web_app: 'Web app',
+  report_template: 'Report template',
+  dashboard: 'Dashboard',
+  file: 'File',
+  layer_package: 'Layer package',
+  notebook: 'Notebook',
+  tool: 'Tool',
+  widget_package: 'Widget package',
+  pick_list: 'Pick list',
+  geo_boundary: 'Boundary',
+};
+
+export function getItemTypeLabel(t: ItemType): string {
+  return ITEM_TYPE_LABELS[t] ?? t;
+}
+
 /** Tailwind color classes used when rendering the icon OUTSIDE a
  *  colored tile (e.g. on a plain surface alongside the item title).
  *  Mirrors the tile palette in @gratis-gis/ui so the two contexts
