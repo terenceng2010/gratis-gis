@@ -90,7 +90,7 @@ export function UserMenu({ seed, displayName, orgName, avatarUrl }: Props) {
             </Link>
             <Link
               role="menuitem"
-              href="/api/auth/signout"
+              href="/api/auth/federated-logout"
               className="flex items-center gap-2 px-3 py-2 text-sm text-danger hover:bg-danger/5"
             >
               <LogOut className="h-4 w-4" />

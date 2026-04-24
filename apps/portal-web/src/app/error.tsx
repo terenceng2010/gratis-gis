@@ -48,7 +48,7 @@ export default function RouteError({
             Try again
           </button>
           <a
-            href="/api/auth/signout"
+            href="/api/auth/federated-logout"
             className="inline-flex h-9 items-center rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 shadow-card hover:bg-surface-2"
           >
             Sign out

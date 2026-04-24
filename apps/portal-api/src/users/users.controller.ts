@@ -1,15 +1,33 @@
 import { Body, Controller, Get, Patch, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { KeycloakAdminService } from '../admin/keycloak-admin.service.js';
 
 class UpdateMeDto {
   // Null clears a previously-set avatar back to the initial badge.
   @IsOptional() @IsString() @MaxLength(2048)
   avatarUrl?: string | null;
+
+  // Identity-adjacent fields that need to go back to Keycloak. All
+  // optional — the PATCH is a sparse update, absent keys are left
+  // untouched. Username is intentionally NOT editable here; it's the
+  // stable handle other tables key on.
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(60)
+  firstName?: string;
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(60)
+  lastName?: string;
+  @IsOptional() @IsEmail() @MaxLength(200)
+  email?: string;
 }
 
 /**
@@ -23,7 +41,10 @@ class UpdateMeDto {
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly kc: KeycloakAdminService,
+  ) {}
 
   @Get('me')
   async me(@CurrentUser() user: AuthUser) {
@@ -37,9 +58,26 @@ export class UsersController {
         select: { name: true, slug: true },
       }),
     ]);
+    // Pull firstName/lastName from Keycloak so the /profile form can
+    // prepopulate edit inputs. We tolerate Keycloak unreachability
+    // here — if the admin API isn't configured the profile page still
+    // renders, it just falls back to the split-on-space heuristic.
+    let firstName: string | undefined;
+    let lastName: string | undefined;
+    if (this.kc.isConfigured()) {
+      try {
+        const kcUser = await this.kc.getUser(user.id);
+        firstName = kcUser.firstName;
+        lastName = kcUser.lastName;
+      } catch {
+        /* non-fatal — read-only display continues to work */
+      }
+    }
     return {
       ...user,
       fullName: row?.fullName ?? user.username,
+      firstName: firstName ?? splitName(row?.fullName ?? '').first,
+      lastName: lastName ?? splitName(row?.fullName ?? '').last,
       avatarUrl: row?.avatarUrl ?? null,
       orgName: org?.name ?? null,
       orgSlug: org?.slug ?? null,
@@ -129,11 +167,54 @@ export class UsersController {
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateMeDto,
   ) {
-    return this.prisma.user.update({
+    const identityPatch: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+    } = {};
+    if (dto.firstName !== undefined) identityPatch.firstName = dto.firstName.trim();
+    if (dto.lastName !== undefined) identityPatch.lastName = dto.lastName.trim();
+    if (dto.email !== undefined) identityPatch.email = dto.email.trim();
+
+    // Push identity-owning fields to Keycloak first so we don't end up
+    // with the local row ahead of the IdP (which would look fine until
+    // the next JWT refresh overwrote it). If Keycloak rejects, the
+    // client gets the error and nothing local has changed yet.
+    if (Object.keys(identityPatch).length > 0) {
+      if (!this.kc.isConfigured()) {
+        // Surface a 503 instead of silently no-op'ing so the user
+        // knows why their edit didn't stick.
+        throw new Error(
+          'Keycloak admin API is not configured — identity edits are disabled',
+        );
+      }
+      await this.kc.updateUser(user.id, identityPatch);
+    }
+
+    // Mirror the new identity fields into the local row so downstream
+    // readers (items, sharing lookups, /users list) see them without
+    // waiting for the next auth-sync upsert.
+    const localPatch: Record<string, unknown> = {};
+    if (dto.avatarUrl !== undefined) localPatch.avatarUrl = dto.avatarUrl;
+    if (identityPatch.firstName !== undefined || identityPatch.lastName !== undefined) {
+      // Rebuild fullName from the fresh Keycloak values.
+      const kcUser = await this.kc.getUser(user.id);
+      const parts = [kcUser.firstName, kcUser.lastName].filter(
+        (s): s is string => typeof s === 'string' && s.trim().length > 0,
+      );
+      localPatch.fullName = parts.join(' ') || user.username;
+    }
+    if (identityPatch.email !== undefined) localPatch.email = identityPatch.email;
+
+    if (Object.keys(localPatch).length > 0) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: localPatch,
+      });
+    }
+
+    return this.prisma.user.findUnique({
       where: { id: user.id },
-      data: {
-        ...(dto.avatarUrl !== undefined && { avatarUrl: dto.avatarUrl }),
-      },
       select: {
         id: true,
         username: true,
@@ -143,4 +224,17 @@ export class UsersController {
       },
     });
   }
+}
+
+/**
+ * Best-effort split of "First Last" into { first, last } so the profile
+ * form can prepopulate when Keycloak isn't reachable. Multi-word last
+ * names fall into `last`. Single-word names land in `first` with an
+ * empty `last`.
+ */
+function splitName(fullName: string): { first: string; last: string } {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { first: '', last: '' };
+  if (parts.length === 1) return { first: parts[0]!, last: '' };
+  return { first: parts[0]!, last: parts.slice(1).join(' ') };
 }

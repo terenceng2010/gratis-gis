@@ -19,6 +19,13 @@ export const authOptions: NextAuthOptions = {
       if (account?.access_token) {
         token.accessToken = account.access_token;
       }
+      // Preserve the id_token so /api/auth/federated-logout can hand it
+      // back to Keycloak's end-session endpoint as id_token_hint. Without
+      // this hint Keycloak redirects to its own account console instead
+      // of our post_logout_redirect_uri.
+      if (account?.id_token) {
+        token.idToken = account.id_token;
+      }
       return token;
     },
     async session({ session, token }) {
@@ -37,3 +44,5 @@ export const authOptions: NextAuthOptions = {
 export type SessionWithToken = import('next-auth').Session & {
   accessToken?: string;
 };
+
+export const keycloakEndSessionBase = `${keycloakUrl}/realms/${realm}/protocol/openid-connect/logout`;
