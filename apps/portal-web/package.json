@@ -12,16 +12,17 @@
   "dependencies": {
     "@gratis-gis/shared-types": "workspace:*",
     "@gratis-gis/ui": "workspace:*",
-    "framer-motion": "^11.11.1",
     "@tmcw/togeojson": "^6.0.1",
+    "framer-motion": "^11.11.1",
     "jszip": "^3.10.1",
-    "shpjs": "^6.1.0",
     "lucide-react": "^0.447.0",
     "maplibre-gl": "^4.7.1",
     "next": "^14.2.15",
     "next-auth": "^4.24.8",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "shpjs": "^6.1.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",

@@ -6,6 +6,7 @@ import {
   Inbox,
   Layers,
   LayoutDashboard,
+  ListChecks,
   Map as MapIcon,
   Notebook,
   Package,
@@ -40,6 +41,7 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
   notebook: Notebook,
   tool: Wrench,
   widget_package: Box,
+  pick_list: ListChecks,
 };
 
 /** Tailwind color classes used when rendering the icon OUTSIDE a
@@ -60,6 +62,7 @@ const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
   notebook: 'text-fuchsia-600',
   tool: 'text-teal-600',
   widget_package: 'text-teal-700',
+  pick_list: 'text-lime-600',
 };
 
 /** Tailwind class combos for the tile background used in compact
@@ -79,6 +82,7 @@ const ITEM_TYPE_TILE: Record<ItemType, string> = {
   notebook: 'bg-fuchsia-500/90 text-white',
   tool: 'bg-teal-500/90 text-white',
   widget_package: 'bg-teal-600/90 text-white',
+  pick_list: 'bg-lime-500/90 text-white',
 };
 
 export function getItemTypeIcon(type: ItemType): LucideIcon {

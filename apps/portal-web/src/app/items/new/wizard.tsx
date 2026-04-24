@@ -12,6 +12,7 @@ import {
   Globe2,
   LayoutDashboard,
   Layers,
+  ListChecks,
   Loader2,
   Lock,
   Map as MapIcon,
@@ -32,6 +33,7 @@ import type {
 import {
   DEFAULT_ARCGIS_SERVICE,
   DEFAULT_FEATURE_SERVICE_V3,
+  DEFAULT_PICK_LIST,
   DEFAULT_WEB_MAP,
 } from '@gratis-gis/shared-types';
 import { ImageUploader } from '@/components/image-uploader';
@@ -80,6 +82,12 @@ const TYPE_OPTIONS: TypeOption[] = [
     label: 'ArcGIS service',
     desc: 'Live pointer at a MapServer or FeatureServer.',
     Icon: Plug,
+  },
+  {
+    value: 'pick_list',
+    label: 'Pick list',
+    desc: 'Shared list of codes + labels referenced by fields, forms, and filters.',
+    Icon: ListChecks,
   },
   {
     value: 'form',
@@ -179,6 +187,7 @@ export function NewItemWizard() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   const pickType = useCallback((t: ItemType) => {
@@ -303,6 +312,11 @@ export function NewItemWizard() {
         }
       }
       data = featureServiceData;
+    } else if (type === 'pick_list') {
+      // Start a pick list empty. The detail-page editor handles
+      // manual entry, CSV / XLSX upload, and paste-from-clipboard
+      // import, so the wizard doesn't need a custom builder step.
+      data = DEFAULT_PICK_LIST;
     } else {
       data = {};
     }
@@ -321,22 +335,63 @@ export function NewItemWizard() {
     };
 
     setSubmitting(true);
-    const res = await fetch('/api/portal/items', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    setSubmitting(false);
-    if (!res.ok) {
-      setError(`Create failed: ${res.status} ${await res.text()}`);
-      return;
+    try {
+      const res = await fetch('/api/portal/items', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        setError(
+          `Create failed: ${res.status}${body ? ` — ${body}` : ''}`,
+        );
+        return;
+      }
+      // Parse defensively — a missing / malformed body used to fall
+      // through silently and leave the user stranded on the create
+      // page with no redirect and no error.
+      let saved: Item | null = null;
+      try {
+        saved = (await res.json()) as Item;
+      } catch (parseErr) {
+        console.error('Create succeeded but response was not JSON:', parseErr);
+      }
+      if (!saved?.id) {
+        // API accepted the payload but we can't navigate to the detail
+        // page. Fall back to the items list so the user still sees
+        // their new item and knows the create worked.
+        const typeLabel =
+          TYPE_OPTIONS.find((o) => o.value === type)?.label ?? 'Item';
+        setSuccessMsg(
+          `${typeLabel} created. Redirecting to your items…`,
+        );
+        startTransition(() => router.push('/items'));
+        return;
+      }
+      // Surface an immediate success message so the user sees feedback
+      // even while the detail page is server-rendering. The actual
+      // redirect fires on the next tick via startTransition.
+      const typeLabel =
+        TYPE_OPTIONS.find((o) => o.value === type)?.label ?? 'Item';
+      setSuccessMsg(
+        `${typeLabel} "${saved.title}" created. Opening it now…`,
+      );
+      // feature_service still wants the ingest panel front and centre.
+      // arcgis_service no longer needs #configure-arcgis because we baked
+      // the probed config into dataJson above.
+      const anchor = type === 'feature_service' ? '#add-data' : '';
+      startTransition(() => router.push(`/items/${saved!.id}${anchor}`));
+    } catch (err) {
+      // Network failure or thrown error inside fetch — surface it
+      // rather than leaving the user staring at a silent form.
+      console.error('Create request failed:', err);
+      setError(
+        `Create failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setSubmitting(false);
     }
-    const saved = (await res.json()) as Item;
-    // feature_service still wants the ingest panel front and centre.
-    // arcgis_service no longer needs #configure-arcgis because we baked
-    // the probed config into dataJson above.
-    const anchor = type === 'feature_service' ? '#add-data' : '';
-    startTransition(() => router.push(`/items/${saved.id}${anchor}`));
   }
 
   if (step === 'pick') {
@@ -556,6 +611,16 @@ export function NewItemWizard() {
         </div>
       ) : null}
 
+      {successMsg ? (
+        <div
+          className="flex items-center gap-2 rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success"
+          role="status"
+        >
+          <Check className="h-4 w-4 shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      ) : null}
+
       <div className="flex items-center justify-end gap-3">
         <button
           type="button"
@@ -568,15 +633,15 @@ export function NewItemWizard() {
         <button
           type="button"
           onClick={submit}
-          disabled={submitting}
+          disabled={submitting || successMsg !== null}
           className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
         >
-          {submitting ? (
+          {submitting || successMsg !== null ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
             <Sparkles className="h-4 w-4" />
           )}
-          Create item
+          {successMsg !== null ? 'Redirecting…' : 'Create item'}
         </button>
       </div>
     </div>

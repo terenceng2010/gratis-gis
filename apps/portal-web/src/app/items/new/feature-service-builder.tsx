@@ -1,12 +1,15 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
+  ChevronUp,
   Circle,
   GripVertical,
   List,
+  ListChecks,
   Minus,
   Paperclip,
   Pencil,
@@ -18,6 +21,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { CreateSharedPickListDialog } from './create-shared-pick-list-dialog';
 import type {
   FeatureField,
   FeatureFieldStorage,
@@ -111,6 +115,11 @@ function newField(): FeatureField {
 export function FeatureServiceBuilder({ value, onChange }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Monotonic counters that LayerCard observes to force-collapse /
+  // force-expand. Bumping either causes a single state change in every
+  // card simultaneously without lifting their open/closed state up here.
+  const [collapseAllSignal, setCollapseAllSignal] = useState(0);
+  const [expandAllSignal, setExpandAllSignal] = useState(0);
 
   const layers = value.layers;
 
@@ -186,6 +195,28 @@ export function FeatureServiceBuilder({ value, onChange }: Props) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {layers.length > 1 ? (
+            <div className="inline-flex overflow-hidden rounded-md border border-border">
+              <button
+                type="button"
+                onClick={() => setCollapseAllSignal((v) => v + 1)}
+                title="Collapse all layers"
+                className="inline-flex h-8 items-center gap-1 bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+              >
+                <ChevronUp className="h-3 w-3" />
+                Collapse all
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpandAllSignal((v) => v + 1)}
+                title="Expand all layers"
+                className="inline-flex h-8 items-center gap-1 border-l border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+              >
+                <ChevronsUpDown className="h-3 w-3" />
+                Expand all
+              </button>
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={() => setImportOpen((v) => !v)}
@@ -248,11 +279,16 @@ export function FeatureServiceBuilder({ value, onChange }: Props) {
         </div>
       ) : (
         <ul className="space-y-2">
-          {layers.map((layer) => (
+          {layers.map((layer, idx) => (
             <li key={layer.id}>
               <LayerCard
                 layer={layer}
                 spatialLayers={spatialLayers}
+                // Expand the first layer by default, collapse the rest.
+                // Keeps a three-layer service readable without a click.
+                initialOpen={idx === 0 || layers.length <= 3}
+                collapseSignal={collapseAllSignal}
+                expandSignal={expandAllSignal}
                 onPatch={(patch) => patchLayer(layer.id, patch)}
                 onReplace={(next) => replaceLayer(layer.id, next)}
                 onRemove={() => removeLayer(layer.id)}
@@ -271,6 +307,13 @@ interface LayerCardProps {
   layer: FeatureServiceLayer;
   /** Layers with a geometry type — potential parents for a table. */
   spatialLayers: FeatureServiceLayer[];
+  /** Whether the card starts expanded. Parent picks this so a long
+   *  list of layers doesn't blow the page out by default. */
+  initialOpen: boolean;
+  /** Increment to force-collapse the card from the parent. */
+  collapseSignal: number;
+  /** Increment to force-expand the card from the parent. */
+  expandSignal: number;
   onPatch: (patch: Partial<FeatureServiceLayer>) => void;
   onReplace: (next: FeatureServiceLayer) => void;
   onRemove: () => void;
@@ -279,20 +322,46 @@ interface LayerCardProps {
 function LayerCard({
   layer,
   spatialLayers,
+  initialOpen,
+  collapseSignal,
+  expandSignal,
   onPatch,
   onReplace,
   onRemove,
 }: LayerCardProps) {
-  // Default collapsed to keep the page short when several layers exist.
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(initialOpen);
+  // Honor global "Collapse all" / "Expand all" commands from the
+  // layers list header. Each signal is a numeric counter the parent
+  // bumps; we key a one-shot effect off the value change so state
+  // resets don't fight the user's manual toggles on subsequent renders.
+  useEffect(() => {
+    if (collapseSignal > 0) setOpen(false);
+  }, [collapseSignal]);
+  useEffect(() => {
+    if (expandSignal > 0) setOpen(true);
+  }, [expandSignal]);
   const geom = GEOMETRY_OPTIONS.find((g) => g.value === layer.geometryType);
   const Icon = geom?.Icon ?? Circle;
+
+  // Signals for pushing collapse commands into FieldRow children
+  // without lifting their individual open/closed state up here.
+  const [fieldCollapseSignal, setFieldCollapseSignal] = useState(0);
+  // Index of the most-recently-added field, for auto-focusing its name
+  // input so the user can see — and start typing — the new row
+  // immediately rather than hunting for it below expanded settings.
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
 
   const setField = (index: number, patch: Partial<FeatureField>) => {
     const next = layer.fields.map((f, i) => (i === index ? { ...f, ...patch } : f));
     onPatch({ fields: next });
   };
-  const addField = () => onPatch({ fields: [...layer.fields, newField()] });
+  const addField = () => {
+    // Collapse existing rows as we append so the new blank row isn't
+    // buried under hundreds of pixels of pick-list editor.
+    setFieldCollapseSignal((v) => v + 1);
+    setFocusIndex(layer.fields.length);
+    onPatch({ fields: [...layer.fields, newField()] });
+  };
   const removeField = (index: number) =>
     onPatch({ fields: layer.fields.filter((_, i) => i !== index) });
 
@@ -368,9 +437,12 @@ function LayerCard({
 
           <FieldsTable
             fields={layer.fields}
+            collapseSignal={fieldCollapseSignal}
+            focusIndex={focusIndex}
             onFieldChange={setField}
             onFieldRemove={removeField}
             onFieldAdd={addField}
+            onCollapseAll={() => setFieldCollapseSignal((v) => v + 1)}
           />
 
           <div className="flex flex-wrap items-center gap-4 text-xs text-ink-1">
@@ -422,31 +494,54 @@ function LayerCard({
 
 interface FieldsTableProps {
   fields: FeatureField[];
+  /** Bumped by the parent to force-collapse every row's settings
+   *  pane. Mirrors the layer-level collapse signal. */
+  collapseSignal: number;
+  /** When set, the FieldRow at this index auto-focuses its name
+   *  input after mount. Used to draw the eye to a freshly-added row. */
+  focusIndex: number | null;
   onFieldChange: (index: number, patch: Partial<FeatureField>) => void;
   onFieldRemove: (index: number) => void;
   onFieldAdd: () => void;
+  onCollapseAll: () => void;
 }
 
 function FieldsTable({
   fields,
+  collapseSignal,
+  focusIndex,
   onFieldChange,
   onFieldRemove,
   onFieldAdd,
+  onCollapseAll,
 }: FieldsTableProps) {
   return (
     <div>
-      <div className="mb-1 flex items-baseline justify-between">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
         <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-          Fields
+          Fields {fields.length > 0 ? <span className="text-muted">({fields.length})</span> : null}
         </p>
-        <button
-          type="button"
-          onClick={onFieldAdd}
-          className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-1.5 text-[11px] text-ink-1 hover:bg-surface-2"
-        >
-          <Plus className="h-3 w-3" />
-          Add field
-        </button>
+        <div className="flex items-center gap-1">
+          {fields.length > 1 ? (
+            <button
+              type="button"
+              onClick={onCollapseAll}
+              className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-1.5 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+              title="Collapse every field's settings panel"
+            >
+              <ChevronUp className="h-3 w-3" />
+              Collapse all
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onFieldAdd}
+            className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-1.5 text-[11px] text-ink-1 hover:bg-surface-2"
+          >
+            <Plus className="h-3 w-3" />
+            Add field
+          </button>
+        </div>
       </div>
       {fields.length === 0 ? (
         <p className="rounded border border-dashed border-border bg-surface-1 px-2 py-3 text-center text-[11px] text-muted">
@@ -476,6 +571,8 @@ function FieldsTable({
                 <FieldRow
                   key={i}
                   field={f}
+                  collapseSignal={collapseSignal}
+                  autoFocus={focusIndex === i}
                   onChange={(patch) => onFieldChange(i, patch)}
                   onRemove={() => onFieldRemove(i)}
                 />
@@ -484,6 +581,21 @@ function FieldsTable({
           </table>
         </div>
       )}
+
+      {/* Second "Add field" trigger lives below the table so it's
+          always visible even when several rows have their settings
+          panel expanded — the top button can end up scrolled off
+          with a dense layer. */}
+      {fields.length > 0 ? (
+        <button
+          type="button"
+          onClick={onFieldAdd}
+          className="mt-2 inline-flex h-7 w-full items-center justify-center gap-1 rounded border border-dashed border-border bg-surface-1 px-2 text-[11px] font-medium text-muted hover:border-accent/40 hover:bg-accent/5 hover:text-ink-1"
+        >
+          <Plus className="h-3 w-3" />
+          Add another field
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -492,6 +604,12 @@ function FieldsTable({
 
 interface FieldRowProps {
   field: FeatureField;
+  /** Parent-driven collapse counter — bumps force-close the settings
+   *  pane. Auto-bumped when a new field is added so the page doesn't
+   *  lengthen indefinitely, and manually bumped by "Collapse all". */
+  collapseSignal: number;
+  /** When true, auto-focus the name input once after mount. */
+  autoFocus: boolean;
   onChange: (patch: Partial<FeatureField>) => void;
   onRemove: () => void;
 }
@@ -506,10 +624,39 @@ interface FieldRowProps {
  * binary; dates rarely benefit from a fixed list). The toggle button
  * is disabled in those cases.
  */
-function FieldRow({ field, onChange, onRemove }: FieldRowProps) {
+function FieldRow({
+  field,
+  collapseSignal,
+  autoFocus,
+  onChange,
+  onRemove,
+}: FieldRowProps) {
   const [expanded, setExpanded] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Collapse on parent signal. First render (signal === 0) is a no-op
+  // so existing rows don't flicker closed on mount.
+  useEffect(() => {
+    if (collapseSignal > 0) setExpanded(false);
+  }, [collapseSignal]);
+
+  // One-shot auto-focus for freshly-added rows so the user's eye
+  // lands on the new field and their next keystroke starts typing
+  // the name.
+  useEffect(() => {
+    if (autoFocus && nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    // Only react to autoFocus going true once on mount / add.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const hasDomain =
-    field.domain !== undefined && field.domain.type === 'coded-value';
+    field.domain !== undefined &&
+    (field.domain.type === 'coded-value' ||
+      field.domain.type === 'coded-value-ref');
+  const isRefDomain =
+    field.domain !== undefined && field.domain.type === 'coded-value-ref';
   const canHaveDomain = field.type === 'string' || field.type === 'number';
   // "Advanced" constraints apply to strings (maxLength) and numbers
   // (integer/decimal + precision/scale). Boolean and date get nothing
@@ -541,13 +688,6 @@ function FieldRow({ field, onChange, onRemove }: FieldRowProps) {
     setExpanded(false);
   }
 
-  function patchValues(
-    next: Array<{ code: string | number; label: string }>,
-  ) {
-    if (!field.domain || field.domain.type !== 'coded-value') return;
-    onChange({ domain: { type: 'coded-value', values: next } });
-  }
-
   return (
     <>
       <tr className="border-t border-border">
@@ -556,6 +696,7 @@ function FieldRow({ field, onChange, onRemove }: FieldRowProps) {
         </td>
         <td className="px-1 py-1">
           <input
+            ref={nameInputRef}
             type="text"
             value={field.name}
             onChange={(e) => onChange({ name: slugify(e.target.value) })}
@@ -633,7 +774,9 @@ function FieldRow({ field, onChange, onRemove }: FieldRowProps) {
               {hasDomain ? (
                 <>
                   <List className="h-3 w-3" />
-                  {(field.domain as { values: unknown[] }).values.length}
+                  {isRefDomain
+                    ? 'ref'
+                    : (field.domain as { values: unknown[] }).values.length}
                 </>
               ) : hasConstraints ? (
                 <>
@@ -672,35 +815,45 @@ function FieldRow({ field, onChange, onRemove }: FieldRowProps) {
           <td colSpan={7} className="space-y-4 px-3 py-3">
             {canHaveDomain ? (
               hasDomain ? (
-                <CodedValueEditor
-                  fieldType={field.type}
-                  values={
-                    (field.domain as {
-                      values: Array<{ code: string | number; label: string }>;
-                    }).values
-                  }
-                  onChange={patchValues}
+                <DomainEditor
+                  field={field}
+                  onChange={onChange}
                   onDisable={disableDomain}
                 />
               ) : (
-                <div className="flex items-center justify-between rounded border border-dashed border-border bg-surface-0 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-dashed border-border bg-surface-0 px-3 py-2">
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
                       Pick list
                     </p>
                     <p className="text-[11px] text-muted">
                       Restrict this field to a short, authoritative list
-                      of allowed values.
+                      of allowed values. Type them inline or point at a
+                      shared pick-list item.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={enableDomain}
-                    className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Add pick list
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={enableDomain}
+                      className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add inline
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onChange({
+                          domain: { type: 'coded-value-ref', pickListItemId: '' },
+                        })
+                      }
+                      className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+                    >
+                      <List className="h-3 w-3" />
+                      Use shared list
+                    </button>
+                  </div>
                 </div>
               )
             ) : null}
@@ -891,11 +1044,299 @@ function ConstraintsEditor({ field, onChange }: ConstraintsEditorProps) {
 
 // ---------------------------------------------------------------------------
 
+interface DomainEditorProps {
+  field: FeatureField;
+  onChange: (patch: Partial<FeatureField>) => void;
+  onDisable: () => void;
+}
+
+/**
+ * Dispatches to either the inline coded-value editor or the shared
+ * pick-list picker based on the current domain variant. Offers a
+ * toggle so authors can switch between the two without losing state
+ * that doesn't overlap — switching from inline → shared just drops
+ * the inline values; switching the other way leaves the user with an
+ * empty inline list to populate.
+ */
+function DomainEditor({ field, onChange, onDisable }: DomainEditorProps) {
+  const domain = field.domain;
+  if (!domain) return null;
+
+  function setValues(next: Array<{ code: string | number; label: string }>) {
+    onChange({ domain: { type: 'coded-value', values: next } });
+  }
+
+  function switchToRef() {
+    onChange({ domain: { type: 'coded-value-ref', pickListItemId: '' } });
+  }
+  function switchToInline() {
+    onChange({
+      domain: {
+        type: 'coded-value',
+        values: [{ code: field.type === 'number' ? 0 : '', label: '' }],
+      },
+    });
+  }
+
+  // Both sub-editors call this to swap the field over to a freshly-
+  // created shared pick list without a round-trip through the detail
+  // page. The "use this field's label as the default title" hint is
+  // why we thread `field` through the DomainEditor.
+  function usePickListItemId(id: string) {
+    onChange({ domain: { type: 'coded-value-ref', pickListItemId: id } });
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+          Pick list source
+        </p>
+        <div className="inline-flex rounded border border-border bg-surface-1 p-0.5 text-[11px]">
+          <button
+            type="button"
+            onClick={switchToInline}
+            className={`px-2 py-0.5 rounded ${
+              domain.type === 'coded-value'
+                ? 'bg-accent text-accent-foreground'
+                : 'text-muted hover:text-ink-1'
+            }`}
+          >
+            Inline
+          </button>
+          <button
+            type="button"
+            onClick={switchToRef}
+            className={`px-2 py-0.5 rounded ${
+              domain.type === 'coded-value-ref'
+                ? 'bg-accent text-accent-foreground'
+                : 'text-muted hover:text-ink-1'
+            }`}
+          >
+            Shared list
+          </button>
+        </div>
+      </div>
+
+      {domain.type === 'coded-value' ? (
+        <CodedValueEditor
+          fieldType={field.type}
+          values={domain.values}
+          fieldLabel={field.label || field.name}
+          onChange={setValues}
+          onDisable={onDisable}
+          onPromoteToShared={usePickListItemId}
+        />
+      ) : domain.type === 'coded-value-ref' ? (
+        <SharedPickListRefEditor
+          pickListItemId={domain.pickListItemId}
+          fieldLabel={field.label || field.name}
+          onChange={usePickListItemId}
+          onDisable={onDisable}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+interface SharedPickListRefEditorProps {
+  pickListItemId: string;
+  fieldLabel: string;
+  onChange: (id: string) => void;
+  onDisable: () => void;
+}
+
+/**
+ * Picker + preview for a coded-value-ref domain. Fetches the caller's
+ * visible pick_list items from /api/portal/items?type=pick_list and
+ * lets them pick one. Also shows a lightweight preview of the selected
+ * list's first few entries so authors can sanity-check the choice.
+ *
+ * Includes an in-context "Create new" button that opens a modal to
+ * stand up a brand-new shared pick list without leaving the builder.
+ * The new list is auto-selected so the user's flow continues without
+ * a detour to /items.
+ */
+function SharedPickListRefEditor({
+  pickListItemId,
+  fieldLabel,
+  onChange,
+  onDisable,
+}: SharedPickListRefEditorProps) {
+  const [lists, setLists] = useState<
+    Array<{ id: string; title: string; description?: string | null }>
+  >([]);
+  const [preview, setPreview] = useState<
+    Array<{ code: string; label: string }> | null
+  >(null);
+  const [loading, setLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  // Load the visible pick_list items once.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch('/api/portal/items?type=pick_list')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{ id: string; title: string; description?: string }>) => {
+        if (!cancelled) setLists(rows);
+      })
+      .catch(() => {
+        /* leave list empty — user can still type an ID */
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Pull the selected pick list's entries for preview.
+  useEffect(() => {
+    if (!pickListItemId) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    fetch(`/api/portal/items/${pickListItemId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (item: null | {
+          data?: { entries?: Array<{ code: string; label: string }> };
+        }) => {
+          if (cancelled) return;
+          const entries = item?.data?.entries ?? [];
+          setPreview(entries.slice(0, 6));
+        },
+      )
+      .catch(() => {
+        if (!cancelled) setPreview(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pickListItemId]);
+
+  return (
+    <div className="rounded border border-border bg-surface-0 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
+          Shared pick list
+        </p>
+        <button
+          type="button"
+          onClick={onDisable}
+          className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+          title="Remove the pick list — any value becomes allowed again"
+        >
+          <X className="h-3 w-3" />
+          Disable
+        </button>
+      </div>
+
+      <label className="block text-xs">
+        <span className="mb-1 block uppercase tracking-wide text-muted">
+          Reference
+        </span>
+        <div className="flex items-center gap-1.5">
+          <select
+            value={pickListItemId}
+            onChange={(e) => onChange(e.target.value)}
+            className="h-8 flex-1 rounded border border-border bg-surface-1 px-1.5 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+            disabled={loading}
+          >
+            <option value="">
+              {loading
+                ? 'Loading…'
+                : lists.length === 0
+                  ? 'No shared pick lists yet — create one below'
+                  : 'Select a pick list…'}
+            </option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.title}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex h-8 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+            title="Create a new shared pick list without leaving the builder"
+          >
+            <Plus className="h-3 w-3" />
+            New
+          </button>
+        </div>
+      </label>
+
+      {createOpen ? (
+        <CreateSharedPickListDialog
+          defaultTitle={suggestedPickListTitle(fieldLabel)}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(newId, newTitle) => {
+            // Add to the local cache so the select shows it without a
+            // full refetch, and auto-select it.
+            setLists((prev) => [{ id: newId, title: newTitle }, ...prev]);
+            onChange(newId);
+            setCreateOpen(false);
+          }}
+        />
+      ) : null}
+
+      {pickListItemId ? (
+        <div className="mt-2 rounded border border-border bg-surface-1 p-2 text-[11px]">
+          <p className="mb-1 uppercase tracking-wide text-muted">Preview</p>
+          {previewLoading ? (
+            <p className="text-muted">Loading entries…</p>
+          ) : preview && preview.length > 0 ? (
+            <ul className="space-y-0.5">
+              {preview.map((e) => (
+                <li key={e.code} className="flex items-center gap-2">
+                  <code className="rounded bg-surface-2 px-1 font-mono">
+                    {e.code}
+                  </code>
+                  <span className="text-ink-1">{e.label}</span>
+                </li>
+              ))}
+              <li className="pt-1 text-muted">
+                Showing first {preview.length}. Edits to the source list
+                flow through automatically.
+              </li>
+            </ul>
+          ) : (
+            <p className="text-muted">
+              The list has no entries yet. Open it to add some.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
 interface CodedValueEditorProps {
   fieldType: FeatureFieldType;
   values: Array<{ code: string | number; label: string }>;
+  fieldLabel: string;
   onChange: (values: Array<{ code: string | number; label: string }>) => void;
   onDisable: () => void;
+  /**
+   * Fires after the user promotes the current inline values into a new
+   * shared pick list — hands the new pick_list item id back so the
+   * field can switch its domain over to `coded-value-ref`.
+   */
+  onPromoteToShared: (newItemId: string) => void;
 }
 
 /**
@@ -906,9 +1347,12 @@ interface CodedValueEditorProps {
 function CodedValueEditor({
   fieldType,
   values,
+  fieldLabel,
   onChange,
   onDisable,
+  onPromoteToShared,
 }: CodedValueEditorProps) {
+  const [promoteOpen, setPromoteOpen] = useState(false);
   function patch(index: number, patchObj: Partial<{ code: string | number; label: string }>) {
     const next = values.map((v, i) => (i === index ? { ...v, ...patchObj } : v));
     onChange(next);
@@ -928,22 +1372,62 @@ function CodedValueEditor({
     );
   }
 
+  // "Promotable" means: the user has at least one complete entry
+  // we can copy into a new shared list. Empty or partial rows are
+  // filtered out so the new list starts clean.
+  const promotable = values.filter(
+    (v) =>
+      String(v.code ?? '').trim().length > 0 &&
+      String(v.label ?? '').trim().length > 0,
+  );
+
   return (
     <div>
-      <div className="mb-1 flex items-center justify-between">
+      <div className="mb-1 flex items-center justify-between gap-2">
         <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
           Allowed values
         </p>
-        <button
-          type="button"
-          onClick={onDisable}
-          className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
-          title="Remove the pick list — any value becomes allowed again"
-        >
-          <X className="h-3 w-3" />
-          Disable pick list
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setPromoteOpen(true)}
+            disabled={promotable.length === 0}
+            className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-1.5 text-[11px] font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+            title={
+              promotable.length === 0
+                ? 'Add at least one complete code + label row first'
+                : 'Promote these values into a reusable shared pick list'
+            }
+          >
+            <ListChecks className="h-3 w-3" />
+            Save as shared list
+          </button>
+          <button
+            type="button"
+            onClick={onDisable}
+            className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
+            title="Remove the pick list — any value becomes allowed again"
+          >
+            <X className="h-3 w-3" />
+            Disable pick list
+          </button>
+        </div>
       </div>
+
+      {promoteOpen ? (
+        <CreateSharedPickListDialog
+          defaultTitle={suggestedPickListTitle(fieldLabel)}
+          seedEntries={promotable.map((v) => ({
+            code: String(v.code),
+            label: v.label,
+          }))}
+          onClose={() => setPromoteOpen(false)}
+          onCreated={(newId) => {
+            setPromoteOpen(false);
+            onPromoteToShared(newId);
+          }}
+        />
+      ) : null}
       <div className="overflow-hidden rounded border border-border">
         <table className="w-full text-xs">
           <thead className="bg-surface-2 text-muted">
@@ -1448,4 +1932,16 @@ function humanize(name: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Default title seed for the "create shared pick list" dialog. Falls
+ * back to a generic "Pick list" if the field doesn't have a usable
+ * label yet. Keeps the wording neutral so the user naturally edits it
+ * before saving rather than inheriting "Priority options" forever.
+ */
+function suggestedPickListTitle(fieldLabel: string): string {
+  const trimmed = (fieldLabel ?? '').trim();
+  if (!trimmed) return 'Pick list';
+  return `${trimmed} options`;
 }

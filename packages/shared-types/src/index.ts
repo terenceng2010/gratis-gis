@@ -16,3 +16,4 @@ export * from './item';
 export * from './web-map';
 export * from './feature-service';
 export * from './arcgis-service';
+export * from './pick-list';
