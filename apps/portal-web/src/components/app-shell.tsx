@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { getServerSession } from 'next-auth';
 import {
   Archive,
+  ClipboardList,
   Compass,
   Folder as FolderIcon,
   LayoutGrid,
@@ -87,6 +88,17 @@ export async function AppShell({ children }: { children: ReactNode }) {
             Folders
           </NavLink>
           <NavLink href="/groups" icon={<Users className="h-4 w-4" />}>Groups</NavLink>
+          {/* Field catalog (Slice 7): a dedicated lens for field
+              data_collection deployments. Surfaces every deployment
+              the user can access alongside its offline-cache and
+              queued-edit state, without forcing them through the
+              generic items list. The link is always visible (the
+              catalog itself filters by access), so a viewer who
+              has no access lands on an empty state rather than
+              missing a hidden entry point. */}
+          <NavLink href="/field" icon={<ClipboardList className="h-4 w-4" />}>
+            Field
+          </NavLink>
           <NavLink href="/recently-deleted" icon={<Trash2 className="h-4 w-4" />}>
             Recently deleted
           </NavLink>
