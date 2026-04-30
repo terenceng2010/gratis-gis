@@ -67,6 +67,7 @@ import {
   clearTileCache,
   readTileCacheStats,
 } from '@/lib/offline-tile-warmer';
+import { postQueueManifestThrottled } from '@/lib/offline-queue-beacon';
 
 /**
  * Per-layer descriptor the field runtime consumes. Server-built (see
@@ -267,6 +268,17 @@ export function FieldRuntime({
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
+  }, []);
+
+  // Tier 4 beacon: post a queue manifest on mount so the admin view
+  // sees a fresh row every time a worker opens the runtime. The
+  // helper is throttled internally; subsequent calls (after sync, on
+  // online-flip) won't double-post inside the same window. See
+  // docs/field-offline-areas.md.
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    if (!navigator.onLine) return;
+    void postQueueManifestThrottled();
   }, []);
 
   // Cached-deployment manifest. Loaded once on mount; refreshed
@@ -479,6 +491,11 @@ export function FieldRuntime({
           }
         }
         setOfflineWriteCounter((n) => n + 1);
+        // Beacon after every sync run so the admin view's row
+        // reflects the post-sync queue depth (often zero, which is
+        // exactly the signal admins want to see). Throttled, so the
+        // mount-time + sync-time + online-flip beacons coalesce.
+        void postQueueManifestThrottled();
       } finally {
         setSyncing(false);
       }

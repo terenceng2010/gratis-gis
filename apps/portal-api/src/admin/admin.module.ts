@@ -15,6 +15,8 @@ import { ItemsModule } from '../items/items.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { NotificationsAdminController } from '../notifications/admin.controller.js';
 import { StorageModule } from '../storage/storage.module.js';
+import { FieldQueueModule } from '../field-queue/field-queue.module.js';
+import { FieldQueueAdminController } from '../field-queue/field-queue-admin.controller.js';
 
 /**
  * Wires the admin surfaces: Keycloak integration (users +
@@ -29,13 +31,20 @@ import { StorageModule } from '../storage/storage.module.js';
  * management yet.
  */
 @Module({
-  imports: [V3TablesModule, ItemsModule, NotificationsModule, StorageModule],
+  imports: [
+    V3TablesModule,
+    ItemsModule,
+    NotificationsModule,
+    StorageModule,
+    FieldQueueModule,
+  ],
   controllers: [
     AdminUsersController,
     AdminBrandingController,
     AdminCapabilitiesController,
     HousekeepingController,
     NotificationsAdminController,
+    FieldQueueAdminController,
   ],
   providers: [
     KeycloakAdminService,

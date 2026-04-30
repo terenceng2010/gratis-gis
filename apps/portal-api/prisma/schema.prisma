@@ -196,6 +196,7 @@ model User {
   capabilityOverrides UserCapabilityOverride[]
   notifications  Notification[]
   notificationPrefs NotificationPreference[]
+  fieldQueueManifests FieldQueueManifest[]
 
   @@index([orgId])
   @@index([deletedAt])
@@ -789,6 +790,60 @@ model FormSubmission {
   @@index([formId], map: "form_submission_form_idx")
   @@index([submittedBy], map: "form_submission_submitted_by_idx")
   @@map("form_submission")
+}
+
+/// Slice 5 / Tier 4 of the field-offline design (see
+/// docs/field-offline-areas.md). The field client periodically POSTs
+/// a manifest of what's queued in its local IndexedDB; the server
+/// stores ONLY the metadata (record ids, queued-at timestamps, op
+/// kinds, layer ids). The actual record payloads stay client-side
+/// in IndexedDB. This is a beacon, not a reconciliation log: it
+/// lets an admin see "user X's device has 47 records queued, oldest
+/// from 3 days ago" without the user pulling out their phone, so
+/// the admin can email them a "your data isn't synced yet" reminder.
+///
+/// Sync goes through the regular feature write path so records get
+/// the same validation, auth, and audit trail as a live edit. This
+/// table is purely diagnostic.
+///
+/// Keyed by (userId, deviceFingerprint) so a single user with two
+/// devices appears as two rows. The fingerprint is a stable client-
+/// generated hash; we don't try to identify users across devices.
+model FieldQueueManifest {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  /// Stable hash the client computes once per browser profile and
+  /// reuses for every manifest POST. Lets an admin distinguish "47
+  /// records on the iPhone" from "12 records on the iPad" without
+  /// us having to track real device identity.
+  deviceFingerprint String   @map("device_fingerprint")
+  /// Per-deployment summary. Shape:
+  ///   Array<{
+  ///     dataCollectionId: string
+  ///     queuedRecords: Array<{ id, op, layerId, queuedAt, status }>
+  ///     cachedAt: string | null
+  ///   }>
+  /// Shape evolves freely; no schema enforcement. Truncated server-
+  /// side at write if it exceeds a sane limit (one stuck device
+  /// shouldn't be able to fill the table).
+  manifest          Json
+  /// navigator.storage.estimate() snapshot at the time of the POST.
+  /// Lets admins see a worker who's about to run out of phone
+  /// storage and proactively reach out before the cache evicts.
+  storageUsage      BigInt?  @map("storage_usage")
+  storageQuota      BigInt?  @map("storage_quota")
+  /// User-agent string captured at the moment of the POST so the
+  /// admin view can show "iPhone Safari" / "Pixel Chrome" without
+  /// the manifest having to embed it explicitly.
+  userAgent         String?  @map("user_agent")
+  reportedAt        DateTime @default(now()) @map("reported_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceFingerprint], map: "field_queue_manifest_user_device_unique")
+  @@index([reportedAt])
+  @@map("field_queue_manifest")
 }
 
 /// Per-(NotificationType, NotificationChannel) org-wide override of

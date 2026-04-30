@@ -137,6 +137,19 @@ export async function AppShell({ children }: { children: ReactNode }) {
               >
                 Notifications
               </NavLink>
+              {/* Tier 4 of the field offline-resilience design (see
+                  docs/field-offline-areas.md). Surfaces every field
+                  device's queued-record beacon: which workers are
+                  stuck offline, which devices haven't reported in,
+                  who's about to run out of phone storage. The page
+                  is read-only by design -- recovery is a human
+                  conversation, not a server-side mutation. */}
+              <NavLink
+                href="/admin/field-queues"
+                icon={<ClipboardList className="h-4 w-4" />}
+              >
+                Field queues
+              </NavLink>
             </>
           ) : null}
         </nav>
