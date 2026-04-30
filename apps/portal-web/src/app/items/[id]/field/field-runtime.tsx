@@ -63,6 +63,10 @@ import {
   requestPersistentStorage,
   type StorageEstimate,
 } from '@/lib/offline-storage-quota';
+import {
+  clearTileCache,
+  readTileCacheStats,
+} from '@/lib/offline-tile-warmer';
 
 /**
  * Per-layer descriptor the field runtime consumes. Server-built (see
@@ -506,16 +510,36 @@ export function FieldRuntime({
     'unknown' | 'persistent' | 'best-effort'
   >('unknown');
   const [storage, setStorage] = useState<StorageEstimate | null>(null);
+  // Slice 10 polish: tile-cache breakdown surfaced separately from
+  // total IndexedDB usage so a user can answer "what's eating my
+  // quota" without guessing. Null = no SW (dev mode, browsers
+  // without SW support); the panel hides the row in that case.
+  const [tileCache, setTileCache] = useState<{
+    count: number;
+    bytes: number;
+  } | null>(null);
   useEffect(() => {
     void (async () => {
-      const [persisted, est] = await Promise.all([
+      const [persisted, est, tiles] = await Promise.all([
         isPersistent(),
         estimateStorage(),
+        readTileCacheStats(),
       ]);
       setPersistentState(persisted ? 'persistent' : 'best-effort');
       setStorage(est);
+      setTileCache(tiles);
     })();
   }, [cachedDeployment]);
+
+  // Refresh tile-cache stats on demand (after download, after
+  // clear). Wrapped as a callback so the LayerVisibilityPanel can
+  // call it from its "Clear tiles" affordance.
+  const refreshTileCacheStats = useCallback(async () => {
+    const tiles = await readTileCacheStats();
+    setTileCache(tiles);
+    const est = await estimateStorage();
+    setStorage(est);
+  }, []);
 
   const startDownload = useCallback(async () => {
     if (downloadProgress?.phase && downloadProgress.phase !== 'done' &&
@@ -616,6 +640,10 @@ export function FieldRuntime({
         (p) => setDownloadProgress({ ...p }),
       );
       setCachedDeployment(manifest);
+      // Tile-cache stats jumped during the warm phase; refresh so
+      // the panel's "Map tiles: X (Y MB)" line catches up without
+      // forcing the user to reopen the layer panel.
+      void refreshTileCacheStats();
     } catch (err) {
       setDownloadProgress({
         phase: 'failed',
@@ -921,6 +949,11 @@ export function FieldRuntime({
               setPersistentState(
                 r.persistent ? 'persistent' : 'best-effort',
               );
+            }}
+            tileCache={tileCache}
+            onClearTiles={async () => {
+              const ok = await clearTileCache();
+              if (ok) await refreshTileCacheStats();
             }}
           />
         ) : null}
@@ -1385,6 +1418,8 @@ function LayerVisibilityPanel({
   storage,
   persistentState,
   onRequestPersist,
+  tileCache,
+  onClearTiles,
 }: {
   layers: MapLayer[];
   hiddenLayerIds: Set<string>;
@@ -1400,6 +1435,13 @@ function LayerVisibilityPanel({
   /** Fires the storage.persist() prompt. The user can also re-request
    *  if they originally denied. */
   onRequestPersist: () => void;
+  /** Slice 10: tile cache stats (count + bytes) read from the SW.
+   *  Null when the SW isn't registered (dev mode, unsupported
+   *  browsers); the panel hides the row in that case. */
+  tileCache: { count: number; bytes: number } | null;
+  /** Drops every cached tile via the SW message channel. Used for
+   *  the "free up space" affordance when the storage gauge is red. */
+  onClearTiles: () => void;
 }) {
   // Group sources are headers, not togglable rows themselves -- but
   // we still show them so the panel reads like the desktop layer
@@ -1497,6 +1539,27 @@ function LayerVisibilityPanel({
             <p className="mt-1 text-[10px] text-rose-600">
               Storage nearly full. Free up space before downloading more areas.
             </p>
+          ) : null}
+          {/* Slice 10: tile-cache breakdown surfaced inside the
+              storage block so a user staring at the bar can answer
+              "what's eating my quota" in one glance. The "Clear
+              tiles" link drops only the SW tile cache; cached
+              features + queued edits stay put because they're
+              load-bearing for offline work. */}
+          {tileCache && tileCache.count > 0 ? (
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2 text-[11px] text-muted">
+              <span>
+                Map tiles: {tileCache.count.toLocaleString()} (
+                {formatBytes(tileCache.bytes)})
+              </span>
+              <button
+                type="button"
+                onClick={onClearTiles}
+                className="text-[10px] text-accent hover:underline"
+              >
+                Clear tiles
+              </button>
+            </div>
           ) : null}
         </div>
       ) : null}
