@@ -17,6 +17,8 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AREA_UNITS,
+  AREA_UNIT_LABELS,
   DEFAULT_BUFFER_STEP,
   DEFAULT_DERIVED_LAYER_FEATURE_LIMIT,
   DEFAULT_STEPS,
@@ -24,7 +26,9 @@ import {
   MAX_BUFFER_DISTANCE_METERS,
   METERS_PER_UNIT,
   UNIT_LABELS,
+  type AreaUnit,
   type BufferParams,
+  type CalculateGeometryParams,
   type DerivedLayerData,
   type FeatureField,
   type Item,
@@ -812,12 +816,88 @@ function extractFields(data: unknown, layerKey: string | undefined): FeatureFiel
 const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   buffer: 'Buffer',
   dissolve: 'Dissolve',
+  centroid: 'Centroid',
+  'convex-hull': 'Convex hull',
+  bbox: 'Bounding box',
+  simplify: 'Simplify',
+  vertices: 'Vertices',
+  densify: 'Densify',
+  'top-n': 'Top N by attribute',
+  'random-sample': 'Random sample',
+  'nearest-neighbor': 'Nearest-neighbor distance',
+  fishnet: 'Fishnet',
+  'calculate-geometry': 'Calculate geometry',
 };
 
 const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
   buffer: 'Expand features outward into polygon halos.',
   dissolve: 'Merge every input geometry into a single feature.',
+  centroid: 'Replace each feature with its center point.',
+  'convex-hull': 'Replace each feature with its smallest enclosing convex polygon.',
+  bbox: 'Replace each feature with its axis-aligned bounding rectangle.',
+  simplify: 'Drop vertices closer than the given tolerance.',
+  vertices: 'Explode each line / polygon into one point per vertex.',
+  densify: 'Add intermediate vertices so no segment exceeds a length.',
+  'top-n': 'Keep only the N highest or lowest values of a numeric field.',
+  'random-sample': 'Keep a deterministic random subset of features.',
+  'nearest-neighbor':
+    'Add a numeric field with the distance to the closest other feature.',
+  fishnet: 'Generate a grid of cells or transect lines over each polygon.',
+  'calculate-geometry':
+    'Add a length / perimeter / area field in your chosen unit.',
 };
+
+/**
+ * Logical tool groups for the toolbox modal. Borrows from PostGIS's
+ * own categorization (Geometry Processing / Accessors / Constructors /
+ * Measurement Functions) where it cleanly maps to user intent, and
+ * invents a UX-only category ('Filter') where it doesn't. Each group
+ * is rendered as its own section in the toolbox; adding a tool is two
+ * lines: extend TOOL_LABELS / TOOL_DESCRIPTIONS and append the kind
+ * to its group's `tools` array here.
+ *
+ * Order matters: groups render top-to-bottom in the order declared.
+ * A user opening the toolbox for the first time sees Reshape first,
+ * which covers the most common single-feature transforms.
+ */
+interface ToolGroup {
+  label: string;
+  description: string;
+  tools: Array<ToolStep['tool']>;
+}
+const TOOL_GROUPS: ToolGroup[] = [
+  {
+    label: 'Reshape',
+    description:
+      'Modify each feature’s geometry. Same row count out, attributes pass through.',
+    tools: ['buffer', 'simplify', 'densify', 'convex-hull', 'bbox'],
+  },
+  {
+    label: 'Extract',
+    description: 'Replace each feature with a piece extracted from it.',
+    tools: ['centroid', 'vertices'],
+  },
+  {
+    label: 'Combine',
+    description: 'Reduce many features to one or fewer.',
+    tools: ['dissolve'],
+  },
+  {
+    label: 'Measure',
+    description: 'Add a numeric attribute computed from each feature.',
+    tools: ['calculate-geometry', 'nearest-neighbor'],
+  },
+  {
+    label: 'Filter',
+    description: 'Keep a subset of rows, no geometry change.',
+    tools: ['top-n', 'random-sample'],
+  },
+  {
+    label: 'Generate',
+    description: 'Create new features from scratch.',
+    tools: ['fishnet'],
+  },
+];
 
 /**
  * Renders the pipeline as a vertical list of step cards. Between
@@ -843,6 +923,11 @@ function PipelineSection({
   onRemoveStep: (index: number) => void;
   onInsertStep: (index: number, kind: ToolStep['tool']) => void;
 }) {
+  // Toolbox modal state lives at the section level so a single modal
+  // instance serves every "Add a step" affordance. `pickerSlotIndex`
+  // is the pipeline index where the picked tool will be spliced in
+  // when the user makes a selection; null means the modal is closed.
+  const [pickerSlotIndex, setPickerSlotIndex] = useState<number | null>(null);
   return (
     <section className="space-y-2">
       <h4 className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -859,7 +944,7 @@ function PipelineSection({
             a step without first having to add at the end and then
             reorder. */}
         <AddStepRow
-          onPick={(kind) => onInsertStep(0, kind)}
+          onClick={() => setPickerSlotIndex(0)}
           variant="slot"
         />
 
@@ -878,7 +963,7 @@ function PipelineSection({
                 list, so we lift it to a primary visual when it's
                 the last slot. */}
             <AddStepRow
-              onPick={(kind) => onInsertStep(idx + 1, kind)}
+              onClick={() => setPickerSlotIndex(idx + 1)}
               variant={idx === pipeline.length - 1 ? 'primary' : 'slot'}
             />
           </div>
@@ -890,6 +975,17 @@ function PipelineSection({
           </p>
         ) : null}
       </div>
+
+      <ToolToolbox
+        open={pickerSlotIndex !== null}
+        onClose={() => setPickerSlotIndex(null)}
+        onPick={(kind) => {
+          if (pickerSlotIndex !== null) {
+            onInsertStep(pickerSlotIndex, kind);
+          }
+          setPickerSlotIndex(null);
+        }}
+      />
     </section>
   );
 }
@@ -949,7 +1045,51 @@ function StepCard({
           sourcePicked={sourcePicked}
         />
       ) : step.tool === 'dissolve' ? (
-        <DissolveStepEditor />
+        <NoParamInfo body="Merges every feature into a single combined geometry. All attributes are dropped; downstream steps that need a specific column will fail validation if they sit after dissolve." />
+      ) : step.tool === 'centroid' ? (
+        <NoParamInfo body="Replaces each feature with its center point. Output is point geometry; attributes pass through." />
+      ) : step.tool === 'convex-hull' ? (
+        <NoParamInfo body="Replaces each feature with its convex hull (the smallest convex polygon enclosing it)." />
+      ) : step.tool === 'bbox' ? (
+        <NoParamInfo body="Replaces each feature with its axis-aligned bounding rectangle. Useful for extent-only views or spatial-bin clustering." />
+      ) : step.tool === 'simplify' ? (
+        <SimplifyStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'simplify', params })}
+        />
+      ) : step.tool === 'vertices' ? (
+        <NoParamInfo body="Explodes each line or polygon into one point feature per vertex. Adds a vertex_index column. Source attributes pass through." />
+      ) : step.tool === 'densify' ? (
+        <DensifyStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'densify', params })}
+        />
+      ) : step.tool === 'top-n' ? (
+        <TopNStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'top-n', params })}
+          sourceFields={sourceFields}
+          sourcePicked={sourcePicked}
+        />
+      ) : step.tool === 'random-sample' ? (
+        <RandomSampleStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'random-sample', params })}
+        />
+      ) : step.tool === 'nearest-neighbor' ? (
+        <NoParamInfo body="Adds a nearest_distance_m attribute to each feature: meters to its closest neighbor in this layer. Geometry passes through." />
+      ) : step.tool === 'fishnet' ? (
+        <FishnetStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'fishnet', params })}
+        />
+      ) : step.tool === 'calculate-geometry' ? (
+        <CalculateGeometryStepEditor
+          params={step.params}
+          onChange={(params) =>
+            onChange({ tool: 'calculate-geometry', params })
+          }
+        />
       ) : (
         // Forward-compat fallback for a tool kind a newer server
         // might emit that this client doesn't recognize. Surface
@@ -964,80 +1104,201 @@ function StepCard({
 }
 
 /**
- * Inline insertion row. The "slot" variant is the small dashed-line
- * affordance between two cards; the "primary" variant is the
- * call-to-action button after the last step. Both open the same
- * picker; the variant is purely visual.
+ * Insertion-slot trigger between (or after) pipeline cards. The "slot"
+ * variant is the small dashed-line affordance between two cards; the
+ * "primary" variant is the call-to-action button after the last step.
+ * Both trigger the same toolbox modal; the parent owns the modal
+ * state so multiple slots share one modal instance.
  */
 function AddStepRow({
-  onPick,
+  onClick,
   variant,
 }: {
-  onPick: (kind: ToolStep['tool']) => void;
+  onClick: () => void;
   variant: 'slot' | 'primary';
 }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  // Close on outside click. Same pattern the source picker uses;
-  // each AddStepRow is independent so concurrent open states across
-  // multiple slots don't collide.
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
-
   const triggerClasses =
     variant === 'primary'
       ? 'inline-flex h-9 items-center gap-1 rounded-md border border-accent/40 bg-accent/5 px-3 text-xs font-medium text-accent hover:bg-accent/10'
       : 'inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-border bg-transparent px-2 text-[11px] text-muted hover:border-accent/50 hover:text-ink-1';
 
   return (
-    <div ref={containerRef} className="relative flex justify-center">
+    <div className="flex justify-center">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={onClick}
         className={triggerClasses}
-        aria-haspopup="menu"
-        aria-expanded={open}
       >
         <Plus className="h-3.5 w-3.5" />
         Add a step
       </button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute top-full z-20 mt-1 w-64 overflow-hidden rounded-md border border-border bg-surface-0 shadow-lg"
-        >
-          <ul className="p-1">
-            {(Object.keys(TOOL_LABELS) as Array<ToolStep['tool']>).map((kind) => (
-              <li key={kind}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onPick(kind);
-                    setOpen(false);
-                  }}
-                  className="flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-2"
-                >
-                  <span className="font-medium text-ink-0">
-                    {TOOL_LABELS[kind]}
-                  </span>
-                  <span className="text-[11px] text-muted">
-                    {TOOL_DESCRIPTIONS[kind]}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+    </div>
+  );
+}
+
+/**
+ * Modal "toolbox" for picking a tool to splice into the pipeline.
+ * Tools are organized into logical groups (see TOOL_GROUPS) so the
+ * list stays scannable as more tools are added. A search field at
+ * the top filters across all groups by name and description so a
+ * user who knows what they want doesn't have to scroll.
+ *
+ * Keyboard:
+ *   - Esc closes the modal
+ *   - "/" anywhere inside the modal jumps focus to the search input
+ *   - Tab / Shift-Tab walks through tool buttons in display order;
+ *     Enter on a focused button selects (this is just standard
+ *     button behavior, not custom)
+ *
+ * Click on the dimmed backdrop also dismisses; click on the inner
+ * card stops propagation so the modal stays open.
+ */
+function ToolToolbox({
+  open,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onPick: (kind: ToolStep['tool']) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  // Reset the search query and focus the search input when the modal
+  // opens. Using rAF so the input has been mounted before focus().
+  useEffect(() => {
+    if (!open) return;
+    setQuery('');
+    const id = requestAnimationFrame(() => searchRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+
+  // Global keyboard shortcuts while the modal is open. Esc closes;
+  // "/" focuses the search bar (skipped when the user is already
+  // typing in it so the slash isn't swallowed).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key === '/' && document.activeElement !== searchRef.current) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  // Filter tool list by query against label / description / kind.
+  // Empty query keeps every group; otherwise empty groups are
+  // dropped from the rendered output entirely so a search like
+  // "buffer" doesn't show empty Reshape / Filter / etc. headings.
+  const q = query.trim().toLowerCase();
+  const visibleGroups = TOOL_GROUPS.map((g) => ({
+    ...g,
+    tools: g.tools.filter((kind) => {
+      if (!q) return true;
+      const haystack = [TOOL_LABELS[kind], TOOL_DESCRIPTIONS[kind], kind]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    }),
+  })).filter((g) => g.tools.length > 0);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 sm:items-center"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add a step"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-surface-0 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="border-b border-border p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-ink-0">
+                Add a step
+              </h2>
+              <p className="mt-0.5 text-xs text-muted">
+                Pick a tool. The output of this step becomes the input
+                of the next.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink-1"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="relative mt-3">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+              aria-hidden="true"
+            />
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='Filter tools (press "/" anywhere to focus)…'
+              className="h-10 w-full rounded-md border border-border bg-surface-1 pl-10 pr-3 text-sm text-ink-0 placeholder:text-muted focus:border-accent focus:outline-none"
+            />
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {visibleGroups.length === 0 ? (
+            <p className="text-center text-sm text-muted">
+              No tools match "{query}".
+            </p>
+          ) : (
+            <div className="space-y-5">
+              {visibleGroups.map((g) => (
+                <section key={g.label}>
+                  <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
+                    {g.label}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-muted">
+                    {g.description}
+                  </p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {g.tools.map((kind) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        onClick={() => onPick(kind)}
+                        className="flex flex-col items-start gap-1 rounded-md border border-border bg-surface-1 p-3 text-left transition-colors hover:border-accent/50 hover:bg-surface-2 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                      >
+                        <span className="text-sm font-medium text-ink-0">
+                          {TOOL_LABELS[kind]}
+                        </span>
+                        <span className="text-[11px] text-muted">
+                          {TOOL_DESCRIPTIONS[kind]}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -1200,17 +1461,434 @@ function BufferStepEditor({
 }
 
 /**
- * Editor for a dissolve step. v1 has no parameters, so this is
- * informational copy explaining the step's effect. The empty
- * params shape on the wire keeps the door open for a future
- * groupBy field without a UI rewrite.
+ * Reusable info-only step editor for tools that take no params.
+ * Several tools (dissolve, centroid, convex-hull, bbox, vertices,
+ * nearest-neighbor) fit this shape; rather than duplicating the
+ * informational paragraph for each, the dispatch passes the
+ * tool-specific copy in.
  */
-function DissolveStepEditor() {
+function NoParamInfo({ body }: { body: string }) {
+  return <p className="text-[11px] text-muted">{body}</p>;
+}
+
+/**
+ * Tolerance editor shared by simplify and densify. Both take a
+ * positive number plus a length unit, so the editor accepts a
+ * label and value/unit setters from the parent.
+ */
+function ToleranceEditor({
+  label,
+  hint,
+  value,
+  unit,
+  onValueChange,
+  onUnitChange,
+}: {
+  label: string;
+  hint?: string;
+  value: number;
+  unit: LengthUnit;
+  onValueChange: (n: number) => void;
+  onUnitChange: (u: LengthUnit) => void;
+}) {
   return (
-    <p className="text-[11px] text-muted">
-      Merges every feature into a single combined geometry. All
-      attributes are dropped; downstream steps that need a specific
-      column will fail validation if they sit after dissolve.
-    </p>
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="text-ink-1">{label}</span>
+      <span className="flex items-center gap-2">
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={Number.isFinite(value) ? value : 0}
+          onChange={(e) => onValueChange(Number(e.target.value))}
+          className="h-10 w-32 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none"
+        />
+        <UnitSelect value={unit} onChange={onUnitChange} />
+      </span>
+      {hint ? <span className="text-[11px] text-muted">{hint}</span> : null}
+    </label>
+  );
+}
+
+function SimplifyStepEditor({
+  params,
+  onChange,
+}: {
+  params: { tolerance: number; unit: LengthUnit };
+  onChange: (next: { tolerance: number; unit: LengthUnit }) => void;
+}) {
+  return (
+    <ToleranceEditor
+      label="Tolerance"
+      hint="Vertices closer than this distance are dropped. Higher = simpler shapes; smaller = closer to the original."
+      value={params.tolerance}
+      unit={params.unit}
+      onValueChange={(tolerance) => onChange({ tolerance, unit: params.unit })}
+      onUnitChange={(unit) => onChange({ tolerance: params.tolerance, unit })}
+    />
+  );
+}
+
+function DensifyStepEditor({
+  params,
+  onChange,
+}: {
+  params: { maxSegmentLength: number; unit: LengthUnit };
+  onChange: (next: { maxSegmentLength: number; unit: LengthUnit }) => void;
+}) {
+  return (
+    <ToleranceEditor
+      label="Max segment length"
+      hint="Adds intermediate vertices so no segment is longer than this."
+      value={params.maxSegmentLength}
+      unit={params.unit}
+      onValueChange={(maxSegmentLength) =>
+        onChange({ maxSegmentLength, unit: params.unit })
+      }
+      onUnitChange={(unit) =>
+        onChange({ maxSegmentLength: params.maxSegmentLength, unit })
+      }
+    />
+  );
+}
+
+function TopNStepEditor({
+  params,
+  onChange,
+  sourceFields,
+  sourcePicked,
+}: {
+  params: { field: string; n: number; direction: 'asc' | 'desc' };
+  onChange: (next: {
+    field: string;
+    n: number;
+    direction: 'asc' | 'desc';
+  }) => void;
+  sourceFields: FeatureField[];
+  sourcePicked: boolean;
+}) {
+  const numericFields = sourceFields.filter((f) => f.type === 'number');
+  return (
+    <div className="space-y-2">
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-ink-1">Numeric field</span>
+        <select
+          value={params.field}
+          onChange={(e) => onChange({ ...params, field: e.target.value })}
+          disabled={!sourcePicked || numericFields.length === 0}
+          className="h-10 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none disabled:opacity-60"
+        >
+          {params.field === '' ? (
+            <option value="">
+              {!sourcePicked
+                ? 'Pick a source layer first'
+                : numericFields.length === 0
+                  ? 'No numeric fields on the source'
+                  : 'Pick a numeric field…'}
+            </option>
+          ) : null}
+          {numericFields.map((f) => (
+            <option key={f.name} value={f.name}>
+              {f.label || f.name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-ink-1">Keep</span>
+        <span className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={Number.isFinite(params.n) ? params.n : 1}
+            onChange={(e) =>
+              onChange({ ...params, n: Math.max(1, Math.floor(Number(e.target.value))) })
+            }
+            className="h-10 w-24 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none"
+          />
+          <select
+            value={params.direction}
+            onChange={(e) =>
+              onChange({
+                ...params,
+                direction: e.target.value === 'asc' ? 'asc' : 'desc',
+              })
+            }
+            className="h-10 rounded-md border border-border bg-surface-1 px-2 text-sm text-ink-0 focus:border-accent focus:outline-none"
+          >
+            <option value="desc">highest</option>
+            <option value="asc">lowest</option>
+          </select>
+        </span>
+        <span className="text-[11px] text-muted">
+          The N rows with the {params.direction === 'asc' ? 'lowest' : 'highest'}{' '}
+          values of the chosen field. NULLs are dropped.
+        </span>
+      </label>
+    </div>
+  );
+}
+
+function RandomSampleStepEditor({
+  params,
+  onChange,
+}: {
+  params: { mode: 'percentage' | 'count'; value: number; seed: number };
+  onChange: (next: {
+    mode: 'percentage' | 'count';
+    value: number;
+    seed: number;
+  }) => void;
+}) {
+  // Persist a stable seed once the user inserts the step. The
+  // generator's validate() also subs a default for seed=0, so the
+  // wizard never needs to ship a fresh random integer; preserving
+  // whatever seed lands here keeps the sample stable across edits.
+  const seed = params.seed || Math.floor(Math.random() * 2147483646) + 1;
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Sample mode">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={params.mode === 'percentage'}
+          onClick={() => onChange({ mode: 'percentage', value: 10, seed })}
+          className={`flex flex-col items-start gap-0.5 rounded-md border p-2.5 text-left transition-colors ${
+            params.mode === 'percentage'
+              ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
+              : 'border-border bg-surface-1 hover:bg-surface-2'
+          }`}
+        >
+          <span className="text-sm font-medium text-ink-1">Percentage</span>
+          <span className="text-[11px] text-muted">Approximately N percent of rows.</span>
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={params.mode === 'count'}
+          onClick={() => onChange({ mode: 'count', value: 100, seed })}
+          className={`flex flex-col items-start gap-0.5 rounded-md border p-2.5 text-left transition-colors ${
+            params.mode === 'count'
+              ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
+              : 'border-border bg-surface-1 hover:bg-surface-2'
+          }`}
+        >
+          <span className="text-sm font-medium text-ink-1">Exact count</span>
+          <span className="text-[11px] text-muted">Exactly N rows.</span>
+        </button>
+      </div>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-ink-1">
+          {params.mode === 'percentage' ? 'Percent' : 'Number of rows'}
+        </span>
+        <input
+          type="number"
+          min={1}
+          max={params.mode === 'percentage' ? 100 : undefined}
+          step={1}
+          value={Number.isFinite(params.value) ? params.value : 1}
+          onChange={(e) =>
+            onChange({ ...params, value: Number(e.target.value), seed })
+          }
+          className="h-10 w-32 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none"
+        />
+        <span className="text-[11px] text-muted">
+          Sample is deterministic given the seed below; same recipe = same
+          rows on every read.
+        </span>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-ink-1">Seed</span>
+        <span className="flex items-center gap-2">
+          <input
+            type="number"
+            value={seed}
+            onChange={(e) =>
+              onChange({ ...params, seed: Number(e.target.value) || 1 })
+            }
+            className="h-10 w-32 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...params,
+                seed: Math.floor(Math.random() * 2147483646) + 1,
+              })
+            }
+            className="h-10 rounded-md border border-border bg-surface-1 px-3 text-xs text-ink-1 hover:bg-surface-2"
+          >
+            Shuffle
+          </button>
+        </span>
+      </label>
+    </div>
+  );
+}
+
+function FishnetStepEditor({
+  params,
+  onChange,
+}: {
+  params: { cellSize: number; unit: LengthUnit; output: 'polygons' | 'lines' };
+  onChange: (next: {
+    cellSize: number;
+    unit: LengthUnit;
+    output: 'polygons' | 'lines';
+  }) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <ToleranceEditor
+        label="Cell size"
+        hint="Side length of each grid cell. Smaller = more cells = more compute."
+        value={params.cellSize}
+        unit={params.unit}
+        onValueChange={(cellSize) => onChange({ ...params, cellSize })}
+        onUnitChange={(unit) => onChange({ ...params, unit })}
+      />
+      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Output mode">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={params.output === 'polygons'}
+          onClick={() => onChange({ ...params, output: 'polygons' })}
+          className={`flex flex-col items-start gap-0.5 rounded-md border p-2.5 text-left transition-colors ${
+            params.output === 'polygons'
+              ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
+              : 'border-border bg-surface-1 hover:bg-surface-2'
+          }`}
+        >
+          <span className="text-sm font-medium text-ink-1">Polygons</span>
+          <span className="text-[11px] text-muted">Filled grid cells.</span>
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={params.output === 'lines'}
+          onClick={() => onChange({ ...params, output: 'lines' })}
+          className={`flex flex-col items-start gap-0.5 rounded-md border p-2.5 text-left transition-colors ${
+            params.output === 'lines'
+              ? 'border-accent bg-accent/5 ring-2 ring-accent/30'
+              : 'border-border bg-surface-1 hover:bg-surface-2'
+          }`}
+        >
+          <span className="text-sm font-medium text-ink-1">Lines</span>
+          <span className="text-[11px] text-muted">Grid lines / transects only.</span>
+        </button>
+      </div>
+      <p className="text-[11px] text-muted">
+        Restricted to polygon input. Output drops source attributes; each
+        cell carries cell_row and cell_col.
+      </p>
+    </div>
+  );
+}
+
+function CalculateGeometryStepEditor({
+  params,
+  onChange,
+}: {
+  params: CalculateGeometryParams;
+  onChange: (next: CalculateGeometryParams) => void;
+}) {
+  // Switching measurement re-keys the unit because length and area
+  // use different unit unions. Persist the field name across
+  // measurement changes so a user who picked a name doesn't have to
+  // retype it after toggling.
+  const setMeasurement = (m: 'length' | 'perimeter' | 'area') => {
+    if (m === params.measurement) return;
+    if (m === 'area') {
+      onChange({
+        measurement: 'area',
+        unit: 'square-meters',
+        fieldName: params.fieldName,
+      });
+    } else {
+      onChange({
+        measurement: m,
+        unit: 'meters',
+        fieldName: params.fieldName,
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Measurement">
+        {(['length', 'perimeter', 'area'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={params.measurement === m}
+            onClick={() => setMeasurement(m)}
+            className={`flex items-center justify-center rounded-md border p-2 text-sm capitalize transition-colors ${
+              params.measurement === m
+                ? 'border-accent bg-accent/5 ring-2 ring-accent/30 text-ink-0'
+                : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+            }`}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-ink-1">Unit</span>
+        {params.measurement === 'area' ? (
+          <select
+            value={params.unit}
+            onChange={(e) =>
+              onChange({
+                ...params,
+                measurement: 'area',
+                unit: e.target.value as AreaUnit,
+              })
+            }
+            className="h-10 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none"
+          >
+            {AREA_UNITS.map((u) => (
+              <option key={u} value={u}>
+                {u} ({AREA_UNIT_LABELS[u]})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <UnitSelect
+            value={params.unit}
+            onChange={(unit) =>
+              onChange({
+                ...params,
+                measurement: params.measurement,
+                unit,
+              })
+            }
+          />
+        )}
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-ink-1">Field name</span>
+        <input
+          type="text"
+          value={params.fieldName}
+          onChange={(e) =>
+            onChange({ ...params, fieldName: e.target.value } as CalculateGeometryParams)
+          }
+          maxLength={60}
+          placeholder="e.g. area_ha, length_km"
+          className="h-10 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-0 focus:border-accent focus:outline-none"
+        />
+        <span className="text-[11px] text-muted">
+          Letters, numbers, and underscores. Cannot match an existing field
+          on the source.
+        </span>
+      </label>
+    </div>
   );
 }
