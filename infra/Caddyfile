@@ -46,11 +46,25 @@ www.{$PORTAL_DOMAIN} {
     # Send everything to the web app. Next.js's standalone server is
     # http only and listens on port 3000. The api routes (/api/*)
     # are NestJS, listening separately on portal-api:4000 with its
-    # own /api global prefix -- EXCEPT /api/auth/*, which is owned by
-    # NextAuth on the web container and handles signin / callback /
-    # error / signout / session. Caddy evaluates handle blocks in
-    # order, so the more specific /api/auth/* match has to come first.
+    # own /api global prefix -- EXCEPT a few prefixes owned by the
+    # web container:
+    #
+    #   /api/auth/*    NextAuth: signin / callback / error / signout
+    #   /api/portal/*  BFF passthrough; injects the Keycloak access
+    #                  token server-side and forwards to portal-api,
+    #                  so the browser never holds the JWT.
+    #   /api/geocode/* server-side geocoding helper.
+    #
+    # Caddy evaluates handle blocks in order, so the more specific
+    # web-owned prefixes have to come before the catch-all
+    # /api/* -> portal-api block.
     handle /api/auth/* {
+        reverse_proxy portal-web:3000
+    }
+    handle /api/portal/* {
+        reverse_proxy portal-web:3000
+    }
+    handle /api/geocode/* {
         reverse_proxy portal-web:3000
     }
     handle /api/* {
