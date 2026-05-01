@@ -158,77 +158,95 @@ export function FieldCatalog({ rows }: { rows: FieldDeploymentRow[] }) {
         )}
       </div>
 
-      <ul className="divide-y divide-border rounded-md border border-border bg-surface-1">
+      {/* Field Maps style row layout (#226). On mobile each row is
+          a tap target that opens the deployment, with a compact
+          status dot for cache state and a tiny pill for queued
+          edits. Desktop keeps the previous denser layout via sm:
+          breakpoints because there's room for the description and
+          the explicit Open button there. */}
+      <ul className="divide-y divide-border overflow-hidden rounded-md border border-border bg-surface-1 sm:border-0">
         {sorted.map((row) => {
           const overlay = overlays[row.id] ?? {
             cached: null,
             queueCount: 0,
           };
+          const cached = overlay.cached !== null;
           return (
-            <li key={row.id} className="flex items-stretch gap-2 p-3">
-              <span
-                aria-hidden="true"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent"
-              >
-                <ClipboardList className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h2 className="truncate text-sm font-semibold text-ink-0">
-                  {row.title}
-                </h2>
-                {row.description ? (
-                  <p className="truncate text-[11px] text-muted">
-                    {row.description}
-                  </p>
-                ) : null}
-                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
-                  {overlay.cached ? (
-                    <span
-                      className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700"
-                      title={`Cached on ${new Date(overlay.cached.cachedAt).toLocaleString()}`}
-                    >
-                      <CloudDownload className="h-3 w-3" />
-                      Cached · {formatBytes(overlay.cached.estimatedSize)}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-muted">
-                      Not cached
-                    </span>
-                  )}
-                  {overlay.queueCount > 0 ? (
-                    isOnline ? (
-                      <button
-                        type="button"
-                        disabled={syncing[row.id]}
-                        onClick={() => {
-                          void syncOne(row.id);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700 hover:bg-amber-100 disabled:opacity-60"
-                      >
-                        {syncing[row.id] ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <CloudDownload className="h-3 w-3 rotate-180" />
-                        )}
-                        {syncing[row.id]
-                          ? 'Syncing...'
-                          : `Sync ${overlay.queueCount}`}
-                      </button>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-muted">
-                        <CloudOff className="h-3 w-3" />
-                        {overlay.queueCount} queued
-                      </span>
-                    )
-                  ) : null}
-                </div>
-              </div>
+            <li key={row.id}>
               <Link
                 href={`/items/${row.id}/field?from=field`}
-                className="flex shrink-0 items-center gap-1 self-center rounded-md border border-border bg-surface-0 px-3 py-2 text-xs font-medium text-ink-0 hover:border-accent hover:text-accent"
+                className="flex w-full items-center gap-3 p-3 transition-colors hover:bg-surface-2 active:bg-surface-2"
               >
-                Open
-                <ChevronRight className="h-3.5 w-3.5" />
+                <span
+                  aria-hidden="true"
+                  className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent sm:h-9 sm:w-9"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  {/* Cache status dot, lower-right of the thumbnail.
+                      Green = cached, gray = not cached. Mobile reads
+                      the dot at a glance instead of a wordy pill. */}
+                  <span
+                    aria-hidden="true"
+                    className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface-1 ${
+                      cached ? 'bg-emerald-500' : 'bg-muted/50'
+                    }`}
+                    title={
+                      cached
+                        ? `Cached: ${formatBytes(
+                            overlay.cached!.estimatedSize,
+                          )}`
+                        : 'Not cached'
+                    }
+                  />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-sm font-semibold text-ink-0">
+                    {row.title}
+                  </h2>
+                  {/* Description hides on mobile to keep rows
+                      single-line. Desktop sees it on a second line. */}
+                  {row.description ? (
+                    <p className="hidden truncate text-[11px] text-muted sm:block">
+                      {row.description}
+                    </p>
+                  ) : null}
+                  {/* Queued edits chip: useful even on mobile so the
+                      worker knows they have unsynced work without
+                      drilling in. Tappable to sync, but stops
+                      propagation so the row's primary tap still
+                      opens the deployment. */}
+                  {overlay.queueCount > 0 ? (
+                    <div className="mt-1 flex items-center gap-1 text-[11px]">
+                      {isOnline ? (
+                        <button
+                          type="button"
+                          disabled={syncing[row.id]}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void syncOne(row.id);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                        >
+                          {syncing[row.id] ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <CloudDownload className="h-3 w-3 rotate-180" />
+                          )}
+                          {syncing[row.id]
+                            ? 'Syncing...'
+                            : `Sync ${overlay.queueCount}`}
+                        </button>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-muted">
+                          <CloudOff className="h-3 w-3" />
+                          {overlay.queueCount} queued
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted" />
               </Link>
             </li>
           );

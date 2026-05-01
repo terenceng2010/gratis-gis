@@ -15,7 +15,9 @@ import {
   Layers,
   Loader2,
   MapPin,
+  MoreVertical,
   Plus,
+  RefreshCw,
   Search,
   Wifi,
   X,
@@ -930,7 +932,7 @@ export function FieldRuntime({
           / dynamic island doesn't sit on top of the back arrow when
           the runtime is launched from a home-screen PWA install
           (viewport-fit=cover puts the page under the status bar). */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-1 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+      <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <Link
           href={backHref}
           className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
@@ -938,20 +940,20 @@ export function FieldRuntime({
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
+        {/* Single-line title. Subtitle ("Field deployment of <map>")
+            moved into the More menu's header; field workers care
+            about the deployment name, not the underlying map name,
+            and the secondary line was eating vertical space + visual
+            weight. */}
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-semibold text-ink-0">{title}</h1>
-          <p className="truncate text-[11px] text-muted">
-            Field deployment of <span className="text-ink-1">{mapTitle}</span>
-          </p>
+          <h1 className="truncate text-sm font-semibold text-ink-0">
+            {title}
+          </h1>
         </div>
-        <ConnectivityPill
-          isOnline={isOnline}
-          cachedAt={cachedDeployment?.cachedAt ?? null}
-        />
-        {/* Slice 5 (queue + sync): surface how many records are
-            waiting for sync, with a click target to drain the queue
-            on demand. Only renders when there's something queued so
-            the header stays quiet during steady-state work. */}
+        {/* Sync chip: only renders when records are queued. Tapping
+            the chip kicks off a manual sync. The badge handles its
+            own busy state. Kept on the header (not in the More menu)
+            because a queued count is a notification, not a setting. */}
         {queueCount > 0 ? (
           <QueueBadge
             count={queueCount}
@@ -962,55 +964,24 @@ export function FieldRuntime({
             }}
           />
         ) : null}
-        {/* Slice 6 (persistence floor): surface whether the browser
-            will keep our IndexedDB across disk-pressure events. The
-            badge is intentionally subtle when persistent (green dot,
-            no copy) and slightly louder when best-effort (amber)
-            so users learn the difference without being nagged. */}
-        <PersistenceBadge state={persistentState} />
-        {/* Download / refresh offline area (#222.2). Top-level
-            affordance because Matt's prod test showed users don't
-            think to look in the Layers panel for it -- this is one
-            of the most-needed actions in field mode and deserves a
-            front-row seat. The Layers panel still has it as a
-            secondary entry for users who land there. Icon flips to
-            CloudOff once cached so users can tell at a glance
-            whether they've downloaded yet. */}
-        <button
-          type="button"
-          onClick={() => {
-            void startDownload();
-          }}
-          disabled={
+        {/* The More menu collects every status pill + secondary
+            action that used to crowd the header (connectivity,
+            persistence, download, install). Field Maps does the
+            same: a single 3-dot button at the top-right keeps the
+            collection chrome out of the way of the canvas. */}
+        <FieldMoreMenu
+          mapTitle={mapTitle}
+          isOnline={isOnline}
+          cachedAt={cachedDeployment?.cachedAt ?? null}
+          persistentState={persistentState}
+          downloadInFlight={
             downloadProgress !== null &&
             downloadProgress.phase !== 'done' &&
             downloadProgress.phase !== 'failed'
           }
-          aria-label={
-            cachedDeployment
-              ? 'Refresh offline cache'
-              : 'Download for offline'
-          }
-          title={
-            cachedDeployment
-              ? 'Refresh offline cache'
-              : 'Download for offline'
-          }
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-        >
-          {downloadProgress &&
-          downloadProgress.phase !== 'done' &&
-          downloadProgress.phase !== 'failed' ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <CloudDownload className="h-4 w-4" />
-          )}
-        </button>
-        {/* PWA install affordance: invisible when already installed
-            or when the browser hasn't fired beforeinstallprompt yet
-            (and on non-iOS where there's nothing to do). On iOS this
-            opens a Share-sheet hint dialog. */}
-        <PwaInstallButton variant="compact" />
+          hasCache={cachedDeployment !== null}
+          onDownload={() => void startDownload()}
+        />
       </header>
 
       <div className="relative min-h-0 flex-1">
@@ -2166,6 +2137,141 @@ function FormModal({
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Field-Maps-style "More" menu in the top-right of the field
+ * runtime header. Replaces the connectivity pill / persistence
+ * badge / download button / PWA install button cluster that used to
+ * fill the right side. All of those affordances are still present;
+ * they're just collected into one dropdown so the canvas isn't
+ * crowded by chrome.
+ *
+ * The dropdown is a self-contained popover with a backdrop that
+ * dismisses on outside-tap. Status rows in the menu are read-only;
+ * actions (Refresh offline cache, Install app) are buttons.
+ */
+function FieldMoreMenu({
+  mapTitle,
+  isOnline,
+  cachedAt,
+  persistentState,
+  downloadInFlight,
+  hasCache,
+  onDownload,
+}: {
+  mapTitle: string;
+  isOnline: boolean;
+  cachedAt: string | null;
+  persistentState: 'unknown' | 'persistent' | 'best-effort';
+  downloadInFlight: boolean;
+  hasCache: boolean;
+  onDownload: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Outside-tap dismisses. Field workers expect tap-on-canvas to do
+  // map work, not stay-trapped-in-menu, so a global listener wins
+  // over an internal click handler.
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!rootRef.current) return;
+      if (rootRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const connStatus = isOnline
+    ? { label: 'Online', tone: 'text-emerald-600' as const }
+    : hasCache
+      ? { label: 'Offline (cached)', tone: 'text-amber-600' as const }
+      : { label: 'Offline (no cache)', tone: 'text-rose-600' as const };
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="More options"
+        aria-expanded={open}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-md border border-border bg-surface-1 shadow-overlay"
+        >
+          <div className="border-b border-border px-3 py-2">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-muted">
+              Map
+            </p>
+            <p className="mt-0.5 truncate text-sm text-ink-0">{mapTitle}</p>
+          </div>
+          <ul className="px-1 py-1 text-sm">
+            <li className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+              <span className="text-muted">Connection</span>
+              <span className={`font-medium ${connStatus.tone}`}>
+                {connStatus.label}
+              </span>
+            </li>
+            {cachedAt ? (
+              <li className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+                <span className="text-muted">Last cached</span>
+                <span className="text-ink-1">
+                  {formatRelativeTime(cachedAt)}
+                </span>
+              </li>
+            ) : null}
+            {persistentState !== 'unknown' ? (
+              <li className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+                <span className="text-muted">Storage</span>
+                <span
+                  className={
+                    persistentState === 'persistent'
+                      ? 'text-emerald-700'
+                      : 'text-amber-700'
+                  }
+                >
+                  {persistentState === 'persistent'
+                    ? 'Persistent'
+                    : 'Best effort'}
+                </span>
+              </li>
+            ) : null}
+          </ul>
+          <div className="border-t border-border p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onDownload();
+              }}
+              disabled={downloadInFlight}
+              className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink-0 hover:bg-surface-2 disabled:opacity-50"
+            >
+              {downloadInFlight ? (
+                <Loader2 className="h-4 w-4 animate-spin text-muted" />
+              ) : hasCache ? (
+                <RefreshCw className="h-4 w-4 text-muted" />
+              ) : (
+                <CloudDownload className="h-4 w-4 text-muted" />
+              )}
+              <span>{hasCache ? 'Refresh offline cache' : 'Download for offline'}</span>
+            </button>
+            <div className="px-2 py-1">
+              <PwaInstallButton variant="compact" />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
