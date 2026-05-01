@@ -154,18 +154,28 @@ services:
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?KEYCLOAK_ADMIN_CLIENT_SECRET must be set in .env.prod}
       # MinIO / S3. Variable names match what storage.service.ts /
       # backup.service.ts read; no S3_* aliases.
-      MINIO_ENDPOINT: http://minio:9000
+      #
+      # The endpoint has to be the PUBLIC hostname because the S3
+      # SDK bakes it into presigned URLs and signature v4 covers the
+      # Host header. The api hairpins back through Caddy for the
+      # admin-style operations (HeadBucket, PutBucketPolicy,
+      # PutBucketCors), which is fine: those run at boot, not per
+      # request. Per-request work (presigning) is just URL
+      # manipulation in-process and never round-trips to MinIO.
+      MINIO_ENDPOINT: https://${STORAGE_DOMAIN:-storage.gratisgis.org}
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${S3_BUCKET:-gratisgis}
-      # Browser-facing MinIO base. Browsers hit this directly for
-      # presigned uploads + public reads. We don't have a CDN today;
-      # routing through the api proxy isn't supported either, so we
-      # hand back the same public URL Caddy is serving and rely on a
-      # future tile-route to map it. For now, the api uploads things
-      # but browser fetches will fail until we wire a path. Set on
-      # the .env.prod side so callers know it's a deliberate stub.
-      MINIO_PUBLIC_BASE: ${MINIO_PUBLIC_BASE:-http://minio:9000}
+      # Browser-facing MinIO base. Same hostname as MINIO_ENDPOINT,
+      # both because there's no CDN in front and because the
+      # presigned URLs we hand back ARE built off this. Saving
+      # publicUrl as a relative MINIO_PUBLIC_BASE here would just
+      # duplicate the host the SDK already embedded.
+      MINIO_PUBLIC_BASE: https://${STORAGE_DOMAIN:-storage.gratisgis.org}
+      # Origins the browser is allowed to PUT from. The bucket CORS
+      # rule we install at boot opens this list. Keep it tight: only
+      # the portal-web origin (apex) needs cross-origin access.
+      STORAGE_ALLOWED_ORIGINS: ${PUBLIC_URL:-https://gratisgis.org}
       # Backup archives. The runtime image pre-creates this with
       # app:app ownership so the named volume below inherits it.
       BACKUP_DIR: /app/backups
@@ -238,6 +248,7 @@ services:
       # we can reuse the same file in staging if we ever want.
       PORTAL_DOMAIN: ${PORTAL_DOMAIN:-gratisgis.org}
       AUTH_DOMAIN: ${AUTH_DOMAIN:-auth.gratisgis.org}
+      STORAGE_DOMAIN: ${STORAGE_DOMAIN:-storage.gratisgis.org}
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set in .env.prod}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

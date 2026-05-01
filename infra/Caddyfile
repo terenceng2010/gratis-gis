@@ -119,3 +119,22 @@ www.{$PORTAL_DOMAIN} {
         # flows. Keycloak sets its own conservative defaults.
     }
 }
+
+# Public-facing MinIO. The browser hits presigned PUTs and public
+# GETs (item thumbnails, hero images, feature attachments) directly
+# at this host. Signature v4 covers the Host header, so the api has
+# to mint URLs that target THIS hostname (MINIO_ENDPOINT below) and
+# Caddy has to preserve the Host on the way through. Caddy v2's
+# reverse_proxy preserves Host by default, which is what we need.
+{$STORAGE_DOMAIN} {
+    encode gzip zstd
+
+    # MinIO speaks plain HTTP inside the docker network. The TLS
+    # termination is here at Caddy.
+    reverse_proxy minio:9000
+
+    # No X-Frame-Options or strict referrer policy here: MinIO
+    # serves binary blobs that get embedded in <img> tags from the
+    # portal, and overly strict headers can break that. The bucket
+    # policy is what gates which objects are publicly readable.
+}
