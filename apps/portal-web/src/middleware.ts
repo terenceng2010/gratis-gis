@@ -34,6 +34,21 @@ export default withAuth(
       // click for the user.
       signIn: '/signin',
     },
+    callbacks: {
+      // Default behavior is "authorized iff token present". We allow
+      // a small allowlist of paths under matcher coverage to be
+      // public. The Web App Manifest under /field/manifest.webmanifest
+      // is the obvious one: PWA installers fetch it without the
+      // user's session cookies (different fetch context), and a
+      // 307-to-/signin breaks the install. Manifest files contain
+      // no protected data; serving them anonymously is safe.
+      authorized: ({ req, token }) => {
+        if (req.nextUrl.pathname === '/field/manifest.webmanifest') {
+          return true;
+        }
+        return !!token;
+      },
+    },
   },
 );
 
