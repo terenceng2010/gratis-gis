@@ -75,21 +75,20 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.KEYCLOAK_CLIENT_ID_WEB ?? 'portal-web',
       clientSecret: process.env.KEYCLOAK_CLIENT_SECRET_WEB ?? '',
       issuer: `${keycloakUrl}/realms/${realm}`,
-      // Request offline_access in addition to the default openid +
-      // profile + email scopes. Keycloak responds with an "offline"
-      // refresh token that does NOT expire on idle (the default
-      // refresh token expires after ssoSessionIdleTimeout, which
-      // forces the user to sign in again every time they leave the
-      // PWA closed for more than a day or two). With offline_access
-      // the refresh-token rotation in jwt() above keeps minting
-      // fresh access tokens for as long as we hold the
-      // NEXTAUTH_SECRET-signed JWT cookie -- which we configure
-      // for 365 days below. This is the Field Maps-equivalent
-      // "stay signed in" behaviour: the user signs in once and
-      // the PWA stays signed in across launches.
-      authorization: {
-        params: { scope: 'openid profile email offline_access' },
-      },
+      // We *want* offline_access here so the refresh token survives
+      // the realm's ssoSessionIdleTimeout (the bit that signs PWA
+      // users out after a day or two of not opening the app). But
+      // requesting it requires the realm to have offline_access in
+      // the client's optional scopes AND the user to have the
+      // offline_access role. Prod Keycloak rejected the OAuth
+      // callback with "Offline tokens not allowed for the user or
+      // client" because the realm wasn't configured for it; the
+      // 365-day NextAuth session.maxAge below still keeps users
+      // signed in across PWA launches by extending the JWT cookie,
+      // and the in-band refresh-token rotation handles ongoing
+      // calls to portal-api. Re-add the scope here once the
+      // realm-side config (offline_access default-role +
+      // optional-client-scope) is in place. (#229 hotfix)
     }),
   ],
   callbacks: {
