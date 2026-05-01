@@ -775,11 +775,28 @@ export function FieldRuntime({
     mapRef.current = map;
   }, []);
 
-  // Wire the map's click handler manually so we can branch on
-  // tap-on-feature (always edit) without colliding with MapCanvas's
-  // own selection machinery. Add-mode no longer uses click-to-drop --
-  // it uses the explicit "Add at center" button below.
-  useEffect(() => {
+  // Tap-to-edit was Field Maps Quick Capture style: tap a feature,
+  // form opens directly in edit mode. Matt's prod test feedback
+  // surfaced two problems with that flow: (1) it suppressed the
+  // popup that shows attribute values, which is the primary "what's
+  // here" affordance users expect, and (2) without an explicit Edit
+  // button, users couldn't tell that tapping a feature was about to
+  // open an edit form. Both stem from forcing the same gesture
+  // (tap) to do two things at once.
+  //
+  // Reverted to popup-first: tapping a feature lets MapCanvas open
+  // its read-only popup, which now shows attributes. Editing is
+  // accessed via a future "Edit" button inside that popup
+  // (#223.4 follow-up). This matches Field Maps' own popup-then-
+  // Edit workflow, and matches the desktop map item where popups
+  // already work the same way.
+  //
+  // The block below is left in place but disabled so the field
+  // runtime's onClick listener is gone. Reintroduce when the
+  // popup-with-Edit-button surface lands and we wire its Edit
+  // button to setFormModal.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  function _legacyTapToEditEffect(): void {
     const map = mapRef.current;
     if (!map) return;
     const liveMap = map; // narrow non-null inside the closure below
@@ -844,10 +861,8 @@ export function FieldRuntime({
       });
     }
     map.on('click', onClick);
-    return () => {
-      map.off('click', onClick);
-    };
-  }, [editableLayers, mapData.layers]);
+  }
+  void _legacyTapToEditEffect; // referenced to silence unused-warning
 
   // Commit the active template: drop a feature at the current map
   // center and open the form pre-filled with presetAttributes. Used
@@ -911,7 +926,11 @@ export function FieldRuntime({
     // bottom) so iPhones with rounded corners don't clip the action
     // buttons.
     <div className="flex h-[100dvh] flex-col bg-surface-1">
-      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-1 px-3 py-2">
+      {/* Header reserves env(safe-area-inset-top) so iOS status bar
+          / dynamic island doesn't sit on top of the back arrow when
+          the runtime is launched from a home-screen PWA install
+          (viewport-fit=cover puts the page under the status bar). */}
+      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-1 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <Link
           href={backHref}
           className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
@@ -1001,7 +1020,6 @@ export function FieldRuntime({
           basemaps={basemaps}
           selection={selection}
           selectTool="off"
-          suppressPopup
           onSelectionChange={setSelection}
           onCameraChange={() => {
             /* Camera changes don't persist in field-mode. */

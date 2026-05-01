@@ -174,7 +174,13 @@ export async function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-0/80 px-4 backdrop-blur">
+        {/* Top bar reserves env(safe-area-inset-top) so iOS status
+            bar / dynamic island doesn't sit on top of the user-menu
+            button when the app is launched from a home-screen PWA
+            install (viewport-fit=cover puts the page under the
+            status bar by design). Without the inset we'd hide the
+            sign-out affordance behind the OS chrome on iPhones. */}
+        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-0/80 px-4 backdrop-blur pt-[env(safe-area-inset-top)] [height:calc(3.5rem+env(safe-area-inset-top))]">
           <div className="flex flex-1 items-center gap-3">
             <TopBarSearch />
           </div>
