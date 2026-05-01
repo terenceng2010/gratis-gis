@@ -92,9 +92,15 @@ services:
     # Pin a recent MinIO. Earlier 2024 releases reject the
     # x-amz-sdk-checksum-algorithm header that AWS SDK v3 sends by
     # default on PUT / CreateBucket, with "A header you provided
-    # implies functionality that is not implemented". Bumping to
-    # 2025+ adds checksum support.
-    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    # implies functionality that is not implemented". The April 2025
+    # release we used initially also rejected the same header on
+    # PUT-Bucket-CORS / PUT-Bucket-Policy specifically (admin
+    # operations send the header but the surface there hadn't caught
+    # up). The September 2025 release accepts it everywhere we use,
+    # so bucket bootstrap (HeadBucket / PutBucketPolicy /
+    # PutBucketCors) and presigned PUTs both succeed without the
+    # WHEN_REQUIRED opt-out alone needing to do all the work.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: gratis-gis-prod-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
