@@ -21,12 +21,25 @@ const API_BASE = process.env.PORTAL_API_URL ?? 'http://localhost:4000';
  * insert can run for several minutes. We use a dedicated Agent so
  * normal API calls keep their tight defaults: only requests routed
  * here get the loosened budget.
+ *
+ * Constructed lazily on first ingest hit. Top-level instantiation
+ * triggered a Next.js build-time crash ("util.markAsUncloneable is
+ * not a function") because that API only exists on Node 22+ and the
+ * build container runs an older Node; the constructor body referenced
+ * the missing builtin during "Collect page data". Lazy-init keeps the
+ * Agent out of the build-phase module evaluation.
  */
-const ingestAgent = new Agent({
-  headersTimeout: 15 * 60 * 1000,
-  bodyTimeout: 15 * 60 * 1000,
-  connectTimeout: 30 * 1000,
-});
+let _ingestAgent: Agent | null = null;
+function getIngestAgent(): Agent {
+  if (!_ingestAgent) {
+    _ingestAgent = new Agent({
+      headersTimeout: 15 * 60 * 1000,
+      bodyTimeout: 15 * 60 * 1000,
+      connectTimeout: 30 * 1000,
+    });
+  }
+  return _ingestAgent;
+}
 
 /** Match v3 per-layer ingest, v2 ingest, and the wizard probe path.
  *  Conservative: only widens for endpoints we know can take minutes. */
@@ -108,7 +121,7 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // headers + body timeouts. Everything else falls through to the
   // built-in 30 s defaults so a misbehaving upstream still fails fast.
   if (isLongRunningIngestPath(suffix)) {
-    init.dispatcher = ingestAgent;
+    init.dispatcher = getIngestAgent();
   }
 
   const upstream = await fetch(target, init);
