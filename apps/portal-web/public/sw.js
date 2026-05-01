@@ -12,7 +12,7 @@
  * Versioning: bump CACHE_VERSION on every deploy so stale assets are evicted.
  */
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const STATIC_CACHE = `gratis-static-${CACHE_VERSION}`;
 const GEOJSON_CACHE = `gratis-geojson-${CACHE_VERSION}`;
 // Slice 10: basemap + reference tiles. Keyed separately from static
@@ -20,6 +20,11 @@ const GEOJSON_CACHE = `gratis-geojson-${CACHE_VERSION}`;
 // retain them aggressively for offline; static assets churn with
 // every deploy and rotate via CACHE_VERSION).
 const TILES_CACHE = `gratis-tiles-${CACHE_VERSION}`;
+// Bucket for the offline catalog shell at /field. Pre-cached at SW
+// install so the back-arrow from a field deployment always lands
+// somewhere usable, online or not.
+const SHELL_CACHE = `gratis-shell-${CACHE_VERSION}`;
+const FIELD_OFFLINE_SHELL = '/field/offline.html';
 const SYNC_QUEUE_TAG = 'gratis-feature-sync';
 
 // Detect the Next.js dev server. Dev chunks under /_next/static/ reuse
@@ -76,9 +81,25 @@ function isTileRequest(url) {
 }
 
 // -------------------------------------------------------------------------
-// Install: nothing special; let the browser manage static asset caching.
+// Install: pre-cache the field offline shell so the back arrow from
+// a field deployment always lands on something usable, even when
+// offline. Other static assets are populated lazily via cacheFirst.
 // -------------------------------------------------------------------------
 self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(SHELL_CACHE).then((cache) =>
+      // cache.addAll bails the whole install if any URL fails. The
+      // offline shell is a single static file so this is fine; if
+      // it's missing the install fails fast and the SW falls back
+      // to the previous version.
+      cache.addAll([FIELD_OFFLINE_SHELL]).catch(() => {
+        // Best-effort: don't kill SW install if the shell fetch
+        // fails (dev mode 404, etc). The fallback handler below
+        // tries to read it anyway -- worst case the user sees the
+        // browser's offline screen.
+      }),
+    ),
+  );
   // Skip waiting so the new SW activates immediately on the next navigate.
   self.skipWaiting();
 });
@@ -87,7 +108,7 @@ self.addEventListener('install', (event) => {
 // Activate: clean up old caches.
 // -------------------------------------------------------------------------
 self.addEventListener('activate', (event) => {
-  const keep = new Set([STATIC_CACHE, GEOJSON_CACHE, TILES_CACHE]);
+  const keep = new Set([STATIC_CACHE, GEOJSON_CACHE, TILES_CACHE, SHELL_CACHE]);
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
@@ -119,6 +140,23 @@ self.addEventListener('fetch', (event) => {
   // party fetches that aren't tiles (auth flows, telemetry, etc.)
   // pass through unmodified.
   if (url.origin !== self.location.origin) return;
+
+  // Field catalog navigation. The /field page is server-rendered
+  // and needs network + auth to load, so without a fallback the
+  // back arrow from an offline field deployment lands on a
+  // browser "no internet" page. Network-first, fallback to the
+  // pre-cached static shell at /field/offline.html. The shell
+  // hydrates from IndexedDB so the user sees their cached
+  // deployments and can re-enter one.
+  if (
+    request.mode === 'navigate' &&
+    (url.pathname === '/field' ||
+      url.pathname === '/field/' ||
+      url.pathname.startsWith('/field?'))
+  ) {
+    event.respondWith(fieldNavigateWithFallback(request));
+    return;
+  }
 
   // GeoJSON: network-first with cache fallback (enables offline map rendering).
   if (GEOJSON_PATTERN.test(url.pathname)) {
@@ -253,6 +291,34 @@ async function tileCacheStats() {
     return { count: requests.length, bytes };
   } catch {
     return { count: 0, bytes: 0 };
+  }
+}
+
+/**
+ * Navigation handler for /field. Network-first so the live catalog
+ * always wins when there's signal; on network failure we serve the
+ * pre-cached static shell that hydrates from IndexedDB. The shell
+ * lists every cached deployment with a tap target back into the
+ * runtime, so the user can keep working offline.
+ */
+async function fieldNavigateWithFallback(request) {
+  try {
+    const response = await fetch(request);
+    return response;
+  } catch {
+    const cache = await caches.open(SHELL_CACHE);
+    const cached = await cache.match(FIELD_OFFLINE_SHELL);
+    if (cached) return cached;
+    // SW couldn't pre-cache the shell at install time. Last-resort
+    // inline HTML so the user isn't dumped on the browser's
+    // generic "no internet" screen.
+    return new Response(
+      '<!DOCTYPE html><meta charset="utf-8"><title>Offline</title>' +
+        '<body style="font-family:system-ui;padding:2rem;color:#333;">' +
+        '<h1>Offline</h1><p>The cached catalog page is missing. ' +
+        'Reconnect and reload to refresh.</p></body>',
+      { headers: { 'content-type': 'text/html; charset=utf-8' } },
+    );
   }
 }
 

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f0f10">
+  <title>Field (offline) | GratisGIS</title>
+  <link rel="manifest" href="/field/manifest.webmanifest">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fafafa;
+      --surface: #ffffff;
+      --border: #e6e6e8;
+      --ink-0: #0f0f10;
+      --ink-1: #2c2c30;
+      --muted: #8a8a8e;
+      --accent: #2563eb;
+      --emerald: #059669;
+      --amber: #b45309;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f0f10;
+        --surface: #18181b;
+        --border: #2a2a2e;
+        --ink-0: #fafafa;
+        --ink-1: #e4e4e7;
+        --muted: #888a90;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink-0);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.4;
+      min-height: 100dvh;
+    }
+    /* Reserve safe-area-top so iOS status bar doesn't sit on header. */
+    header {
+      padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    header .sub {
+      margin: 2px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      margin-top: 8px;
+      border: 1px solid var(--amber);
+      color: var(--amber);
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    main {
+      padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+    }
+    .empty {
+      padding: 32px 16px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    ul.deployments {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 4px;
+      text-decoration: none;
+      color: inherit;
+      border-bottom: 1px solid var(--border);
+    }
+    .row:active { background: rgba(127, 127, 127, 0.08); }
+    .thumb {
+      flex: 0 0 auto;
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      background: rgba(37, 99, 235, 0.12);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      font-size: 18px;
+    }
+    .thumb .dot {
+      position: absolute;
+      bottom: -2px;
+      right: -2px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--emerald);
+      border: 2px solid var(--surface);
+    }
+    .body {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .title {
+      font-weight: 600;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .meta {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .queue {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 4px;
+      padding: 2px 8px;
+      border: 1px solid var(--amber);
+      color: var(--amber);
+      border-radius: 999px;
+      font-size: 11px;
+    }
+    .chev { color: var(--muted); flex: 0 0 auto; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Field</h1>
+    <p class="sub">Cached deployments on this device</p>
+    <span class="badge" aria-live="polite">Offline</span>
+  </header>
+  <main>
+    <ul class="deployments" id="list"></ul>
+    <p class="empty" id="empty" hidden>
+      No deployments cached on this device. Reconnect to download
+      offline data for a deployment.
+    </p>
+  </main>
+  <script>
+    /**
+     * Render cached deployments from IndexedDB. The catalog page at
+     * /field can't load when the device is offline (it's
+     * server-rendered Next), so this static shell is what the
+     * service worker serves as the fallback. We read directly from
+     * the same `deployments` store the field runtime writes to.
+     */
+    (async function() {
+      const list = document.getElementById('list');
+      const empty = document.getElementById('empty');
+
+      function fmtRelative(iso) {
+        if (!iso) return '';
+        const t = new Date(iso).getTime();
+        if (!Number.isFinite(t)) return '';
+        const diff = Date.now() - t;
+        const min = Math.floor(diff / 60_000);
+        if (min < 1) return 'just now';
+        if (min < 60) return min + 'm ago';
+        const hr = Math.floor(min / 60);
+        if (hr < 24) return hr + 'h ago';
+        const d = Math.floor(hr / 24);
+        if (d === 1) return 'yesterday';
+        if (d < 30) return d + 'd ago';
+        return new Date(iso).toLocaleDateString();
+      }
+
+      function fmtBytes(n) {
+        if (typeof n !== 'number' || !Number.isFinite(n)) return '';
+        if (n < 1024) return n + 'B';
+        const kb = n / 1024;
+        if (kb < 1024) return Math.round(kb) + 'KB';
+        return (kb / 1024).toFixed(1) + 'MB';
+      }
+
+      function readAll(store) {
+        return new Promise(function(resolve, reject) {
+          const req = store.getAll();
+          req.onsuccess = function() { resolve(req.result || []); };
+          req.onerror = function() { reject(req.error); };
+        });
+      }
+
+      let db = null;
+      try {
+        db = await new Promise(function(resolve, reject) {
+          const req = indexedDB.open('gratisgis-offline');
+          req.onsuccess = function() { resolve(req.result); };
+          req.onerror = function() { reject(req.error); };
+        });
+      } catch (err) {
+        empty.hidden = false;
+        empty.textContent =
+          "Couldn't open the offline cache on this device.";
+        return;
+      }
+
+      let deployments = [];
+      let queueRows = [];
+      try {
+        if (db.objectStoreNames.contains('deployments')) {
+          const tx = db.transaction('deployments', 'readonly');
+          deployments = await readAll(tx.objectStore('deployments'));
+        }
+        if (db.objectStoreNames.contains('queue')) {
+          const tx2 = db.transaction('queue', 'readonly');
+          queueRows = await readAll(tx2.objectStore('queue'));
+        }
+      } catch (err) {
+        // empty out -- show empty state below
+      }
+
+      // Per-deployment queue counts.
+      const queueByDeployment = {};
+      for (const q of queueRows) {
+        const id = q.dataCollectionId;
+        if (!id) continue;
+        queueByDeployment[id] = (queueByDeployment[id] || 0) + 1;
+      }
+
+      if (!deployments || deployments.length === 0) {
+        empty.hidden = false;
+        return;
+      }
+
+      deployments.sort(function(a, b) {
+        const ax = (a && a.cachedAt) || '';
+        const bx = (b && b.cachedAt) || '';
+        return bx.localeCompare(ax);
+      });
+
+      for (const d of deployments) {
+        const link = document.createElement('a');
+        link.className = 'row';
+        link.href = '/items/' + encodeURIComponent(d.dataCollectionId) +
+          '/field?from=field';
+
+        const thumb = document.createElement('span');
+        thumb.className = 'thumb';
+        thumb.setAttribute('aria-hidden', 'true');
+        thumb.textContent = '☰'; // hamburger glyph as a placeholder
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        thumb.appendChild(dot);
+
+        const body = document.createElement('span');
+        body.className = 'body';
+        const title = document.createElement('span');
+        title.className = 'title';
+        title.textContent = d.title || d.slug || 'Untitled deployment';
+        body.appendChild(title);
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        const cachedLabel = d.cachedAt
+          ? 'Cached ' + fmtRelative(d.cachedAt)
+          : 'Cached';
+        const sizeLabel = d.estimatedSize
+          ? ' · ' + fmtBytes(d.estimatedSize)
+          : '';
+        meta.textContent = cachedLabel + sizeLabel;
+        body.appendChild(meta);
+        const qcount = queueByDeployment[d.dataCollectionId] || 0;
+        if (qcount > 0) {
+          const q = document.createElement('span');
+          q.className = 'queue';
+          q.textContent = qcount + ' queued edit' + (qcount === 1 ? '' : 's');
+          body.appendChild(q);
+        }
+
+        const chev = document.createElement('span');
+        chev.className = 'chev';
+        chev.setAttribute('aria-hidden', 'true');
+        chev.textContent = '›'; // single right-arrow
+
+        link.appendChild(thumb);
+        link.appendChild(body);
+        link.appendChild(chev);
+
+        const li = document.createElement('li');
+        li.appendChild(link);
+        list.appendChild(li);
+      }
+    })();
+  </script>
+</body>
+</html>
