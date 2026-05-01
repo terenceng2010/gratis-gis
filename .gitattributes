@@ -1,0 +1,26 @@
+# Default: let git handle line endings per-file. CRLF on Windows
+# checkouts, LF on Linux/macOS.
+* text=auto
+
+# Files that MUST be LF on every checkout, regardless of the host OS.
+# Shell scripts, Dockerfiles, and other files that get exec'd by Linux
+# tooling break with CRLF (bash: "bad interpreter: /bin/bash^M",
+# Docker: "exec format error", etc).
+*.sh         text eol=lf
+*.bash       text eol=lf
+Dockerfile   text eol=lf
+*.dockerfile text eol=lf
+Caddyfile    text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+
+# Binary files git should never try to interpret as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.tar  binary

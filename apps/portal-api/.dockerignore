@@ -1,0 +1,26 @@
+# Anything we don't want shipped into the build context. The build
+# runs from the repo root (so packages/* is reachable) and the build
+# stage inside the Dockerfile cherry-picks what it needs from the
+# tree, so this file mostly just trims context size + skips local
+# state that would invalidate the cache.
+
+node_modules
+**/node_modules
+dist
+.next
+.turbo
+coverage
+.cache
+*.log
+*.out
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Local dev artifacts
+.env
+.env.local
+.env.*.local

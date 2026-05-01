@@ -1,0 +1,92 @@
+# Caddy config for the gratisgis.org production stack. Two virtual
+# hosts:
+#
+#   - {$PORTAL_DOMAIN}      -> portal-web:3000
+#                              The Next.js app proxies its own /api/*
+#                              calls to portal-api server-side, so
+#                              there's no need to route /api/* through
+#                              Caddy separately. Browser-side requests
+#                              also hit /api/* paths under the same
+#                              hostname, which Next.js forwards via
+#                              its server actions / route handlers.
+#                              ...except: NestJS sets a global /api
+#                              prefix and lives on its own port, so
+#                              we also route /api/* to portal-api:4000
+#                              directly. portal-web does NOT proxy
+#                              browser-side calls.
+#   - {$AUTH_DOMAIN}        -> keycloak:8080
+#                              Keycloak handles its own routing under
+#                              /realms, /admin, /resources, etc.
+#
+# Both hosts get automatic Let's Encrypt certs. The {$ACME_EMAIL}
+# placeholder lets Let's Encrypt notify us about renewal failures.
+#
+# Caddy auto-redirects HTTP to HTTPS by default, so port 80 traffic
+# transparently upgrades.
+
+{
+    email {$ACME_EMAIL}
+    # Production cert authority. Switch to `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory`
+    # when iterating on cert issuance to avoid the LE rate limit.
+    # No `auto_https off`; we want the default behaviour.
+}
+
+{$PORTAL_DOMAIN} {
+    encode gzip zstd
+
+    # Send everything to the web app. Next.js's standalone server is
+    # http only and listens on port 3000. The api routes (/api/*)
+    # are NestJS, listening separately on portal-api:4000 with its
+    # own /api global prefix.
+    handle /api/* {
+        reverse_proxy portal-api:4000
+    }
+    handle /docs {
+        reverse_proxy portal-api:4000
+    }
+    handle /docs/* {
+        reverse_proxy portal-api:4000
+    }
+    handle /health {
+        reverse_proxy portal-api:4000
+    }
+
+    # Everything else: the Next.js portal.
+    handle {
+        reverse_proxy portal-web:3000
+    }
+
+    # Cache static assets aggressively. Next emits filename-hashed
+    # bundles under /_next/static so a year is safe.
+    @nextStatic path /_next/static/*
+    header @nextStatic Cache-Control "public, max-age=31536000, immutable"
+
+    # Light security headers. CSP is intentionally absent; Next + Map
+    # tile loads make a strict CSP a separate project.
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        # Strict-Transport-Security is added by Caddy automatically
+        # once HTTPS is up; leaving the explicit header off avoids a
+        # double-set warning.
+    }
+}
+
+{$AUTH_DOMAIN} {
+    encode gzip zstd
+
+    reverse_proxy keycloak:8080 {
+        # Keycloak (with --proxy-headers=xforwarded) trusts the
+        # X-Forwarded-* headers Caddy sets by default, so no extra
+        # config is needed here.
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        # Don't set X-Frame-Options DENY on auth: the login screen
+        # is sometimes embedded in an iframe during account-linking
+        # flows. Keycloak sets its own conservative defaults.
+    }
+}

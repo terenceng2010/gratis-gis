@@ -1,0 +1,213 @@
+name: gratis-gis-prod
+
+# Production stack for gratisgis.org. Distinct from
+# infra/docker-compose.yml (the dev stack) on every axis that matters:
+#
+#   - No public ports except Caddy on 80/443. Postgres, Keycloak,
+#     MinIO, pg_tileserv, and the apps all live on the internal
+#     `gratis-net` network and are only reachable through the proxy.
+#   - Keycloak runs in production mode (`start --optimized`), not
+#     `start-dev`, with a real PostgreSQL store rather than dev-file.
+#   - portal-api and portal-web are built from source via the
+#     repo-root Dockerfiles. The build context is the repo root so
+#     the workspace deps resolve.
+#   - All secrets come from infra/.env.prod (gitignored). See
+#     infra/.env.prod.example for the required keys.
+#   - Caddy holds the only TLS certs; renewal is fully automatic via
+#     Let's Encrypt. The certs persist in the caddy-data volume so
+#     restarts don't re-fetch.
+#
+# Day-to-day usage from the box:
+#
+#   cd /opt/gratis-gis
+#   docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.prod up -d --build
+#   docker compose -f infra/docker-compose.prod.yml logs -f
+#
+# Or, with the deploy.sh helper:
+#   ./infra/deploy.sh
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: gratis-gis-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gratisgis}
+      POSTGRES_USER: ${POSTGRES_USER:-gratisgis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD must be set in .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-prod-db.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+      - ./init-prod-db.sh:/docker-entrypoint-initdb.d/20-init-keycloak-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gratisgis} -d ${POSTGRES_DB:-gratisgis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gratis-net
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: gratis-gis-prod-keycloak
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Production mode: optimized, postgres-backed, edge-proxy-aware.
+    # `start` (no --optimized because we don't pre-build a custom
+    # image) auto-runs the Liquibase migrations on first boot.
+    command: ["start", "--http-enabled=true", "--proxy-headers=xforwarded"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD must be set in .env.prod}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-auth.gratisgis.org}
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env.prod}
+      # JVM ceiling. The host has 7.6 GB; capping Keycloak at 1 GB
+      # leaves room for Postgres + the two app containers without
+      # pressure. Bump if Keycloak starts ttying memory under load.
+      JAVA_OPTS_APPEND: -Xms256m -Xmx1024m
+    volumes:
+      - ./keycloak/themes/portal:/opt/keycloak/themes/portal:ro
+    networks:
+      - gratis-net
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-02T17-50-41Z
+    container_name: gratis-gis-prod-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env.prod}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env.prod}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gratis-net
+
+  pg_tileserv:
+    image: pramsey/pg_tileserv:latest
+    container_name: gratis-gis-prod-pg_tileserv
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
+    networks:
+      - gratis-net
+
+  portal-api:
+    image: gratis-gis/portal-api:latest
+    container_name: gratis-gis-prod-portal-api
+    build:
+      context: ..
+      dockerfile: apps/portal-api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
+      # Keycloak issuer the API expects in JWTs. Has to match the
+      # issuer the web app's NextAuth config uses; both come from
+      # KEYCLOAK_ISSUER in .env.prod.
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-https://auth.gratisgis.org/realms/gratis-gis}
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gratis-gis}
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-admin-cli}
+      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # MinIO / S3.
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-gratisgis}
+      S3_FORCE_PATH_STYLE: "true"
+      # Public URL for redirects + OG metadata.
+      PUBLIC_URL: ${PUBLIC_URL:-https://gratisgis.org}
+    networks:
+      - gratis-net
+    # No public port. Caddy talks to it as `portal-api:4000`.
+
+  portal-web:
+    image: gratis-gis/portal-web:latest
+    container_name: gratis-gis-prod-portal-web
+    build:
+      context: ..
+      dockerfile: apps/portal-web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      portal-api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # Server-side fetch target. Web container talks to api over
+      # the internal docker network.
+      INTERNAL_API_URL: http://portal-api:4000
+      # Browser-side fetch target. Routed through Caddy under /api/.
+      NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-https://gratisgis.org}
+      # NextAuth: must match the public Keycloak issuer so iss claim
+      # validates. NEXTAUTH_URL is the canonical public app URL.
+      NEXTAUTH_URL: ${PUBLIC_URL:-https://gratisgis.org}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET must be set in .env.prod}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-https://auth.gratisgis.org/realms/gratis-gis}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-portal-web}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET must be set in .env.prod}
+    networks:
+      - gratis-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: gratis-gis-prod-caddy
+    restart: unless-stopped
+    depends_on:
+      portal-web:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Surfaced as {$PORTAL_DOMAIN} / {$AUTH_DOMAIN} in the Caddyfile so
+      # we can reuse the same file in staging if we ever want.
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:-gratisgis.org}
+      AUTH_DOMAIN: ${AUTH_DOMAIN:-auth.gratisgis.org}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set in .env.prod}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - gratis-net
+
+volumes:
+  pgdata:
+  miniodata:
+  caddy-data:
+  caddy-config:
+
+networks:
+  gratis-net:
+    driver: bridge
