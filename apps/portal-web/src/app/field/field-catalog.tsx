@@ -224,7 +224,7 @@ export function FieldCatalog({ rows }: { rows: FieldDeploymentRow[] }) {
                 </div>
               </div>
               <Link
-                href={`/items/${row.id}/field`}
+                href={`/items/${row.id}/field?from=field`}
                 className="flex shrink-0 items-center gap-1 self-center rounded-md border border-border bg-surface-0 px-3 py-2 text-xs font-medium text-ink-0 hover:border-accent hover:text-accent"
               >
                 Open

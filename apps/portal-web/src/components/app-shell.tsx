@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { headers } from 'next/headers';
 import { getServerSession } from 'next-auth';
 import {
   Archive,
@@ -55,6 +56,23 @@ export async function AppShell({ children }: { children: ReactNode }) {
   // layout. Prevents the sidebar / nav from showing links the user
   // can't use without signing in.
   if (!session) {
+    return (
+      <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
+    );
+  }
+
+  // Field deployment runtime: skip the global chrome. The field page
+  // owns the entire viewport (its own header bar, basemap canvas,
+  // bottom-anchored sheets), and the search bar at the top of the
+  // shell isn't useful while collecting data -- worse, on mobile
+  // users mistake it for a map address-search and try to type
+  // coordinates into it. Detection comes from x-gratis-pathname,
+  // stamped by middleware so we don't need a custom server. The
+  // route shape /items/<id>/field is a deliberate match (any deeper
+  // segments under /field are still field-runtime children).
+  const pathname = headers().get('x-gratis-pathname') ?? '';
+  const isFieldRuntime = /^\/items\/[^/]+\/field(?:\/|$)/.test(pathname);
+  if (isFieldRuntime) {
     return (
       <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
     );

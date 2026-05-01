@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { Inter } from 'next/font/google';
 import { AppShell } from '@/components/app-shell';
@@ -24,6 +24,15 @@ export const metadata: Metadata = {
     title: 'GratisGIS',
     statusBarStyle: 'black-translucent',
   },
+};
+
+export const viewport: Viewport = {
+  // viewportFit: 'cover' is what makes env(safe-area-inset-*) return
+  // real pixel values on iPhones with rounded corners / notches.
+  // Without it the insets are zero and bottom-anchored UI
+  // (add-feature sheet, attribute table) clips behind the home
+  // indicator.
+  viewportFit: 'cover',
   // Theme color appears in both the OS status bar (Android Chrome
   // standalone) and the iOS splash screen. Matches manifest.json
   // for consistency.

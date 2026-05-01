@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   Check,
@@ -194,6 +195,35 @@ export function FieldRuntime({
   boundForms,
   currentUserId,
 }: Props) {
+  // Where the back arrow goes. Defaults to the deployment's item
+  // detail page (admin / desktop flow); when the user came from the
+  // /field catalog, we honor that with ?from=field on the deep link.
+  // Persisted to sessionStorage so subsequent in-app nav within the
+  // runtime (e.g. Add Layer dialog reopening this page) keeps the
+  // mobile-correct destination instead of falling back to item-
+  // detail. Cleared on next visit when ?from is absent.
+  const searchParams = useSearchParams();
+  const backHref = useMemo(() => {
+    if (typeof window === 'undefined') return `/items/${dataCollectionId}`;
+    const fromParam = searchParams?.get('from');
+    const key = `gratis:field:back:${dataCollectionId}`;
+    if (fromParam === 'field') {
+      try {
+        window.sessionStorage.setItem(key, '/field');
+      } catch {
+        /* private browsing etc -- best effort */
+      }
+      return '/field';
+    }
+    try {
+      const stored = window.sessionStorage.getItem(key);
+      if (stored) return stored;
+    } catch {
+      /* ignore */
+    }
+    return `/items/${dataCollectionId}`;
+  }, [dataCollectionId, searchParams]);
+
   // The active template: which (layer, symbology class) pair is armed
   // for add-mode. null = no armed template (the user hasn't picked
   // anything from the picker yet, or just cancelled).
@@ -822,16 +852,18 @@ export function FieldRuntime({
   }, [activeTemplate, clearPendingMarker]);
 
   return (
-    // Field-mode lives below the standard portal nav (3.5rem) just like
-    // the editor runtime does. Avoids `fixed inset-0` so the standard
-    // page chrome stays on top of the canvas instead of bleeding through
-    // it.
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col bg-surface-1">
+    // Field mode owns the entire viewport: AppShell suppresses its
+    // chrome on this route (see app-shell.tsx) so we render edge-to-
+    // edge. dvh keeps the layout stable when iOS hides the URL bar
+    // mid-scroll. The bottom sheets below honor env(safe-area-inset-
+    // bottom) so iPhones with rounded corners don't clip the action
+    // buttons.
+    <div className="flex h-[100dvh] flex-col bg-surface-1">
       <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-1 px-3 py-2">
         <Link
-          href={`/items/${dataCollectionId}`}
+          href={backHref}
           className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
-          aria-label="Back to deployment"
+          aria-label="Back"
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
@@ -976,7 +1008,7 @@ export function FieldRuntime({
         ) : null}
       </div>
 
-      <footer className="flex shrink-0 items-center gap-2 border-t border-border bg-surface-1 p-2">
+      <footer className="flex shrink-0 items-center gap-2 border-t border-border bg-surface-1 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         {editableLayers.length === 0 ? (
           <p className="flex-1 text-center text-xs text-muted">
             No editable layers in this map.
@@ -1355,7 +1387,7 @@ function TemplatePicker({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[75vh] w-full flex-col rounded-t-xl border-t border-border bg-surface-1 shadow-overlay sm:max-h-[80vh]"
+        className="flex max-h-[75vh] w-full flex-col rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)] sm:max-h-[80vh]"
       >
         <div className="shrink-0 border-b border-border px-3 py-2">
           <div className="flex items-center justify-between">
@@ -1886,7 +1918,7 @@ function FormModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[60vh] w-full flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay sm:max-h-[55vh]"
+        className="flex max-h-[60vh] w-full flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)] sm:max-h-[55vh]"
       >
         <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3 py-2">
           <span
