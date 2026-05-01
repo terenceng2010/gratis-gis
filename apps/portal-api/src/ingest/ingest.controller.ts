@@ -20,6 +20,10 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { FeaturesService } from '../features/features.service.js';
 import { V3FeaturesService } from '../features-v3/v3-features.service.js';
+import {
+  V3TablesService,
+  type V3LayerShape,
+} from '../features-v3/v3-tables.service.js';
 import { IngestService } from './ingest.service.js';
 
 /**
@@ -42,6 +46,7 @@ export class IngestController {
     private readonly prisma: PrismaService,
     private readonly features: FeaturesService,
     private readonly v3Features: V3FeaturesService,
+    private readonly v3Tables: V3TablesService,
   ) {}
 
   /**
@@ -199,19 +204,26 @@ export class IngestController {
     }
     const data = item.data as {
       version?: number;
-      layers?: Array<{ id: string }>;
+      layers?: Array<V3LayerShape>;
     } | null;
     if (data?.version !== 3) {
       throw new BadRequestException(
         'Per-layer ingest is v3-only. Use /items/:id/ingest for v1/v2 items.',
       );
     }
-    if (!(data.layers ?? []).some((l) => l.id === layerId)) {
+    const layer = (data.layers ?? []).find((l) => l.id === layerId);
+    if (!layer) {
       throw new NotFoundException(
         `Layer ${layerId} is not part of this item's schema.`,
       );
     }
     await this.items.assertCanEdit(user, itemId);
+
+    // Re-run provisionLayer before the insert so any pre-#240
+    // single-geometry column (Polygon/Point/LineString) is migrated
+    // to its Multi-* equivalent in place. Idempotent on tables that
+    // are already correctly typed.
+    await this.v3Tables.provisionLayer(itemId, layer);
 
     const { geojson, driver, layerName, sourceSrs } = await this.ingest.fileLayerToGeoJson(
       file.buffer,
