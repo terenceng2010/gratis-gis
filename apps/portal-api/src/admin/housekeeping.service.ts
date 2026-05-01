@@ -429,6 +429,13 @@ export class HousekeepingService {
    * and the operator wants to know which one. Joins to pg_stat_user_tables
    * for live row-count estimates. Limited to public-schema regular
    * tables so we skip toast/index/sequence noise.
+   *
+   * Excluded by name:
+   *   - spatial_ref_sys: PostGIS-managed lookup table, ~7 MB on every
+   *     install whether the org has any data or not. Not actionable
+   *     to the admin; including it just dominates the chart.
+   *   - tables starting with `_` (e.g. `_prisma_migrations`): Prisma
+   *     bookkeeping. Same rationale -- not user data.
    */
   async largestTables() {
     type Row = {
@@ -452,6 +459,8 @@ export class HousekeepingService {
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public'
         AND c.relkind = 'r'
+        AND c.relname <> 'spatial_ref_sys'
+        AND c.relname NOT LIKE '\_%'
       ORDER BY pg_total_relation_size(c.oid) DESC
       LIMIT 10
     `;

@@ -690,28 +690,33 @@ export function HousekeepingView({ bundle }: Props) {
         />
       ) : null}
 
-      {/* Top tables by total relation size (#161). Diagnostic for
-          "which table is bloating the cluster" -- if the database
-          card above is heavy, this is where to look. */}
-      <Section
-        icon={<Layers className="h-4 w-4" />}
-        title="Largest database tables"
-        empty="No tables to report."
-        caption="Top 10 tables in the public schema by total size (heap + indexes). The fs_* tables are the per-layer feature stores for individual data_layer items; form_submission holds every form response."
-      >
-        {largestTables.length === 0 ? null : (
-          <LargestTablesTable rows={largestTables} />
-        )}
-      </Section>
-
+      {/* Items first because that's the actionable view -- "which
+          item should I trash" -- and tables second as the diagnostic
+          drilldown for "is the database itself bloated". */}
       <Section
         icon={<Database className="h-4 w-4" />}
         title="Largest items by total size"
         empty="No items yet."
-        caption="Each item's settings/metadata blob plus, for data_layer items, the per-layer feature tables that hold the actual rows and geometry. File attachments and form submissions aren't attributed back to their owning items here -- attachments live in MinIO (see the Storage card above) and submissions live in form_submission (see the Largest database tables card)."
+        caption="Each item's settings/metadata blob plus, for data_layer items, the per-layer feature tables that hold the actual rows and geometry. File attachments and form submissions aren't attributed back to their owning items here -- attachments live in MinIO (see the Storage card above) and submissions live in form_submission (see the Largest database tables card below)."
       >
         {largeItems.length === 0 ? null : (
           <LargeItemsTable rows={largeItems} />
+        )}
+      </Section>
+
+      {/* Top tables by total relation size (#161). Diagnostic for
+          "which table is bloating the cluster" -- if the database
+          card above is heavy, this is where to look. PostGIS's
+          spatial_ref_sys and Prisma's bookkeeping tables are
+          excluded server-side so the chart shows only user data. */}
+      <Section
+        icon={<Layers className="h-4 w-4" />}
+        title="Largest database tables"
+        empty="No tables to report."
+        caption="Top 10 user tables in the public schema by total size (heap + indexes). The fs_* tables are the per-layer feature stores for individual data_layer items; form_submission holds every form response. PostGIS reference tables and Prisma bookkeeping are excluded."
+      >
+        {largestTables.length === 0 ? null : (
+          <LargestTablesTable rows={largestTables} />
         )}
       </Section>
     </div>
