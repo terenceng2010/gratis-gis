@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { AlertTriangle, ChevronRight, Smartphone } from 'lucide-react';
 
@@ -8,9 +9,17 @@ import { formatBytes } from '@/lib/offline-store';
 /**
  * Per-deployment summary inside a single device's manifest. Mirrors
  * what the API returns; trimmed to what this page renders.
+ *
+ * The server enriches each entry with `dataCollectionTitle` (resolved
+ * via Item.title) so the admin sees a human label rather than a raw
+ * uuid. `dataCollectionDeleted` flips when the underlying item has
+ * been soft-deleted, since the manifest mirror outlives item deletion
+ * by design.
  */
 export interface FieldQueueManifestEntry {
   dataCollectionId: string;
+  dataCollectionTitle?: string | null;
+  dataCollectionDeleted?: boolean;
   cachedAt: string | null;
   queuedRecords: Array<{
     id: string;
@@ -185,13 +194,45 @@ function DeviceRow({ row }: { row: FieldQueueRow }) {
 function DeploymentEntry({ entry }: { entry: FieldQueueManifestEntry }) {
   const queued = entry.queuedRecords.length;
   const failed = entry.queuedRecords.filter((r) => r.status === 'failed');
+  // Prefer the server-resolved deployment title. If the item has been
+  // soft-deleted we keep the title but tag it; if the lookup missed
+  // entirely (cross-org or hard-deleted) we fall back to the uuid so
+  // the admin can still copy it for forensic purposes.
+  const title = entry.dataCollectionTitle?.trim() || null;
+  const deleted = !!entry.dataCollectionDeleted;
   return (
     <li className="rounded-md border border-border bg-surface-0 px-3 py-2">
       <div className="flex items-baseline justify-between gap-2">
-        <p className="font-mono text-[11px] text-ink-1">
-          {entry.dataCollectionId}
-        </p>
-        <p className="text-[10px] text-muted">
+        <div className="min-w-0">
+          {title ? (
+            <Link
+              href={`/items/${entry.dataCollectionId}`}
+              className="block truncate text-sm font-medium text-ink-0 hover:text-accent"
+              title={entry.dataCollectionId}
+            >
+              {title}
+              {deleted ? (
+                <span className="ml-2 text-[10px] font-normal text-muted">
+                  (deleted)
+                </span>
+              ) : null}
+            </Link>
+          ) : (
+            <p
+              className="truncate text-sm font-medium text-ink-1"
+              title={entry.dataCollectionId}
+            >
+              Unknown deployment
+            </p>
+          )}
+          <p
+            className="mt-0.5 truncate font-mono text-[10px] text-muted"
+            title={entry.dataCollectionId}
+          >
+            {entry.dataCollectionId}
+          </p>
+        </div>
+        <p className="shrink-0 text-[10px] text-muted">
           {entry.cachedAt
             ? `cached ${formatRelative(entry.cachedAt)}`
             : 'no cache'}
