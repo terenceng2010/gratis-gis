@@ -44,6 +44,11 @@ mkdir -p infra/keycloak/import
 # shellcheck disable=SC1091
 set -a
 . infra/.env.prod
+# Derived AUTH_URL the realm template uses for the realm-level
+# frontendUrl. Keep this separate from PUBLIC_URL: the realm has to
+# advertise itself as the AUTH subdomain (otherwise discovery
+# returns the wrong issuer and OAuth breaks).
+export AUTH_URL="https://${AUTH_DOMAIN:-auth.gratisgis.org}"
 set +a
 envsubst < infra/keycloak/realm-gratis-gis.prod.json.tmpl \
   > infra/keycloak/import/realm-gratis-gis.json
