@@ -125,10 +125,14 @@ export function FilterPopover({
         <div
           role="dialog"
           aria-label="Filter items"
-          // Anchored under the pill, left-aligned. max-w stops the
-          // panel from running off the right edge on a narrow viewport;
-          // the chip strip wraps inside if there are many types.
-          className="absolute left-0 top-full z-30 mt-1 w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-surface-1 p-3 shadow-lg"
+          // Anchored under the pill. On mobile we right-align so the
+          // panel can't overflow off the right edge of the viewport
+          // when the Filter button sits near the middle of the
+          // header (Matt's iPhone screenshot showed type chips
+          // clipped behind the right edge). Desktop keeps the
+          // left-aligned anchor so the panel hugs the button as
+          // before.
+          className="absolute right-0 top-full z-30 mt-1 w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-surface-1 p-3 shadow-lg sm:left-0 sm:right-auto"
         >
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
