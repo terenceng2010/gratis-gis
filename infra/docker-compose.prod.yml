@@ -107,6 +107,17 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env.prod}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env.prod}
+      # Server-level CORS allowlist. Mirrors the per-bucket CORS rule
+      # the api would otherwise install via PutBucketCorsCommand --
+      # but that command path triggers MinIO's "header you provided
+      # implies functionality not implemented" rejection on every
+      # MinIO release we've tried (server flips between accepting
+      # and rejecting x-amz-sdk-checksum-algorithm headers across
+      # releases). Setting it on the server side sidesteps the
+      # per-bucket dance entirely. Leave the bucket-policy install
+      # in the api alone -- it works -- this only replaces the CORS
+      # piece. Multiple origins go in as a comma-separated list.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_URL:-https://gratisgis.org}
     volumes:
       - miniodata:/data
     healthcheck:
