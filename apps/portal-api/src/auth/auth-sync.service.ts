@@ -56,6 +56,22 @@ export class AuthSyncService {
   private readonly basemapSeedChecked = new Set<string>();
 
   /**
+   * Per-org in-flight promise. When a user signs in, NextAuth and the
+   * portal land make multiple parallel requests against the api; each
+   * one runs ensureBuiltinBasemaps in isolation, all see the same
+   * empty-state SELECT, and all INSERT the full BUILTIN set. Result:
+   * one row per (basemap, request) -- on first sign-in we observed
+   * 3x copies of every seed.
+   *
+   * Coalescing by org turns N parallel callers into one in-flight
+   * INSERT; the others await the same Promise and short-circuit on
+   * the now-populated basemapSeedChecked Set. Cleared once the inner
+   * promise resolves (success or failure) so a transient DB error
+   * doesn't permanently disable seeding.
+   */
+  private readonly basemapSeedInFlight = new Map<string, Promise<void>>();
+
+  /**
    * Per-process cache of `userId -> last time we wrote lastSeenAt`.
    * Throttles the UPDATE to once per LAST_SEEN_THROTTLE_MS so the
    * stable-state cost of an authenticated request is one SELECT
@@ -200,9 +216,28 @@ export class AuthSyncService {
     // turns ensureBuiltinBasemaps into a no-op for every authenticated
     // request after the first one. New seeds added in a deploy are
     // picked up automatically because the cache is per-process.
+    //
+    // Parallel callers (NextAuth + portal-web SSR all firing on first
+    // sign-in) share a single in-flight promise so we don't trigger N
+    // concurrent INSERTs that each see the same empty state. The first
+    // arrival kicks off the work; everyone else awaits the same
+    // Promise. Once it settles we mark the org as checked and drop the
+    // in-flight entry so a transient failure doesn't permanently
+    // disable seeding.
     if (!this.basemapSeedChecked.has(org.id)) {
-      await this.ensureBuiltinBasemaps(org.id, user.id);
-      this.basemapSeedChecked.add(org.id);
+      let inFlight = this.basemapSeedInFlight.get(org.id);
+      if (!inFlight) {
+        inFlight = (async () => {
+          try {
+            await this.ensureBuiltinBasemaps(org.id, user.id);
+            this.basemapSeedChecked.add(org.id);
+          } finally {
+            this.basemapSeedInFlight.delete(org.id);
+          }
+        })();
+        this.basemapSeedInFlight.set(org.id, inFlight);
+      }
+      await inFlight;
     }
 
     // Exclude memberships whose group is in the trash. Otherwise an item
