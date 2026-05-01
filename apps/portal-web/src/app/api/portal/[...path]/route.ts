@@ -8,7 +8,6 @@
  */
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { Agent } from 'undici';
 import { authOptions, type SessionWithToken } from '@/lib/auth';
 
 const API_BASE = process.env.PORTAL_API_URL ?? 'http://localhost:4000';
@@ -22,16 +21,19 @@ const API_BASE = process.env.PORTAL_API_URL ?? 'http://localhost:4000';
  * normal API calls keep their tight defaults: only requests routed
  * here get the loosened budget.
  *
- * Constructed lazily on first ingest hit. Top-level instantiation
- * triggered a Next.js build-time crash ("util.markAsUncloneable is
- * not a function") because that API only exists on Node 22+ and the
- * build container runs an older Node; the constructor body referenced
- * the missing builtin during "Collect page data". Lazy-init keeps the
- * Agent out of the build-phase module evaluation.
+ * Both the import AND the constructor are deferred to first ingest
+ * hit. A static `import { Agent } from 'undici'` loads undici's
+ * Agent module at evaluation time, and that module body references
+ * `util.markAsUncloneable`, a Node 22+ builtin that doesn't exist on
+ * the older Node our build container runs. Next.js's "Collect page
+ * data" phase evaluates every route module, so the build crashed
+ * even though we never instantiated the Agent. Dynamic import keeps
+ * undici entirely out of build-time evaluation.
  */
-let _ingestAgent: Agent | null = null;
-function getIngestAgent(): Agent {
+let _ingestAgent: unknown = null;
+async function getIngestAgent(): Promise<unknown> {
   if (!_ingestAgent) {
+    const { Agent } = await import('undici');
     _ingestAgent = new Agent({
       headersTimeout: 15 * 60 * 1000,
       bodyTimeout: 15 * 60 * 1000,
@@ -100,7 +102,7 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // `duplex: 'half'` is required by undici/fetch when the request
   // body is a ReadableStream; without it Node throws "RequestInit:
   // duplex option is required when sending a body".
-  const init: RequestInit & { duplex?: 'half'; dispatcher?: Agent } = {
+  const init: RequestInit & { duplex?: 'half'; dispatcher?: unknown } = {
     method: req.method,
     headers,
     cache: 'no-store',
@@ -121,7 +123,7 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // headers + body timeouts. Everything else falls through to the
   // built-in 30 s defaults so a misbehaving upstream still fails fast.
   if (isLongRunningIngestPath(suffix)) {
-    init.dispatcher = getIngestAgent();
+    init.dispatcher = await getIngestAgent();
   }
 
   const upstream = await fetch(target, init);
