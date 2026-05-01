@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import type { ItemAccess, ItemType, PrincipalType, Prisma, SharePermission } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import type { ItemAccess, ItemType, PrincipalType, SharePermission } from '@prisma/client';
 import { ITEM_TYPES } from '@gratis-gis/shared-types';
 
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -1013,23 +1014,51 @@ export class ItemsService {
       });
       const changedByName =
         changedRow?.fullName || changedRow?.username || 'An admin';
-      // One notification per affected deployment. Per-deployment
-      // recipient lists (e.g. notify every offline-area downloader)
-      // are Phase A.5; v1 just notifies the owner.
+      // For each affected deployment we notify two cohorts:
+      //   1. The deployment owner (so authors hear about it even
+      //      if no field crew has reported in yet).
+      //   2. Every user whose field_queue_manifest currently
+      //      references this dataCollectionId. Those are the
+      //      people whose next sync is about to fail loudly --
+      //      reaching them directly is the point of this whole
+      //      flow. Dedupe owner-vs-downloader by (userId, dcId).
+      // We do per-deployment so the email payload still names the
+      // specific data_collection. A user who has 5 offline areas
+      // gets up to 5 emails; that's worse than one digest, but
+      // worth it for v1 because each email tells them which area
+      // to rebuild.
       for (const dc of dataCollections) {
-        await this.notifications.notify(
-          dc.ownerId,
-          'data_collection_schema_break',
-          {
-            dataCollectionId: dc.id,
-            dataCollectionTitle: dc.title,
-            dataLayerId: args.dataLayerId,
-            dataLayerTitle: args.dataLayerTitle,
-            changedByName,
-            droppedLayerKeys: args.dropped,
-            geometryChangedLayerKeys: args.geometryChanged,
-          },
-        );
+        // Postgres JSONB containment to find devices with this
+        // deployment in their manifest. The manifest JSON is an
+        // array of { dataCollectionId, ... } objects so the
+        // containment predicate is a single-element array with
+        // the matching id.
+        const downloaders = await this.prisma.$queryRaw<
+          Array<{ user_id: string }>
+        >(Prisma.sql`
+          SELECT DISTINCT user_id
+          FROM field_queue_manifest
+          WHERE manifest @> ${Prisma.sql`${JSON.stringify([
+            { dataCollectionId: dc.id },
+          ])}::jsonb`}
+        `);
+        const recipients = new Set<string>([dc.ownerId]);
+        for (const row of downloaders) recipients.add(row.user_id);
+        for (const userId of recipients) {
+          await this.notifications.notify(
+            userId,
+            'data_collection_schema_break',
+            {
+              dataCollectionId: dc.id,
+              dataCollectionTitle: dc.title,
+              dataLayerId: args.dataLayerId,
+              dataLayerTitle: args.dataLayerTitle,
+              changedByName,
+              droppedLayerKeys: args.dropped,
+              geometryChangedLayerKeys: args.geometryChanged,
+            },
+          );
+        }
       }
     } catch (err) {
       // Same swallow rationale as the editor / data_collection
