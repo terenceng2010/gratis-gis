@@ -186,47 +186,74 @@ export class V3FeaturesService {
     const tbl = toV3TableName(itemId, layerId);
     const now = new Date();
     let inserted = 0;
-    // Table sublayers (no geom column) get a different INSERT shape:
-    // dropping the geom column from the column list AND its parameter
-    // so we don't reference a column that doesn't exist (#192). Any
-    // f.geometry is silently ignored on a table layer; the caller
-    // shouldn't be sending one but if they do we choose to drop it
-    // rather than 400 the whole batch.
+    // Batch multi-row VALUES inserts. The previous code did one
+    // $executeRawUnsafe per feature, which on a county-scale shapefile
+    // (869k features) means 869k roundtrips and pushes a single import
+    // past the BFF timeout. 500 rows/batch keeps the param count well
+    // under PostgreSQL's per-statement cap (~32k) for both branches:
+    //   table:   4 params/row * 500 = 2,000
+    //   geom:    5 params/row * 500 = 2,500
+    const BATCH = 500;
     if (opts.isTable) {
-      for (const f of inputs) {
+      // Table sublayers (no geom column) get a different INSERT shape:
+      // dropping the geom column from the column list AND its parameter
+      // so we don't reference a column that doesn't exist (#192). Any
+      // f.geometry is silently ignored on a table layer.
+      for (let i = 0; i < inputs.length; i += BATCH) {
+        const batch = inputs.slice(i, i + BATCH);
+        const params: unknown[] = [];
+        const valueRows: string[] = [];
+        for (const f of batch) {
+          const base = params.length + 1;
+          params.push(
+            f.globalId ?? null,
+            JSON.stringify(f.properties ?? {}),
+            now,
+            user.id,
+          );
+          valueRows.push(
+            `(COALESCE($${base}::uuid, gen_random_uuid()), ` +
+              `$${base + 1}::jsonb, $${base + 2}::timestamptz, ` +
+              `$${base + 3}::uuid, $${base + 3}::uuid)`,
+          );
+        }
         await this.prisma.$executeRawUnsafe(
-          `
-          INSERT INTO "${tbl}"
-            (global_id, properties, valid_from, created_by, edited_by)
-          VALUES
-            (COALESCE($1::uuid, gen_random_uuid()),
-             $2::jsonb, $3, $4::uuid, $4::uuid)
-          `,
-          f.globalId ?? null,
-          JSON.stringify(f.properties ?? {}),
-          now,
-          user.id,
+          `INSERT INTO "${tbl}"
+             (global_id, properties, valid_from, created_by, edited_by)
+           VALUES ${valueRows.join(', ')}`,
+          ...params,
         );
-        inserted += 1;
+        inserted += batch.length;
       }
     } else {
-      for (const f of inputs) {
+      for (let i = 0; i < inputs.length; i += BATCH) {
+        const batch = inputs.slice(i, i + BATCH);
+        const params: unknown[] = [];
+        const valueRows: string[] = [];
+        for (const f of batch) {
+          const base = params.length + 1;
+          params.push(
+            f.globalId ?? null,
+            f.geometry ? JSON.stringify(f.geometry) : null,
+            JSON.stringify(f.properties ?? {}),
+            now,
+            user.id,
+          );
+          valueRows.push(
+            `(COALESCE($${base}::uuid, gen_random_uuid()), ` +
+              `CASE WHEN $${base + 1}::text IS NULL THEN NULL ` +
+              `ELSE ST_Multi(ST_GeomFromGeoJSON($${base + 1})) END, ` +
+              `$${base + 2}::jsonb, $${base + 3}::timestamptz, ` +
+              `$${base + 4}::uuid, $${base + 4}::uuid)`,
+          );
+        }
         await this.prisma.$executeRawUnsafe(
-          `
-          INSERT INTO "${tbl}"
-            (global_id, geom, properties, valid_from, created_by, edited_by)
-          VALUES
-            (COALESCE($1::uuid, gen_random_uuid()),
-             CASE WHEN $2::text IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromGeoJSON($2)) END,
-             $3::jsonb, $4, $5::uuid, $5::uuid)
-          `,
-          f.globalId ?? null,
-          f.geometry ? JSON.stringify(f.geometry) : null,
-          JSON.stringify(f.properties ?? {}),
-          now,
-          user.id,
+          `INSERT INTO "${tbl}"
+             (global_id, geom, properties, valid_from, created_by, edited_by)
+           VALUES ${valueRows.join(', ')}`,
+          ...params,
         );
-        inserted += 1;
+        inserted += batch.length;
       }
     }
     this.log.log(`Inserted ${inserted} features into ${tbl}`);

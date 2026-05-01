@@ -8,9 +8,35 @@
  */
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
+import { Agent } from 'undici';
 import { authOptions, type SessionWithToken } from '@/lib/auth';
 
 const API_BASE = process.env.PORTAL_API_URL ?? 'http://localhost:4000';
+
+/**
+ * Long-running upstream dispatcher for ingest + per-layer import
+ * routes. Default undici fetch() caps the response-headers wait at
+ * 30 s, which is plenty for an admin click but nowhere near long
+ * enough for a county-scale parcel ingest where GDAL parse + bulk
+ * insert can run for several minutes. We use a dedicated Agent so
+ * normal API calls keep their tight defaults: only requests routed
+ * here get the loosened budget.
+ */
+const ingestAgent = new Agent({
+  headersTimeout: 15 * 60 * 1000,
+  bodyTimeout: 15 * 60 * 1000,
+  connectTimeout: 30 * 1000,
+});
+
+/** Match v3 per-layer ingest, v2 ingest, and the wizard probe path.
+ *  Conservative: only widens for endpoints we know can take minutes. */
+function isLongRunningIngestPath(suffix: string): boolean {
+  return (
+    /^items\/[^/]+\/layers\/[^/]+\/import$/.test(suffix) ||
+    /^items\/[^/]+\/ingest$/.test(suffix) ||
+    suffix === 'ingest/probe'
+  );
+}
 
 async function forward(req: NextRequest, pathSegments: string[]) {
   // Per-hop timing log behind the BFF_TIMING flag. Lets us split a
@@ -61,7 +87,7 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // `duplex: 'half'` is required by undici/fetch when the request
   // body is a ReadableStream; without it Node throws "RequestInit:
   // duplex option is required when sending a body".
-  const init: RequestInit & { duplex?: 'half' } = {
+  const init: RequestInit & { duplex?: 'half'; dispatcher?: Agent } = {
     method: req.method,
     headers,
     cache: 'no-store',
@@ -77,6 +103,13 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // slow page-revisit pattern that means each abandoned request
   // serialises behind the previous one's still-running query.
   init.signal = req.signal;
+
+  // Long-running ingest endpoints get a custom dispatcher with 15 min
+  // headers + body timeouts. Everything else falls through to the
+  // built-in 30 s defaults so a misbehaving upstream still fails fast.
+  if (isLongRunningIngestPath(suffix)) {
+    init.dispatcher = ingestAgent;
+  }
 
   const upstream = await fetch(target, init);
   const tUpstream = trace ? Date.now() : 0;
