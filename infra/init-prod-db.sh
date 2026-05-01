@@ -17,19 +17,16 @@ if [[ -z "${KEYCLOAK_DB_PASSWORD:-}" ]]; then
   exit 1
 fi
 
-psql -v ON_ERROR_STOP=1 \
+# psql variable substitution (`:'kc_pw'`) only works in top-level SQL,
+# not inside DO blocks, so we keep the role + database creation as
+# bare statements. -v ON_ERROR_STOP=0 lets us no-op on re-runs (rare,
+# since initdb only fires on first boot, but harmless for retries).
+psql -v ON_ERROR_STOP=0 \
      --username "$POSTGRES_USER" \
      --dbname "$POSTGRES_DB" \
-     -v kc_pw="'${KEYCLOAK_DB_PASSWORD}'" <<'SQL'
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'keycloak') THEN
-    EXECUTE format('CREATE ROLE keycloak LOGIN PASSWORD %s', :kc_pw);
-  END IF;
-END$$;
-
-SELECT 'CREATE DATABASE keycloak OWNER keycloak'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'keycloak')\gexec
+     -v kc_pw="${KEYCLOAK_DB_PASSWORD}" <<'SQL'
+CREATE ROLE keycloak LOGIN PASSWORD :'kc_pw';
+CREATE DATABASE keycloak OWNER keycloak;
 SQL
 
 echo "[init-prod-db.sh] keycloak role + database ready"
