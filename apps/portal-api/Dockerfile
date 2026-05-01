@@ -84,6 +84,13 @@ COPY --from=build --chown=app:app /out /app
 # from this image.
 COPY --from=build --chown=app:app /repo/apps/portal-api/prisma /app/prisma
 
+# BackupService writes archives to BACKUP_DIR (default ./backups), and
+# that has to be a writable path for the non-root `app` user. Pre-create
+# it with the right ownership so a volume mount onto this path inherits
+# the same uid/gid (Docker volumes inherit the underlying directory's
+# ownership when first attached).
+RUN mkdir -p /app/backups /app/data && chown -R app:app /app/backups /app/data
+
 # Entrypoint: apply migrations, then start. Idempotent on a current
 # DB (no-op when nothing pending). Surfaces migration errors as exit
 # codes so the container fails fast on a bad deploy.

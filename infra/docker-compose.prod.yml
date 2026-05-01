@@ -55,10 +55,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Production mode: optimized, postgres-backed, edge-proxy-aware.
-    # `start` (no --optimized because we don't pre-build a custom
-    # image) auto-runs the Liquibase migrations on first boot.
-    command: ["start", "--http-enabled=true", "--proxy-headers=xforwarded"]
+    # Production mode with realm import on first boot. The realm JSON
+    # is materialized by deploy.sh from realm-gratis-gis.prod.json.tmpl
+    # via envsubst so hostnames + secrets land in the right shape.
+    # --import-realm is a no-op when the realm already exists.
+    command:
+      - start
+      - --http-enabled=true
+      - --proxy-headers=xforwarded
+      - --import-realm
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
@@ -68,14 +73,18 @@ services:
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env.prod}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env.prod}
       # JVM ceiling. The host has 7.6 GB; capping Keycloak at 1 GB
       # leaves room for Postgres + the two app containers without
-      # pressure. Bump if Keycloak starts ttying memory under load.
+      # pressure. Bump if Keycloak starts hitting memory under load.
       JAVA_OPTS_APPEND: -Xms256m -Xmx1024m
     volumes:
       - ./keycloak/themes/portal:/opt/keycloak/themes/portal:ro
+      # Realm-import directory. deploy.sh writes the substituted realm
+      # JSON here before bringing keycloak up. Keycloak picks up every
+      # *.json on first start when --import-realm is passed.
+      - ./keycloak/import:/opt/keycloak/data/import:ro
     networks:
       - gratis-net
 
@@ -127,24 +136,38 @@ services:
       NODE_ENV: production
       PORT: "4000"
       DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
-      # Keycloak issuer the API expects in JWTs. Has to match the
-      # issuer the web app's NextAuth config uses; both come from
-      # KEYCLOAK_ISSUER in .env.prod.
-      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-https://auth.gratisgis.org/realms/gratis-gis}
-      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      # Token issuer side: KEYCLOAK_URL is the public-facing Keycloak
+      # base, used both as the JWT issuer prefix and as the JWKS
+      # fetch root. The api code reads this via process.env.KEYCLOAK_URL
+      # in src/auth/jwt.strategy.ts.
+      KEYCLOAK_URL: https://${AUTH_DOMAIN:-auth.gratisgis.org}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gratis-gis}
-      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-admin-cli}
-      KEYCLOAK_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-      # MinIO / S3.
-      S3_ENDPOINT: http://minio:9000
-      S3_REGION: us-east-1
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-      S3_BUCKET: ${S3_BUCKET:-gratisgis}
-      S3_FORCE_PATH_STYLE: "true"
+      # Service-account credentials for the api's admin operations
+      # (user reconcile, password reset, role mutation). Matches the
+      # portal-api-admin client in the realm import.
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-portal-api-admin}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?KEYCLOAK_ADMIN_CLIENT_SECRET must be set in .env.prod}
+      # MinIO / S3. Variable names match what storage.service.ts /
+      # backup.service.ts read; no S3_* aliases.
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${S3_BUCKET:-gratisgis}
+      # Browser-facing MinIO base. Browsers hit this directly for
+      # presigned uploads + public reads. We don't have a CDN today;
+      # routing through the api proxy isn't supported either, so we
+      # hand back the same public URL Caddy is serving and rely on a
+      # future tile-route to map it. For now, the api uploads things
+      # but browser fetches will fail until we wire a path. Set on
+      # the .env.prod side so callers know it's a deliberate stub.
+      MINIO_PUBLIC_BASE: ${MINIO_PUBLIC_BASE:-http://minio:9000}
+      # Backup archives. The runtime image pre-creates this with
+      # app:app ownership so the named volume below inherits it.
+      BACKUP_DIR: /app/backups
       # Public URL for redirects + OG metadata.
       PUBLIC_URL: ${PUBLIC_URL:-https://gratisgis.org}
+    volumes:
+      - portal-api-backups:/app/backups
     networks:
       - gratis-net
     # No public port. Caddy talks to it as `portal-api:4000`.
@@ -172,8 +195,13 @@ services:
       NEXTAUTH_URL: ${PUBLIC_URL:-https://gratisgis.org}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET must be set in .env.prod}
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-https://auth.gratisgis.org/realms/gratis-gis}
-      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-portal-web}
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET must be set in .env.prod}
+      # NextAuth's Keycloak provider reads these names verbatim
+      # (apps/portal-web/src/lib/auth.ts). portal-web is a public
+      # client with PKCE in the realm; the secret here is the empty
+      # string but we still need the env var present for the provider
+      # to register.
+      KEYCLOAK_CLIENT_ID_WEB: ${KEYCLOAK_CLIENT_ID:-portal-web}
+      KEYCLOAK_CLIENT_SECRET_WEB: ${KEYCLOAK_CLIENT_SECRET:-}
     networks:
       - gratis-net
 
@@ -207,6 +235,7 @@ volumes:
   miniodata:
   caddy-data:
   caddy-config:
+  portal-api-backups:
 
 networks:
   gratis-net:

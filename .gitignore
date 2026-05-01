@@ -18,6 +18,10 @@ build/
 !.env.example
 !.env.prod.example
 
+# Materialized realm import (deploy.sh writes this from the .tmpl).
+# Contains substituted secrets, so never commit.
+infra/keycloak/import/
+
 # Logs
 *.log
 npm-debug.log*

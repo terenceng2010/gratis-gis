@@ -35,6 +35,23 @@ if grep -q '^[A-Z_]*=GENERATE$' infra/.env.prod; then
   exit 1
 fi
 
+# Materialize the Keycloak realm import file from the template by
+# substituting env vars. envsubst only replaces $VAR / ${VAR} forms,
+# leaving JSON braces alone. Run it before bringing keycloak up so
+# the import directory is ready when the container starts.
+echo "=== Materializing Keycloak realm import ==="
+mkdir -p infra/keycloak/import
+# shellcheck disable=SC1091
+set -a
+. infra/.env.prod
+set +a
+envsubst < infra/keycloak/realm-gratis-gis.prod.json.tmpl \
+  > infra/keycloak/import/realm-gratis-gis.json
+# Sanity-check: the JSON should still parse after substitution.
+python3 -c "import json,sys; json.load(open('infra/keycloak/import/realm-gratis-gis.json'))" \
+  || { echo "FATAL: realm import JSON is malformed after envsubst" >&2; exit 1; }
+echo "Wrote infra/keycloak/import/realm-gratis-gis.json"
+
 COMPOSE=(docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.prod)
 
 echo "=== Building images ==="

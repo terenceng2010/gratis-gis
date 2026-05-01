@@ -1,0 +1,169 @@
+{
+  "realm": "gratis-gis",
+  "enabled": true,
+  "displayName": "Portal",
+  "displayNameHtml": "<span>Portal</span>",
+  "loginTheme": "portal",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 3600,
+  "ssoSessionMaxLifespan": 36000,
+  "attributes": {
+    "frontendUrl": "${PUBLIC_URL}"
+  },
+  "clients": [
+    {
+      "clientId": "portal-web",
+      "name": "GratisGIS Portal Web",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "${PUBLIC_URL}/*"
+      ],
+      "webOrigins": [
+        "${PUBLIC_URL}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${PUBLIC_URL}/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "org_role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_role",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_role",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "portal-api",
+      "name": "GratisGIS Portal API",
+      "enabled": true,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "portal-api-admin",
+      "name": "GratisGIS Portal API (admin)",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KEYCLOAK_ADMIN_CLIENT_SECRET}",
+      "attributes": {
+        "use.refresh.tokens": "false"
+      }
+    },
+    {
+      "clientId": "field-app",
+      "name": "GratisGIS Field App",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "gratisgis://auth-callback",
+        "${PUBLIC_URL}/*"
+      ],
+      "webOrigins": [
+        "${PUBLIC_URL}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "org_role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_role",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_role",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "viewer", "description": "Default user role" },
+      { "name": "contributor", "description": "Can publish items" },
+      { "name": "admin", "description": "Org administrator" }
+    ]
+  },
+  "defaultRole": {
+    "name": "viewer"
+  },
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "${ACME_EMAIL}",
+      "emailVerified": true,
+      "firstName": "Site",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${INITIAL_USER_PASSWORD}",
+          "temporary": true
+        }
+      ],
+      "attributes": {
+        "org": ["${DEFAULT_ORG_SLUG}"],
+        "org_role": ["admin"]
+      },
+      "realmRoles": ["admin"]
+    }
+  ]
+}
