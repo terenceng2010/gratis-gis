@@ -21,9 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json tsconfig.base.json ./
 COPY packages ./packages
-COPY apps/portal-web ./apps/portal-web
-# portal-web pulls in shared types from form-schema's index too (some
-# pages render form schemas server-side).
+# pnpm's --frozen-lockfile expects EVERY workspace package referenced
+# in the lockfile to exist in the tree. Copying the full apps/ subtree
+# is the simplest way to satisfy that without per-package COPY juggling.
+# .dockerignore on each app strips the heavy stuff (node_modules,
+# .next, dist), so the build context stays small.
+COPY apps ./apps
 RUN pnpm install --frozen-lockfile
 
 # Telemetry is a noisy build-time stderr; not useful here.
