@@ -83,6 +83,24 @@ enum NotificationType {
   /// An editor target had a feature added. Phase 2 trigger
   /// (replaces the original Survey123-gap ask).
   editor_feature_created   @map("editor-feature-created")
+  /// An admin has invited a new user to the org. Sent to the
+  /// invitee with the realm-managed invite link. Replaces the
+  /// hand-rolled invite email body that used to live in the
+  /// admin-invite path so all transactional email goes through one
+  /// renderer.
+  user_invited             @map("user-invited")
+  /// A field deployment ('data_collection' item) had a feature
+  /// added through the field runtime. Mirrors editor_feature_created
+  /// but covers the field-deployment write path, which doesn't
+  /// carry an editorId so it never tripped the editor type. Useful
+  /// for "send me an email when my field team adds a record"
+  /// workflows.
+  data_collection_feature_created @map("data-collection-feature-created")
+  /// A standalone form item received a new submission. Different
+  /// from editor / data_collection because the write lands in
+  /// form_submission rather than a feature table; recipient gets
+  /// the rendered receipt + a deep link to the submission.
+  form_submission_received @map("form-submission-received")
 }
 
 /// Channel a notification is delivered through. Phase 1 ships email
@@ -149,9 +167,10 @@ model Organization {
   /// null renders all public items in the org, newest-first.
   landingFeaturedItemIds String[] @default([]) @map("landing_featured_item_ids") @db.Uuid
 
-  users    User[]
-  groups   Group[]
-  items    Item[]
+  users                 User[]
+  groups                Group[]
+  items                 Item[]
+  notificationTemplates NotificationTemplate[]
 
   @@map("organization")
 }
@@ -859,5 +878,38 @@ model NotificationTypeDefault {
 
   @@id([type, channel])
   @@map("notification_type_default")
+}
+
+/// Org-customised template for a (NotificationType, NotificationChannel)
+/// pair. Sparse: when no row exists the renderer falls back to the
+/// hard-coded default in notifications/templates.ts. subject + bodyText
+/// + bodyHtml are mustache-lite templates: {{var}} placeholders that map
+/// to keys on the type's payload schema. The render pipeline
+/// HTML-escapes substituted values for bodyHtml; bodyText is rendered
+/// verbatim. Editing this row does not invalidate already-queued
+/// notification rows in the `notification` table; in-flight work
+/// keeps the older template snapshot at enqueue time.
+///
+/// Phase B of #229. Phase A only adds the table + the new types; the
+/// admin UI for editing rows lands in Phase B.
+model NotificationTemplate {
+  /// Org scope. Today this is always the lone org's id since we're
+  /// pre-multi-tenant; the column lives now so when multi-org lands
+  /// (#47) the existing rows already have the right scope.
+  orgId     String              @map("org_id") @db.Uuid
+  type      NotificationType
+  channel   NotificationChannel
+  /// Mustache-lite template for the email subject line.
+  subject   String
+  /// Mustache-lite template for the plain-text email body.
+  bodyText  String              @map("body_text")
+  /// Mustache-lite template for the HTML email body.
+  bodyHtml  String              @map("body_html")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@id([orgId, type, channel])
+  @@map("notification_template")
 }
 

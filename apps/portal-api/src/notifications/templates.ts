@@ -95,6 +95,52 @@ export interface EditorFeatureCreatedPayload {
   summary: string;
 }
 
+/** Payload shape for data_collection_feature_created. Mirrors
+ *  EditorFeatureCreatedPayload but keys on the data_collection
+ *  item id so the trigger path can branch + the recipient resolution
+ *  can change later (e.g. notify a per-deployment list rather than
+ *  the deployment owner). */
+export interface DataCollectionFeatureCreatedPayload {
+  dataCollectionId: string;
+  dataCollectionTitle: string;
+  /** The data_layer the feature landed in. */
+  dataLayerId: string;
+  dataLayerTitle: string;
+  /** Layer key inside the data_layer. */
+  layerKey: string;
+  /** global_id of the new feature. */
+  featureId: string;
+  /** Display name of the author who created the feature. */
+  createdByName: string;
+  /** Best-effort summary string from the first non-empty user field. */
+  summary: string;
+}
+
+/** Payload shape for form_submission_received. */
+export interface FormSubmissionReceivedPayload {
+  formItemId: string;
+  formTitle: string;
+  /** form_submission row id; deep-link target. */
+  submissionId: string;
+  /** Display name of the submitter. Falls back to "Someone" when
+   *  the form is configured for anonymous responses. */
+  submittedByName: string;
+  /** Best-effort summary from the first answered question. */
+  summary: string;
+}
+
+/** Payload shape for user_invited. The recipient is the invitee, not
+ *  the inviting admin; the renderer pulls the invite link directly
+ *  from the realm at trigger time. */
+export interface UserInvitedPayload {
+  invitedEmail: string;
+  invitedByName: string;
+  /** One-time-use invite link issued by Keycloak. */
+  inviteLink: string;
+  /** Optional ISO timestamp when the invite link stops working. */
+  expiresAt?: string;
+}
+
 type Renderer<T> = (payload: T, ctx: RenderContext) => RenderedNotification;
 
 const renderers: { [K in NotificationType]?: Renderer<unknown> } = {
@@ -197,6 +243,77 @@ const renderers: { [K in NotificationType]?: Renderer<unknown> } = {
       `</ul>` +
       `<p><a href="${escapeAttr(editorUrl)}">Open the editor</a> · ` +
       `<a href="${escapeAttr(dataLayerUrl)}">open the data layer</a></p>`;
+    return { subject, text, html };
+  }) as Renderer<unknown>,
+
+  data_collection_feature_created: ((
+    payload: DataCollectionFeatureCreatedPayload,
+    ctx,
+  ) => {
+    const deploymentUrl = `${ctx.baseUrl}/items/${payload.dataCollectionId}`;
+    const dataLayerUrl = `${ctx.baseUrl}/items/${payload.dataLayerId}`;
+    const subject = `New field submission on "${payload.dataCollectionTitle}": ${payload.summary}`;
+    const text =
+      `${payload.createdByName} added a feature through your "${payload.dataCollectionTitle}" field deployment.\n\n` +
+      `Layer: ${payload.dataLayerTitle}\n` +
+      `Summary: ${payload.summary}\n\n` +
+      `Deployment: ${deploymentUrl}\n` +
+      `Data layer: ${dataLayerUrl}\n`;
+    const html =
+      `<p><strong>${escapeHtml(payload.createdByName)}</strong> added a feature ` +
+      `through your <strong>${escapeHtml(payload.dataCollectionTitle)}</strong> ` +
+      `field deployment.</p>` +
+      `<ul>` +
+      `<li>Layer: ${escapeHtml(payload.dataLayerTitle)}</li>` +
+      `<li>Summary: ${escapeHtml(payload.summary)}</li>` +
+      `</ul>` +
+      `<p><a href="${escapeAttr(deploymentUrl)}">Open the deployment</a> · ` +
+      `<a href="${escapeAttr(dataLayerUrl)}">open the data layer</a></p>`;
+    return { subject, text, html };
+  }) as Renderer<unknown>,
+
+  form_submission_received: ((
+    payload: FormSubmissionReceivedPayload,
+    ctx,
+  ) => {
+    const formUrl = `${ctx.baseUrl}/items/${payload.formItemId}`;
+    const submissionUrl =
+      `${ctx.baseUrl}/items/${payload.formItemId}/submissions/${payload.submissionId}`;
+    const subject = `New submission on "${payload.formTitle}": ${payload.summary}`;
+    const text =
+      `${payload.submittedByName} submitted a response to "${payload.formTitle}".\n\n` +
+      `Summary: ${payload.summary}\n\n` +
+      `View submission: ${submissionUrl}\n` +
+      `Form: ${formUrl}\n`;
+    const html =
+      `<p><strong>${escapeHtml(payload.submittedByName)}</strong> submitted a response ` +
+      `to <strong>${escapeHtml(payload.formTitle)}</strong>.</p>` +
+      `<ul><li>Summary: ${escapeHtml(payload.summary)}</li></ul>` +
+      `<p><a href="${escapeAttr(submissionUrl)}">View submission</a> · ` +
+      `<a href="${escapeAttr(formUrl)}">open the form</a></p>`;
+    return { subject, text, html };
+  }) as Renderer<unknown>,
+
+  user_invited: ((payload: UserInvitedPayload, ctx) => {
+    const expiryNote = payload.expiresAt
+      ? ` (link expires ${formatDate(payload.expiresAt)})`
+      : '';
+    const subject = `${payload.invitedByName} invited you to ${ctx.orgLabel}`;
+    const text =
+      `${payload.invitedByName} invited you to ${ctx.orgLabel}.\n\n` +
+      `Click the link below to set a password and sign in${expiryNote}:\n\n` +
+      `${payload.inviteLink}\n`;
+    const html =
+      `<p><strong>${escapeHtml(payload.invitedByName)}</strong> invited you to ` +
+      `<strong>${escapeHtml(ctx.orgLabel)}</strong>.</p>` +
+      `<p>Click the button below to set a password and sign in${escapeHtml(
+        expiryNote,
+      )}:</p>` +
+      `<p><a href="${escapeAttr(payload.inviteLink)}" ` +
+      `style="display:inline-block;background:#2563eb;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600;">` +
+      `Accept invitation</a></p>` +
+      `<p style="font-size:12px;color:#666;">Or copy this link into your browser: ` +
+      `<a href="${escapeAttr(payload.inviteLink)}">${escapeHtml(payload.inviteLink)}</a></p>`;
     return { subject, text, html };
   }) as Renderer<unknown>,
 };

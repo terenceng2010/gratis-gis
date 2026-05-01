@@ -5,6 +5,9 @@ import type {
   ShareExpiryPayload,
   UserDisablePayload,
   EditorFeatureCreatedPayload,
+  DataCollectionFeatureCreatedPayload,
+  FormSubmissionReceivedPayload,
+  UserInvitedPayload,
 } from './templates.js';
 
 /**
@@ -58,4 +61,28 @@ export const SAMPLE_PAYLOADS: { [K in NotificationType]?: unknown } = {
     createdByName: 'Contributor User',
     summary: 'Inspection #4127 (cracked grate)',
   } satisfies EditorFeatureCreatedPayload,
+  user_invited: {
+    invitedEmail: 'newuser@example.com',
+    invitedByName: 'Admin User',
+    inviteLink:
+      'https://auth.example.org/realms/your-org/login-actions/action-token?key=sample-token',
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  } satisfies UserInvitedPayload,
+  data_collection_feature_created: {
+    dataCollectionId: '00000000-0000-4000-8000-000000000030',
+    dataCollectionTitle: 'Yard Inspection',
+    dataLayerId: '00000000-0000-4000-8000-000000000040',
+    dataLayerTitle: 'Inspection Points',
+    layerKey: 'points',
+    featureId: 'points/456',
+    createdByName: 'Field Worker',
+    summary: 'Point near pool fence',
+  } satisfies DataCollectionFeatureCreatedPayload,
+  form_submission_received: {
+    formItemId: '00000000-0000-4000-8000-000000000050',
+    formTitle: 'Volunteer Sign-Up',
+    submissionId: '00000000-0000-4000-8000-000000000060',
+    submittedByName: 'Visitor',
+    summary: 'jane@example.com',
+  } satisfies FormSubmissionReceivedPayload,
 };

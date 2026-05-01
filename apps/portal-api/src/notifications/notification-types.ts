@@ -97,6 +97,17 @@ export const NOTIFICATION_TYPES: NotificationTypeMeta[] = [
     defaultByChannel: ALL_DEFAULT_ON,
   },
 
+  // Account (continued)
+  {
+    type: 'user_invited',
+    category: 'account',
+    label: 'New user invited',
+    description:
+      'An admin invited a new user to the org. Sent to the invitee with the realm-managed invite link. Replaces the hand-rolled invite email body that used to live in the admin-invite path.',
+    channels: ALL_CHANNELS,
+    defaultByChannel: ALL_DEFAULT_ON,
+  },
+
   // Editor
   {
     type: 'editor_feature_created',
@@ -104,6 +115,24 @@ export const NOTIFICATION_TYPES: NotificationTypeMeta[] = [
     label: 'New submission on your editor',
     description:
       'Someone created a feature through an editor you own. Useful for "send me an email per response" data-collection workflows.',
+    channels: ALL_CHANNELS,
+    defaultByChannel: ALL_DEFAULT_ON,
+  },
+  {
+    type: 'data_collection_feature_created',
+    category: 'editor',
+    label: 'New feature on your field deployment',
+    description:
+      'Someone added a feature through a data_collection field deployment you own. Mirrors the editor notification but covers the field-runtime write path.',
+    channels: ALL_CHANNELS,
+    defaultByChannel: ALL_DEFAULT_ON,
+  },
+  {
+    type: 'form_submission_received',
+    category: 'editor',
+    label: 'New form submission',
+    description:
+      'A standalone form item received a new submission. Different from editor / data_collection because the write lands in form_submission rather than a feature table.',
     channels: ALL_CHANNELS,
     defaultByChannel: ALL_DEFAULT_ON,
   },
