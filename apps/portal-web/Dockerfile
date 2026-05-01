@@ -29,6 +29,13 @@ COPY packages ./packages
 COPY apps ./apps
 RUN pnpm install --frozen-lockfile
 
+# @gratis-gis/shared-types declares "main": "./dist/index.js" so it
+# must be tsc-compiled before downstream packages can import from it.
+# form-schema and ui are pure-TS (they expose ./src/index.ts directly)
+# so they don't need a separate build step. transpilePackages in
+# next.config.mjs covers the source-only packages at compile time.
+RUN pnpm -C packages/shared-types build
+
 # Telemetry is a noisy build-time stderr; not useful here.
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm -C apps/portal-web build

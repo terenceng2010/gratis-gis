@@ -43,6 +43,13 @@ COPY apps ./apps
 
 RUN pnpm install --frozen-lockfile
 
+# @gratis-gis/shared-types declares "main": "./dist/index.js" so it
+# must be tsc-compiled before downstream packages can import from it.
+# form-schema and ui are pure-TS (they expose ./src/index.ts directly)
+# so they don't need a separate build step. Building everything via
+# turbo would also work but takes longer and pulls in the apps too.
+RUN pnpm -C packages/shared-types build
+
 # Prisma client (generated into node_modules/.prisma/client) and the
 # Nest build (dist/) both happen here.
 RUN pnpm -C apps/portal-api exec prisma generate
