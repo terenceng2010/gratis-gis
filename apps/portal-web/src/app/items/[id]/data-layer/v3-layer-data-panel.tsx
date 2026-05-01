@@ -8,11 +8,15 @@ import {
   ChevronDown,
   ChevronRight,
   Database,
-  Loader2,
   Table2,
   Upload,
 } from 'lucide-react';
 import type { DataLayerSublayer } from '@gratis-gis/shared-types';
+import {
+  UploadProgressPanel,
+  uploadWithProgress,
+  type UploadBusy,
+} from '@/components/upload-progress-panel';
 import { V3FeatureBrowser } from './v3-feature-browser';
 
 /**
@@ -73,7 +77,13 @@ interface RowProps {
 
 function LayerRow({ itemId, layer, canEdit }: RowProps) {
   const router = useRouter();
-  const [uploading, setUploading] = useState(false);
+  // Busy carries the prominent upload-progress state. The previous
+  // tiny inline spinner on the Import features button was easy to
+  // miss while a 200 MB shapefile uploaded; now the row expands to
+  // show file name, file size, real upload bytes, and a phase label
+  // that flips through Uploading X% / Importing features so the user
+  // can see what's happening at every step.
+  const [busy, setBusy] = useState<UploadBusy | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [message, setMessage] = useState<
     | { kind: 'success'; text: string }
@@ -81,32 +91,51 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
     | null
   >(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const xhrRef = useRef<XMLHttpRequest | null>(null);
+
+  function cancelUpload() {
+    xhrRef.current?.abort();
+    xhrRef.current = null;
+    setBusy(null);
+    setMessage(null);
+  }
 
   async function handleFile(file: File) {
     setMessage(null);
-    setUploading(true);
+    setBusy({
+      phase: 'uploading',
+      fileName: file.name,
+      fileSize: file.size,
+      bytesUploaded: 0,
+      // Subhead copy is tuned for the ingest phase (PostGIS bulk
+      // insert, possibly hundreds of thousands of rows) rather than
+      // the wizard's "GDAL is listing layers" probe phase.
+      copy: {
+        reading: {
+          headline: 'Importing features',
+          subhead:
+            'Parsing the file and bulk-inserting into PostGIS. Large layers (county-scale parcels) can take a few minutes.',
+        },
+      },
+    });
     try {
-      const body = new FormData();
-      body.append('file', file);
-      const res = await fetch(
-        `/api/portal/items/${itemId}/layers/${layer.id}/import`,
-        { method: 'POST', body },
-      );
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        setMessage({
-          kind: 'error',
-          text: `Import failed (${res.status}): ${
-            text || res.statusText || 'no body'
-          }`,
-        });
-        return;
-      }
-      const out = (await res.json()) as {
+      const out = await uploadWithProgress<{
         driver: string;
         sourceLayer: string;
         inserted: number;
-      };
+      }>(
+        `/api/portal/items/${itemId}/layers/${layer.id}/import`,
+        file,
+        (e) => {
+          setBusy((prev) =>
+            prev
+              ? { ...prev, phase: e.phase, bytesUploaded: e.bytesUploaded }
+              : null,
+          );
+        },
+        xhrRef,
+      );
+      xhrRef.current = null;
       setMessage({
         kind: 'success',
         text: `${out.inserted.toLocaleString()} feature${
@@ -114,16 +143,21 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
         } imported from ${out.sourceLayer} (${out.driver})`,
       });
       // Refresh the server-rendered detail page so featureCount /
-      // bbox on the header match the new state next time Phase C
-      // hooks those back into item.data.
+      // bbox on the header match the new state.
       router.refresh();
     } catch (err) {
-      setMessage({
-        kind: 'error',
-        text: (err as Error).message || 'Upload failed',
-      });
+      // Cancellations come through here; don't tag those as errors.
+      if ((err as Error).name === 'AbortError') {
+        // No-op; cancelUpload already cleared state.
+      } else {
+        setMessage({
+          kind: 'error',
+          text: (err as Error).message || 'Upload failed',
+        });
+      }
     } finally {
-      setUploading(false);
+      setBusy(null);
+      xhrRef.current = null;
     }
   }
 
@@ -179,19 +213,20 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
             <button
               type="button"
               onClick={() => inputRef.current?.click()}
-              disabled={uploading}
+              disabled={busy !== null}
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
             >
-              {uploading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Upload className="h-3.5 w-3.5" />
-              )}
+              <Upload className="h-3.5 w-3.5" />
               Import features
             </button>
           </>
         ) : null}
       </div>
+      {busy ? (
+        <div className="mt-2">
+          <UploadProgressPanel busy={busy} onCancel={cancelUpload} />
+        </div>
+      ) : null}
       {message ? (
         <p
           role={message.kind === 'error' ? 'alert' : undefined}
