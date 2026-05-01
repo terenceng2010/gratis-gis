@@ -8,14 +8,17 @@ import {
   ClipboardList,
   ChevronRight,
   Loader2,
+  Trash2,
   Wifi,
 } from 'lucide-react';
 import {
+  deleteDeployment,
   formatBytes,
   listDeployments,
   listQueue,
   type CachedDeployment,
 } from '@/lib/offline-store';
+import { postQueueManifest } from '@/lib/offline-queue-beacon';
 import { syncQueue } from '@/lib/offline-sync';
 
 /**
@@ -65,6 +68,13 @@ export function FieldCatalog({ rows }: { rows: FieldDeploymentRow[] }) {
     typeof navigator !== 'undefined' ? navigator.onLine : true,
   );
   const [syncing, setSyncing] = useState<Record<string, boolean>>({});
+  // Two-tap confirmation for the destructive Remove action: first tap
+  // sets confirmingId, the affordance morphs to a red Confirm button,
+  // the second tap commits. Tap-elsewhere clears the armed state so a
+  // user can back out by just walking away. Cheaper than a full modal
+  // on a phone and matches the runtime More menu's pattern.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -119,6 +129,30 @@ export function FieldCatalog({ rows }: { rows: FieldDeploymentRow[] }) {
       }));
     } finally {
       setSyncing((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
+  async function removeOne(id: string) {
+    setRemoving((prev) => ({ ...prev, [id]: true }));
+    setConfirmingId(null);
+    try {
+      await deleteDeployment(id);
+      // Local optimistic update so the row's status dot flips back to
+      // gray immediately. The next listDeployments / listQueue pass
+      // would catch up on its own but this keeps the UI snappy.
+      setOverlays((prev) => ({
+        ...prev,
+        [id]: { cached: null, queueCount: 0 },
+      }));
+      // Tell the admin's field-queue mirror that this device's
+      // manifest just shrank. Bypasses the throttle deliberately:
+      // removal is a meaningful state change, not chatter.
+      void postQueueManifest();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to remove offline cache:', err);
+    } finally {
+      setRemoving((prev) => ({ ...prev, [id]: false }));
     }
   }
 
@@ -210,39 +244,84 @@ export function FieldCatalog({ rows }: { rows: FieldDeploymentRow[] }) {
                       {row.description}
                     </p>
                   ) : null}
-                  {/* Queued edits chip: useful even on mobile so the
-                      worker knows they have unsynced work without
-                      drilling in. Tappable to sync, but stops
-                      propagation so the row's primary tap still
-                      opens the deployment. */}
-                  {overlay.queueCount > 0 ? (
-                    <div className="mt-1 flex items-center gap-1 text-[11px]">
-                      {isOnline ? (
+                  {/* Queued edits + Remove chips. The queue chip
+                      surfaces unsynced work; the Remove chip lets a
+                      user clear an offline cache they no longer need
+                      from the catalog without opening the runtime.
+                      Both stop propagation so the row's primary tap
+                      keeps opening the deployment. */}
+                  {(overlay.queueCount > 0 || cached) ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
+                      {overlay.queueCount > 0 ? (
+                        isOnline ? (
+                          <button
+                            type="button"
+                            disabled={syncing[row.id]}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void syncOne(row.id);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                          >
+                            {syncing[row.id] ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <CloudDownload className="h-3 w-3 rotate-180" />
+                            )}
+                            {syncing[row.id]
+                              ? 'Syncing...'
+                              : `Sync ${overlay.queueCount}`}
+                          </button>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-muted">
+                            <CloudOff className="h-3 w-3" />
+                            {overlay.queueCount} queued
+                          </span>
+                        )
+                      ) : null}
+                      {cached ? (
                         <button
                           type="button"
-                          disabled={syncing[row.id]}
+                          disabled={removing[row.id]}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            void syncOne(row.id);
+                            if (confirmingId !== row.id) {
+                              setConfirmingId(row.id);
+                              return;
+                            }
+                            void removeOne(row.id);
                           }}
-                          className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 disabled:opacity-60 ${
+                            confirmingId === row.id
+                              ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                              : 'border-border bg-surface-2 text-muted hover:bg-surface-1'
+                          }`}
+                          title={
+                            confirmingId === row.id
+                              ? overlay.queueCount > 0
+                                ? `${overlay.queueCount} unsynced edit${
+                                    overlay.queueCount === 1 ? '' : 's'
+                                  } will be lost.`
+                                : 'Tap again to remove from device.'
+                              : 'Remove this deployment from your device.'
+                          }
                         >
-                          {syncing[row.id] ? (
+                          {removing[row.id] ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
-                            <CloudDownload className="h-3 w-3 rotate-180" />
+                            <Trash2 className="h-3 w-3" />
                           )}
-                          {syncing[row.id]
-                            ? 'Syncing...'
-                            : `Sync ${overlay.queueCount}`}
+                          {removing[row.id]
+                            ? 'Removing...'
+                            : confirmingId === row.id
+                              ? overlay.queueCount > 0
+                                ? `Confirm remove (${overlay.queueCount} unsynced)`
+                                : 'Confirm remove'
+                              : 'Remove from device'}
                         </button>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-muted">
-                          <CloudOff className="h-3 w-3" />
-                          {overlay.queueCount} queued
-                        </span>
-                      )}
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

@@ -19,6 +19,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   Wifi,
   X,
 } from 'lucide-react';
@@ -42,6 +43,7 @@ import { MapCanvas, type MapCanvasHandle } from '../map/map-canvas';
 import { FormRuntime } from '@/components/form-runtime';
 import { PwaInstallButton } from '@/components/pwa-install-button';
 import {
+  deleteDeployment,
   enqueueRecord,
   formatBytes,
   getDeployment,
@@ -71,7 +73,10 @@ import {
   clearTileCache,
   readTileCacheStats,
 } from '@/lib/offline-tile-warmer';
-import { postQueueManifestThrottled } from '@/lib/offline-queue-beacon';
+import {
+  postQueueManifest,
+  postQueueManifestThrottled,
+} from '@/lib/offline-queue-beacon';
 
 /**
  * Per-layer descriptor the field runtime consumes. Server-built (see
@@ -760,6 +765,34 @@ export function FieldRuntime({
     }
   }, [downloadProgress, editableLayers, dataCollectionId, title]);
 
+  // Remove this deployment from the device. Cascades through every
+  // IDB store keyed on dataCollectionId (features, queue, forms,
+  // pick lists, manifest). Tile cache is left alone because it's a
+  // shared origin-wide cache and other deployments may still need
+  // those tiles. The user is sent back to /field afterwards so the
+  // catalog reflects the new state and they don't sit on a now-
+  // hollow runtime view.
+  const removeCache = useCallback(async () => {
+    try {
+      await deleteDeployment(dataCollectionId);
+      setCachedDeployment(null);
+      // Beacon the now-empty manifest so the admin's field-queues
+      // view stops showing this deployment as cached. Bypasses the
+      // throttle because this is a meaningful state change, not the
+      // periodic chatter the throttle exists to dampen.
+      void postQueueManifest();
+    } catch (err) {
+      // Swallow + log: deletion failures are rare (IDB transaction
+      // race) and a retry from the user's next tap usually succeeds.
+      // eslint-disable-next-line no-console
+      console.error('Failed to remove offline cache:', err);
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      window.location.assign('/field');
+    }
+  }, [dataCollectionId]);
+
   // Templates: one row per (editable layer, symbology class) pair.
   // Computed once unless the source data changes; stable React keys
   // come from `template.id`.
@@ -980,7 +1013,9 @@ export function FieldRuntime({
             downloadProgress.phase !== 'failed'
           }
           hasCache={cachedDeployment !== null}
+          queueCount={queueCount}
           onDownload={() => void startDownload()}
+          onRemoveCache={() => void removeCache()}
         />
       </header>
 
@@ -2167,7 +2202,9 @@ function FieldMoreMenu({
   persistentState,
   downloadInFlight,
   hasCache,
+  queueCount,
   onDownload,
+  onRemoveCache,
 }: {
   mapTitle: string;
   isOnline: boolean;
@@ -2175,9 +2212,15 @@ function FieldMoreMenu({
   persistentState: 'unknown' | 'persistent' | 'best-effort';
   downloadInFlight: boolean;
   hasCache: boolean;
+  queueCount: number;
   onDownload: () => void;
+  onRemoveCache: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Two-tap confirm for the destructive Remove action: first tap arms
+  // the button (turns red, label flips to Confirm), second tap commits.
+  // Cheaper than a full modal on mobile and stays inside the popover.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Outside-tap dismisses. Field workers expect tap-on-canvas to do
@@ -2192,6 +2235,12 @@ function FieldMoreMenu({
     }
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  // Reset the armed-confirm state whenever the menu closes so the
+  // next time the user opens it they see the safe label again.
+  useEffect(() => {
+    if (!open) setConfirmingRemove(false);
   }, [open]);
 
   const connStatus = isOnline
@@ -2273,6 +2322,52 @@ function FieldMoreMenu({
               )}
               <span>{hasCache ? 'Refresh offline cache' : 'Download for offline'}</span>
             </button>
+            {/* Remove from device. Only meaningful when something is
+                cached, and we want a hard confirm step because the
+                action wipes the deployment's IDB rows. Two-tap pattern
+                instead of a separate modal keeps the surface small on
+                a phone screen. Queued edits are surfaced as a warning
+                line; they will be lost on remove because the records
+                are gone with the deployment, so the user gets one
+                last chance to sync first. */}
+            {hasCache ? (
+              <>
+                {confirmingRemove && queueCount > 0 ? (
+                  <p className="px-2 pt-1 text-[11px] text-rose-600">
+                    {queueCount} unsynced edit{queueCount === 1 ? '' : 's'}{' '}
+                    will be lost.
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!confirmingRemove) {
+                      setConfirmingRemove(true);
+                      return;
+                    }
+                    setOpen(false);
+                    onRemoveCache();
+                  }}
+                  disabled={downloadInFlight}
+                  className={`flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm disabled:opacity-50 ${
+                    confirmingRemove
+                      ? 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                      : 'text-ink-0 hover:bg-surface-2'
+                  }`}
+                >
+                  <Trash2
+                    className={`h-4 w-4 ${
+                      confirmingRemove ? 'text-rose-600' : 'text-muted'
+                    }`}
+                  />
+                  <span>
+                    {confirmingRemove
+                      ? 'Confirm remove from device'
+                      : 'Remove from device'}
+                  </span>
+                </button>
+              </>
+            ) : null}
             <div className="px-2 py-1">
               <PwaInstallButton variant="compact" />
             </div>
