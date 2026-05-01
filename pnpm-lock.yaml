@@ -46,10 +46,10 @@ importers:
   apps/portal-api:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: ^3.665.0
+        specifier: ^3.700.0
         version: 3.1032.0
       '@aws-sdk/s3-request-presigner':
-        specifier: ^3.665.0
+        specifier: ^3.700.0
         version: 3.1032.0
       '@gratis-gis/form-schema':
         specifier: workspace:*

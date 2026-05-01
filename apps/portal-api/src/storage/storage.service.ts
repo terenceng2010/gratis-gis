@@ -86,6 +86,16 @@ export class StorageService implements OnModuleInit {
       region: 'us-east-1', // MinIO ignores this but the SDK requires a value.
       credentials: { accessKeyId, secretAccessKey },
       forcePathStyle: true, // MinIO only supports path-style addressing.
+      // AWS SDK v3 turns on default integrity protections that send
+      // x-amz-sdk-checksum-algorithm + x-amz-content-sha256 headers
+      // even on operations like HeadBucket. Older / non-AWS S3
+      // implementations (including some MinIO releases) reject the
+      // header with "A header you provided implies functionality that
+      // is not implemented." Opting out via WHEN_REQUIRED keeps the
+      // checksum on real PUT-data calls (where MinIO supports it) and
+      // skips it on the metadata operations where MinIO chokes.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
     });
   }
 
