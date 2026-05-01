@@ -89,7 +89,12 @@ services:
       - gratis-net
 
   minio:
-    image: minio/minio:RELEASE.2024-10-02T17-50-41Z
+    # Pin a recent MinIO. Earlier 2024 releases reject the
+    # x-amz-sdk-checksum-algorithm header that AWS SDK v3 sends by
+    # default on PUT / CreateBucket, with "A header you provided
+    # implies functionality that is not implemented". Bumping to
+    # 2025+ adds checksum support.
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
     container_name: gratis-gis-prod-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
