@@ -169,6 +169,14 @@ services:
       # portal-api-admin client in the realm import.
       KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-portal-api-admin}
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?KEYCLOAK_ADMIN_CLIENT_SECRET must be set in .env.prod}
+      # AES-256-GCM master key for credential-at-rest encryption.
+      # Used for stored item credentials (#36) and the SMTP password
+      # in admin Notifications. Generate with:
+      #   openssl rand -base64 32
+      # If this is rotated after-the-fact, every encrypted row in
+      # item_credential and system_setting becomes unreadable -- treat
+      # it as effectively immutable once set.
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY must be set in .env.prod}
       # MinIO / S3. Variable names match what storage.service.ts /
       # backup.service.ts read; no S3_* aliases.
       #
