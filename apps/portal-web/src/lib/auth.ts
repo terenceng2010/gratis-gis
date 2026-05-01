@@ -75,6 +75,21 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.KEYCLOAK_CLIENT_ID_WEB ?? 'portal-web',
       clientSecret: process.env.KEYCLOAK_CLIENT_SECRET_WEB ?? '',
       issuer: `${keycloakUrl}/realms/${realm}`,
+      // Request offline_access in addition to the default openid +
+      // profile + email scopes. Keycloak responds with an "offline"
+      // refresh token that does NOT expire on idle (the default
+      // refresh token expires after ssoSessionIdleTimeout, which
+      // forces the user to sign in again every time they leave the
+      // PWA closed for more than a day or two). With offline_access
+      // the refresh-token rotation in jwt() above keeps minting
+      // fresh access tokens for as long as we hold the
+      // NEXTAUTH_SECRET-signed JWT cookie -- which we configure
+      // for 365 days below. This is the Field Maps-equivalent
+      // "stay signed in" behaviour: the user signs in once and
+      // the PWA stays signed in across launches.
+      authorization: {
+        params: { scope: 'openid profile email offline_access' },
+      },
     }),
   ],
   callbacks: {
@@ -130,7 +145,19 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  session: { strategy: 'jwt' },
+  // 365-day session + JWT cookie. The default 30-day session is too
+  // short for a field PWA where users may not open the app for
+  // weeks at a stretch. Combined with the offline_access scope and
+  // the refresh-token rotation in jwt() above, this lets the PWA
+  // mint fresh access tokens silently on every launch as long as
+  // the user has signed in within the last year. Equivalent to the
+  // Field Maps "stay signed in" pattern. If the org wants tighter
+  // session bounds, the realm-level ssoSessionMaxLifespan still
+  // wins -- once the offline refresh token is invalidated server-
+  // side, the JWT becomes useless and the user is forced through
+  // sign-in again.
+  session: { strategy: 'jwt', maxAge: 365 * 24 * 60 * 60 },
+  jwt: { maxAge: 365 * 24 * 60 * 60 },
   // We have only one provider (Keycloak). Override the default
   // /api/auth/signin picker page with a custom /signin that
   // immediately redirects to Keycloak; saves the user a useless
