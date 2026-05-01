@@ -171,6 +171,36 @@ export class V3TablesService {
       )
     `);
     if (!isTable) {
+      // Self-heal pre-#240 layer tables that were provisioned with
+      // single-geometry columns (Polygon / LineString / Point) before
+      // we discovered that real shapefiles mix single + multi inside
+      // one layer. ST_Multi() is idempotent for already-multi
+      // geometries, so the rewrite is a no-op for empty tables and
+      // a one-time migration for populated ones. Skipped when the
+      // column is already Multi-*.
+      const desired = toPgGeomType(geomType);
+      const current = await this.prisma.$queryRawUnsafe<
+        Array<{ ftype: string }>
+      >(`
+        SELECT format_type(atttypid, atttypmod) AS ftype
+        FROM pg_attribute
+        WHERE attrelid = '"${tbl}"'::regclass
+          AND attname = 'geom'
+      `);
+      const ftype = current[0]?.ftype ?? '';
+      if (
+        ftype.length > 0 &&
+        !ftype.toLowerCase().includes(desired.toLowerCase())
+      ) {
+        await this.prisma.$executeRawUnsafe(`
+          ALTER TABLE "${tbl}"
+          ALTER COLUMN geom TYPE GEOMETRY(${desired}, 4326)
+          USING ST_Multi(geom)
+        `);
+        this.log.log(
+          `Migrated ${tbl}.geom from ${ftype} to GEOMETRY(${desired}, 4326)`,
+        );
+      }
       await this.prisma.$executeRawUnsafe(`
         CREATE INDEX IF NOT EXISTS "${tbl}_geom_idx"
           ON "${tbl}" USING GIST (geom)
@@ -288,10 +318,18 @@ export function toV3TableName(itemId: string, layerId: string): string {
 
 function toPgGeomType(
   g: 'point' | 'line' | 'polygon',
-): 'Point' | 'LineString' | 'Polygon' {
-  if (g === 'point') return 'Point';
-  if (g === 'line') return 'LineString';
-  return 'Polygon';
+): 'MultiPoint' | 'MultiLineString' | 'MultiPolygon' {
+  // Always provision Multi-* columns. Real-world spatial data
+  // (especially shapefiles, where the OGR driver hands us a
+  // generalized polygon ring concept) routinely mixes single and
+  // multi geometries inside one "polygon" layer; PostGIS's strict
+  // type check rejects MultiPolygon rows on a Polygon column with
+  // SQLSTATE 22023. By promoting on the column side and ST_Multi()
+  // ing on insert, we accept both, and queries that read the column
+  // out work the same for downstream renderers.
+  if (g === 'point') return 'MultiPoint';
+  if (g === 'line') return 'MultiLineString';
+  return 'MultiPolygon';
 }
 
 function toPgFieldType(

@@ -217,7 +217,7 @@ export class V3FeaturesService {
             (global_id, geom, properties, valid_from, created_by, edited_by)
           VALUES
             (COALESCE($1::uuid, gen_random_uuid()),
-             CASE WHEN $2::text IS NULL THEN NULL ELSE ST_GeomFromGeoJSON($2) END,
+             CASE WHEN $2::text IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromGeoJSON($2)) END,
              $3::jsonb, $4, $5::uuid, $5::uuid)
           `,
           f.globalId ?? null,
@@ -329,7 +329,7 @@ export class V3FeaturesService {
         INSERT INTO "${tbl}"
           (global_id, geom, properties, valid_from, created_by, created_at, edited_by, edited_at)
         VALUES
-          ($1::uuid, CASE WHEN $2::text IS NULL THEN NULL ELSE ST_GeomFromGeoJSON($2) END,
+          ($1::uuid, CASE WHEN $2::text IS NULL THEN NULL ELSE ST_Multi(ST_GeomFromGeoJSON($2)) END,
            $3::jsonb, $4, $5::uuid, $6, $5::uuid, $4)
         RETURNING gid, global_id, ST_AsGeoJSON(geom) AS geom, properties,
                   valid_from, valid_to, created_by, created_at, edited_by, edited_at
