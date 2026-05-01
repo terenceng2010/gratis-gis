@@ -46,7 +46,13 @@ www.{$PORTAL_DOMAIN} {
     # Send everything to the web app. Next.js's standalone server is
     # http only and listens on port 3000. The api routes (/api/*)
     # are NestJS, listening separately on portal-api:4000 with its
-    # own /api global prefix.
+    # own /api global prefix -- EXCEPT /api/auth/*, which is owned by
+    # NextAuth on the web container and handles signin / callback /
+    # error / signout / session. Caddy evaluates handle blocks in
+    # order, so the more specific /api/auth/* match has to come first.
+    handle /api/auth/* {
+        reverse_proxy portal-web:3000
+    }
     handle /api/* {
         reverse_proxy portal-api:4000
     }
