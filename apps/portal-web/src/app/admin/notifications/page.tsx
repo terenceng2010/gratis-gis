@@ -9,6 +9,7 @@ import {
   type RecentRow,
   type SmtpState,
   type DefaultsRow,
+  type TemplateOverrideRow,
 } from './notifications-admin-view';
 
 /**
@@ -31,18 +32,23 @@ export default async function AdminNotificationsPage() {
   let recent: RecentRow[] = [];
   let smtp: SmtpState | null = null;
   let defaults: DefaultsRow[] = [];
+  let templateOverrides: TemplateOverrideRow[] = [];
   let error: string | null = null;
   try {
-    const [s, r, sm, df] = await Promise.all([
+    const [s, r, sm, df, tpl] = await Promise.all([
       apiFetch<Stats>('/api/admin/notifications/stats'),
       apiFetch<RecentRow[]>('/api/admin/notifications/recent'),
       apiFetch<SmtpState>('/api/admin/notifications/smtp'),
       apiFetch<{ rows: DefaultsRow[] }>('/api/admin/notifications/defaults'),
+      apiFetch<{ rows: TemplateOverrideRow[] }>(
+        '/api/admin/notifications/templates',
+      ),
     ]);
     stats = s;
     recent = r;
     smtp = sm;
     defaults = df.rows;
+    templateOverrides = tpl.rows;
   } catch (err) {
     error =
       err instanceof Error
@@ -89,6 +95,7 @@ export default async function AdminNotificationsPage() {
           initialRecent={recent}
           initialSmtp={smtp}
           initialDefaults={defaults}
+          initialTemplateOverrides={templateOverrides}
         />
       ) : null}
     </div>

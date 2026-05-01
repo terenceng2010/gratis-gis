@@ -5,6 +5,7 @@ import { NotificationStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EmailTransport } from './email-transport.js';
+import { NotificationTemplateService } from './notification-template.service.js';
 import { renderNotification, type RenderContext } from './templates.js';
 
 /**
@@ -45,6 +46,7 @@ export class NotificationsWorker {
     private readonly prisma: PrismaService,
     private readonly transport: EmailTransport,
     private readonly cfg: ConfigService,
+    private readonly templates: NotificationTemplateService,
   ) {
     this.enabled =
       (this.cfg.get<string>('NOTIFICATIONS_ENABLED') ?? '').toLowerCase() ===
@@ -142,7 +144,31 @@ export class NotificationsWorker {
 
     // Phase 1: only email is wired. Other channels would dispatch
     // here based on row.channel.
-    const rendered = renderNotification(row.type, row.payload, this.renderCtx);
+    //
+    // Render precedence (#229 Phase B): per-org notification_template
+    // override > hardcoded default in templates.ts. The override
+    // path needs the recipient's orgId, which we read off the User
+    // row. Lookup is one extra row per send; given we drain in
+    // batches of 25 once every 30s that's negligible.
+    let rendered = null as Awaited<
+      ReturnType<typeof renderNotification>
+    > | null;
+    const recipient = await this.prisma.user.findUnique({
+      where: { id: row.userId },
+      select: { orgId: true },
+    });
+    if (recipient?.orgId) {
+      rendered = await this.templates.renderOverride(
+        recipient.orgId,
+        row.type,
+        row.channel,
+        row.payload,
+        this.renderCtx,
+      );
+    }
+    if (!rendered) {
+      rendered = renderNotification(row.type, row.payload, this.renderCtx);
+    }
     if (!rendered) {
       await this.prisma.notification.update({
         where: { id },

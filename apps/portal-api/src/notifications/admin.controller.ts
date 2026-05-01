@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -33,6 +34,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { NOTIFICATION_TYPES, getTypeMeta } from './notification-types.js';
 import { SystemSettingsService, type SmtpConfig } from './system-settings.service.js';
 import { NotificationTypeDefaultService } from './notification-type-default.service.js';
+import { NotificationTemplateService } from './notification-template.service.js';
 import { EmailTransport } from './email-transport.js';
 import { renderNotification } from './templates.js';
 import { SAMPLE_PAYLOADS } from './sample-payloads.js';
@@ -62,6 +64,19 @@ class PutDefaultDto {
   @IsEnum(NotificationType) type!: NotificationType;
   @IsEnum(NotificationChannel) channel!: NotificationChannel;
   @IsBoolean() enabled!: boolean;
+}
+
+class PutTemplateDto {
+  @IsString() subject!: string;
+  @IsString() bodyText!: string;
+  @IsString() bodyHtml!: string;
+}
+
+class PreviewTemplateDto {
+  @IsEnum(NotificationType) type!: NotificationType;
+  @IsString() subject!: string;
+  @IsString() bodyText!: string;
+  @IsString() bodyHtml!: string;
 }
 
 interface StatsPayload {
@@ -124,6 +139,7 @@ export class NotificationsAdminController {
     private readonly prisma: PrismaService,
     private readonly settings: SystemSettingsService,
     private readonly defaults: NotificationTypeDefaultService,
+    private readonly templates: NotificationTemplateService,
     private readonly transport: EmailTransport,
     private readonly keycloak: KeycloakAdminService,
   ) {}
@@ -475,6 +491,135 @@ export class NotificationsAdminController {
       html: rendered.html,
     };
   }
+
+  // ---- Per-org template overrides (#229 Phase B) ----------------
+
+  /**
+   * List the saved overrides for the admin's org. The admin types
+   * page uses this to badge "Custom" next to types whose copy has
+   * been edited. Catalog defaults are surfaced via the existing
+   * /preview endpoint.
+   */
+  @Get('templates')
+  async listTemplates(
+    @CurrentUser() me: AuthUser,
+  ): Promise<{ rows: Array<{ type: NotificationType; channel: NotificationChannel; isOverride: boolean; updatedAt: string | null }> }> {
+    return { rows: await this.templates.list(me.orgId) };
+  }
+
+  /**
+   * Read a single override, or null when none is saved. The Edit
+   * modal calls this on open so it can populate the textareas with
+   * the current override (or fall back to the default copy when no
+   * override exists).
+   */
+  @Get('templates/:type/:channel')
+  async getTemplate(
+    @CurrentUser() me: AuthUser,
+    @Param('type') typeRaw: string,
+    @Param('channel') channelRaw: string,
+  ): Promise<{
+    override: { subject: string; bodyText: string; bodyHtml: string; updatedAt: string } | null;
+    defaultPreview: { subject: string; text: string; html: string };
+  }> {
+    const type = parseType(typeRaw);
+    const channel = parseChannel(channelRaw);
+    const override = await this.templates.get(me.orgId, type, channel);
+    const orgLabel = process.env.PORTAL_NAME ?? 'GratisGIS';
+    const baseUrl = process.env.PORTAL_BASE_URL ?? 'http://localhost:3000';
+    // Always include a preview of the hardcoded default so the
+    // editor can show "what you'll get if you click Reset".
+    const payload = SAMPLE_PAYLOADS[type];
+    const def =
+      payload === undefined
+        ? null
+        : renderNotification(type, payload, { orgLabel, baseUrl });
+    if (!def) {
+      throw new BadRequestException(
+        `No default renderer for type "${typeRaw}". Add one in templates.ts.`,
+      );
+    }
+    return {
+      override,
+      defaultPreview: { subject: def.subject, text: def.text, html: def.html },
+    };
+  }
+
+  /**
+   * Upsert one (type, channel) override for the admin's org. The
+   * payload is three mustache-lite strings; substitution happens at
+   * send time. Validation here is lightweight -- a malformed
+   * template still renders, just with empty substitutions, so the
+   * worker doesn't get poisoned.
+   */
+  @Put('templates/:type/:channel')
+  async putTemplate(
+    @CurrentUser() me: AuthUser,
+    @Param('type') typeRaw: string,
+    @Param('channel') channelRaw: string,
+    @Body() dto: PutTemplateDto,
+  ): Promise<{ ok: true }> {
+    const type = parseType(typeRaw);
+    const channel = parseChannel(channelRaw);
+    await this.templates.setOverride(me.orgId, type, channel, {
+      subject: dto.subject,
+      bodyText: dto.bodyText,
+      bodyHtml: dto.bodyHtml,
+    });
+    return { ok: true };
+  }
+
+  /** Drop an override so the runtime falls back to the default. */
+  @Delete('templates/:type/:channel')
+  @HttpCode(204)
+  async deleteTemplate(
+    @CurrentUser() me: AuthUser,
+    @Param('type') typeRaw: string,
+    @Param('channel') channelRaw: string,
+  ): Promise<void> {
+    const type = parseType(typeRaw);
+    const channel = parseChannel(channelRaw);
+    await this.templates.clearOverride(me.orgId, type, channel);
+  }
+
+  /**
+   * Render an unsaved template against the type's sample payload.
+   * Used by the Edit modal's live preview pane so the admin can see
+   * the result of substitutions without committing.
+   */
+  @Post('templates/preview')
+  @HttpCode(200)
+  async previewTemplate(
+    @Body() dto: PreviewTemplateDto,
+  ): Promise<{ subject: string; text: string; html: string }> {
+    const orgLabel = process.env.PORTAL_NAME ?? 'GratisGIS';
+    const baseUrl = process.env.PORTAL_BASE_URL ?? 'http://localhost:3000';
+    const rendered = this.templates.previewUnsaved(
+      { subject: dto.subject, bodyText: dto.bodyText, bodyHtml: dto.bodyHtml },
+      dto.type,
+      { orgLabel, baseUrl },
+    );
+    if (!rendered) {
+      throw new BadRequestException(
+        `No sample payload registered for ${dto.type}.`,
+      );
+    }
+    return { subject: rendered.subject, text: rendered.text, html: rendered.html };
+  }
+}
+
+function parseType(raw: string): NotificationType {
+  if (!Object.values(NotificationType).includes(raw as NotificationType)) {
+    throw new BadRequestException(`Unknown notification type: ${raw}`);
+  }
+  return raw as NotificationType;
+}
+
+function parseChannel(raw: string): NotificationChannel {
+  if (!Object.values(NotificationChannel).includes(raw as NotificationChannel)) {
+    throw new BadRequestException(`Unknown notification channel: ${raw}`);
+  }
+  return raw as NotificationChannel;
 }
 
 interface SmtpStatePayload {

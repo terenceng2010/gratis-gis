@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -8,7 +8,9 @@ import {
   Eye,
   Loader2,
   Mail,
+  Pencil,
   RefreshCcw,
+  RotateCcw,
   RotateCw,
   Save,
   Send,
@@ -70,6 +72,17 @@ export interface DefaultsRow {
   isOverride: boolean;
 }
 
+/** One row from /admin/notifications/templates -- the org's saved
+ *  copy overrides for a (type, channel) pair (#229 Phase B). The
+ *  initial fetch only includes types that have an override; types
+ *  without one are inferred by absence in this list. */
+export interface TemplateOverrideRow {
+  type: string;
+  channel: 'email';
+  isOverride: true;
+  updatedAt: string | null;
+}
+
 interface PreviewPayload {
   type: string;
   label: string;
@@ -83,6 +96,7 @@ interface Props {
   initialRecent: RecentRow[];
   initialSmtp: SmtpState;
   initialDefaults: DefaultsRow[];
+  initialTemplateOverrides: TemplateOverrideRow[];
 }
 
 /**
@@ -102,6 +116,7 @@ export function NotificationsAdminView({
   initialRecent,
   initialSmtp,
   initialDefaults,
+  initialTemplateOverrides,
 }: Props) {
   const [stats, setStats] = useState<Stats>(initialStats);
   const [recent, setRecent] = useState<RecentRow[]>(initialRecent);
@@ -109,6 +124,18 @@ export function NotificationsAdminView({
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
+  // Templates editor state (#229 Phase B). The set of overrides
+  // lives at the page level so the DefaultsCard's "override"
+  // badge stays in sync after a save / reset without a full
+  // refresh.
+  const [templateOverrides, setTemplateOverrides] = useState<
+    TemplateOverrideRow[]
+  >(initialTemplateOverrides);
+  const [editingType, setEditingType] = useState<{
+    type: string;
+    label: string;
+    channel: 'email';
+  } | null>(null);
 
   async function refresh() {
     setRefreshing(true);
@@ -249,7 +276,15 @@ export function NotificationsAdminView({
       <DefaultsCard
         initial={initialDefaults}
         statsByType={stats.byType}
+        templateOverrides={templateOverrides}
         onPreview={(type) => void openPreview(type)}
+        onCustomize={(row) =>
+          setEditingType({
+            type: row.type,
+            label: row.label,
+            channel: row.channel,
+          })
+        }
       />
 
       <section className="rounded-lg border border-border bg-surface-1 p-4 shadow-card">
@@ -330,6 +365,35 @@ export function NotificationsAdminView({
 
       {preview ? (
         <PreviewModal preview={preview} onClose={() => setPreview(null)} />
+      ) : null}
+
+      {editingType ? (
+        <TemplateEditModal
+          type={editingType.type}
+          label={editingType.label}
+          channel={editingType.channel}
+          onClose={() => setEditingType(null)}
+          onSaved={(saved) => {
+            // Maintain the per-type override badge state when the
+            // admin saves or resets a template. Saved -> ensure
+            // present; reset -> drop.
+            setTemplateOverrides((cur) => {
+              const without = cur.filter(
+                (r) => !(r.type === editingType.type && r.channel === editingType.channel),
+              );
+              if (!saved) return without;
+              return [
+                ...without,
+                {
+                  type: editingType.type,
+                  channel: editingType.channel,
+                  isOverride: true as const,
+                  updatedAt: new Date().toISOString(),
+                },
+              ];
+            });
+          }}
+        />
       ) : null}
     </div>
   );
@@ -623,15 +687,25 @@ function SmtpCard({ initial }: { initial: SmtpState }) {
 function DefaultsCard({
   initial,
   statsByType,
+  templateOverrides,
   onPreview,
+  onCustomize,
 }: {
   initial: DefaultsRow[];
   statsByType: Stats['byType'];
+  templateOverrides: TemplateOverrideRow[];
   onPreview: (type: string) => void;
+  onCustomize: (row: DefaultsRow) => void;
 }) {
   const [rows, setRows] = useState<DefaultsRow[]>(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const statsLookup = new Map(statsByType.map((s) => [s.type, s] as const));
+  // Set of `${type}|${channel}` keys that have a saved per-org
+  // template override. Used to badge the row + flip the Customize
+  // button affordance from "Customize" to "Edit".
+  const templateOverrideKeys = new Set(
+    templateOverrides.map((t) => `${t.type}|${t.channel}`),
+  );
 
   async function setOverride(row: DefaultsRow, enabled: boolean) {
     const key = `${row.type}|${row.channel}`;
@@ -676,6 +750,7 @@ function DefaultsCard({
             <th className="pb-1 text-right font-medium">Sent</th>
             <th className="pb-1 text-right font-medium">Failed</th>
             <th className="pb-1 text-right font-medium">Default</th>
+            <th className="pb-1 text-right font-medium">Template</th>
             <th className="pb-1 text-right font-medium">Preview</th>
           </tr>
         </thead>
@@ -720,6 +795,29 @@ function DefaultsCard({
                   </label>
                 </td>
                 <td className="py-1.5 text-right">
+                  {(() => {
+                    const hasOverride = templateOverrideKeys.has(key);
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => onCustomize(row)}
+                        className="inline-flex items-center gap-1 rounded border border-border bg-surface-1 px-1.5 py-0.5 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+                        title={
+                          hasOverride
+                            ? 'Editing your saved template'
+                            : 'Override the default copy for this org'
+                        }
+                      >
+                        <Pencil className="h-3 w-3" />
+                        {hasOverride ? 'Edit' : 'Customize'}
+                        {hasOverride ? (
+                          <span className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        ) : null}
+                      </button>
+                    );
+                  })()}
+                </td>
+                <td className="py-1.5 text-right">
                   <button
                     type="button"
                     onClick={() => onPreview(row.type)}
@@ -736,7 +834,10 @@ function DefaultsCard({
       </table>
       <p className="mt-2 text-[11px] text-muted">
         Off here mutes the type platform-wide for users who haven&apos;t
-        explicitly opted in. Per-user opt-ins still win.
+        explicitly opted in. Per-user opt-ins still win. Customize
+        rewrites the email body for your org; saved templates
+        substitute mustache-style placeholders like {'{{itemTitle}}'}
+        and {'{{baseUrl}}'} from the trigger payload.
       </p>
     </section>
   );
@@ -801,6 +902,359 @@ function PreviewModal({
               {preview.text}
             </pre>
           </details>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Template edit modal (#229 Phase B) --------------------------
+
+/**
+ * Lets an admin override the per-NotificationType email body for
+ * their org. Three textareas (subject, plain-text body, HTML body)
+ * with a live preview pane that re-renders against the type's
+ * sample payload after a 250ms debounce. Saving upserts the
+ * notification_template row; Reset deletes it so the runtime
+ * falls back to the hardcoded default in templates.ts.
+ *
+ * The placeholder grammar is mustache-lite: {{name}} HTML-escapes,
+ * {{{name}}} passes through. Both substitute from the payload +
+ * { orgLabel, baseUrl } context the runtime carries. The renderer
+ * lives server-side (NotificationTemplateService.previewUnsaved)
+ * so the preview is a faithful round-trip of what the worker will
+ * eventually send.
+ */
+function TemplateEditModal({
+  type,
+  label,
+  channel,
+  onClose,
+  onSaved,
+}: {
+  type: string;
+  label: string;
+  channel: 'email';
+  onClose: () => void;
+  /** Called with `true` when the admin clicks Save (a row now
+   *  exists), `false` when they click Reset (the override has been
+   *  removed). The parent uses this to update the badge in the
+   *  per-type table without a full refresh. */
+  onSaved: (hasOverride: boolean) => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [subject, setSubject] = useState('');
+  const [bodyText, setBodyText] = useState('');
+  const [bodyHtml, setBodyHtml] = useState('');
+  const [hasOverride, setHasOverride] = useState(false);
+  const [defaultPreview, setDefaultPreview] = useState<{
+    subject: string;
+    text: string;
+    html: string;
+  } | null>(null);
+  const [preview, setPreview] = useState<{
+    subject: string;
+    text: string;
+    html: string;
+  } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Initial fetch: load the saved override (if any) and the
+  // hardcoded default preview so the admin can see what they're
+  // diverging from before they start typing.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/portal/admin/notifications/templates/${type}/${channel}`,
+        );
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        const json = (await res.json()) as {
+          override: {
+            subject: string;
+            bodyText: string;
+            bodyHtml: string;
+            updatedAt: string;
+          } | null;
+          defaultPreview: { subject: string; text: string; html: string };
+        };
+        if (cancelled) return;
+        setDefaultPreview(json.defaultPreview);
+        if (json.override) {
+          setSubject(json.override.subject);
+          setBodyText(json.override.bodyText);
+          setBodyHtml(json.override.bodyHtml);
+          setHasOverride(true);
+          setPreview(null);
+        } else {
+          // Seed the textareas with the hardcoded default copy so
+          // the admin can edit-by-tweak rather than start from
+          // blank. We keep `hasOverride` false so the Reset button
+          // stays disabled until they Save.
+          setSubject(json.defaultPreview.subject);
+          setBodyText(json.defaultPreview.text);
+          setBodyHtml(json.defaultPreview.html);
+          setPreview(json.defaultPreview);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLoadError(
+            e instanceof Error ? e.message : 'Could not load template.',
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [type, channel]);
+
+  function schedulePreview() {
+    if (typeof window === 'undefined') return;
+    setPreviewing(true);
+    window.clearTimeout((schedulePreview as unknown as { _t?: number })._t);
+    (schedulePreview as unknown as { _t?: number })._t = window.setTimeout(
+      async () => {
+        try {
+          const res = await fetch(
+            '/api/portal/admin/notifications/templates/preview',
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ type, subject, bodyText, bodyHtml }),
+            },
+          );
+          if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+          setPreview(
+            (await res.json()) as { subject: string; text: string; html: string },
+          );
+          setErr(null);
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : 'Preview failed.');
+        } finally {
+          setPreviewing(false);
+        }
+      },
+      250,
+    );
+  }
+
+  async function save() {
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await fetch(
+        `/api/portal/admin/notifications/templates/${type}/${channel}`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ subject, bodyText, bodyHtml }),
+        },
+      );
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      setHasOverride(true);
+      onSaved(true);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reset() {
+    setResetting(true);
+    setErr(null);
+    try {
+      const res = await fetch(
+        `/api/portal/admin/notifications/templates/${type}/${channel}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok && res.status !== 204) {
+        throw new Error(`${res.status} ${await res.text()}`);
+      }
+      setHasOverride(false);
+      onSaved(false);
+      // Repopulate textareas with the hardcoded default so the
+      // admin can keep iterating from a known baseline.
+      if (defaultPreview) {
+        setSubject(defaultPreview.subject);
+        setBodyText(defaultPreview.text);
+        setBodyHtml(defaultPreview.html);
+        setPreview(defaultPreview);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Reset failed.');
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[92vh] w-full max-w-5xl flex-col rounded-lg border border-border bg-surface-1 shadow-raised"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-muted">
+              Edit template ({channel})
+            </p>
+            <p className="text-sm font-medium text-ink-0">{label}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 hover:bg-surface-2"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 px-4 py-6 text-xs text-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading template...
+          </div>
+        ) : loadError ? (
+          <div className="px-4 py-6 text-xs text-danger">{loadError}</div>
+        ) : (
+          <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto px-4 py-4 lg:grid-cols-2">
+            <div className="space-y-3">
+              <Field
+                label="Subject"
+                hint="Mustache-lite. {{itemTitle}}, {{orgLabel}}, etc."
+              >
+                <input
+                  type="text"
+                  value={subject}
+                  onChange={(e) => {
+                    setSubject(e.target.value);
+                    schedulePreview();
+                  }}
+                  className={inputClass}
+                />
+              </Field>
+
+              <Field
+                label="HTML body"
+                hint="{{name}} escapes, {{{name}}} passes raw HTML."
+              >
+                <textarea
+                  rows={10}
+                  value={bodyHtml}
+                  onChange={(e) => {
+                    setBodyHtml(e.target.value);
+                    schedulePreview();
+                  }}
+                  className="w-full rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+              </Field>
+
+              <Field
+                label="Plain-text body"
+                hint="Sent as the multipart/alternative fallback."
+              >
+                <textarea
+                  rows={6}
+                  value={bodyText}
+                  onChange={(e) => {
+                    setBodyText(e.target.value);
+                    schedulePreview();
+                  }}
+                  className="w-full rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                />
+              </Field>
+
+              {err ? (
+                <p className="text-xs text-danger" role="alert">
+                  {err}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-3">
+              <p className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted">
+                Live preview
+                {previewing ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              </p>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-muted">
+                  Subject
+                </p>
+                <p className="mt-0.5 text-sm text-ink-0">
+                  {preview?.subject ?? '...'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-muted">
+                  HTML
+                </p>
+                <div
+                  className="mt-0.5 max-h-72 overflow-auto rounded border border-border bg-surface-0 p-3 text-sm"
+                  // eslint-disable-next-line react/no-danger
+                  dangerouslySetInnerHTML={{ __html: preview?.html ?? '' }}
+                />
+              </div>
+              <details>
+                <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-muted">
+                  Plain-text fallback
+                </summary>
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-border bg-surface-0 p-3 text-[11px] text-ink-1">
+                  {preview?.text ?? ''}
+                </pre>
+              </details>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-2 border-t border-border px-4 py-3">
+          <button
+            type="button"
+            disabled={!hasOverride || resetting}
+            onClick={() => void reset()}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            {resetting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            Reset to default
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void save()}
+              className="inline-flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+            >
+              {saving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save override
+            </button>
+          </div>
         </div>
       </div>
     </div>

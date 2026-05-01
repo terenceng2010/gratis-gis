@@ -9,6 +9,7 @@ import { NotificationsCron } from './notifications-cron.service.js';
 import { NotificationPreferencesController } from './preferences.controller.js';
 import { SystemSettingsService } from './system-settings.service.js';
 import { NotificationTypeDefaultService } from './notification-type-default.service.js';
+import { NotificationTemplateService } from './notification-template.service.js';
 
 /**
  * Cross-cutting notifications platform (#127). Other modules import
@@ -32,6 +33,7 @@ import { NotificationTypeDefaultService } from './notification-type-default.serv
     EmailTransport,
     SystemSettingsService,
     NotificationTypeDefaultService,
+    NotificationTemplateService,
   ],
   // Export the platform settings + default services so the admin
   // controller (registered in AdminModule, not here, to avoid a
@@ -42,6 +44,7 @@ import { NotificationTypeDefaultService } from './notification-type-default.serv
     NotificationsService,
     SystemSettingsService,
     NotificationTypeDefaultService,
+    NotificationTemplateService,
     EmailTransport,
   ],
 })
