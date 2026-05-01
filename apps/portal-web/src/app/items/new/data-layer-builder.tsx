@@ -7,9 +7,11 @@ import {
   ChevronsUpDown,
   ChevronUp,
   Circle,
+  FileUp,
   GripVertical,
   List,
   ListChecks,
+  Loader2,
   Minus,
   Paperclip,
   Pencil,
@@ -20,6 +22,7 @@ import {
   Trash2,
   Upload,
   X,
+  XCircle,
 } from 'lucide-react';
 import { CreateSharedPickListDialog } from './create-shared-pick-list-dialog';
 import type {
@@ -1667,9 +1670,33 @@ interface ProbedLayer {
   featureCount: number;
 }
 
+/**
+ * Busy state surfaces upload + probe progress prominently while a
+ * large file is being processed. The previous tiny "Probing on the
+ * server..." line was easy to miss for a 200 MB+ archive: users would
+ * close the dialog thinking nothing was happening. The panel below
+ * shows file name + size, a real upload progress bar (XHR upload
+ * progress events), and clear phase labels: Parsing locally /
+ * Uploading X% / Reading on the server.
+ *
+ * `bytesUploaded` and `fileSize` are both nullable while parsing a
+ * geojson client-side because we never send those bytes anywhere; the
+ * UI swaps to an indeterminate spinner in that case.
+ */
+interface ImportBusy {
+  phase: 'parsing' | 'uploading' | 'reading';
+  fileName: string;
+  fileSize: number;
+  bytesUploaded: number;
+}
+
 function ImportPanel({ onClose, onImport }: ImportPanelProps) {
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'parsing' | 'probing' | null>(null);
+  const [busy, setBusy] = useState<ImportBusy | null>(null);
+  // Live XHR ref so the user can cancel a long upload mid-flight. The
+  // ref is also how the abort path knows whether anything is actually
+  // in flight (handles double-clicks on Cancel gracefully).
+  const xhrRef = useRef<XMLHttpRequest | null>(null);
   const [probed, setProbed] = useState<{
     fileName: string;
     driver: string;
@@ -1678,13 +1705,25 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
     selected: Set<string>;
   } | null>(null);
 
+  function cancelUpload() {
+    xhrRef.current?.abort();
+    xhrRef.current = null;
+    setBusy(null);
+    setError(null);
+  }
+
   async function handleFile(file: File) {
     setError(null);
     setProbed(null);
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
     // GeoJSON stays client-side: it's small and parses quickly.
     if (ext === 'geojson' || ext === 'json') {
-      setBusy('parsing');
+      setBusy({
+        phase: 'parsing',
+        fileName: file.name,
+        fileSize: file.size,
+        bytesUploaded: 0,
+      });
       try {
         const text = await file.text();
         const fc = JSON.parse(text);
@@ -1721,25 +1760,32 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
     // KML / KMZ / shapefile zip / GDB / anything OGR-readable: send to
     // the server's probe endpoint. Returns layer metadata without the
     // geometry: we just need to seed the builder schema here.
-    setBusy('probing');
+    //
+    // We use XMLHttpRequest instead of fetch() because fetch has no
+    // upload-progress hook. For a 200 MB+ shapefile zip the user would
+    // otherwise stare at a tiny "Probing on the server..." string for
+    // a minute and assume the dialog was hung. XHR's
+    // upload.onprogress lets us paint a real bar from 0 to 100, then
+    // flip the label to "Reading on the server..." once the upload
+    // finishes and the GDAL probe runs.
     try {
-      const body = new FormData();
-      body.append('file', file);
-      const res = await fetch('/api/portal/ingest/probe', {
-        method: 'POST',
-        body,
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        setError(
-          `Probe failed (${res.status}): ${text || res.statusText || 'no body'}`,
+      const out = await uploadAndProbe(file, (e) => {
+        setBusy((prev) =>
+          prev
+            ? {
+                ...prev,
+                phase: e.phase,
+                bytesUploaded: e.bytesUploaded,
+              }
+            : {
+                phase: e.phase,
+                fileName: file.name,
+                fileSize: file.size,
+                bytesUploaded: e.bytesUploaded,
+              },
         );
-        return;
-      }
-      const out = (await res.json()) as {
-        driver: string;
-        layers: ProbedLayer[];
-      };
+      }, xhrRef);
+      xhrRef.current = null;
       if (out.layers.length === 1) {
         // Single-layer file: add it straight away, no picker needed.
         addProbedLayers(file.name, out.layers, out.layers[0]!.name);
@@ -1752,9 +1798,16 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
         selected: new Set(out.layers.map((l) => l.name)),
       });
     } catch (err) {
-      setError((err as Error).message || 'Probe failed.');
+      // Cancellations come through here too; don't show "Probe failed"
+      // in that case since the user explicitly aborted.
+      if ((err as Error).name === 'AbortError') {
+        // No-op; cancelUpload already cleared state.
+      } else {
+        setError((err as Error).message || 'Probe failed.');
+      }
     } finally {
       setBusy(null);
+      xhrRef.current = null;
     }
   }
 
@@ -1876,6 +1929,8 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
             feature data per layer from the detail page.
           </p>
         </div>
+      ) : busy ? (
+        <ImportBusyPanel busy={busy} onCancel={cancelUpload} />
       ) : (
         <label
           htmlFor="fs-builder-import"
@@ -1900,11 +1955,6 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
         </label>
       )}
 
-      {busy ? (
-        <p className="mt-2 text-[11px] text-muted">
-          {busy === 'parsing' ? 'Parsing locally…' : 'Probing on the server…'}
-        </p>
-      ) : null}
       {error ? (
         <p className="mt-2 text-[11px] text-danger" role="alert">
           {error}
@@ -1912,6 +1962,187 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * XHR-driven multipart upload to /api/portal/ingest/probe with real
+ * upload-progress reporting. Resolves with the probe response or
+ * rejects with an Error (.name === 'AbortError' on user cancel).
+ *
+ * The progress callback is called with phase 'uploading' as bytes
+ * climb, then once the upload finishes and we're awaiting the GDAL
+ * probe result, with phase 'reading' (bytesUploaded === fileSize).
+ */
+async function uploadAndProbe(
+  file: File,
+  onProgress: (e: {
+    phase: 'uploading' | 'reading';
+    bytesUploaded: number;
+  }) => void,
+  ref: { current: XMLHttpRequest | null },
+): Promise<{ driver: string; layers: ProbedLayer[] }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    ref.current = xhr;
+    xhr.open('POST', '/api/portal/ingest/probe');
+    xhr.responseType = 'text';
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) {
+        if (ev.loaded < ev.total) {
+          onProgress({ phase: 'uploading', bytesUploaded: ev.loaded });
+        } else {
+          onProgress({ phase: 'reading', bytesUploaded: ev.total });
+        }
+      }
+    };
+    xhr.upload.onload = () => {
+      onProgress({ phase: 'reading', bytesUploaded: file.size });
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const out = JSON.parse(xhr.responseText) as {
+            driver: string;
+            layers: ProbedLayer[];
+          };
+          resolve(out);
+        } catch (err) {
+          reject(
+            new Error(
+              `Probe response was not JSON: ${(err as Error).message}`,
+            ),
+          );
+        }
+      } else {
+        reject(
+          new Error(
+            `Probe failed (${xhr.status}): ${
+              xhr.responseText || xhr.statusText || 'no body'
+            }`,
+          ),
+        );
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload.'));
+    xhr.onabort = () => {
+      const e = new Error('Upload cancelled.');
+      e.name = 'AbortError';
+      reject(e);
+    };
+    const body = new FormData();
+    body.append('file', file);
+    xhr.send(body);
+  });
+}
+
+/**
+ * Prominent loading panel that replaces the dropzone while a file is
+ * being parsed locally or uploaded for a server probe. Tall enough
+ * that the user can't mistake it for a static label, with a real
+ * progress bar driven by XHR upload events for the multipart path.
+ *
+ * Three phases:
+ *   parsing   - geojson is being parsed in the main thread; spinner.
+ *   uploading - bytes are climbing to the server; bar from 0..100.
+ *   reading   - upload is done, GDAL is probing on the server;
+ *               spinner with "Reading on the server" copy because at
+ *               this point the bar can't tell the user anything new.
+ */
+function ImportBusyPanel({
+  busy,
+  onCancel,
+}: {
+  busy: ImportBusy;
+  onCancel: () => void;
+}) {
+  const pct =
+    busy.phase === 'uploading' && busy.fileSize > 0
+      ? Math.min(100, (busy.bytesUploaded / busy.fileSize) * 100)
+      : busy.phase === 'reading'
+        ? 100
+        : 0;
+  const headline =
+    busy.phase === 'parsing'
+      ? 'Parsing locally'
+      : busy.phase === 'uploading'
+        ? `Uploading ${pct.toFixed(0)}%`
+        : 'Reading on the server';
+  const subhead =
+    busy.phase === 'parsing'
+      ? 'Reading the file in your browser. This is fast for GeoJSON.'
+      : busy.phase === 'uploading'
+        ? 'Sending the file to the server. Larger files take longer; cellular is slower than wifi.'
+        : 'GDAL is opening the archive and listing layers. This can take a minute for a county-scale parcel layer.';
+  const showCancel = busy.phase !== 'parsing';
+  return (
+    <div className="rounded border border-border bg-surface-1 p-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+          {busy.phase === 'uploading' ? (
+            <FileUp className="h-5 w-5" />
+          ) : (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-ink-0">
+            {headline}
+          </p>
+          <p className="mt-0.5 truncate text-[11px] text-muted">
+            <span className="font-medium text-ink-1">{busy.fileName}</span>
+            {busy.fileSize > 0 ? (
+              <span> · {formatBytesSimple(busy.fileSize)}</span>
+            ) : null}
+          </p>
+          <p className="mt-1.5 text-[11px] text-muted">{subhead}</p>
+          {/* Bar is rendered for upload + reading phases. During the
+              reading phase it sits at 100 + animates a subtle stripe
+              to telegraph "still working" without lying about ETA. */}
+          {busy.phase !== 'parsing' ? (
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+              <div
+                className={`h-full bg-accent transition-all ${
+                  busy.phase === 'reading' ? 'animate-pulse' : ''
+                }`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          ) : null}
+          {busy.phase === 'uploading' ? (
+            <p className="mt-1 text-[10px] text-muted">
+              {formatBytesSimple(busy.bytesUploaded)} of{' '}
+              {formatBytesSimple(busy.fileSize)}
+            </p>
+          ) : null}
+        </div>
+        {showCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-surface-0 px-2 py-1 text-[11px] text-ink-1 hover:bg-surface-2"
+          >
+            <XCircle className="h-3 w-3" />
+            Cancel
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Tiny local byte formatter so the import panel doesn't need to
+ *  reach into the offline-store bundle (which would also pull IDB
+ *  helpers into the wizard chunk). */
+function formatBytesSimple(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v < 10 ? v.toFixed(1) : v.toFixed(0)} ${units[i]}`;
 }
 
 /**

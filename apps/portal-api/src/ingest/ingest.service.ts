@@ -402,10 +402,54 @@ function gdalTypeToSimple(
  * tri-state we expose in the builder. Returns null when GDAL reports no
  * specific geometry (attribute-only "table" layer inside a GDB or
  * unknown / mixed geometries inside a shapefile).
+ *
+ * gdal-async hands us `layer.geomType` as a numeric WKB constant
+ * (Point=1, LineString=2, Polygon=3, MultiPoint=4, MultiLineString=5,
+ * MultiPolygon=6, plus the +1000/+2000/+3000 dimension variants for
+ * Z/M/ZM). The earlier implementation only ran a string includes()
+ * check, which mapped numeric values to null and surfaced every
+ * shapefile in the wizard as a TABLE rather than the polygon /
+ * point / line layer it actually was. Now we fold the numeric path
+ * into a real switch over the WKB base type and keep the string
+ * fallback for environments where gdal-async returns a name.
  */
 function gdalGeomToSimple(
   geomType: number | string,
 ): 'point' | 'line' | 'polygon' | null {
+  const n =
+    typeof geomType === 'number'
+      ? geomType
+      : Number.parseInt(String(geomType), 10);
+  if (Number.isFinite(n) && n > 0 && n !== 100) {
+    // Strip the high-bit EWKB flag and the dimension offsets
+    // (Z=+1000, M=+2000, ZM=+3000) so PointZ, PointM, PointZM all
+    // collapse to plain Point.
+    const masked = n & 0x7fffffff;
+    const base = ((masked - 1) % 1000) + 1;
+    switch (base) {
+      case 1: // Point
+      case 4: // MultiPoint
+        return 'point';
+      case 2: // LineString
+      case 5: // MultiLineString
+      case 8: // CircularString
+      case 9: // CompoundCurve
+      case 11: // MultiCurve
+      case 13: // Curve
+        return 'line';
+      case 3: // Polygon
+      case 6: // MultiPolygon
+      case 10: // CurvePolygon
+      case 12: // MultiSurface
+      case 14: // Surface
+      case 15: // PolyhedralSurface
+      case 16: // TIN
+      case 17: // Triangle
+        return 'polygon';
+      default:
+        break;
+    }
+  }
   const s = String(geomType).toLowerCase();
   if (s.includes('point')) return 'point';
   if (s.includes('line') || s.includes('curve')) return 'line';
