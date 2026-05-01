@@ -199,6 +199,15 @@ services:
       # validates. NEXTAUTH_URL is the canonical public app URL.
       NEXTAUTH_URL: ${PUBLIC_URL:-https://gratisgis.org}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?NEXTAUTH_SECRET must be set in .env.prod}
+      # The web's auth.ts builds the issuer from KEYCLOAK_URL +
+      # KEYCLOAK_REALM (it is not the same as the api's
+      # KEYCLOAK_ISSUER variable). Public URL on purpose -- the JWT
+      # iss claim has to match this for token validation to work,
+      # and the discovery doc fetch runs from the container out
+      # through the public DNS hairpin.
+      KEYCLOAK_URL: https://${AUTH_DOMAIN:-auth.gratisgis.org}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gratis-gis}
+      # Carried for compat with anything else that reads it.
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-https://auth.gratisgis.org/realms/gratis-gis}
       # NextAuth's Keycloak provider reads these names verbatim
       # (apps/portal-web/src/lib/auth.ts). portal-web is a public
