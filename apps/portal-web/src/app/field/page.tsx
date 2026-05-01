@@ -62,20 +62,26 @@ export default async function FieldCatalogPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
+      {/* Mobile: just the title -- this is a field worker's
+          launchpad, nothing else. The descriptive copy and the
+          "New deployment" button are author affordances and only
+          surface from sm: up. Saves vertical real estate on
+          iPhone where every row of the deployment list matters
+          more than the marketing line. */}
       <header className="mb-4 flex items-end justify-between gap-4">
         <div>
           <p className="text-sm text-muted">Content</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">
             Field
           </h1>
-          <p className="mt-1 text-sm text-muted">
+          <p className="mt-1 hidden text-sm text-muted sm:block">
             Deployments you can open in the field, with offline-cache and
             sync state for this device.
           </p>
         </div>
         <Link
           href="/items/new?type=data_collection"
-          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
+          className="hidden h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 sm:inline-flex"
         >
           <ClipboardList className="h-4 w-4" />
           New deployment

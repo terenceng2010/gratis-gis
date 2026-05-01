@@ -1,236 +1,44 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { headers } from 'next/headers';
 import { getServerSession } from 'next-auth';
-import {
-  Archive,
-  ClipboardList,
-  Compass,
-  Folder as FolderIcon,
-  LayoutGrid,
-  Map as MapIcon,
-  Paintbrush,
-  Sparkles,
-  Users,
-  Bell,
-  Shield,
-  Trash2,
-} from 'lucide-react';
 import { authOptions } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
-import { UserMenu } from './user-menu';
-import { TopBarSearch } from './top-bar-search';
+import { AppShellChrome, type AppShellMe } from './app-shell-chrome';
 
 /**
- * Top-level chrome shared by every portal page: top bar with brand + search
- * + account, left nav with primary destinations, and a content area. One
- * consistent frame keeps the app feeling cohesive as we add surfaces.
+ * Server entry point for the global chrome. Fetches the session +
+ * the current user's profile (server-only because it uses the
+ * Keycloak access token), then hands everything to the client
+ * AppShellChrome which decides how to render based on usePathname().
+ *
+ * The split exists because path-based chrome suppression has to be
+ * client-side. We previously stamped x-gratis-pathname from
+ * middleware and read it via headers() here, but that header
+ * occasionally didn't propagate in prod -- the visible symptom was
+ * the search-items top bar stacking on top of the field-runtime's
+ * own header on iPhone, eating the vertical room the field
+ * footer's "Add feature" button needed. usePathname() is always
+ * accurate, so the suppression now lives on the client.
  */
-type Me = {
-  id: string;
-  fullName: string;
-  avatarUrl: string | null;
-  orgName: string | null;
-  /** Role derived from the JWT's org_role claim. Used to gate the
-   *  Admin section in the sidebar so non-admins never see it. */
-  orgRole: 'viewer' | 'contributor' | 'admin';
-};
-
 export async function AppShell({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
 
-  // Fetch the user's profile so we can show their avatar + org in the
-  // top bar. Silently fall back if this fails so the shell still renders
-  // (e.g. the user is signed out and the fetch 401s).
-  let me: Me | null = null;
+  let me: AppShellMe | null = null;
   if (session) {
     try {
-      me = await apiFetch<Me>('/api/users/me');
+      me = await apiFetch<AppShellMe>('/api/users/me');
     } catch {
       me = null;
     }
   }
 
-  // Unauthenticated visitors get no chrome. The page they land on
-  // (always the public landing at `/`) is responsible for its own
-  // layout. Prevents the sidebar / nav from showing links the user
-  // can't use without signing in.
-  if (!session) {
-    return (
-      <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
-    );
-  }
-
-  // Field deployment runtime: skip the global chrome. The field page
-  // owns the entire viewport (its own header bar, basemap canvas,
-  // bottom-anchored sheets), and the search bar at the top of the
-  // shell isn't useful while collecting data -- worse, on mobile
-  // users mistake it for a map address-search and try to type
-  // coordinates into it. Detection comes from x-gratis-pathname,
-  // stamped by middleware so we don't need a custom server. The
-  // route shape /items/<id>/field is a deliberate match (any deeper
-  // segments under /field are still field-runtime children).
-  const pathname = headers().get('x-gratis-pathname') ?? '';
-  const isFieldRuntime = /^\/items\/[^/]+\/field(?:\/|$)/.test(pathname);
-  if (isFieldRuntime) {
-    return (
-      <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
-    );
-  }
-
   return (
-    <div className="flex min-h-screen bg-surface-0 text-ink-0">
-      <aside className="hidden w-60 shrink-0 border-r border-border bg-surface-1 px-3 py-4 md:block">
-        <Link href="/" className="flex items-center gap-2 px-2 py-2">
-          <Compass className="h-6 w-6 text-accent" />
-          <span className="text-base font-semibold tracking-tight">GratisGIS</span>
-        </Link>
-        <nav className="mt-4 flex flex-col gap-0.5 text-sm">
-          <NavLink href="/" icon={<LayoutGrid className="h-4 w-4" />}>Overview</NavLink>
-          {/* Single items entry. The My / All toggle lives on the page
-              itself: see apps/portal-web/src/app/items/page.tsx. */}
-          <NavLink href="/items" icon={<MapIcon className="h-4 w-4" />}>Items</NavLink>
-          {/* "Folders" links to the same items page so the user sees
-              the rail tree (the actual folder navigation surface).
-              Folders aren't a separate destination -- they're how
-              you organize items, so the link drops you where you
-              can see and use them. The `folders=open` flag forces
-              the slide-in drawer open on landing so the user
-              actually sees the rail when they meant to click on
-              "Folders"; the drawer's normal closed-by-default
-              behaviour resumes on subsequent visits to /items. */}
-          <NavLink
-            href="/items?folders=open"
-            icon={<FolderIcon className="h-4 w-4" />}
-          >
-            Folders
-          </NavLink>
-          <NavLink href="/groups" icon={<Users className="h-4 w-4" />}>Groups</NavLink>
-          {/* Field catalog (Slice 7): a dedicated lens for field
-              data_collection deployments. Surfaces every deployment
-              the user can access alongside its offline-cache and
-              queued-edit state, without forcing them through the
-              generic items list. The link is always visible (the
-              catalog itself filters by access), so a viewer who
-              has no access lands on an empty state rather than
-              missing a hidden entry point. */}
-          <NavLink href="/field" icon={<ClipboardList className="h-4 w-4" />}>
-            Field
-          </NavLink>
-          <NavLink href="/recently-deleted" icon={<Trash2 className="h-4 w-4" />}>
-            Recently deleted
-          </NavLink>
-          {me?.orgRole === 'admin' ? (
-            <>
-              <p className="mt-4 px-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-                Admin
-              </p>
-              <NavLink
-                href="/admin/users"
-                icon={<Shield className="h-4 w-4" />}
-              >
-                Users
-              </NavLink>
-              <NavLink
-                href="/admin/branding"
-                icon={<Paintbrush className="h-4 w-4" />}
-              >
-                Landing page
-              </NavLink>
-              <NavLink
-                href="/admin/backup"
-                icon={<Archive className="h-4 w-4" />}
-              >
-                Backup
-              </NavLink>
-              <NavLink
-                href="/admin/housekeeping"
-                icon={<Sparkles className="h-4 w-4" />}
-              >
-                Housekeeping
-              </NavLink>
-              <NavLink
-                href="/admin/notifications"
-                icon={<Bell className="h-4 w-4" />}
-              >
-                Notifications
-              </NavLink>
-              {/* Tier 4 of the field offline-resilience design (see
-                  docs/field-offline-areas.md). Surfaces every field
-                  device's queued-record beacon: which workers are
-                  stuck offline, which devices haven't reported in,
-                  who's about to run out of phone storage. The page
-                  is read-only by design -- recovery is a human
-                  conversation, not a server-side mutation. */}
-              <NavLink
-                href="/admin/field-queues"
-                icon={<ClipboardList className="h-4 w-4" />}
-              >
-                Field queues
-              </NavLink>
-            </>
-          ) : null}
-        </nav>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Top bar reserves env(safe-area-inset-top) so iOS status
-            bar / dynamic island doesn't sit on top of the user-menu
-            button when the app is launched from a home-screen PWA
-            install (viewport-fit=cover puts the page under the
-            status bar by design). Without the inset we'd hide the
-            sign-out affordance behind the OS chrome on iPhones. */}
-        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-0/80 px-4 backdrop-blur pt-[env(safe-area-inset-top)] [height:calc(3.5rem+env(safe-area-inset-top))]">
-          <div className="flex flex-1 items-center gap-3">
-            <TopBarSearch />
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-surface-2"
-              aria-label="Notifications"
-            >
-              <Bell className="h-4 w-4" />
-            </button>
-            {session ? (
-              <UserMenu
-                seed={me?.id ?? session.user?.email ?? 'you'}
-                displayName={me?.fullName ?? session.user?.name ?? 'You'}
-                orgName={me?.orgName ?? null}
-                avatarUrl={me?.avatarUrl ?? null}
-              />
-            ) : (
-              <Link
-                href="/signin"
-                className="inline-flex h-9 items-center rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground hover:opacity-90"
-              >
-                Sign in
-              </Link>
-            )}
-          </div>
-        </header>
-
-        <main className="flex-1 animate-fade-in">{children}</main>
-      </div>
-    </div>
-  );
-}
-
-function NavLink({
-  href,
-  icon,
-  children,
-}: {
-  href: string;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className="flex items-center gap-2 rounded-md px-2 py-2 text-ink-1 transition-colors hover:bg-surface-2"
+    <AppShellChrome
+      me={me}
+      signedIn={!!session}
+      fallbackName={session?.user?.name ?? null}
+      fallbackEmail={session?.user?.email ?? null}
     >
-      <span className="text-muted">{icon}</span>
       {children}
-    </Link>
+    </AppShellChrome>
   );
 }

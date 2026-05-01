@@ -127,8 +127,13 @@ export function PublicLanding({ data }: Props) {
 }
 
 function TopBar({ orgName }: { orgName: string }) {
+  // Same safe-area treatment as the AppShell top bar: viewport-fit=
+  // cover (set in the root layout) puts the page under the iOS
+  // status bar / dynamic island, so without an explicit inset the
+  // GratisGIS wordmark and the Sign-in button render behind the
+  // OS chrome on iPhones.
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-surface-1 px-6">
+    <header className="flex items-center justify-between border-b border-border bg-surface-1 px-6 pt-[env(safe-area-inset-top)] [height:calc(3.5rem+env(safe-area-inset-top))]">
       <div className="flex items-center gap-2">
         <Compass className="h-6 w-6 text-accent" />
         <span className="text-base font-semibold tracking-tight">
