@@ -190,9 +190,11 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
-      # Server-side fetch target. Web container talks to api over
-      # the internal docker network.
-      INTERNAL_API_URL: http://portal-api:4000
+      # Server-side fetch target. apps/portal-web/src/lib/api.ts and
+      # the BFF route handler both read PORTAL_API_URL when running
+      # on the server. Hits the api over the internal docker network
+      # (no TLS hop, no Caddy round-trip).
+      PORTAL_API_URL: http://portal-api:4000
       # Browser-side fetch target. Routed through Caddy under /api/.
       NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-https://gratisgis.org}
       # NextAuth: must match the public Keycloak issuer so iss claim
