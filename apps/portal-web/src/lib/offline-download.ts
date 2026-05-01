@@ -59,6 +59,12 @@ export interface DownloadProgress {
   /** Estimated total bytes that will be cached. Updated through the
    *  estimating phase; final value lands in the deployment manifest. */
   estimatedSize: number;
+  /** Total number of editable layers in this deployment. Surfaced
+   *  in the final summary so an empty deployment (zero features,
+   *  zero forms, zero picklists) doesn't render as "nothing
+   *  happened" -- the user sees "Cached N layers offline; sync
+   *  stays current as you add features." instead. */
+  layerCount: number;
   /** Counts updated as the run progresses. */
   featuresFetched: number;
   formsFetched: number;
@@ -120,6 +126,7 @@ export async function downloadDeployment(
     phase: 'estimating',
     message: 'Estimating download size...',
     estimatedSize: 0,
+    layerCount: input.layers.length,
     featuresFetched: 0,
     formsFetched: 0,
     pickListsFetched: 0,
@@ -333,7 +340,32 @@ export async function downloadDeployment(
   await putDeployment(manifest);
 
   progress.phase = 'done';
-  progress.message = `Cached ${progress.featuresFetched} features, ${progress.formsFetched} forms, ${progress.pickListsFetched} pick lists.`;
+  // Lead with the layer count so the summary reads as "yes, this
+  // worked" even when the data_layer is fresh and has zero
+  // features yet. The breakdown is parenthesised secondary detail.
+  // Empty deployment case: a brand-new layer with nothing in it
+  // still gets cached (schema, form, picklists, tiles), so the
+  // collector can start adding features in the field. The old
+  // "Cached 0 features, 0 forms, 0 picklists" copy made it look
+  // like the download was a no-op.
+  const layerWord = progress.layerCount === 1 ? 'layer' : 'layers';
+  const detail: string[] = [];
+  if (progress.featuresFetched > 0) {
+    const w = progress.featuresFetched === 1 ? 'feature' : 'features';
+    detail.push(`${progress.featuresFetched} ${w}`);
+  }
+  if (progress.formsFetched > 0) {
+    const w = progress.formsFetched === 1 ? 'form' : 'forms';
+    detail.push(`${progress.formsFetched} ${w}`);
+  }
+  if (progress.pickListsFetched > 0) {
+    const w = progress.pickListsFetched === 1 ? 'pick list' : 'pick lists';
+    detail.push(`${progress.pickListsFetched} ${w}`);
+  }
+  progress.message =
+    detail.length > 0
+      ? `Cached ${progress.layerCount} ${layerWord} (${detail.join(', ')}).`
+      : `Cached ${progress.layerCount} ${layerWord}. Sync stays current as features are added.`;
   progress.estimatedSize = totalFeatureBytes;
   onProgress({ ...progress });
 

@@ -615,6 +615,7 @@ export function FieldRuntime({
         phase: 'failed',
         message: 'Not enough storage for this download',
         estimatedSize: quota.estimatedDownloadBytes,
+        layerCount: editableLayers.length,
         featuresFetched: 0,
         formsFetched: 0,
         pickListsFetched: 0,
@@ -628,16 +629,46 @@ export function FieldRuntime({
     // reflects the post-prompt state immediately.
     void estimateStorage().then(setStorage);
 
-    // Collect the pick-list ids referenced by any editable layer's
-    // coded-value-ref domain. Same logic the server-side page does
-    // for online; we duplicate here so the download manager has the
-    // full set without an extra round-trip.
+    // Collect every pick-list id the deployment will need offline.
+    // Two surfaces reference picklists, and we have to walk both:
+    //
+    //   1. Layer field domains: a feature field with a coded-value-
+    //      ref domain points at a pick_list item id directly. The
+    //      auto-generated form path consumes this when no bound
+    //      form is configured.
+    //   2. Bound form questions: a select-one question can carry
+    //      its own pickListId (form-schema/index.ts), which the
+    //      bound form designer may set independently of the layer
+    //      field's domain. Skipping this surface is what made the
+    //      first offline download report 0 picklists when the
+    //      bound form actually referenced one.
+    //
+    // De-duped by the Set; downloadDeployment fetches each id once.
     const pickListIdSet = new Set<string>();
     for (const l of editableLayers) {
       for (const f of l.fields) {
         if (f.domain && f.domain.type === 'coded-value-ref') {
           pickListIdSet.add(f.domain.pickListItemId);
         }
+      }
+    }
+    // Walk every bound form's questions for question-level
+    // pickListId references. The form schema is a tree of
+    // questions / groups / repeats so we recurse with a stack.
+    const formStack: unknown[] = Object.values(boundForms);
+    while (formStack.length > 0) {
+      const node = formStack.pop();
+      if (!node || typeof node !== 'object') continue;
+      const obj = node as Record<string, unknown>;
+      // QuestionBase has pickListId on select-one / select-many.
+      // Group / repeat nodes don't, but we still recurse into
+      // their .questions array.
+      if (typeof obj.pickListId === 'string' && obj.pickListId.length > 0) {
+        pickListIdSet.add(obj.pickListId);
+      }
+      const children = obj.questions;
+      if (Array.isArray(children)) {
+        for (const c of children) formStack.push(c);
       }
     }
     const downloadLayers: DownloadLayer[] = editableLayers.map((l) => {
@@ -696,6 +727,7 @@ export function FieldRuntime({
         phase: 'failed',
         message: 'Download failed',
         estimatedSize: 0,
+        layerCount: editableLayers.length,
         featuresFetched: 0,
         formsFetched: 0,
         pickListsFetched: 0,
@@ -2154,7 +2186,17 @@ function DownloadProgressModal({
           </h2>
         </div>
         <p className="mt-2 text-xs text-muted">{progress.message}</p>
-        <dl className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+        {/* Layers leads the breakdown so the user sees a non-zero
+            number even on a fresh deployment with no features yet.
+            Features, Forms, and Pick lists below are secondary
+            detail. */}
+        <dl className="mt-3 grid grid-cols-4 gap-2 text-[11px]">
+          <div className="rounded border border-border bg-surface-0 p-2 text-center">
+            <dt className="text-muted">Layers</dt>
+            <dd className="text-sm font-semibold text-ink-0">
+              {progress.layerCount}
+            </dd>
+          </div>
           <div className="rounded border border-border bg-surface-0 p-2 text-center">
             <dt className="text-muted">Features</dt>
             <dd className="text-sm font-semibold text-ink-0">
