@@ -28,7 +28,14 @@ import {
   type QueueRecord,
 } from './offline-store';
 
-const BEACON_ENDPOINT = '/api/field/queue-manifest';
+// Beacon goes through the portal-web BFF passthrough at
+// /api/portal/[...path], which injects the user's Keycloak JWT
+// server-side. Hitting /api/field/* directly bypasses the BFF and
+// the request lands on portal-api with no Authorization header,
+// silently 401-ing every beacon -- which made the admin Field
+// Device Queues page look broken (it was, but only because the
+// beacons never reached the server).
+const BEACON_ENDPOINT = '/api/portal/field/queue-manifest';
 const FINGERPRINT_KEY = 'gratisgis.field.deviceFingerprint';
 
 interface ManifestEntry {
