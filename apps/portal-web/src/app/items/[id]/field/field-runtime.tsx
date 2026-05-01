@@ -949,6 +949,44 @@ export function FieldRuntime({
             no copy) and slightly louder when best-effort (amber)
             so users learn the difference without being nagged. */}
         <PersistenceBadge state={persistentState} />
+        {/* Download / refresh offline area (#222.2). Top-level
+            affordance because Matt's prod test showed users don't
+            think to look in the Layers panel for it -- this is one
+            of the most-needed actions in field mode and deserves a
+            front-row seat. The Layers panel still has it as a
+            secondary entry for users who land there. Icon flips to
+            CloudOff once cached so users can tell at a glance
+            whether they've downloaded yet. */}
+        <button
+          type="button"
+          onClick={() => {
+            void startDownload();
+          }}
+          disabled={
+            downloadProgress !== null &&
+            downloadProgress.phase !== 'done' &&
+            downloadProgress.phase !== 'failed'
+          }
+          aria-label={
+            cachedDeployment
+              ? 'Refresh offline cache'
+              : 'Download for offline'
+          }
+          title={
+            cachedDeployment
+              ? 'Refresh offline cache'
+              : 'Download for offline'
+          }
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+        >
+          {downloadProgress &&
+          downloadProgress.phase !== 'done' &&
+          downloadProgress.phase !== 'failed' ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CloudDownload className="h-4 w-4" />
+          )}
+        </button>
         {/* PWA install affordance: invisible when already installed
             or when the browser hasn't fired beforeinstallprompt yet
             (and on non-iOS where there's nothing to do). On iOS this
