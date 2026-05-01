@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 
 /**
@@ -21,14 +22,24 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
  */
 @Injectable()
 export class FormsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /** Fetch the form item, gating by visibility for the caller. Used
    *  to look up the orgId we'll stamp on the submission. */
   private async getVisibleForm(formId: string, user: AuthUser) {
     const item = await this.prisma.item.findUnique({
       where: { id: formId },
-      select: { id: true, type: true, orgId: true, ownerId: true, access: true },
+      select: {
+        id: true,
+        type: true,
+        orgId: true,
+        ownerId: true,
+        access: true,
+        title: true,
+      },
     });
     if (!item || item.type !== 'form') {
       throw new NotFoundException('Form not found.');
@@ -94,7 +105,67 @@ export class FormsService {
     // query. Phase 2 may switch to a tx-level WAS-CREATED flag.
     const justCreated =
       Date.now() - result.createdAt.getTime() < 5_000;
+    // form_submission_received fan-out (#229). Only fire on real
+    // first-write so a re-drained offline queue doesn't re-spam the
+    // form owner. Recipient for v1 is the form item's owner; per-
+    // recipient lists land with the Phase B template editor. Fire-
+    // and-forget so an SMTP outage never rolls back the submission
+    // the user just made.
+    if (justCreated) {
+      void this.notifyFormSubmissionReceived({
+        formId: form.id,
+        formTitle: form.title ?? 'Form',
+        formOwnerId: form.ownerId,
+        submissionId: result.id,
+        submitter: user,
+        response: dto.response,
+      });
+    }
     return { id: result.id, created: justCreated };
+  }
+
+  /**
+   * Helper for the form_submission_received notification (#229).
+   * Resolves the submitter's display name + a best-effort summary
+   * (first non-empty answered question) and notifies the form item's
+   * owner. Errors are swallowed: a queued notification failing must
+   * never roll back the submission the user just made.
+   */
+  private async notifyFormSubmissionReceived(args: {
+    formId: string;
+    formTitle: string;
+    formOwnerId: string;
+    submissionId: string;
+    submitter: AuthUser;
+    response: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      const submitterRow = await this.prisma.user.findUnique({
+        where: { id: args.submitter.id },
+        select: { fullName: true, username: true },
+      });
+      const submittedByName =
+        submitterRow?.fullName || submitterRow?.username || 'Someone';
+      const summary = pickResponseSummary(args.response);
+      await this.notifications.notify(
+        args.formOwnerId,
+        'form_submission_received',
+        {
+          formItemId: args.formId,
+          formTitle: args.formTitle,
+          submissionId: args.submissionId,
+          submittedByName,
+          summary,
+        },
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `form_submission_received notify failed: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
   }
 
   async list(
@@ -152,4 +223,27 @@ export class FormsService {
     }
     return this.prisma.formSubmission.count({ where: { formId: form.id } });
   }
+}
+
+/**
+ * Best-effort summary string for form_submission_received emails.
+ * The form response shape is `{ [questionId]: answer }` where answer
+ * may be a string, number, boolean, array, or nested object (for
+ * groups / repeats). We pick the first non-empty primitive we hit so
+ * the subject reads "New submission: <something useful>" rather
+ * than a uuid. Underscore-prefixed keys (system metadata) are
+ * skipped. Falls back to a short literal when nothing's available.
+ */
+function pickResponseSummary(
+  response: Record<string, unknown> | undefined,
+): string {
+  if (!response) return '(no answers)';
+  for (const [k, v] of Object.entries(response)) {
+    if (k.startsWith('_')) continue;
+    if (v === null || v === undefined || v === '') continue;
+    if (typeof v === 'object') continue;
+    const s = String(v);
+    return s.length > 80 ? `${s.slice(0, 77)}...` : s;
+  }
+  return '(no answers)';
 }

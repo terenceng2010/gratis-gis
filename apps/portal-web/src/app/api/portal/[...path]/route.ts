@@ -47,6 +47,11 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // forwarding everything.
   const editorId = req.headers.get('x-editor-id');
   if (editorId) headers['x-editor-id'] = editorId;
+  // Field deployment runtime sends `x-data-collection-id` on every
+  // write so the API can fire the data_collection_feature_created
+  // notification (#229). Same allowlist pattern as x-editor-id.
+  const dataCollectionId = req.headers.get('x-data-collection-id');
+  if (dataCollectionId) headers['x-data-collection-id'] = dataCollectionId;
 
   const init: RequestInit = {
     method: req.method,

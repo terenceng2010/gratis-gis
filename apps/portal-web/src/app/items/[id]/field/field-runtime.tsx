@@ -2009,7 +2009,14 @@ function FormModal({
               )}/features`,
               {
                 method: 'POST',
-                headers: { 'content-type': 'application/json' },
+                headers: {
+                  'content-type': 'application/json',
+                  // x-data-collection-id triggers the
+                  // data_collection_feature_created notification (#229)
+                  // server-side. Carries the deployment id so the
+                  // BFF passthrough can forward it to portal-api.
+                  'x-data-collection-id': dataCollectionId,
+                },
                 body: JSON.stringify({
                   features: [
                     {

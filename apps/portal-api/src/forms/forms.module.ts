@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { PrismaModule } from '../prisma/prisma.module.js';
 import { FormsController } from './forms.controller.js';
 import { FormsService } from './forms.service.js';
@@ -10,7 +11,7 @@ import { FormsService } from './forms.service.js';
  * captured responses.
  */
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, NotificationsModule],
   controllers: [FormsController],
   providers: [FormsService],
   exports: [FormsService],

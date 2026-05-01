@@ -173,6 +173,7 @@ export class V3FeaturesController {
     @Param('layerId') layerId: string,
     @Body() body: AppendFeaturesBodyDto,
     @Headers('x-editor-id') editorId?: string,
+    @Headers('x-data-collection-id') dataCollectionId?: string,
   ) {
     const { isTable } = await this.assertV3Layer(user, itemId, layerId, 'write');
     if (editorId) {
@@ -201,6 +202,26 @@ export class V3FeaturesController {
     if (editorId && result.inserted > 0) {
       void this.notifyEditorFeatureCreated({
         editorId,
+        dataLayerId: itemId,
+        layerKey: layerId,
+        features: body.features,
+        creator: user,
+      });
+    }
+    // Same fan-out for the field-deployment write path. The runtime
+    // sends an x-data-collection-id header (mirroring x-editor-id).
+    // Both headers are mutually exclusive in practice -- a single
+    // request comes from one surface or the other. We notify the
+    // data_collection's owner per inserted feature so field-team
+    // managers get the same "an edit just landed" signal Editor
+    // owners do.
+    if (
+      dataCollectionId &&
+      !editorId &&
+      result.inserted > 0
+    ) {
+      void this.notifyDataCollectionFeatureCreated({
+        dataCollectionId,
         dataLayerId: itemId,
         layerKey: layerId,
         features: body.features,
@@ -269,6 +290,68 @@ export class V3FeaturesController {
       // eslint-disable-next-line no-console
       console.warn(
         `editor_feature_created notify failed: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Helper for the data_collection_feature_created notification
+   * fan-out (#229). Same shape as notifyEditorFeatureCreated above
+   * but keys on the data_collection item id from the
+   * x-data-collection-id header. Notifies the deployment owner per
+   * inserted feature. Per-deployment recipient lists are a Phase B
+   * extension.
+   */
+  private async notifyDataCollectionFeatureCreated(args: {
+    dataCollectionId: string;
+    dataLayerId: string;
+    layerKey: string;
+    features: AppendFeatureDto[];
+    creator: AuthUser;
+  }): Promise<void> {
+    try {
+      const dc = await this.prisma.item.findUnique({
+        where: { id: args.dataCollectionId },
+        select: { id: true, title: true, ownerId: true, type: true },
+      });
+      if (!dc || dc.type !== 'data_collection') return;
+      const dataLayer = await this.prisma.item.findUnique({
+        where: { id: args.dataLayerId },
+        select: { title: true },
+      });
+      const dataLayerTitle = dataLayer?.title ?? args.layerKey;
+      const creatorRow = await this.prisma.user.findUnique({
+        where: { id: args.creator.id },
+        select: { fullName: true, username: true },
+      });
+      const createdByName =
+        creatorRow?.fullName || creatorRow?.username || 'Someone';
+      for (const f of args.features) {
+        const summary = pickFeatureSummary(f.properties);
+        const featureId = typeof f.globalId === 'string' ? f.globalId : '';
+        await this.notifications.notify(
+          dc.ownerId,
+          'data_collection_feature_created',
+          {
+            dataCollectionId: dc.id,
+            dataCollectionTitle: dc.title,
+            dataLayerId: args.dataLayerId,
+            dataLayerTitle,
+            layerKey: args.layerKey,
+            featureId,
+            createdByName,
+            summary,
+          },
+        );
+      }
+    } catch (err) {
+      // Same swallow rationale as the editor variant: notify errors
+      // are non-fatal because the feature already landed.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `data_collection_feature_created notify failed: ${
           err instanceof Error ? err.message : err
         }`,
       );
