@@ -85,6 +85,7 @@ import {
   type GpsPosition,
 } from './use-geolocation';
 import { createGpsMarker, type GpsMarkerHandle } from './gps-map-marker';
+import { V3FeatureAttachments } from '../data-layer/v3-feature-attachments';
 
 /**
  * Per-layer descriptor the field runtime consumes. Server-built (see
@@ -2354,6 +2355,28 @@ function FormModal({
             >
               {error}
             </p>
+          ) : null}
+          {/* Phase B: per-feature attachments. Only mounted in edit
+              mode because attachments need a server-side feature row
+              to register against (the API path is keyed by featureId).
+              Add-mode features get a fresh global id but the
+              attachment endpoint requires the row to exist first;
+              users can save the feature, the form re-opens in edit
+              mode for picture/audio/video uploads. Online-only for
+              now: the offline buffer for blobs is queued separately
+              (#200). */}
+          {modal.mode === 'edit' ? (
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+                Attachments
+              </p>
+              <V3FeatureAttachments
+                itemId={modal.layer.dataLayerId}
+                layerId={modal.layer.layerKey}
+                featureId={modal.featureId}
+                canEdit={true}
+              />
+            </div>
           ) : null}
         </div>
       </div>
