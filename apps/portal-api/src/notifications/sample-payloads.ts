@@ -6,6 +6,7 @@ import type {
   UserDisablePayload,
   EditorFeatureCreatedPayload,
   DataCollectionFeatureCreatedPayload,
+  DataCollectionSchemaBreakPayload,
   FormSubmissionReceivedPayload,
   UserInvitedPayload,
 } from './templates.js';
@@ -85,4 +86,13 @@ export const SAMPLE_PAYLOADS: { [K in NotificationType]?: unknown } = {
     submittedByName: 'Visitor',
     summary: 'jane@example.com',
   } satisfies FormSubmissionReceivedPayload,
+  data_collection_schema_break: {
+    dataCollectionId: '00000000-0000-4000-8000-000000000030',
+    dataCollectionTitle: 'Yard Inspection',
+    dataLayerId: '00000000-0000-4000-8000-000000000040',
+    dataLayerTitle: 'Inspection Points',
+    changedByName: 'Admin User',
+    droppedLayerKeys: ['burrow_points'],
+    geometryChangedLayerKeys: [],
+  } satisfies DataCollectionSchemaBreakPayload,
 };

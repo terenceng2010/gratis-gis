@@ -903,7 +903,145 @@ export class ItemsService {
         nextLayers,
       );
     }
+    // #230 Phase A: schema-change notification for live field
+    // deployments. If the data_layer save dropped a layer or
+    // changed a layer's geometryType, find every data_collection
+    // that depends on this data_layer and notify the deployment
+    // owner. Triggered after the row + table reconcile have both
+    // landed so the notification represents an event the field
+    // crew actually has to react to (their next sync will fail).
+    if (
+      prevLayers !== null &&
+      nextLayers !== null &&
+      (prevLayers.length > 0 || nextLayers.length > 0)
+    ) {
+      const breaks = computeSchemaBreaks(prevLayers, nextLayers);
+      if (breaks.dropped.length > 0 || breaks.geometryChanged.length > 0) {
+        // Fire-and-forget: a notify error must never roll back the
+        // user-facing save. The field crew is going to hit the
+        // broken sync regardless; better to let them save and
+        // surface the warning best-effort than block the edit.
+        void this.notifyDataCollectionSchemaBreak({
+          dataLayerId: updated.id,
+          dataLayerTitle: updated.title,
+          changedBy: user,
+          dropped: breaks.dropped,
+          geometryChanged: breaks.geometryChanged,
+        });
+      }
+    }
     return updated;
+  }
+
+  /**
+   * Schema-break notification fan-out (#230 Phase A). Walks the
+   * dependents graph from the changed data_layer to every
+   * data_collection that transitively references it, and notifies
+   * each deployment's owner. Recipients on the offline-area side
+   * (per-user offline-area mirrors) are a Phase A.5 extension --
+   * for v1 we tell the deployment owner so they can warn their
+   * field crew themselves.
+   */
+  private async notifyDataCollectionSchemaBreak(args: {
+    dataLayerId: string;
+    dataLayerTitle: string;
+    changedBy: AuthUser;
+    dropped: string[];
+    geometryChanged: string[];
+  }): Promise<void> {
+    try {
+      // We can't go through this.listDependents() because it gates
+      // on visibility-for-the-caller; the schema-break notify needs
+      // to fan out to deployments the changing admin may not own.
+      // Instead, do the same BFS walk against every referencer
+      // type in the org, scoped by the changed item's orgId.
+      const target = await this.prisma.item.findUnique({
+        where: { id: args.dataLayerId },
+        select: { orgId: true, title: true },
+      });
+      if (!target) return;
+      // Pull every potentially-referencing item in this org. The
+      // shape mirrors listDependents() but skips its visibility
+      // re-query. REFERENCER_TYPES includes data_collection so
+      // we'll hit them in the BFS reverse index.
+      const referencers = await this.prisma.item.findMany({
+        where: {
+          orgId: target.orgId,
+          type: { in: REFERENCER_TYPES },
+          deletedAt: null,
+        },
+        select: { id: true, type: true, title: true, ownerId: true, data: true },
+      });
+      const reverse = new Map<string, string[]>();
+      const byId = new Map<string, (typeof referencers)[number]>();
+      for (const r of referencers) {
+        byId.set(r.id, r);
+        const deps = extractDependencies({ type: r.type, data: r.data });
+        for (const d of deps.itemIds) {
+          const arr = reverse.get(d) ?? [];
+          arr.push(r.id);
+          reverse.set(d, arr);
+        }
+      }
+      // BFS outward from the data_layer id. Collect every
+      // data_collection reachable (including transitively
+      // through maps). Cycle-guarded by `seen`.
+      const seen = new Set<string>();
+      const frontier: string[] = [args.dataLayerId];
+      const dataCollections: Array<(typeof referencers)[number]> = [];
+      while (frontier.length > 0) {
+        const next = frontier.shift()!;
+        const ancestors = reverse.get(next) ?? [];
+        for (const a of ancestors) {
+          if (seen.has(a)) continue;
+          seen.add(a);
+          const item = byId.get(a);
+          if (!item) continue;
+          if (item.type === 'data_collection') {
+            dataCollections.push(item);
+          }
+          frontier.push(a);
+        }
+      }
+      if (dataCollections.length === 0) return;
+      // Display name of the admin who made the change. Falls back
+      // to "An admin" so the email never reads "undefined just
+      // changed...".
+      const changedRow = await this.prisma.user.findUnique({
+        where: { id: args.changedBy.id },
+        select: { fullName: true, username: true },
+      });
+      const changedByName =
+        changedRow?.fullName || changedRow?.username || 'An admin';
+      // One notification per affected deployment. Per-deployment
+      // recipient lists (e.g. notify every offline-area downloader)
+      // are Phase A.5; v1 just notifies the owner.
+      for (const dc of dataCollections) {
+        await this.notifications.notify(
+          dc.ownerId,
+          'data_collection_schema_break',
+          {
+            dataCollectionId: dc.id,
+            dataCollectionTitle: dc.title,
+            dataLayerId: args.dataLayerId,
+            dataLayerTitle: args.dataLayerTitle,
+            changedByName,
+            droppedLayerKeys: args.dropped,
+            geometryChangedLayerKeys: args.geometryChanged,
+          },
+        );
+      }
+    } catch (err) {
+      // Same swallow rationale as the editor / data_collection
+      // notify helpers: notify errors are non-fatal because the
+      // schema change already landed.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `data_collection_schema_break notify failed: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
   }
 
   /**
@@ -2056,4 +2194,42 @@ function readV3Layers(data: unknown): V3LayerShape[] | null {
       return out;
     })
     .filter((l): l is V3LayerShape => l !== null);
+}
+
+/**
+ * Compare prev vs next v3 layer arrays and return the keys whose
+ * change would break offline copies (#230 Phase A). Currently
+ * narrow:
+ *
+ *   - dropped: a layer id that existed in prev but not in next.
+ *     Field offline copies still reference the underlying table
+ *     by id; the next sync 400s with "table not found" the same
+ *     way Esri's "DBMS table not found" surfaces.
+ *   - geometryChanged: a layer id whose geometryType differs
+ *     between prev and next. Cached features in the offline DB
+ *     have the old geometry shape; the next sync rejects them.
+ *
+ * Field renames / drops within a layer are deliberately out of
+ * scope for v1 -- they're recoverable via the offline-recovery
+ * flow without surfacing as a hard sync failure. Add them here
+ * if we see real breakage in the wild.
+ */
+function computeSchemaBreaks(
+  prev: V3LayerShape[],
+  next: V3LayerShape[],
+): { dropped: string[]; geometryChanged: string[] } {
+  const nextById = new Map(next.map((l) => [l.id, l] as const));
+  const dropped: string[] = [];
+  const geometryChanged: string[] = [];
+  for (const p of prev) {
+    const n = nextById.get(p.id);
+    if (!n) {
+      dropped.push(p.id);
+      continue;
+    }
+    if (p.geometryType !== n.geometryType) {
+      geometryChanged.push(p.id);
+    }
+  }
+  return { dropped, geometryChanged };
 }

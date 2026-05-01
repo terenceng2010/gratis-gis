@@ -141,6 +141,28 @@ export interface UserInvitedPayload {
   expiresAt?: string;
 }
 
+/** Payload shape for data_collection_schema_break (#230 Phase A).
+ *  Fired when an admin saves a data_layer change that drops a
+ *  layer or swaps its geometryType -- both break offline copies
+ *  the field has already downloaded. Recipients are deployment
+ *  owners of every data_collection that transitively depends on
+ *  the changed data_layer. The body summarises which layers
+ *  changed so the recipient knows which area to rebuild. */
+export interface DataCollectionSchemaBreakPayload {
+  /** The data_collection (deployment) item the recipient owns. */
+  dataCollectionId: string;
+  dataCollectionTitle: string;
+  /** The data_layer that changed upstream. */
+  dataLayerId: string;
+  dataLayerTitle: string;
+  /** Display name of the admin who made the change. */
+  changedByName: string;
+  /** Layer keys that were dropped from the data_layer schema. */
+  droppedLayerKeys: string[];
+  /** Layer keys whose geometryType changed (e.g. point->polygon). */
+  geometryChangedLayerKeys: string[];
+}
+
 type Renderer<T> = (payload: T, ctx: RenderContext) => RenderedNotification;
 
 const renderers: { [K in NotificationType]?: Renderer<unknown> } = {
@@ -291,6 +313,53 @@ const renderers: { [K in NotificationType]?: Renderer<unknown> } = {
       `<ul><li>Summary: ${escapeHtml(payload.summary)}</li></ul>` +
       `<p><a href="${escapeAttr(submissionUrl)}">View submission</a> · ` +
       `<a href="${escapeAttr(formUrl)}">open the form</a></p>`;
+    return { subject, text, html };
+  }) as Renderer<unknown>,
+
+  data_collection_schema_break: ((
+    payload: DataCollectionSchemaBreakPayload,
+    ctx,
+  ) => {
+    const deploymentUrl = `${ctx.baseUrl}/items/${payload.dataCollectionId}`;
+    const dataLayerUrl = `${ctx.baseUrl}/items/${payload.dataLayerId}`;
+    const droppedSummary =
+      payload.droppedLayerKeys.length > 0
+        ? `Dropped: ${payload.droppedLayerKeys.join(', ')}`
+        : '';
+    const geomSummary =
+      payload.geometryChangedLayerKeys.length > 0
+        ? `Geometry changed: ${payload.geometryChangedLayerKeys.join(', ')}`
+        : '';
+    const subject = `Action needed: "${payload.dataCollectionTitle}" offline copies will fail to sync`;
+    const text =
+      `${payload.changedByName} just changed "${payload.dataLayerTitle}" in a way that breaks ` +
+      `field offline copies of your "${payload.dataCollectionTitle}" deployment.\n\n` +
+      (droppedSummary ? `${droppedSummary}\n` : '') +
+      (geomSummary ? `${geomSummary}\n` : '') +
+      `\n` +
+      `Field users with offline copies of this deployment will see a "DBMS table not found" or ` +
+      `geometry-mismatch error on their next sync. Ask them to rebuild their offline area, or wait ` +
+      `until you've revised the deployment yourself before they reconnect.\n\n` +
+      `Deployment: ${deploymentUrl}\n` +
+      `Data layer: ${dataLayerUrl}\n`;
+    const breakBullets =
+      `<ul>` +
+      (droppedSummary
+        ? `<li>${escapeHtml(droppedSummary)}</li>`
+        : '') +
+      (geomSummary ? `<li>${escapeHtml(geomSummary)}</li>` : '') +
+      `</ul>`;
+    const html =
+      `<p><strong>${escapeHtml(payload.changedByName)}</strong> just changed ` +
+      `<strong>${escapeHtml(payload.dataLayerTitle)}</strong> in a way that breaks ` +
+      `field offline copies of your <strong>${escapeHtml(payload.dataCollectionTitle)}</strong> ` +
+      `deployment.</p>` +
+      breakBullets +
+      `<p>Field users with offline copies of this deployment will see a "DBMS table not found" ` +
+      `or geometry-mismatch error on their next sync. Ask them to rebuild their offline area, or ` +
+      `wait until you've revised the deployment yourself before they reconnect.</p>` +
+      `<p><a href="${escapeAttr(deploymentUrl)}">Open the deployment</a> &middot; ` +
+      `<a href="${escapeAttr(dataLayerUrl)}">open the data layer</a></p>`;
     return { subject, text, html };
   }) as Renderer<unknown>,
 

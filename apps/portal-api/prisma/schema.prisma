@@ -101,6 +101,14 @@ enum NotificationType {
   /// form_submission rather than a feature table; recipient gets
   /// the rendered receipt + a deep link to the submission.
   form_submission_received @map("form-submission-received")
+  /// A data_layer schema change just landed that will break
+  /// in-flight offline copies (#230). Fires on layer drop or
+  /// geometryType swap; recipients are deployment owners of
+  /// every data_collection that transitively depends on the
+  /// changed data_layer. Phase A only sends post-save; Phase B
+  /// surfaces a pre-save admin warning + Phase C builds the
+  /// field-runtime "rebuild offline area" badge.
+  data_collection_schema_break @map("data-collection-schema-break")
 }
 
 /// Channel a notification is delivered through. Phase 1 ships email

@@ -136,6 +136,15 @@ export const NOTIFICATION_TYPES: NotificationTypeMeta[] = [
     channels: ALL_CHANNELS,
     defaultByChannel: ALL_DEFAULT_ON,
   },
+  {
+    type: 'data_collection_schema_break',
+    category: 'editor',
+    label: 'Field deployment schema break',
+    description:
+      'An admin saved a data_layer change that drops a layer or swaps its geometry, which breaks offline copies your field crew has already downloaded. Recipients are deployment owners.',
+    channels: ALL_CHANNELS,
+    defaultByChannel: ALL_DEFAULT_ON,
+  },
 ];
 
 /** Lookup by NotificationType. */
