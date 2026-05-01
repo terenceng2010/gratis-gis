@@ -16,6 +16,7 @@ import {
   Loader2,
   MapPin,
   Plus,
+  Search,
   Wifi,
   X,
 } from 'lucide-react';
@@ -1019,6 +1020,19 @@ export function FieldRuntime({
         >
           <Layers className="h-4 w-4 text-ink-1" />
         </button>
+
+        {/* Address search overlay (#223.3). Positioned to the right
+            of the Layers button at the top of the canvas; on
+            mobile this is the most natural spot for a "find this
+            place" affordance and matches Field Maps' equivalent
+            location. The internal width grows with available
+            horizontal space; on tablet+ the bar is constrained to
+            keep the canvas usable. */}
+        <div className="pointer-events-none absolute left-14 right-3 top-3 z-10 flex justify-start">
+          <div className="pointer-events-auto w-full max-w-sm">
+            <FieldAddressSearch mapRef={mapRef} />
+          </div>
+        </div>
 
         {layerPanelOpen ? (
           <LayerVisibilityPanel
@@ -2338,6 +2352,186 @@ function DownloadProgressModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Field-mode address search. Lightweight wrapper around the geocode
+ * helper at /api/geocode -- no layer-attribute or arcgis-rest
+ * search like the desktop SearchBar does, just place lookup so a
+ * field worker can type "1234 Main St" and fly there. Per Matt's
+ * test feedback (#223.3), this is what users reached for when they
+ * mistook the global "Search items" bar for a map address search.
+ *
+ * Renders as a thin pill that grows on focus. Result selection
+ * pans the map to the picked location and highlights it briefly.
+ */
+function FieldAddressSearch({
+  mapRef,
+}: {
+  mapRef: React.MutableRefObject<maplibregl.Map | null>;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<
+    Array<{
+      label: string;
+      center: [number, number] | null;
+      bbox: [number, number, number, number] | null;
+    }>
+  >([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click so the dropdown doesn't linger when the
+  // user pans the map.
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!rootRef.current) return;
+      if (rootRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  // Debounced geocode. Match the desktop SearchBar's 250 ms delay
+  // and 3-character minimum so we don't hammer Nominatim.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 3) {
+      setResults([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    setLoading(true);
+    const handle = setTimeout(() => {
+      fetch(`/api/geocode?q=${encodeURIComponent(q)}`, {
+        signal: ctrl.signal,
+        headers: { Accept: 'application/json' },
+      })
+        .then((res) => (res.ok ? res.json() : []))
+        .then(
+          (
+            rows: Array<{
+              display_name?: string;
+              lat?: string;
+              lon?: string;
+              boundingbox?: [string, string, string, string];
+            }>,
+          ) => {
+            const mapped = rows.map((r) => {
+              const lat = Number(r.lat);
+              const lon = Number(r.lon);
+              const bb = r.boundingbox;
+              const bbox =
+                bb && bb.length === 4
+                  ? ([
+                      Number(bb[2]),
+                      Number(bb[0]),
+                      Number(bb[3]),
+                      Number(bb[1]),
+                    ] as [number, number, number, number])
+                  : null;
+              return {
+                label: r.display_name ?? '',
+                center:
+                  Number.isFinite(lat) && Number.isFinite(lon)
+                    ? ([lon, lat] as [number, number])
+                    : null,
+                bbox,
+              };
+            });
+            setResults(mapped);
+            setLoading(false);
+          },
+        )
+        .catch(() => {
+          setLoading(false);
+        });
+    }, 250);
+    return () => {
+      ctrl.abort();
+      clearTimeout(handle);
+      setLoading(false);
+    };
+  }, [query]);
+
+  function pick(r: {
+    bbox: [number, number, number, number] | null;
+    center: [number, number] | null;
+  }) {
+    const m = mapRef.current;
+    if (!m) return;
+    if (r.bbox) {
+      m.fitBounds(
+        [
+          [r.bbox[0], r.bbox[1]],
+          [r.bbox[2], r.bbox[3]],
+        ],
+        { padding: 60, duration: 400 },
+      );
+    } else if (r.center) {
+      m.flyTo({ center: r.center, zoom: 16, duration: 400 });
+    }
+    setOpen(false);
+  }
+
+  return (
+    <div ref={rootRef} className="relative w-full">
+      <label className="relative block">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => {
+            if (query.trim().length >= 3) setOpen(true);
+          }}
+          placeholder="Search address..."
+          className="h-9 w-full rounded-md border border-border bg-surface-0 pl-8 pr-8 text-sm text-ink-0 placeholder:text-muted focus:border-accent focus:outline-none"
+          aria-label="Search address"
+        />
+        {query ? (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+              setResults([]);
+              setOpen(false);
+            }}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted hover:bg-surface-2"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        ) : null}
+      </label>
+      {open && (loading || results.length > 0) ? (
+        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-surface-1 text-sm shadow-overlay">
+          {loading ? (
+            <li className="px-3 py-2 text-xs text-muted">Searching...</li>
+          ) : null}
+          {results.map((r, i) => (
+            <li key={`${r.label}-${i}`}>
+              <button
+                type="button"
+                onClick={() => pick(r)}
+                className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-surface-2"
+              >
+                <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+                <span className="min-w-0 flex-1 truncate text-xs text-ink-0">
+                  {r.label}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
