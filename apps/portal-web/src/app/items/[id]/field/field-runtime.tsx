@@ -393,16 +393,35 @@ export function FieldRuntime({
     offlineWriteCounter,
   ]);
 
+  // Field-mode basemap override (#223.8). Per-session selection
+  // surfaced via the layer list's basemap chip. null = honor the
+  // map item's authored basemap; otherwise the override id wins
+  // and effectiveMapData injects it at render time. Resets on
+  // navigation away (state lives on the runtime), so a new field
+  // session falls back to the authored basemap until the user
+  // picks one again.
+  const [basemapOverrideId, setBasemapOverrideId] = useState<string | null>(
+    null,
+  );
+
   // Effective MapData: visibility overrides + offline source
-  // substitution. The two transforms compose: each layer is first
-  // checked for visibility (off when hiddenLayerIds includes it),
-  // then for offline substitution (when offline + cached + the
-  // source has an inline FC available).
+  // substitution + per-session basemap swap. Each transform composes:
+  // visibility (off when hiddenLayerIds includes the layer),
+  // offline substitution (when offline + cached + the source has an
+  // inline FC available), and basemap (when the user has picked one
+  // via the layer panel chip).
   const effectiveMapData = useMemo<MapData>(() => {
     const offlineActive = !isOnline && Object.keys(offlineFeatures).length > 0;
-    if (hiddenLayerIds.size === 0 && !offlineActive) return mapData;
+    const basemapOverride =
+      basemapOverrideId && basemapOverrideId !== mapData.basemap
+        ? basemapOverrideId
+        : null;
+    if (hiddenLayerIds.size === 0 && !offlineActive && !basemapOverride) {
+      return mapData;
+    }
     return {
       ...mapData,
+      ...(basemapOverride ? { basemap: basemapOverride } : {}),
       layers: mapData.layers.map((l) => {
         let next: MapLayer = l;
         if (hiddenLayerIds.has(l.id)) {
@@ -432,7 +451,7 @@ export function FieldRuntime({
         return next;
       }),
     };
-  }, [mapData, hiddenLayerIds, isOnline, offlineFeatures]);
+  }, [mapData, hiddenLayerIds, isOnline, offlineFeatures, basemapOverrideId]);
 
   // Effective pickLists. When offline, pick from IndexedDB instead of
   // the prop so newly-added pick lists from the download cache work.
@@ -943,6 +962,7 @@ export function FieldRuntime({
           basemaps={basemaps}
           selection={selection}
           selectTool="off"
+          suppressPopup
           onSelectionChange={setSelection}
           onCameraChange={() => {
             /* Camera changes don't persist in field-mode. */
@@ -1012,6 +1032,9 @@ export function FieldRuntime({
                 return next;
               });
             }}
+            basemaps={basemaps}
+            currentBasemapId={basemapOverrideId ?? mapData.basemap}
+            onBasemapChange={setBasemapOverrideId}
             cachedDeployment={cachedDeployment}
             isDownloading={
               downloadProgress !== null &&
@@ -1492,6 +1515,9 @@ function LayerVisibilityPanel({
   layers,
   hiddenLayerIds,
   onToggle,
+  basemaps,
+  currentBasemapId,
+  onBasemapChange,
   cachedDeployment,
   isDownloading,
   onDownload,
@@ -1505,6 +1531,13 @@ function LayerVisibilityPanel({
   layers: MapLayer[];
   hiddenLayerIds: Set<string>;
   onToggle: (layerId: string) => void;
+  /** Available basemap items the user can swap to. */
+  basemaps: CustomBasemap[];
+  /** Currently active basemap id (override or authored default). */
+  currentBasemapId: string;
+  /** Switch to a different basemap. Pass null to clear the override
+   *  and fall back to the map item's authored basemap. */
+  onBasemapChange: (next: string | null) => void;
   cachedDeployment: CachedDeployment | null;
   isDownloading: boolean;
   onDownload: () => void;
@@ -1528,6 +1561,8 @@ function LayerVisibilityPanel({
   // we still show them so the panel reads like the desktop layer
   // tree. Per-row visibility only applies to leaf layers; toggling a
   // group is a polish item for later.
+  const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
+  const activeBasemap = basemaps.find((b) => b.id === currentBasemapId);
   return (
     <div
       role="dialog"
@@ -1549,6 +1584,72 @@ function LayerVisibilityPanel({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+      {/* Basemap chip at the top of the layer list (#223.8). Field
+          workers reach for "swap to satellite" all the time; baking
+          it into the layer panel keeps it one tap away without a
+          dedicated tool button cluttering the canvas. Tapping the
+          chip expands an inline picker; selection updates the
+          runtime's session-only basemap override and the chip
+          collapses back. Only renders when at least 2 basemaps are
+          available -- one isn't a choice. */}
+      {basemaps.length >= 2 ? (
+        <div className="border-b border-border px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setBasemapPickerOpen((v) => !v)}
+            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5 text-left text-xs font-medium text-ink-0 hover:border-accent hover:text-accent"
+            aria-expanded={basemapPickerOpen}
+          >
+            <Layers className="h-3.5 w-3.5 shrink-0 text-muted" />
+            <span className="min-w-0 flex-1 truncate">
+              Basemap: {activeBasemap?.label ?? 'default'}
+            </span>
+            <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
+              {basemapPickerOpen ? 'Hide' : 'Change'}
+            </span>
+          </button>
+          {basemapPickerOpen ? (
+            <ul className="mt-1 max-h-44 overflow-y-auto rounded-md border border-border bg-surface-0">
+              {basemaps.map((b) => {
+                const active = b.id === currentBasemapId;
+                return (
+                  <li key={b.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onBasemapChange(b.id);
+                        setBasemapPickerOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs ${
+                        active
+                          ? 'bg-accent/10 text-accent'
+                          : 'text-ink-0 hover:bg-surface-2'
+                      }`}
+                      aria-pressed={active}
+                    >
+                      {b.thumbnailUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={b.thumbnailUrl}
+                          alt=""
+                          className="h-6 w-6 shrink-0 rounded border border-border object-cover"
+                        />
+                      ) : (
+                        <span
+                          aria-hidden="true"
+                          className="h-6 w-6 shrink-0 rounded border border-border bg-surface-2"
+                        />
+                      )}
+                      <span className="min-w-0 flex-1 truncate">{b.label}</span>
+                      {active ? <Check className="h-3 w-3" /> : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       <div className="border-b border-border px-3 py-2">
         <button
           type="button"

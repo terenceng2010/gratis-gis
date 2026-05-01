@@ -79,6 +79,15 @@ interface Props {
    */
   selectTool: SelectToolMode;
   /**
+   * When true, suppress the canvas's default click-to-popup behavior
+   * even when selectTool === 'off'. The parent owns the click event
+   * (e.g. field-runtime opens its own form modal directly), and the
+   * canvas's read-only popup just gets in the way. Default false
+   * preserves existing behavior on the desktop map editor and the
+   * item-detail map preview.
+   */
+  suppressPopup?: boolean;
+  /**
    * Commit a new selection. Called by the click / rectangle / polygon
    * handlers once they resolve a feature set. The canvas never mutates
    * the selection state directly: parent owns the canonical copy.
@@ -146,6 +155,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     onCameraChange,
     selection,
     selectTool,
+    suppressPopup = false,
     onSelectionChange,
     onMapReady,
   }: Props,
@@ -766,7 +776,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         return;
       }
 
-      // tool === 'off' â†’ popup behaviour.
+      // tool === 'off' â†’ popup behaviour, unless the parent told
+      // us to skip (field-runtime opens its own form modal on tap).
+      if (suppressPopup) {
+        popupRef.current?.remove();
+        popupRef.current = null;
+        return;
+      }
       const hit = hits[0];
       if (!hit) {
         popupRef.current?.remove();
@@ -796,7 +812,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       m.off('mouseleave', onMouseLeave);
       m.off('click', onClick);
     };
-  }, [map.layers]);
+  }, [map.layers, suppressPopup]);
 
   // Rectangle-select tool. Disables pan while active so drag starts
   // a box; on mouseup we queryRenderedFeatures against the pixel
