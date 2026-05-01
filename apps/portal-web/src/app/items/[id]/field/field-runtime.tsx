@@ -10,10 +10,12 @@ import {
   CloudDownload,
   CloudOff,
   ClipboardList,
+  Crosshair,
   Eye,
   EyeOff,
   Layers,
   Loader2,
+  LocateFixed,
   MapPin,
   MoreVertical,
   Plus,
@@ -77,6 +79,12 @@ import {
   postQueueManifest,
   postQueueManifestThrottled,
 } from '@/lib/offline-queue-beacon';
+import {
+  useGeolocation,
+  gpsAccuracyBand,
+  type GpsPosition,
+} from './use-geolocation';
+import { createGpsMarker, type GpsMarkerHandle } from './gps-map-marker';
 
 /**
  * Per-layer descriptor the field runtime consumes. Server-built (see
@@ -276,6 +284,13 @@ export function FieldRuntime({
 
   const canvasRef = useRef<MapCanvasHandle | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  // GPS state (Phase A). Hook owns the watch lifecycle and follow-mode
+  // toggle; marker handle paints the dot + accuracy ring on the map and
+  // is created on first map-ready. The two are intentionally
+  // decoupled: the hook updates the marker only when the map has
+  // mounted (the GPS dot doesn't need to render before the map does).
+  const gps = useGeolocation();
+  const gpsMarkerRef = useRef<GpsMarkerHandle | null>(null);
   // Temporary preview marker shown while the add-form is open. Held
   // by ref (not state) so we don't re-render the whole canvas when
   // the marker comes and goes; maplibre's Marker primitive plants
@@ -808,7 +823,42 @@ export function FieldRuntime({
 
   const handleMapReady = useCallback((map: maplibregl.Map | null) => {
     mapRef.current = map;
-  }, []);
+    // Tear down any prior marker before re-attaching: handleMapReady can
+    // fire again on a basemap swap that recreates the underlying map.
+    if (gpsMarkerRef.current) {
+      gpsMarkerRef.current.detach();
+      gpsMarkerRef.current = null;
+    }
+    if (map) {
+      gpsMarkerRef.current = createGpsMarker(map);
+      gpsMarkerRef.current.attach();
+      // Replay the latest position into the freshly attached marker
+      // so the dot doesn't disappear after a basemap change.
+      if (gps.position) gpsMarkerRef.current.update(gps.position);
+    }
+  }, [gps.position]);
+
+  // Push every new GPS fix into the marker source. Separate from
+  // handleMapReady because positions arrive asynchronously and the
+  // marker handle may already exist from the initial map ready.
+  useEffect(() => {
+    if (!gpsMarkerRef.current) return;
+    gpsMarkerRef.current.update(gps.position);
+  }, [gps.position]);
+
+  // Follow-me mode: recenter the map on each new fix, keeping the
+  // current zoom. easeTo is animated but short so a brisk walk
+  // doesn't feel jumpy. Skipped when the user is mid-pan: maplibre's
+  // isMoving() check would lie (camera also moves during easeTo), so
+  // we trust the user's follow toggle as the only signal.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !gps.follow || !gps.position) return;
+    map.easeTo({
+      center: [gps.position.lon, gps.position.lat],
+      duration: 600,
+    });
+  }, [gps.follow, gps.position]);
 
   // Tap-to-edit was Field Maps Quick Capture style: tap a feature,
   // form opens directly in edit mode. Matt's prod test feedback
@@ -953,6 +1003,45 @@ export function FieldRuntime({
     });
   }, [activeTemplate, clearPendingMarker]);
 
+  // Phase A3: drop a point at the current GPS fix instead of map
+  // center. Same flow as commitAtCenter otherwise (open form + plant
+  // preview marker + ease camera). For surveys / inspections the GPS
+  // location is almost always what the user wants; "Add at center"
+  // is the fallback when the dot drifts or you want to record a
+  // feature at a place you're not standing.
+  const commitAtGps = useCallback(() => {
+    const tpl = activeTemplate;
+    const map = mapRef.current;
+    const pos = gps.position;
+    if (!tpl || !map || !pos) return;
+    if (!isPointGeometry(tpl.layer.geometryType)) {
+      // eslint-disable-next-line no-alert
+      alert(
+        `Adding ${tpl.layer.geometryType} features arrives in a follow-up slice.`,
+      );
+      return;
+    }
+    setFormModal({
+      layer: tpl.layer,
+      mode: 'add',
+      geometry: { type: 'Point', coordinates: [pos.lon, pos.lat] },
+      presetAttributes: tpl.presetAttributes,
+    });
+    setActiveTemplate(null);
+    clearPendingMarker();
+    pendingMarkerRef.current = new maplibregl.Marker({ color: tpl.color })
+      .setLngLat([pos.lon, pos.lat])
+      .addTo(map);
+    // Same screen-offset trick as commitAtCenter so the dropped marker
+    // doesn't end up under the form sheet.
+    const h = map.getContainer().clientHeight;
+    map.easeTo({
+      center: [pos.lon, pos.lat],
+      offset: [0, -h * 0.3],
+      duration: 350,
+    });
+  }, [activeTemplate, gps.position, clearPendingMarker]);
+
   return (
     // Field mode owns the entire viewport: AppShell suppresses its
     // chrome on this route (see app-shell.tsx) so we render edge-to-
@@ -1014,6 +1103,8 @@ export function FieldRuntime({
           }
           hasCache={cachedDeployment !== null}
           queueCount={queueCount}
+          gpsStatus={gps.status}
+          gpsAccuracyM={gps.position?.accuracyM ?? null}
           onDownload={() => void startDownload()}
           onRemoveCache={() => void removeCache()}
         />
@@ -1082,6 +1173,39 @@ export function FieldRuntime({
         >
           <Layers className="h-4 w-4 text-ink-1" />
         </button>
+
+        {/* Locate-me FAB (Phase A2). Sits bottom-left, above the
+            template footer so the worker's thumb has an easy reach
+            on mobile. Three-state interaction:
+              - idle             -> tap requests permission + starts watch
+              - watching, no follow -> tap centers on current fix
+              - follow            -> button shows filled + tap toggles off
+            The hook handles the OS subscription lifecycle; this
+            button is purely a UI affordance. */}
+        <FieldLocateButton
+          gpsStatus={gps.status}
+          hasPosition={gps.position !== null}
+          follow={gps.follow}
+          accuracyM={gps.position?.accuracyM ?? null}
+          onTap={() => {
+            const map = mapRef.current;
+            if (gps.status === 'idle') {
+              gps.start();
+              return;
+            }
+            if (gps.position && map) {
+              map.easeTo({
+                center: [gps.position.lon, gps.position.lat],
+                zoom: Math.max(map.getZoom(), 16),
+                duration: 600,
+              });
+            }
+            // Toggle follow mode on the second tap. Each tap after that
+            // alternates follow on/off. Tapping while not yet watching
+            // starts the watch above.
+            gps.toggleFollow();
+          }}
+        />
 
         {/* Address search overlay (#223.3). Positioned to the right
             of the Layers button at the top of the canvas; on
@@ -1169,10 +1293,37 @@ export function FieldRuntime({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
+            {/* When GPS is watching, "Add at my location" is the
+                primary action because it's what the field worker
+                wants 90% of the time. "Add at center" stays as the
+                fallback when the user wants to record a feature
+                somewhere they're not standing (e.g., the parcel's
+                centroid, a feature visible from a vantage point).
+                When GPS is idle/denied/unavailable the only button
+                shown is "Add at center". */}
+            {gps.status === 'watching' && gps.position ? (
+              <button
+                type="button"
+                onClick={commitAtGps}
+                title={`Drop the feature at your current location (~${
+                  gps.position.accuracyM < 1
+                    ? '<1'
+                    : Math.round(gps.position.accuracyM)
+                } m accuracy)`}
+                className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90"
+              >
+                <LocateFixed className="h-4 w-4" />
+                Add at GPS
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={commitAtCenter}
-              className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90"
+              className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold shadow-card hover:opacity-90 ${
+                gps.status === 'watching' && gps.position
+                  ? 'border border-border bg-surface-1 text-ink-1'
+                  : 'bg-accent text-accent-foreground'
+              }`}
             >
               <MapPin className="h-4 w-4" />
               Add at center
@@ -1210,6 +1361,7 @@ export function FieldRuntime({
           boundForms={boundForms}
           currentUserId={currentUserId}
           isOnline={isOnline}
+          gpsPosition={gps.position}
           onClose={() => {
             clearPendingMarker();
             setFormModal(null);
@@ -1886,6 +2038,7 @@ function FormModal({
   boundForms,
   currentUserId,
   isOnline,
+  gpsPosition,
   onClose,
   onSubmitted,
   onLocalWriteApplied,
@@ -1911,6 +2064,11 @@ function FormModal({
   /** Whether the runtime is currently online. Drives the choice
    *  between direct write and enqueue-to-sync-later. */
   isOnline: boolean;
+  /** Latest GPS fix at the time the form opened. Stamped onto
+   *  add-mode features (Phase A4) so survey-style workflows preserve
+   *  fix accuracy + altitude + heading + timestamp alongside the
+   *  geometry. Null when the user hasn't enabled location. */
+  gpsPosition: GpsPosition | null;
   onClose: () => void;
   onSubmitted: () => void;
   /** Fires after an offline write (or an online write that fell
@@ -1966,7 +2124,27 @@ function FormModal({
 
   async function handleSubmit(response: FormResponse) {
     setError(null);
-    const properties = response;
+    // Phase A4: stamp GPS fix metadata onto add-mode features. We don't
+    // overwrite anything the form already supplied (a user-entered
+    // _gps_lat would win), and we don't stamp on edit because the
+    // existing fix was the one that mattered. Fields use the leading
+    // underscore convention so they never collide with user-defined
+    // schema columns. The portal-api accepts arbitrary JSONB
+    // properties on v3 inserts, so no schema migration is needed.
+    const properties: FormResponse =
+      modal.mode === 'add' && gpsPosition
+        ? {
+            _gps_lon: gpsPosition.lon,
+            _gps_lat: gpsPosition.lat,
+            _gps_accuracy_m: gpsPosition.accuracyM,
+            _gps_altitude_m: gpsPosition.altitudeM,
+            _gps_altitude_accuracy_m: gpsPosition.altitudeAccuracyM,
+            _gps_heading_deg: gpsPosition.headingDeg,
+            _gps_speed_mps: gpsPosition.speedMps,
+            _gps_fix_at: new Date(gpsPosition.fixAt).toISOString(),
+            ...response,
+          }
+        : response;
     // Identity. For inserts we generate the globalId client-side so
     // the queue and the local feature row share a key with the
     // eventual server row -- a re-drained queue (or a sync that
@@ -2184,6 +2362,85 @@ function FormModal({
 }
 
 /**
+ * Locate-me FAB. Bottom-left of the canvas, opposite the layer-toggle
+ * button at top-left so the worker's thumb stays in one corner per
+ * action class. Three visual states tied to the GPS hook:
+ *
+ *   - idle / requesting / denied -> outlined icon, neutral tint
+ *   - watching, follow=false     -> outlined icon, accent tint
+ *   - follow=true                -> filled accent + small "live" pulse
+ *
+ * Tap behavior is controlled entirely by the parent (the runtime
+ * decides whether to start, recenter, or toggle follow); this
+ * component just renders the appropriate visual.
+ */
+function FieldLocateButton({
+  gpsStatus,
+  hasPosition,
+  follow,
+  accuracyM,
+  onTap,
+}: {
+  gpsStatus: import('./use-geolocation').GpsStatus;
+  hasPosition: boolean;
+  follow: boolean;
+  accuracyM: number | null;
+  onTap: () => void;
+}) {
+  const tone =
+    gpsStatus === 'denied' || gpsStatus === 'unavailable'
+      ? 'bg-surface-1 border-border text-muted'
+      : follow
+        ? 'bg-accent border-accent text-accent-foreground'
+        : hasPosition
+          ? 'bg-surface-1 border-border text-accent'
+          : 'bg-surface-1 border-border text-ink-1';
+  const label =
+    gpsStatus === 'idle'
+      ? 'Show my location'
+      : gpsStatus === 'requesting'
+        ? 'Acquiring location'
+        : gpsStatus === 'denied'
+          ? 'Location permission denied'
+          : gpsStatus === 'unavailable'
+            ? 'Location unavailable'
+            : follow
+              ? 'Following location (tap to stop)'
+              : hasPosition
+                ? `Center on my location (~${
+                    accuracyM === null
+                      ? 'unknown'
+                      : accuracyM < 1
+                        ? '<1'
+                        : Math.round(accuracyM)
+                  } m)`
+                : 'Show my location';
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      title={label}
+      aria-label={label}
+      aria-pressed={follow}
+      disabled={
+        gpsStatus === 'requesting' ||
+        gpsStatus === 'denied' ||
+        gpsStatus === 'unavailable'
+      }
+      className={`absolute left-3 bottom-20 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
+    >
+      {gpsStatus === 'requesting' ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : follow ? (
+        <Crosshair className="h-4 w-4" />
+      ) : (
+        <LocateFixed className="h-4 w-4" />
+      )}
+    </button>
+  );
+}
+
+/**
  * Field-Maps-style "More" menu in the top-right of the field
  * runtime header. Replaces the connectivity pill / persistence
  * badge / download button / PWA install button cluster that used to
@@ -2203,6 +2460,8 @@ function FieldMoreMenu({
   downloadInFlight,
   hasCache,
   queueCount,
+  gpsStatus,
+  gpsAccuracyM,
   onDownload,
   onRemoveCache,
 }: {
@@ -2213,6 +2472,8 @@ function FieldMoreMenu({
   downloadInFlight: boolean;
   hasCache: boolean;
   queueCount: number;
+  gpsStatus: import('./use-geolocation').GpsStatus;
+  gpsAccuracyM: number | null;
   onDownload: () => void;
   onRemoveCache: () => void;
 }) {
@@ -2299,6 +2560,49 @@ function FieldMoreMenu({
                   {persistentState === 'persistent'
                     ? 'Persistent'
                     : 'Best effort'}
+                </span>
+              </li>
+            ) : null}
+            {/* GPS row (Phase A5). Surfaces the watch state + the
+                latest accuracy band so the worker can tell at a
+                glance whether the next tap-to-add will be precise.
+                Only renders when the watch is active or has been
+                active; idle = the user hasn't asked for location yet
+                and we shouldn't pretend to know anything. */}
+            {gpsStatus !== 'idle' ? (
+              <li className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+                <span className="text-muted">GPS</span>
+                <span
+                  className={
+                    gpsStatus === 'denied' || gpsStatus === 'unavailable'
+                      ? 'text-rose-700'
+                      : gpsStatus === 'requesting'
+                        ? 'text-muted'
+                        : (() => {
+                            const band = gpsAccuracyBand(gpsAccuracyM);
+                            return band === 'excellent' || band === 'good'
+                              ? 'text-emerald-700'
+                              : band === 'fair'
+                                ? 'text-amber-700'
+                                : 'text-rose-700';
+                          })()
+                  }
+                >
+                  {gpsStatus === 'denied'
+                    ? 'Permission denied'
+                    : gpsStatus === 'unavailable'
+                      ? 'Unavailable'
+                      : gpsStatus === 'requesting'
+                        ? 'Acquiring...'
+                        : gpsStatus === 'error'
+                          ? 'Error'
+                          : gpsAccuracyM === null
+                            ? 'Watching'
+                            : `${
+                                gpsAccuracyM < 1
+                                  ? '<1'
+                                  : Math.round(gpsAccuracyM)
+                              } m`}
                 </span>
               </li>
             ) : null}
