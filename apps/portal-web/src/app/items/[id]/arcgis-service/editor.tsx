@@ -144,9 +144,16 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
   const setLayerLabel = (id: number, label: string) => {
     const key = String(id);
     const next = { ...(staged.layerConfig ?? {}) };
-    const trimmed = label.trim();
-    if (trimmed) {
-      next[key] = { ...next[key], label: trimmed };
+    // Store the value EXACTLY as typed. Trimming on every keystroke
+    // strips trailing spaces, which makes typing "West Virginia
+    // Parcels" impossible: the space after "West" gets eaten, the
+    // controlled input re-renders as "West", and the next keypress
+    // lands as "WestV". Use trim ONLY to detect empty / whitespace-
+    // only inputs (which still clear the override). Save-time
+    // serialization can trim leading/trailing whitespace before it
+    // hits the api.
+    if (label.trim()) {
+      next[key] = { ...next[key], label };
     } else if (next[key]) {
       const { label: _l, ...rest } = next[key]!;
       void _l;
