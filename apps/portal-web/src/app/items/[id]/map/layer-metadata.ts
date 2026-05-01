@@ -164,6 +164,82 @@ export async function discoverLayerMetadata(
         return { ...EMPTY, error: `ArcGIS service returned ${res.status}` };
       }
       raw = await res.json();
+    } else if (
+      layer.source.kind === 'data-layer' &&
+      typeof layer.source.layerKey === 'string' &&
+      layer.source.layerKey.length > 0
+    ) {
+      // v3 sublayer. Two changes from the v1/v2 path:
+      //
+      // 1. Hit /items/:id/layers/:layerKey/geojson (the per-sublayer
+      //    endpoint), not /items/:id/geojson (which only works for
+      //    legacy single-table items).
+      // 2. Consult the parent item's sublayer descriptor for the
+      //    authoritative geometryType. The features-driven
+      //    "geometryTypes.size === 0 -> table" inference is wrong
+      //    for a freshly-created spatial layer that just hasn't had
+      //    a feature added yet -- without this preempt, every empty
+      //    point/line/polygon sublayer renders as a non-spatial
+      //    table in the layer panel.
+      const itemId = layer.source.itemId;
+      const layerKey = layer.source.layerKey;
+      let declaredGeometry: 'point' | 'line' | 'polygon' | null | undefined;
+      try {
+        const descInit: RequestInit = {};
+        if (signal) descInit.signal = signal;
+        const descRes = await fetch(`/api/portal/items/${itemId}`, descInit);
+        if (descRes.ok) {
+          const item = (await descRes.json()) as {
+            data?: {
+              version?: number;
+              layers?: Array<{
+                id?: string;
+                geometryType?: 'point' | 'line' | 'polygon' | null;
+              }>;
+            };
+          };
+          const sub = item.data?.layers?.find((l) => l.id === layerKey);
+          if (sub) declaredGeometry = sub.geometryType ?? null;
+        }
+      } catch {
+        // Fall through to the features fetch; if that errors too the
+        // user sees a generic discovery error.
+      }
+      if (declaredGeometry === null) {
+        // Authoritative table sublayer. Skip the geojson fetch
+        // entirely (the v3 endpoint refuses geojson on tables) and
+        // surface fields via the parent item's schema if we can get
+        // it, but at minimum return isTable=true so the UI hides
+        // the cartographic editors.
+        return { ...EMPTY, isTable: true, loading: false };
+      }
+      const init: RequestInit = {};
+      if (signal) init.signal = signal;
+      const res = await fetch(
+        `/api/portal/items/${itemId}/layers/${layerKey}/geojson`,
+        init,
+      );
+      if (!res.ok) {
+        return { ...EMPTY, error: `Source returned ${res.status}` };
+      }
+      raw = await res.json();
+      // If the parent item told us the declared geometry but we
+      // sampled zero features, seed geometryTypes from the
+      // declaration so symbology / legend treat the empty layer as
+      // its true family. The features-driven loop below still wins
+      // for non-empty layers; this only kicks in when the layer is
+      // empty.
+      if (
+        declaredGeometry === 'point' ||
+        declaredGeometry === 'line' ||
+        declaredGeometry === 'polygon'
+      ) {
+        // Stash on raw for the post-loop merge below. We could
+        // build the Set here, but the existing code path constructs
+        // it from the features loop -- easier to merge after.
+        (raw as { __declaredGeometry?: GeometryFamily }).__declaredGeometry =
+          declaredGeometry;
+      }
     } else {
       const url =
         layer.source.kind === 'geojson-url'
@@ -242,10 +318,23 @@ export async function discoverLayerMetadata(
     raw && typeof raw === 'object' && (raw as { type?: string }).type === 'FeatureCollection'
       ? (raw as GeoJSON.FeatureCollection)
       : null;
+  // If the v3 path stashed a declared geometry on the raw payload
+  // (the parent item said "this sublayer is a point/line/polygon"
+  // even though we sampled zero features), seed geometryTypes from
+  // it. Without this an empty spatial sublayer would slip into the
+  // isTable branch below.
+  const declaredGeometry =
+    raw && typeof raw === 'object'
+      ? (raw as { __declaredGeometry?: GeometryFamily }).__declaredGeometry
+      : undefined;
+  if (declaredGeometry && geometryTypes.size === 0) {
+    geometryTypes.add(declaredGeometry);
+  }
   // Loaded successfully but no geometry showed up: this is a
   // table, even if the source isn't arcgis-rest. Catches the
   // geojson-url case where someone hands us an attribute-only
-  // FeatureCollection (rare but possible).
+  // FeatureCollection (rare but possible). Empty v3 spatial
+  // sublayers are excluded by the declaredGeometry seed above.
   const isTable =
     featureCollection !== null && geometryTypes.size === 0;
   const out: LayerMetadata = {
