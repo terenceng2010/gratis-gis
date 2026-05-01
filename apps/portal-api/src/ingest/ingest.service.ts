@@ -27,8 +27,13 @@ import { randomUUID } from 'node:crypto';
 export class IngestService {
   private readonly log = new Logger(IngestService.name);
 
-  /** Reasonable upload ceiling. Matches the multer config in the controller. */
-  readonly maxBytes = 100 * 1024 * 1024; // 100 MB
+  /** Reasonable upload ceiling. Matches the multer config in the
+   *  controller. 1 GB covers a full county-scale parcel layer
+   *  (200-500 MB zipped is typical) without forcing the user to
+   *  subset first. Anything bigger should go through a future
+   *  direct-to-MinIO presigned-PUT path; right now everything
+   *  buffers through portal-api which is RAM-bound on the host. */
+  readonly maxBytes = 1024 * 1024 * 1024; // 1 GB
 
   async fileToGeoJson(
     buffer: Buffer,

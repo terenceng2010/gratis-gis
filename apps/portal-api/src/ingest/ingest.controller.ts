@@ -54,7 +54,7 @@ export class IngestController {
   @Post('ingest/probe')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: { fileSize: 100 * 1024 * 1024 },
+      limits: { fileSize: 1024 * 1024 * 1024 },
     }),
   )
   async probe(@UploadedFile() file: Express.Multer.File | undefined) {
@@ -70,10 +70,14 @@ export class IngestController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: {
-        // Multer enforces the same ceiling as IngestService. Defense in
-        // depth is cheap and it gives users a clear 413 instead of
-        // burning CPU on a 2 GB shapefile.
-        fileSize: 100 * 1024 * 1024,
+        // Multer enforces the same ceiling as IngestService. Defense
+        // in depth is cheap and it gives users a clear 413 instead
+        // of burning CPU on a 2 GB shapefile. Set to 1 GB so a
+        // county-scale parcel layer (often 200-500 MB zipped) fits
+        // without the user having to subset first. Anything bigger
+        // should go through a future direct-to-MinIO presigned-PUT
+        // path rather than buffering through portal-api.
+        fileSize: 1024 * 1024 * 1024,
       },
     }),
   )
@@ -172,7 +176,7 @@ export class IngestController {
   @Post('items/:id/layers/:layerId/import')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: { fileSize: 100 * 1024 * 1024 },
+      limits: { fileSize: 1024 * 1024 * 1024 },
     }),
   )
   async ingestV3Layer(

@@ -59,6 +59,33 @@
       'cv11';
   }
 
+  /* iOS Safari auto-zooms when the user taps an input whose computed
+     font-size is below 16px. The page then scrolls left/right because
+     the viewport stays at the zoomed scale, breaking layouts that
+     assume 100vw. Pin the form-control font-size to >=16px on touch
+     devices via @media (pointer: coarse) so we don't enlarge the
+     desktop UI. The text-base utility classes we use elsewhere are
+     already 16px; this catches the smaller utility classes
+     (text-xs/text-sm) we use on dense forms and search inputs. */
+  @media (pointer: coarse) {
+    input[type='text'],
+    input[type='email'],
+    input[type='url'],
+    input[type='password'],
+    input[type='search'],
+    input[type='tel'],
+    input[type='number'],
+    input[type='date'],
+    input[type='datetime-local'],
+    input[type='time'],
+    input[type='month'],
+    input[type='week'],
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
   /* Respect user's motion preference across the app. */
   @media (prefers-reduced-motion: reduce) {
     *,

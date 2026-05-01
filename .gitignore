@@ -97,3 +97,15 @@ test.txt
 schema-head.prisma
 items-service-head.ts
 page-head.tsx
+
+# Test data sets dropped in the repo root for local upload testing.
+# Real-world parcel layers etc. -- big files we don't want in git.
+*.geojson
+*.zip
+!apps/**/*.geojson
+!apps/**/*.zip
+!packages/**/*.geojson
+!packages/**/*.zip
+!infra/**/*.zip
+!docs/**/*.geojson
+!docs/**/*.zip

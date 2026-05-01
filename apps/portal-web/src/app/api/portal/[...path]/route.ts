@@ -53,15 +53,22 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   const dataCollectionId = req.headers.get('x-data-collection-id');
   if (dataCollectionId) headers['x-data-collection-id'] = dataCollectionId;
 
-  const init: RequestInit = {
+  // Stream-forward the request body instead of buffering the full
+  // payload into a single ArrayBuffer. Buffering blew up on large
+  // ingest uploads (a 200 MB shapefile would allocate 200 MB in the
+  // BFF and another 200 MB in fetch's internal copy before sending,
+  // sometimes oom-ing portal-web). Streaming keeps memory flat.
+  // `duplex: 'half'` is required by undici/fetch when the request
+  // body is a ReadableStream; without it Node throws "RequestInit:
+  // duplex option is required when sending a body".
+  const init: RequestInit & { duplex?: 'half' } = {
     method: req.method,
     headers,
     cache: 'no-store',
   };
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    // ArrayBuffer preserves binary content; text() would mangle any
-    // non-UTF8 byte in a multipart body.
-    init.body = await req.arrayBuffer();
+    init.body = req.body;
+    init.duplex = 'half';
   }
 
   // Forward client aborts upstream. Without this, when the browser

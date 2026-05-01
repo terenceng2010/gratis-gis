@@ -43,6 +43,15 @@ www.{$PORTAL_DOMAIN} {
 {$PORTAL_DOMAIN} {
     encode gzip zstd
 
+    # Lift the request-body cap so large spatial-data uploads
+    # (county-scale parcel layers run 200-500 MB zipped) stream
+    # through Caddy. Caddy 2 default is unlimited but some deploy
+    # paths set a lower cap; explicit max_size makes the intent
+    # obvious. Multer at the api caps at 1 GB; this matches.
+    request_body {
+        max_size 1GB
+    }
+
     # Send everything to the web app. Next.js's standalone server is
     # http only and listens on port 3000. The api routes (/api/*)
     # are NestJS, listening separately on portal-api:4000 with its
