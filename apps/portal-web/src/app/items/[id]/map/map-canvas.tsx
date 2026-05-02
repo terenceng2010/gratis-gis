@@ -104,6 +104,16 @@ interface Props {
    * (the Map item editor) leave this unset.
    */
   onMapReady?: (map: maplibregl.Map | null) => void;
+  /**
+   * #249.15: when true, skip MapLibre's built-in NavigationControl
+   * (zoom +/- + compass cluster). The field-runtime turns this on
+   * and renders its own zoom / compass buttons at h-11 w-11 so they
+   * line up with the rest of the field map controls (Layers, Search,
+   * Locate, Add). Default false preserves existing behavior on the
+   * desktop map editor and item-detail preview, which keep the
+   * MapLibre defaults.
+   */
+  hideNavigationControl?: boolean;
 }
 
 export interface MapCanvasHandle {
@@ -158,6 +168,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     suppressPopup = false,
     onSelectionChange,
     onMapReady,
+    hideNavigationControl = false,
   }: Props,
   ref,
 ) {
@@ -387,7 +398,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       pitch: map.pitch,
       attributionControl: false,
     });
-    m.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+    if (!hideNavigationControl) {
+      m.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+    }
     m.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
     m.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 

@@ -10,6 +10,7 @@ import {
   CloudDownload,
   CloudOff,
   ClipboardList,
+  Compass,
   Crosshair,
   Eye,
   EyeOff,
@@ -17,6 +18,7 @@ import {
   Loader2,
   LocateFixed,
   MapPin,
+  Minus,
   MoreVertical,
   Plus,
   RefreshCw,
@@ -1176,6 +1178,11 @@ export function FieldRuntime({
             /* Camera changes don't persist in field-mode. */
           }}
           onMapReady={handleMapReady}
+          // #249.15: hide MapLibre's default NavigationControl so the
+          // field-runtime can render its own zoom + compass buttons
+          // sized to match Layers / Search / Locate / FAB. The default
+          // 29px buttons looked tiny next to the 44px field controls.
+          hideNavigationControl
         />
 
         {/* Crosshair reticle: only visible while a template is armed.
@@ -1229,6 +1236,20 @@ export function FieldRuntime({
         >
           <Layers className="h-5 w-5 text-ink-1" />
         </button>
+        ) : null}
+
+        {/* #249.15: zoom + compass cluster at top-right. Replaces
+            MapLibre's default NavigationControl (29px buttons) with
+            three h-11 w-11 buttons stacked vertically and visually
+            joined (shared rounded outer, internal borders). Sized to
+            match Layers / Search / Locate / FAB so the right rail
+            reads as one consistent set of map tools. Compass is
+            de-emphasized (text-muted) in north-up state and brightens
+            when the bearing/pitch is non-default. Hidden during
+            active collect (#249) so it doesn't compete with the
+            Cancel/Submit header. */}
+        {formModal === null ? (
+          <FieldNavCluster mapRef={mapRef} />
         ) : null}
 
         {/* Locate-me FAB. Sits top-right under MapLibre's zoom +
@@ -3174,19 +3195,20 @@ function FieldLocateButton({
         gpsStatus === 'unavailable'
       }
       // #249.13: locate button moved from bottom-left to top-right,
-      // anchored just below MapLibre's NavigationControl (zoom +/- +
-      // compass cluster). Per Matt: most users scan a map left-to-right
-      // across the top then down the right rail, so grouping the GPS
-      // affordance with the zoom controls matches that flow. Distance
-      // (top-32 = 8rem) clears the three stacked nav buttons + their
-      // top margin without leaving a visible gap.
+      // anchored just below the zoom + compass cluster. Per Matt:
+      // most users scan a map left-to-right across the top then down
+      // the right rail, so grouping the GPS affordance with the zoom
+      // controls matches that flow.
       // #249.14: sized to h-11 w-11 to match the Layers + Search
       // buttons at top-left -- consistent thumb target across all
       // map controls. The locate button keeps the rounded-full
       // shape (not square like the other two) because its filled
       // accent state needs to read as "live tracking" -- a circle
       // is the conventional shape for that.
-      className={`absolute right-3 top-32 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
+      // #249.15: top-44 = 11rem clears the three-button zoom cluster
+      // (top-3 + 3 * h-11 + a few pixels of internal border) with
+      // the same 8-12px breathing room the rest of the layout uses.
+      className={`absolute right-3 top-44 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
     >
       {gpsStatus === 'requesting' ? (
         <Loader2 className="h-5 w-5 animate-spin" />
@@ -3196,6 +3218,94 @@ function FieldLocateButton({
         <LocateFixed className="h-5 w-5" />
       )}
     </button>
+  );
+}
+
+/**
+ * #249.15: zoom in / zoom out / reset-north cluster. Replaces
+ * MapLibre's built-in NavigationControl (29px buttons) so the
+ * field-runtime can match the rest of its h-11 w-11 control
+ * rail. Three buttons stacked top-3 right-3 with a shared rounded
+ * outer + internal dividers so they read as one widget.
+ *
+ * The compass arrow rotates with the map's bearing -- subscribed
+ * via map.on('rotate') so the arrow stays in sync as the user
+ * drags-to-rotate. Tapping resets bearing AND pitch to 0 (a
+ * pitched view is also "off-north" enough that one tap should
+ * unwind both). Compass is de-emphasized (text-muted) at
+ * bearing=0 + pitch=0 and switches to text-ink-0 when either is
+ * non-zero, matching the convention from Apple/Google maps.
+ */
+function FieldNavCluster({
+  mapRef,
+}: {
+  mapRef: React.MutableRefObject<maplibregl.Map | null>;
+}) {
+  const [bearing, setBearing] = useState(0);
+  const [pitch, setPitch] = useState(0);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return undefined;
+    const update = () => {
+      setBearing(map.getBearing());
+      setPitch(map.getPitch());
+    };
+    update();
+    map.on('rotate', update);
+    map.on('pitch', update);
+    return () => {
+      map.off('rotate', update);
+      map.off('pitch', update);
+    };
+  }, [mapRef]);
+
+  const offNorth = Math.abs(bearing) > 0.5 || Math.abs(pitch) > 0.5;
+
+  return (
+    <div className="absolute right-3 top-3 z-10 flex flex-col overflow-hidden rounded-md border border-border bg-surface-1 shadow-card">
+      <button
+        type="button"
+        onClick={() => mapRef.current?.zoomIn()}
+        aria-label="Zoom in"
+        className="inline-flex h-11 w-11 items-center justify-center hover:bg-surface-2"
+      >
+        <Plus className="h-5 w-5 text-ink-1" />
+      </button>
+      <button
+        type="button"
+        onClick={() => mapRef.current?.zoomOut()}
+        aria-label="Zoom out"
+        className="inline-flex h-11 w-11 items-center justify-center border-t border-border hover:bg-surface-2"
+      >
+        <Minus className="h-5 w-5 text-ink-1" />
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          // #249.15: reset bearing AND pitch to 0. MapLibre's default
+          // compass click only resets bearing, but in a touch-driven
+          // context we routinely catch a 3D pitch from a two-finger
+          // drag. Resetting both with one tap matches the "I want
+          // north up, flat" mental model.
+          mapRef.current?.easeTo({ bearing: 0, pitch: 0, duration: 300 });
+        }}
+        aria-label="Reset bearing"
+        className="inline-flex h-11 w-11 items-center justify-center border-t border-border hover:bg-surface-2"
+      >
+        <Compass
+          className={`h-5 w-5 transition-colors ${
+            offNorth ? 'text-ink-0' : 'text-muted'
+          }`}
+          // The arrow rotates with the map bearing so the user sees
+          // which direction is north at a glance. Negative because
+          // MapLibre's bearing is "the direction the camera is
+          // facing" while the compass needle points north -- the
+          // two are inverses.
+          style={{ transform: `rotate(${-bearing}deg)` }}
+        />
+      </button>
+    </div>
   );
 }
 
