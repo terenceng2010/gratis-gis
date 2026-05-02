@@ -2210,6 +2210,7 @@ function LayerVisibilityPanel({
                   ) : (
                     <EyeOff className="h-4 w-4 shrink-0 text-muted" />
                   )}
+                  <LayerSwatch layer={l} dimmed={!visible} />
                   <span
                     className={`min-w-0 flex-1 truncate ${
                       visible ? 'text-ink-0' : 'text-muted line-through'
@@ -2224,6 +2225,110 @@ function LayerVisibilityPanel({
         )}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Compact symbology swatch rendered next to a layer name in the
+ * Layers panel. Three modes:
+ *   - simple renderer: one filled square in the layer's primary
+ *     color (polygon fill, then point, then line as fallback).
+ *   - unique-values: up to three mini squares from the first three
+ *     categories. A "+N" tooltip hint isn't surfaced visually
+ *     (tight strip) but the panel can grow if categories matter.
+ *   - class-breaks: a 3-step gradient strip taking the first, middle,
+ *     and last colors so the user sees the range without us having
+ *     to render every break.
+ *
+ * Designed to be ~14x14, fitting between the eye toggle and the
+ * layer title without changing the row's vertical rhythm. When the
+ * layer is hidden we drop opacity so the swatch reads as muted.
+ */
+function LayerSwatch({
+  layer,
+  dimmed,
+}: {
+  layer: MapLayer;
+  dimmed: boolean;
+}) {
+  // Pick a primary color for the simple-renderer fallback. Polygon
+  // fill wins if present (most common case for area layers); falls
+  // through to point color, then line color, then a neutral.
+  const primary =
+    layer.style?.polygon?.fillColor ||
+    layer.style?.point?.color ||
+    layer.style?.line?.color ||
+    '#6b7280';
+  const stroke =
+    layer.style?.polygon?.strokeColor ||
+    layer.style?.point?.strokeColor ||
+    layer.style?.line?.color ||
+    '#374151';
+  const opacity = dimmed ? 0.4 : 1;
+
+  if (layer.renderer?.kind === 'unique-values') {
+    const cats = layer.renderer.categories ?? [];
+    const sample = cats.slice(0, 3);
+    if (sample.length === 0) {
+      return (
+        <span
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 rounded-sm border"
+          style={{ backgroundColor: primary, borderColor: stroke, opacity }}
+        />
+      );
+    }
+    return (
+      <span
+        aria-hidden="true"
+        className="flex h-3.5 shrink-0 items-center gap-0.5"
+        style={{ opacity }}
+      >
+        {sample.map((c, i) => (
+          <span
+            key={`${c.value}-${i}`}
+            className="h-3.5 w-1.5 rounded-sm border border-black/20"
+            style={{ backgroundColor: c.color }}
+          />
+        ))}
+      </span>
+    );
+  }
+
+  if (layer.renderer?.kind === 'class-breaks') {
+    const colors = layer.renderer.colors ?? [];
+    if (colors.length === 0) {
+      return (
+        <span
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 rounded-sm border"
+          style={{ backgroundColor: primary, borderColor: stroke, opacity }}
+        />
+      );
+    }
+    // Three-step strip: first, middle, last.
+    const mid = colors[Math.floor(colors.length / 2)] ?? colors[0]!;
+    const stops = [colors[0]!, mid, colors[colors.length - 1]!];
+    return (
+      <span
+        aria-hidden="true"
+        className="flex h-3.5 w-3.5 shrink-0 overflow-hidden rounded-sm border border-black/20"
+        style={{ opacity }}
+      >
+        {stops.map((c, i) => (
+          <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
+        ))}
+      </span>
+    );
+  }
+
+  // simple renderer (or no renderer): one square.
+  return (
+    <span
+      aria-hidden="true"
+      className="h-3.5 w-3.5 shrink-0 rounded-sm border"
+      style={{ backgroundColor: primary, borderColor: stroke, opacity }}
+    />
   );
 }
 
