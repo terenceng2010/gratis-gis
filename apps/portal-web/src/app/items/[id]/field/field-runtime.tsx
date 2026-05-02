@@ -1292,7 +1292,24 @@ export function FieldRuntime({
           <button
             type="button"
             disabled={templates.length === 0}
-            onClick={() => setPickerOpen(true)}
+            onClick={() => {
+              // #249: single-template deployments skip the picker.
+              // Field Maps does the same: with one feature type to
+              // collect, asking "which one?" is friction. Combined
+              // with Slice 2's GPS-fast-path, the common case
+              // (single template + GPS watching) collapses to one
+              // tap from FAB to FormModal.
+              if (templates.length === 1) {
+                const only = templates[0]!;
+                if (gps.position) {
+                  commitTemplateAt(only, gps.position.lon, gps.position.lat);
+                } else {
+                  setActiveTemplate(only);
+                }
+                return;
+              }
+              setPickerOpen(true);
+            }}
             aria-label="Add feature"
             className="absolute bottom-5 right-3 z-10 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-overlay hover:opacity-90 disabled:opacity-50"
             style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
