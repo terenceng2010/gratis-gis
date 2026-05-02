@@ -1087,6 +1087,15 @@ export function FieldRuntime({
           / dynamic island doesn't sit on top of the back arrow when
           the runtime is launched from a home-screen PWA install
           (viewport-fit=cover puts the page under the status bar). */}
+      {/* #249: Hide the runtime's top chrome while a collect is in
+          progress. The FormModal sheet has its own Cancel / Collect
+          / Submit header (Slice 3). Showing back/title/kebab on top
+          of an active collect lets the worker accidentally tap into
+          the More menu, navigate away, or trigger search -- all
+          interruptions to the focused capture flow. Field Maps does
+          the same: the runtime chrome melts away once you're
+          collecting. */}
+      {formModal === null ? (
       <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <Link
           href={backHref}
@@ -1142,6 +1151,7 @@ export function FieldRuntime({
           onRemoveCache={() => void removeCache()}
         />
       </header>
+      ) : null}
 
       <div className="relative min-h-0 flex-1">
         <MapCanvas
@@ -1196,7 +1206,9 @@ export function FieldRuntime({
             (zoom +/- + compass) plants itself at top-right via
             map-canvas.tsx, so we keep this button on the opposite
             side to avoid overlap. Compact icon-only and the panel
-            drops below when tapped. */}
+            drops below when tapped. Hidden during active collect
+            (#249) so it doesn't compete with the form sheet. */}
+        {formModal === null ? (
         <button
           type="button"
           onClick={() => setLayerPanelOpen((v) => !v)}
@@ -1206,6 +1218,7 @@ export function FieldRuntime({
         >
           <Layers className="h-4 w-4 text-ink-1" />
         </button>
+        ) : null}
 
         {/* Locate-me FAB (Phase A2). Sits bottom-left, above the
             template footer so the worker's thumb has an easy reach
@@ -1246,12 +1259,17 @@ export function FieldRuntime({
             place" affordance and matches Field Maps' equivalent
             location. The internal width grows with available
             horizontal space; on tablet+ the bar is constrained to
-            keep the canvas usable. */}
+            keep the canvas usable. Hidden during active collect
+            (#249) -- the worker is committing a feature, not
+            navigating, and the form sheet sits where the search
+            bar would otherwise extend. */}
+        {formModal === null ? (
         <div className="pointer-events-none absolute left-14 right-3 top-3 z-10 flex justify-start">
           <div className="pointer-events-auto w-full max-w-sm">
             <FieldAddressSearch mapRef={mapRef} />
           </div>
         </div>
+        ) : null}
 
         {layerPanelOpen ? (
           <LayerVisibilityPanel
