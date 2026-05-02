@@ -1435,6 +1435,27 @@ export function FieldRuntime({
             }
           }}
           onLocalWriteApplied={() => setOfflineWriteCounter((n) => n + 1)}
+          onUpdateGeometry={(geom) => {
+            // #249: keep the pendingMarker in sync when the user taps
+            // "Update Point" inside the form. We only get called for
+            // Point geometries (the modal gates the button), so a
+            // direct setLngLat is safe.
+            if (
+              pendingMarkerRef.current &&
+              geom.type === 'Point' &&
+              Array.isArray(geom.coordinates)
+            ) {
+              const [lon, lat] = geom.coordinates as [number, number];
+              pendingMarkerRef.current.setLngLat([lon, lat]);
+              // Pan the camera to the new spot so the user can see
+              // where the feature is going to land. easeTo is a quick
+              // animation; not a full flyTo because the move is small.
+              const map = mapRef.current;
+              if (map) {
+                map.easeTo({ center: [lon, lat], duration: 200 });
+              }
+            }
+          }}
         />
       ) : null}
 
@@ -2090,6 +2111,7 @@ function FormModal({
   onClose,
   onSubmitted,
   onLocalWriteApplied,
+  onUpdateGeometry,
 }: {
   dataCollectionId: string;
   modal:
@@ -2137,8 +2159,22 @@ function FormModal({
    *  this to bump its offline-feature refresh counter so the new /
    *  edited feature appears on the map without a manual reload. */
   onLocalWriteApplied: () => void;
+  /** #249: invoked when the user taps "Update Point" inside the
+   *  form sheet. Lets the runtime move the pendingMarker so the map
+   *  stays in sync with whatever the form thinks the position is.
+   *  Only fires for Point-geometry add flows. */
+  onUpdateGeometry: (geom: GeoJSON.Geometry) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  // #249: working copy of the feature's geometry. The Field Maps
+  // pattern lets the user re-snap the position to the current GPS
+  // fix from inside the form (the "Update Point" button) instead of
+  // committing the location up front. We start from whatever the
+  // runtime handed us (GPS-at-open or map-center fallback) and let
+  // the user revise without canceling out of the form.
+  const [activeGeometry, setActiveGeometry] = useState<
+    GeoJSON.Geometry | null
+  >(modal.geometry);
 
   const form = useMemo<FormSchema>(() => {
     let base: FormSchema;
@@ -2244,7 +2280,7 @@ function FormModal({
         dataLayerId: modal.layer.dataLayerId,
         layerKey: modal.layer.layerKey,
         globalId: featureId,
-        geometry: modal.geometry,
+        geometry: activeGeometry,
         properties,
         queuedAt: new Date().toISOString(),
         schemaHash,
@@ -2264,7 +2300,7 @@ function FormModal({
         feature: {
           type: 'Feature',
           id: featureId,
-          geometry: modal.geometry as GeoJSON.Geometry,
+          geometry: activeGeometry as GeoJSON.Geometry,
           properties: {
             ...properties,
             _global_id: featureId,
@@ -2308,7 +2344,7 @@ function FormModal({
                   features: [
                     {
                       globalId: featureId,
-                      geometry: modal.geometry,
+                      geometry: activeGeometry,
                       properties,
                     },
                   ],
@@ -2388,20 +2424,20 @@ function FormModal({
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[60vh] w-full flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)] sm:max-h-[55vh]"
       >
-        <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3 py-2">
+        <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3 py-2.5">
           <span
             aria-hidden="true"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent"
           >
-            <ClipboardList className="h-4 w-4" />
+            <ClipboardList className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold text-ink-0">
+            <h2 className="truncate text-base font-semibold text-ink-0">
               {modal.mode === 'add'
                 ? `New ${modal.layer.layerLabel}`
                 : `Edit ${modal.layer.layerLabel}`}
             </h2>
-            <p className="truncate text-[11px] text-muted">
+            <p className="truncate text-xs text-muted">
               {modal.layer.dataLayerTitle}
             </p>
           </div>
@@ -2409,11 +2445,69 @@ function FormModal({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
           >
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </button>
         </header>
+        {/* #249: Field Maps-style location bar. Shows the current
+            position of the feature (lat/lon) and lets the worker
+            re-snap to the live GPS fix without canceling out of the
+            form. Only meaningful for Point geometries; for polygons /
+            lines the geometry is multi-vertex and "Update Point" has
+            no clear semantics. Add-mode only -- on edit, the geometry
+            of an existing row isn't changed from inside the attribute
+            form (geometry editing has its own tool). */}
+        {modal.mode === 'add' && modal.layer.geometryType === 'point' ? (
+          <div className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-0 px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-muted">
+                Location
+              </p>
+              <p className="truncate font-mono text-sm tabular-nums text-ink-0">
+                {(() => {
+                  const coords =
+                    activeGeometry &&
+                    'coordinates' in activeGeometry &&
+                    Array.isArray(activeGeometry.coordinates) &&
+                    typeof activeGeometry.coordinates[0] === 'number' &&
+                    typeof activeGeometry.coordinates[1] === 'number'
+                      ? (activeGeometry.coordinates as [number, number])
+                      : null;
+                  if (!coords) return 'Not set';
+                  const [lon, lat] = coords;
+                  return `${lat.toFixed(6)}°N  ${lon.toFixed(6)}°W`;
+                })()}
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={!gpsPosition}
+              onClick={() => {
+                if (!gpsPosition) return;
+                const next: GeoJSON.Geometry = {
+                  type: 'Point',
+                  coordinates: [gpsPosition.lon, gpsPosition.lat],
+                };
+                setActiveGeometry(next);
+                onUpdateGeometry(next);
+              }}
+              title={
+                gpsPosition
+                  ? `Re-snap to current GPS (~${
+                      gpsPosition.accuracyM < 1
+                        ? '<1'
+                        : Math.round(gpsPosition.accuracyM)
+                    } m)`
+                  : 'Enable location to use GPS'
+              }
+              className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+            >
+              <LocateFixed className="h-4 w-4" />
+              Update Point
+            </button>
+          </div>
+        ) : null}
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <FormRuntime
             form={form}
