@@ -98,6 +98,12 @@ export function createGpsMarker(map: maplibregl.Map): GpsMarkerHandle {
   }
 
   function ensureSourceAndLayers() {
+    // MapLibre throws "Style is not done loading" if addSource /
+    // addLayer fires before the style is fully ready. Gate every
+    // entry point through isStyleLoaded() so no caller can trip the
+    // race -- the styledata listener will retry once the style
+    // settles.
+    if (!map.isStyleLoaded()) return;
     if (!map.getSource(SOURCE_ID)) {
       map.addSource(SOURCE_ID, {
         type: 'geojson',
@@ -158,9 +164,25 @@ export function createGpsMarker(map: maplibregl.Map): GpsMarkerHandle {
 
   return {
     attach() {
-      ensureSourceAndLayers();
+      // Wire the events first so the styledata handler picks up the
+      // initial style load if attach() ran before the map's style is
+      // fully ready. ensureSourceAndLayers() calls addSource /
+      // addLayer, which throw "Style is not done loading" if the
+      // style hasn't completed loading -- iOS Safari sometimes fires
+      // MapLibre's 'load' event slightly before isStyleLoaded() flips
+      // true, and the styledata handler is then the path that wires
+      // the layers in. Calling ensureSourceAndLayers() inline here
+      // would throw on that race.
       map.on('zoom', onMove);
       map.on('styledata', onStyleData);
+      if (map.isStyleLoaded()) {
+        ensureSourceAndLayers();
+      } else {
+        map.once('load', () => {
+          ensureSourceAndLayers();
+          pushSourceData();
+        });
+      }
     },
     update(pos) {
       lastPosition = pos;
