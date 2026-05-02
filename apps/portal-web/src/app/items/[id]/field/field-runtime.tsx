@@ -85,6 +85,7 @@ import {
   type GpsPosition,
 } from './use-geolocation';
 import { createGpsMarker, type GpsMarkerHandle } from './gps-map-marker';
+import { stampGpsMetadata } from './gps-metadata-stamp';
 import { V3FeatureAttachments } from '../data-layer/v3-feature-attachments';
 
 /**
@@ -2184,26 +2185,39 @@ function FormModal({
 
   async function handleSubmit(response: FormResponse) {
     setError(null);
-    // Phase A4: stamp GPS fix metadata onto add-mode features. We don't
-    // overwrite anything the form already supplied (a user-entered
-    // _gps_lat would win), and we don't stamp on edit because the
-    // existing fix was the one that mattered. Fields use the leading
-    // underscore convention so they never collide with user-defined
-    // schema columns. The portal-api accepts arbitrary JSONB
-    // properties on v3 inserts, so no schema migration is needed.
+    // GPS fix metadata stamping (#225 item 3). For add-mode features
+    // only -- on edit, the existing fix was the one that mattered.
+    // Walk the layer's declared fields and populate any whose name
+    // matches a canonical GPS metadata key (case-insensitive) from
+    // the live position. This way admins opt in by adding columns
+    // with familiar names (h_accuracy, fix_at, position_source_type,
+    // ...); we don't write columns the layer doesn't have, so the
+    // attribute table stays the schema's source of truth.
+    //
+    // Recognized aliases per slot (case-insensitive, leading-underscore
+    // tolerated for backwards compat with Phase A's private convention):
+    //   - longitude / lon / x / gps_lon         → position.lon
+    //   - latitude  / lat / y / gps_lat         → position.lat
+    //   - h_accuracy / horizontal_accuracy /
+    //     horiz_accuracy / accuracy / gps_accuracy_m
+    //                                           → position.accuracyM
+    //   - altitude / alt / alt_m / z / gps_altitude_m
+    //                                           → position.altitudeM
+    //   - v_accuracy / vertical_accuracy /
+    //     vert_accuracy / altitude_accuracy /
+    //     gps_altitude_accuracy_m               → position.altitudeAccuracyM
+    //   - heading / heading_deg / gps_heading_deg
+    //                                           → position.headingDeg
+    //   - speed / speed_mps / gps_speed_mps     → position.speedMps
+    //   - fix_at / captured_at / gps_fix_at     → ISO timestamp
+    //   - position_source_type                  → "browser-geolocation"
+    //   - capture_method                        → "point-collected"
+    //
+    // Form-supplied values always win (a user typing into a captured_at
+    // field overrides our stamp); we only fill blanks.
     const properties: FormResponse =
       modal.mode === 'add' && gpsPosition
-        ? {
-            _gps_lon: gpsPosition.lon,
-            _gps_lat: gpsPosition.lat,
-            _gps_accuracy_m: gpsPosition.accuracyM,
-            _gps_altitude_m: gpsPosition.altitudeM,
-            _gps_altitude_accuracy_m: gpsPosition.altitudeAccuracyM,
-            _gps_heading_deg: gpsPosition.headingDeg,
-            _gps_speed_mps: gpsPosition.speedMps,
-            _gps_fix_at: new Date(gpsPosition.fixAt).toISOString(),
-            ...response,
-          }
+        ? stampGpsMetadata(modal.layer.fields, response, gpsPosition)
         : response;
     // Identity. For inserts we generate the globalId client-side so
     // the queue and the local feature row share a key with the
