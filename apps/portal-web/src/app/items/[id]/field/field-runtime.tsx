@@ -1277,6 +1277,43 @@ export function FieldRuntime({
         </div>
         ) : null}
 
+        {/* #249: Field Maps-style GPS accuracy banner during active
+            collect. Sits at the top of the canvas (where the
+            runtime's header would be, but that's hidden during
+            collect via Slice 5). One-line, semi-transparent, just a
+            number + units. The collector glances up to see "is my
+            fix good enough to commit this point?" without taking
+            a hand off the form. Hidden when there's no fix or the
+            user hasn't enabled location yet. */}
+        {formModal !== null && gps.position ? (
+          <div
+            aria-live="polite"
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-[max(0.5rem,env(safe-area-inset-top))]"
+          >
+            <span
+              className={`pointer-events-auto inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium shadow-card backdrop-blur-sm ${
+                (() => {
+                  const band = gpsAccuracyBand(gps.position.accuracyM);
+                  if (band === 'excellent' || band === 'good') {
+                    return 'border-emerald-200 bg-emerald-50/95 text-emerald-700';
+                  }
+                  if (band === 'fair') {
+                    return 'border-amber-200 bg-amber-50/95 text-amber-700';
+                  }
+                  return 'border-rose-200 bg-rose-50/95 text-rose-700';
+                })()
+              }`}
+            >
+              <LocateFixed className="h-3.5 w-3.5" aria-hidden="true" />
+              GPS accuracy{' '}
+              {gps.position.accuracyM < 1
+                ? '<1'
+                : Math.round(gps.position.accuracyM)}
+              {' m'}
+            </span>
+          </div>
+        ) : null}
+
         {/* #249: Field Maps-style circular FAB at bottom-right.
             Replaces the previous full-width footer button. Only
             renders in the default state (no activeTemplate, layers
