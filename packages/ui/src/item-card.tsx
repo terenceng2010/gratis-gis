@@ -96,6 +96,7 @@ const typeLabel: Record<string, string> = {
   wfs_service: 'WFS service',
   folder: 'Folder',
   editor: 'Editor',
+  data_collection: 'Data collection',
 };
 
 export function ItemCard({
