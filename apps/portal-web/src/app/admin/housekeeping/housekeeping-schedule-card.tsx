@@ -229,7 +229,7 @@ export function HousekeepingScheduleCard({
               }
               className="h-4 w-4 rounded border-border text-accent focus:ring-accent/30"
             />
-            Refresh spatial extents on every run (#93)
+            Refresh spatial extents on every run
           </label>
           <p className="block text-xs text-ink-1">
             Recompute the cached bounding box on every map / data
