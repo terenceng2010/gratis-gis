@@ -1277,6 +1277,30 @@ export function FieldRuntime({
         </div>
         ) : null}
 
+        {/* #249: Field Maps-style circular FAB at bottom-right.
+            Replaces the previous full-width footer button. Only
+            renders in the default state (no activeTemplate, layers
+            available, no active collect). Tap opens the template
+            picker; if there's exactly one template AND GPS is
+            watching, the picker auto-dismisses and the form opens
+            in one tap (Slice 2 behaviour). Hidden during active
+            collect (#249 chrome rules) so it doesn't compete with
+            the Cancel/Submit header. */}
+        {formModal === null &&
+        activeTemplate === null &&
+        editableLayers.length > 0 ? (
+          <button
+            type="button"
+            disabled={templates.length === 0}
+            onClick={() => setPickerOpen(true)}
+            aria-label="Add feature"
+            className="absolute bottom-5 right-3 z-10 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-overlay hover:opacity-90 disabled:opacity-50"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+          >
+            <Plus className="h-7 w-7" />
+          </button>
+        ) : null}
+
         {layerPanelOpen ? (
           <LayerVisibilityPanel
             layers={mapData.layers ?? []}
@@ -1320,6 +1344,12 @@ export function FieldRuntime({
         ) : null}
       </div>
 
+      {/* #249: Footer only renders when there's something to put in it
+          (activeTemplate location-pick step or the empty-layers
+          message). Default state moves to a circular FAB at
+          bottom-right of the canvas (rendered separately above), so
+          the map gets the full height when nothing is happening. */}
+      {(editableLayers.length === 0 || activeTemplate !== null) ? (
       <footer className="flex shrink-0 items-center gap-2 border-t border-border bg-surface-1 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         {editableLayers.length === 0 ? (
           <p className="flex-1 text-center text-xs text-muted">
@@ -1386,18 +1416,9 @@ export function FieldRuntime({
               Add at center
             </button>
           </>
-        ) : (
-          <button
-            type="button"
-            disabled={templates.length === 0}
-            onClick={() => setPickerOpen(true)}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
-          >
-            <Plus className="h-4 w-4" />
-            Add feature
-          </button>
-        )}
+        ) : null}
       </footer>
+      ) : null}
 
       {pickerOpen ? (
         <TemplatePicker
