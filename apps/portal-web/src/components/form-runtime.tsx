@@ -77,6 +77,15 @@ export interface FormRuntimeProps {
    *  `form={id}` HTML association. Pure DOM-level wiring; no shared
    *  React state to keep in sync. */
   formId?: string;
+  /** When true, the bottom Submit button is hidden. Used by the
+   *  field-runtime FormModal: the modal header already has a
+   *  Submit button (wired via the formId form-attribute trick),
+   *  so showing a second submit at the bottom of the form is
+   *  redundant and confusing. The Back/Next pagination buttons
+   *  still render -- only the terminal Submit is suppressed.
+   *  (#249.14: prompted by Matt's "what's the difference between
+   *  Save Feature and Submit?" feedback.) */
+  hideSubmitButton?: boolean;
 }
 
 export function FormRuntime({
@@ -86,6 +95,7 @@ export function FormRuntime({
   submitLabel = 'Submit',
   readOnly = false,
   formId,
+  hideSubmitButton = false,
 }: FormRuntimeProps) {
   const [response, setResponse] = useState<Response>(() =>
     applyCalculations(form, initial ?? {}),
@@ -253,6 +263,18 @@ export function FormRuntime({
               Next
               <ChevronRight className="h-4 w-4" />
             </button>
+          ) : hideSubmitButton ? (
+            // #249.14: parent surface owns the Submit affordance
+            // (e.g. the field-runtime FormModal header). Render a
+            // tiny submitting indicator when a submit is in flight
+            // so users still see feedback, but don't duplicate the
+            // primary button.
+            submitting ? (
+              <span className="inline-flex items-center gap-1 text-xs text-muted">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Submitting...
+              </span>
+            ) : null
           ) : (
             <button
               type="submit"

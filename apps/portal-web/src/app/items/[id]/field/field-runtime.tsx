@@ -1223,11 +1223,11 @@ export function FieldRuntime({
         <button
           type="button"
           onClick={() => setLayerPanelOpen((v) => !v)}
-          className="absolute left-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface-1 shadow-card hover:bg-surface-2"
+          className="absolute left-3 top-3 z-10 inline-flex h-11 w-11 items-center justify-center rounded-md border border-border bg-surface-1 shadow-card hover:bg-surface-2"
           aria-label="Toggle layers"
           aria-pressed={layerPanelOpen}
         >
-          <Layers className="h-4 w-4 text-ink-1" />
+          <Layers className="h-5 w-5 text-ink-1" />
         </button>
         ) : null}
 
@@ -1281,7 +1281,7 @@ export function FieldRuntime({
             sits where the search bar would otherwise extend. */}
         {formModal === null ? (
           searchExpanded ? (
-            <div className="absolute left-14 right-14 top-3 z-10">
+            <div className="absolute left-[3.75rem] right-14 top-3 z-10">
               <div className="w-full max-w-xs">
                 <FieldAddressSearch
                   mapRef={mapRef}
@@ -1297,9 +1297,9 @@ export function FieldRuntime({
               type="button"
               onClick={() => setSearchExpanded(true)}
               aria-label="Search address"
-              className="absolute left-14 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface-1 shadow-card hover:bg-surface-2"
+              className="absolute left-[3.75rem] top-3 z-10 inline-flex h-11 w-11 items-center justify-center rounded-md border border-border bg-surface-1 shadow-card hover:bg-surface-2"
             >
-              <Search className="h-4 w-4 text-ink-1" />
+              <Search className="h-5 w-5 text-ink-1" />
             </button>
           )
         ) : null}
@@ -2935,6 +2935,13 @@ function FormModal({
             onSubmit={handleSubmit}
             submitLabel={modal.mode === 'add' ? 'Save feature' : 'Save changes'}
             formId={`field-form-${modal.layer.layerKey}`}
+            // #249.14: header already has a Submit button. The
+            // FormRuntime's bottom Submit was reading as a duplicate
+            // ("what's the difference between Save Feature and
+            // Submit?" - Matt). Suppress the bottom button; the
+            // small "Submitting..." indicator the runtime renders
+            // in its place keeps in-flight feedback visible.
+            hideSubmitButton
           />
           {error ? (
             <p
@@ -3173,14 +3180,20 @@ function FieldLocateButton({
       // affordance with the zoom controls matches that flow. Distance
       // (top-32 = 8rem) clears the three stacked nav buttons + their
       // top margin without leaving a visible gap.
-      className={`absolute right-3 top-32 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
+      // #249.14: sized to h-11 w-11 to match the Layers + Search
+      // buttons at top-left -- consistent thumb target across all
+      // map controls. The locate button keeps the rounded-full
+      // shape (not square like the other two) because its filled
+      // accent state needs to read as "live tracking" -- a circle
+      // is the conventional shape for that.
+      className={`absolute right-3 top-32 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
     >
       {gpsStatus === 'requesting' ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 className="h-5 w-5 animate-spin" />
       ) : follow ? (
-        <Crosshair className="h-4 w-4" />
+        <Crosshair className="h-5 w-5" />
       ) : (
-        <LocateFixed className="h-4 w-4" />
+        <LocateFixed className="h-5 w-5" />
       )}
     </button>
   );
