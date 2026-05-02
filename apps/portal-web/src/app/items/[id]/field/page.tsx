@@ -181,6 +181,27 @@ export default async function FieldRuntimePage({ params }: Props) {
     if (!sublayer) continue;
     if (sublayer.geometryType === null) continue; // tables: out-of-scope for Slice 2
     const binding = dc.formBindings?.[sublayer.id];
+    // Phase C: enumerate child layers within the same data_layer
+    // item that reference this layer via parentFkColumn. Used by
+    // FormModal's "Add related" affordance so a worker editing a
+    // tree feature can drop an inspection under it in one tap.
+    const childLayers = (data.layers ?? [])
+      .filter(
+        (l) =>
+          typeof l.parentFkColumn === 'string' &&
+          l.parentFkColumn.length > 0 &&
+          // Convention: parentFkColumn is the FK back to THIS sublayer
+          // when the column name encodes the parent's id (e.g., the
+          // wizard's Add-event-tracking-related-layer flow names it
+          // <parentLayerName>_id). Filter to only those.
+          l.id !== sublayer.id,
+      )
+      .map((l) => ({
+        layerKey: l.id,
+        layerLabel: l.label ?? l.id,
+        geometryType: l.geometryType,
+        parentFkColumn: l.parentFkColumn as string,
+      }));
     editableLayers.push({
       dataLayerId: dlItem.id,
       dataLayerTitle: dlItem.title,
@@ -194,6 +215,7 @@ export default async function FieldRuntimePage({ params }: Props) {
       // share grant.
       editingPolicy: sublayer.editingPolicy ?? 'all-rows',
       ...(binding ? { boundFormItemId: binding.formItemId } : {}),
+      ...(childLayers.length > 0 ? { childLayers } : {}),
     });
   }
 

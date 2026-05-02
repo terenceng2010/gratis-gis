@@ -112,6 +112,19 @@ export interface EditableLayer {
   /** Optional explicit form binding from the data_collection's
    *  formBindings map. When absent, an auto-form is generated. */
   boundFormItemId?: string;
+  /** Phase C: child layers (within the same data_layer item) that
+   *  reference this layer via parentFkColumn. Lets the FormModal
+   *  surface "Add related" buttons in edit mode so a user can drop
+   *  child records under the current feature without having to find
+   *  the child layer in the picker. Only children whose layerKey
+   *  also appears in editableLayers should get a wired Add button --
+   *  others are visible as descriptive lines but Add is disabled. */
+  childLayers?: Array<{
+    layerKey: string;
+    layerLabel: string;
+    geometryType: LayerGeometryType;
+    parentFkColumn: string;
+  }>;
 }
 
 interface Props {
@@ -1363,6 +1376,37 @@ export function FieldRuntime({
           currentUserId={currentUserId}
           isOnline={isOnline}
           gpsPosition={gps.position}
+          editableLayers={editableLayers}
+          onAddRelated={(childLayer, parentFkColumn, parentFeatureId) => {
+            // Switch the modal to add-mode for the child layer with
+            // the FK pre-filled. Geometry: prefer the GPS fix when
+            // available, fall back to the parent's geometry, fall back
+            // to map center as a last resort. Most surveys want the
+            // child captured at the worker's actual position; the
+            // parent's geometry is a sane fallback when GPS is off.
+            const map = mapRef.current;
+            const fallbackCenter = map ? map.getCenter() : null;
+            const initialGeometry: GeoJSON.Geometry | null =
+              gps.position
+                ? {
+                    type: 'Point',
+                    coordinates: [gps.position.lon, gps.position.lat],
+                  }
+                : formModal.geometry ??
+                  (fallbackCenter
+                    ? {
+                        type: 'Point',
+                        coordinates: [fallbackCenter.lng, fallbackCenter.lat],
+                      }
+                    : null);
+            clearPendingMarker();
+            setFormModal({
+              layer: childLayer,
+              mode: 'add',
+              geometry: initialGeometry,
+              presetAttributes: { [parentFkColumn]: parentFeatureId },
+            });
+          }}
           onClose={() => {
             clearPendingMarker();
             setFormModal(null);
@@ -2040,6 +2084,8 @@ function FormModal({
   currentUserId,
   isOnline,
   gpsPosition,
+  editableLayers,
+  onAddRelated,
   onClose,
   onSubmitted,
   onLocalWriteApplied,
@@ -2070,6 +2116,19 @@ function FormModal({
    *  fix accuracy + altitude + heading + timestamp alongside the
    *  geometry. Null when the user hasn't enabled location. */
   gpsPosition: GpsPosition | null;
+  /** Phase C: full editable-layer list so the modal can resolve a
+   *  child layer key to its full EditableLayer (with fields, form
+   *  binding, etc.) when the user taps "Add related." */
+  editableLayers: EditableLayer[];
+  /** Phase C: open a fresh add-mode modal for a child layer with the
+   *  parent FK pre-filled. Runtime owns the actual setFormModal call
+   *  because it also has to clear pendingMarker, ease the camera,
+   *  etc. */
+  onAddRelated: (
+    childLayer: EditableLayer,
+    parentFkColumn: string,
+    parentFeatureId: string,
+  ) => void;
   onClose: () => void;
   onSubmitted: () => void;
   /** Fires after an offline write (or an online write that fell
@@ -2376,6 +2435,68 @@ function FormModal({
                 featureId={modal.featureId}
                 canEdit={true}
               />
+            </div>
+          ) : null}
+          {/* Phase C: child layers in the same data_layer that
+              reference this layer via parentFkColumn. Each row is
+              a quick-add affordance: tap to drop a fresh child
+              record under this feature, with the FK column already
+              filled in. Children that aren't editable in this
+              deployment (table-only sublayer or restricted
+              editingPolicy) are still listed but with the Add
+              button disabled so the user knows they exist. */}
+          {modal.mode === 'edit' &&
+          (modal.layer.childLayers ?? []).length > 0 ? (
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+                Related records
+              </p>
+              <ul className="space-y-1.5">
+                {(modal.layer.childLayers ?? []).map((c) => {
+                  const childEditable = editableLayers.find(
+                    (e) =>
+                      e.dataLayerId === modal.layer.dataLayerId &&
+                      e.layerKey === c.layerKey,
+                  );
+                  return (
+                    <li
+                      key={c.layerKey}
+                      className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-ink-0">
+                          {c.layerLabel}
+                        </p>
+                        <p className="truncate text-[10px] text-muted">
+                          {(c.geometryType ?? 'table').toUpperCase()} ·
+                          linked via {c.parentFkColumn}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!childEditable}
+                        onClick={() => {
+                          if (!childEditable) return;
+                          onAddRelated(
+                            childEditable,
+                            c.parentFkColumn,
+                            modal.featureId,
+                          );
+                        }}
+                        title={
+                          childEditable
+                            ? `Add a new ${c.layerLabel} record under this feature`
+                            : 'This child layer is not editable in this deployment'
+                        }
+                        className="inline-flex h-7 shrink-0 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Add
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           ) : null}
         </div>
