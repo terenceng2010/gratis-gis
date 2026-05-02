@@ -82,8 +82,14 @@ export class V3FeaturesController {
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
     @Query('clip') clip?: string,
+    // #247: parent-FK filter. When `parentFk` + `parentId` are both
+    // present, the SELECT is narrowed to rows whose
+    // properties->>parentFk equals parentId. Used by the field
+    // runtime to list existing related rows under a parent feature.
+    @Query('parentFk') parentFk?: string,
+    @Query('parentId') parentId?: string,
   ) {
-    const { geoLimit, rowScope, isTable } = await this.assertV3Layer(
+    const { geoLimit, rowScope, isTable, layer } = await this.assertV3Layer(
       user,
       itemId,
       layerId,
@@ -96,6 +102,7 @@ export class V3FeaturesController {
       boundaryClip?: unknown;
       ownRowsOnly?: { userId: string };
       isTable?: boolean;
+      parentFkFilter?: { column: string; parentId: string };
     } = {};
     if (isTable) opts.isTable = true;
     if (bbox) {
@@ -120,6 +127,27 @@ export class V3FeaturesController {
       if (geom) opts.boundaryClip = geom;
     }
     if (rowScope === 'own') opts.ownRowsOnly = { userId: user.id };
+    // #247: parent-FK filter. Two-step validation:
+    //   1. column name must be a safe identifier (regex) so it can be
+    //      embedded in the SQL string literal `properties->>'col'`
+    //      without escaping shenanigans.
+    //   2. column must actually exist in the target layer's schema.
+    //      A typo / spoofed column never reaches the SQL.
+    // parentId is parameterized so any string is fine.
+    if (parentFk && parentId) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(parentFk)) {
+        // Silently drop malformed identifiers rather than 400ing the
+        // request -- the runtime might fall back to "show no related
+        // rows" gracefully and the worker can still tap Add. Logging
+        // this would also be reasonable; for now the silent drop
+        // matches how a missing geo_boundary clip is handled above.
+      } else if (!schemaHasField(layer, parentFk)) {
+        // Column not on this layer's schema -- same silent-drop
+        // rationale as the regex case.
+      } else {
+        opts.parentFkFilter = { column: parentFk, parentId };
+      }
+    }
     return this.v3.listFeatures(itemId, layerId, opts);
   }
 
@@ -134,8 +162,19 @@ export class V3FeaturesController {
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
     @Query('clip') clip?: string,
+    @Query('parentFk') parentFk?: string,
+    @Query('parentId') parentId?: string,
   ) {
-    return this.listFeatures(user, itemId, layerId, bbox, at, clip);
+    return this.listFeatures(
+      user,
+      itemId,
+      layerId,
+      bbox,
+      at,
+      clip,
+      parentFk,
+      parentId,
+    );
   }
 
   /**
@@ -450,6 +489,14 @@ export class V3FeaturesController {
      * table sublayers (#192).
      */
     isTable: boolean;
+    /**
+     * #247: the resolved layer schema. Callers that need to validate
+     * a request-supplied field name (e.g. parentFk) against the
+     * actual column list use this rather than re-fetching the item.
+     * Optional shape because the controller only needs `fields`
+     * today; widen as more callers grow needs.
+     */
+    layer: { id: string; fields?: Array<{ name: string }> };
   }> {
     const item = await this.items.get(user, itemId);
     if (item.type !== 'data_layer') {
@@ -462,6 +509,7 @@ export class V3FeaturesController {
         parentLayerId?: string;
         editingPolicy?: 'all-rows' | 'own-rows-only';
         geometryType?: string | null;
+        fields?: Array<{ name: string }>;
       }>;
     } | null;
     if (data?.version !== 3) {
@@ -512,8 +560,24 @@ export class V3FeaturesController {
     // missing its geometryType field would silently lose geometry
     // otherwise.
     const isTable = layer.geometryType === null;
-    return { geoLimit, rowScope, isTable };
+    return { geoLimit, rowScope, isTable, layer };
   }
+}
+
+/**
+ * #247: tiny predicate used by the listFeatures parent-FK filter to
+ * confirm the supplied column actually exists on the target layer's
+ * schema before letting it through to the SQL builder. Defined at
+ * module scope (not a method) so it doesn't pull `this` into a hot
+ * codepath; takes the minimal layer shape the assertV3Layer helper
+ * surfaces.
+ */
+function schemaHasField(
+  layer: { fields?: Array<{ name: string }> } | undefined,
+  fieldName: string,
+): boolean {
+  if (!layer || !Array.isArray(layer.fields)) return false;
+  return layer.fields.some((f) => f.name === fieldName);
 }
 
 /**

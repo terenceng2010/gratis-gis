@@ -1570,6 +1570,23 @@ export function FieldRuntime({
               presetAttributes: { [parentFkColumn]: parentFeatureId },
             });
           }}
+          onOpenRelated={(childLayer, feature) => {
+            // #247: open the FormModal in edit mode for an existing
+            // related row. The runtime owns the camera + pendingMarker
+            // bookkeeping (mirrors onAddRelated above) so the child
+            // form gets a clean slate. Geometry comes straight from
+            // the feature -- if the child is a table sublayer (no
+            // geom) it'll be null and FormModal already handles that
+            // shape.
+            clearPendingMarker();
+            setFormModal({
+              layer: childLayer,
+              mode: 'edit',
+              featureId: feature.id,
+              properties: feature.properties,
+              geometry: feature.geometry,
+            });
+          }}
           onClose={() => {
             clearPendingMarker();
             setFormModal(null);
@@ -2383,6 +2400,7 @@ function FormModal({
   gpsPosition,
   editableLayers,
   onAddRelated,
+  onOpenRelated,
   onClose,
   onSubmitted,
   onLocalWriteApplied,
@@ -2427,6 +2445,18 @@ function FormModal({
     parentFkColumn: string,
     parentFeatureId: string,
   ) => void;
+  /** #247: open the FormModal in edit mode for an existing related
+   *  row. The runtime owns the camera + pendingMarker housekeeping
+   *  (same reasoning as onAddRelated) so the modal hands off the
+   *  full feature shape and the runtime decides what to do with it. */
+  onOpenRelated: (
+    childLayer: EditableLayer,
+    feature: {
+      id: string;
+      properties: Record<string, unknown>;
+      geometry: GeoJSON.Geometry | null;
+    },
+  ) => void;
   onClose: () => void;
   onSubmitted: () => void;
   /** Fires after an offline write (or an online write that fell
@@ -2460,6 +2490,103 @@ function FormModal({
   useEffect(() => {
     setActiveGeometry(modal.geometry);
   }, [modal.geometry]);
+
+  // #247: per-child fetch + cache of existing related rows. Keyed by
+  // childLayer.layerKey because that's what the modal already has in
+  // hand from modal.layer.childLayers. Each entry tracks loading,
+  // error, and the row payload so the rendered list can show a
+  // spinner while in flight, an error pill on failure, and the rows
+  // (with global_id + properties + geometry) once loaded.
+  type RelatedFeature = {
+    id: string;
+    properties: Record<string, unknown>;
+    geometry: GeoJSON.Geometry | null;
+  };
+  type RelatedRowsState = {
+    loading: boolean;
+    error: string | null;
+    rows: RelatedFeature[];
+  };
+  const [relatedRowsByChild, setRelatedRowsByChild] = useState<
+    Record<string, RelatedRowsState>
+  >({});
+
+  // #247: in edit mode, fire one /features?parentFk=...&parentId=...
+  // GET per child layer in parallel. Skipped in add mode (no parent
+  // id yet), and skipped offline (no IndexedDB read path for this
+  // yet -- the field worker can still tap Add to drop a fresh child;
+  // listing existing children offline is captured as a follow-up).
+  // Aborts on unmount / re-fire so a quick tap-through doesn't leave
+  // dangling fetches scribbling stale state.
+  useEffect(() => {
+    if (modal.mode !== 'edit') return undefined;
+    if (!isOnline) return undefined;
+    const children = modal.layer.childLayers ?? [];
+    if (children.length === 0) return undefined;
+    const parentId = modal.featureId;
+    const parentDataLayerId = modal.layer.dataLayerId;
+    const ctrl = new AbortController();
+    setRelatedRowsByChild((prev) => {
+      const next: Record<string, RelatedRowsState> = { ...prev };
+      for (const c of children) {
+        next[c.layerKey] = { loading: true, error: null, rows: [] };
+      }
+      return next;
+    });
+    void Promise.all(
+      children.map(async (c) => {
+        try {
+          const url =
+            `/api/portal/items/${parentDataLayerId}/layers/${c.layerKey}` +
+            `/features?parentFk=${encodeURIComponent(c.parentFkColumn)}` +
+            `&parentId=${encodeURIComponent(parentId)}`;
+          const res = await fetch(url, {
+            signal: ctrl.signal,
+            headers: { Accept: 'application/json' },
+          });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const json = (await res.json()) as {
+            features?: Array<{
+              id?: string;
+              properties?: Record<string, unknown>;
+              geometry?: GeoJSON.Geometry | null;
+            }>;
+          };
+          const rows: RelatedFeature[] = (json.features ?? []).map((f) => ({
+            id: String(f.id ?? ''),
+            properties: f.properties ?? {},
+            geometry: f.geometry ?? null,
+          }));
+          setRelatedRowsByChild((prev) => ({
+            ...prev,
+            [c.layerKey]: { loading: false, error: null, rows },
+          }));
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          setRelatedRowsByChild((prev) => ({
+            ...prev,
+            [c.layerKey]: {
+              loading: false,
+              error:
+                err instanceof Error ? err.message : 'Failed to load',
+              rows: [],
+            },
+          }));
+        }
+      }),
+    );
+    return () => {
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    modal.mode,
+    modal.mode === 'edit' ? modal.featureId : null,
+    modal.layer.dataLayerId,
+    isOnline,
+  ]);
 
   const form = useMemo<FormSchema>(() => {
     let base: FormSchema;
@@ -2853,52 +2980,118 @@ function FormModal({
               <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
                 Related records
               </p>
-              <ul className="space-y-1.5">
+              <div className="space-y-3">
                 {(modal.layer.childLayers ?? []).map((c) => {
                   const childEditable = editableLayers.find(
                     (e) =>
                       e.dataLayerId === modal.layer.dataLayerId &&
                       e.layerKey === c.layerKey,
                   );
+                  const state = relatedRowsByChild[c.layerKey];
+                  const count = state?.rows.length ?? 0;
                   return (
-                    <li
-                      key={c.layerKey}
-                      className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-medium text-ink-0">
-                          {c.layerLabel}
-                        </p>
-                        <p className="truncate text-[10px] text-muted">
-                          {(c.geometryType ?? 'table').toUpperCase()} ·
-                          linked via {c.parentFkColumn}
-                        </p>
+                    <div key={c.layerKey} className="space-y-1.5">
+                      {/* #247: per-child header row. Layer label, geometry +
+                          link hint, count badge, and the Add affordance.
+                          The count is loaded from the parentFk fetch
+                          and only renders once we have a definitive
+                          state (loading suppresses the badge so an
+                          empty list doesn't briefly flash "0"). */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="flex items-center gap-1.5 truncate text-xs font-medium text-ink-0">
+                            {c.layerLabel}
+                            {state && !state.loading && !state.error ? (
+                              <span className="inline-flex items-center justify-center rounded-full bg-surface-2 px-1.5 py-0 text-[10px] font-semibold text-muted">
+                                {count}
+                              </span>
+                            ) : null}
+                            {state?.loading ? (
+                              <Loader2 className="h-3 w-3 animate-spin text-muted" />
+                            ) : null}
+                          </p>
+                          <p className="truncate text-[10px] text-muted">
+                            {(c.geometryType ?? 'table').toUpperCase()} ·
+                            linked via {c.parentFkColumn}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!childEditable}
+                          onClick={() => {
+                            if (!childEditable) return;
+                            onAddRelated(
+                              childEditable,
+                              c.parentFkColumn,
+                              modal.featureId,
+                            );
+                          }}
+                          title={
+                            childEditable
+                              ? `Add a new ${c.layerLabel} record under this feature`
+                              : 'This child layer is not editable in this deployment'
+                          }
+                          className="inline-flex h-7 shrink-0 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                        >
+                          <Plus className="h-3 w-3" />
+                          Add
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        disabled={!childEditable}
-                        onClick={() => {
-                          if (!childEditable) return;
-                          onAddRelated(
-                            childEditable,
-                            c.parentFkColumn,
-                            modal.featureId,
-                          );
-                        }}
-                        title={
-                          childEditable
-                            ? `Add a new ${c.layerLabel} record under this feature`
-                            : 'This child layer is not editable in this deployment'
-                        }
-                        className="inline-flex h-7 shrink-0 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-                      >
-                        <Plus className="h-3 w-3" />
-                        Add
-                      </button>
-                    </li>
+                      {/* #247: existing-row list. Empty / error / rows
+                          are mutually exclusive states; loading is the
+                          spinner in the header above so we avoid a
+                          double-spinner here. Each row has its own
+                          Open button that hands the full feature back
+                          to the runtime via onOpenRelated. */}
+                      {state && !state.loading ? (
+                        state.error ? (
+                          <p className="text-[10px] text-rose-700">
+                            Couldn&apos;t load existing {c.layerLabel}
+                            {' '}records ({state.error}). Tap Add to
+                            create a new one.
+                          </p>
+                        ) : state.rows.length === 0 ? (
+                          <p className="text-[10px] text-muted">
+                            No {c.layerLabel.toLowerCase()} records yet.
+                          </p>
+                        ) : (
+                          <ul className="space-y-1">
+                            {state.rows.map((row) => (
+                              <li
+                                key={row.id}
+                                className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-xs text-ink-0">
+                                    {pickRelatedRowTitle(row.properties) ??
+                                      row.id.slice(0, 8)}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={!childEditable}
+                                  onClick={() => {
+                                    if (!childEditable) return;
+                                    onOpenRelated(childEditable, row);
+                                  }}
+                                  title={
+                                    childEditable
+                                      ? `Open this ${c.layerLabel} record`
+                                      : 'This child layer is not editable in this deployment'
+                                  }
+                                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[10px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                                >
+                                  Open
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )
+                      ) : null}
+                    </div>
                   );
                 })}
-              </ul>
+              </div>
             </div>
           ) : null}
         </div>
@@ -3868,6 +4061,33 @@ function FieldAddressSearch({
       ) : null}
     </div>
   );
+}
+
+/**
+ * #247: pick a short human-friendly label for an existing related
+ * row in the FormModal's child-list. Skips underscore-prefixed keys
+ * (system metadata: _created_by, _edited_at, etc.), the parent FK
+ * column itself (would always read as the parent's UUID), and falls
+ * back to the first non-empty user-field value. Returns null when
+ * nothing fits, so the caller can show the row's globalId prefix
+ * instead.
+ */
+function pickRelatedRowTitle(
+  properties: Record<string, unknown>,
+): string | null {
+  for (const [k, v] of Object.entries(properties)) {
+    if (k.startsWith('_')) continue;
+    if (v === null || v === undefined) continue;
+    const s = typeof v === 'string' ? v.trim() : String(v);
+    if (!s) continue;
+    // Don't echo the parent FK back as the row's title -- it's the
+    // same UUID for every row and reads as noise. Identifiable by
+    // the value being a 36-char hyphenated string (UUID v4 shape).
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s))
+      continue;
+    return s.length > 60 ? `${s.slice(0, 57)}...` : s;
+  }
+  return null;
 }
 
 /**

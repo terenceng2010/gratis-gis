@@ -97,6 +97,16 @@ export class V3FeaturesService {
        * from the layer's geometryType in assertV3Layer.
        */
       isTable?: boolean;
+      /**
+       * #247: narrows the SELECT to rows whose `properties->>{column}`
+       * equals `parentId`. Used by the field-runtime FormModal to
+       * list every related child of a given parent feature without
+       * scanning every row in the layer. Column name is validated by
+       * the controller against the layer's schema before reaching
+       * here so it's safe to interpolate; values are still
+       * parameterized.
+       */
+      parentFkFilter?: { column: string; parentId: string };
     } = {},
   ): Promise<{ type: 'FeatureCollection'; features: V3FeatureOut[] }> {
     const tbl = toV3TableName(itemId, layerId);
@@ -154,6 +164,22 @@ export class V3FeaturesService {
       params.push(opts.ownRowsOnly.userId);
       const n = params.length;
       whereClauses.push(`created_by = $${n}`);
+    }
+    if (opts.parentFkFilter) {
+      // #247: parent-FK filter. Column name is validated against the
+      // layer schema in the controller (must match a real field) so
+      // the `properties->>'col'` form is safe; only the parentId
+      // value is parameterized. Avoid quoting the column name with
+      // double quotes -- properties is a JSONB blob, not a column,
+      // and the key inside it is whatever the schema says it is
+      // (single-quoted SQL string literal). The controller
+      // pre-quotes the column with the same regex used by other
+      // schema-derived identifiers.
+      params.push(opts.parentFkFilter.parentId);
+      const n = params.length;
+      whereClauses.push(
+        `properties->>'${opts.parentFkFilter.column}' = $${n}`,
+      );
     }
     // Build the projection. Table layers have no geom column so we
     // omit the cast entirely; rowToFeature falls back to geometry:null
