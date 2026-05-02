@@ -1227,7 +1227,12 @@ export function FieldRuntime({
               - watching, no follow -> tap centers on current fix
               - follow            -> button shows filled + tap toggles off
             The hook handles the OS subscription lifecycle; this
-            button is purely a UI affordance. */}
+            button is purely a UI affordance. Hidden during active
+            collect (#249) -- the FormModal sheet covers the bottom
+            ~60vh, including this FAB's bottom-20 position, so it'd
+            be obscured anyway, AND the form's own "Update Point"
+            button serves the same re-snap-to-GPS purpose. */}
+        {formModal === null ? (
         <FieldLocateButton
           gpsStatus={gps.status}
           hasPosition={gps.position !== null}
@@ -1252,6 +1257,7 @@ export function FieldRuntime({
             gps.toggleFollow();
           }}
         />
+        ) : null}
 
         {/* Address search overlay (#223.3). Positioned to the right
             of the Layers button at the top of the canvas; on
