@@ -2626,6 +2626,13 @@ function FieldMoreMenu({
   // the button (turns red, label flips to Confirm), second tap commits.
   // Cheaper than a full modal on mobile and stays inside the popover.
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  // Same two-tap pattern, but only triggered when the queue has
+  // unsynced edits. Refresh itself is non-destructive (downloadDeployment
+  // upserts cached features and never touches the queue store), but
+  // the runtime renders from cached features, so after a refresh the
+  // user sees server state and any locally-edited rows look "lost"
+  // until the queue drains. Warning the user lets them sync first.
+  const [confirmingRefresh, setConfirmingRefresh] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Outside-tap dismisses. Field workers expect tap-on-canvas to do
@@ -2642,10 +2649,13 @@ function FieldMoreMenu({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  // Reset the armed-confirm state whenever the menu closes so the
+  // Reset the armed-confirm states whenever the menu closes so the
   // next time the user opens it they see the safe label again.
   useEffect(() => {
-    if (!open) setConfirmingRemove(false);
+    if (!open) {
+      setConfirmingRemove(false);
+      setConfirmingRefresh(false);
+    }
   }, [open]);
 
   const connStatus = isOnline
@@ -2752,23 +2762,61 @@ function FieldMoreMenu({
             ) : null}
           </ul>
           <div className="border-t border-border p-1">
+            {/* Refresh + queue safety: when the queue has unsynced
+                edits, refreshing pulls server state and the locally
+                edited rows look "lost" until the queue drains in the
+                background. The records are still safe (downloadDeployment
+                never touches the queue), but the visual gap rattles
+                users. Two-tap arm/confirm with an inline warning gives
+                them the option to sync first. With an empty queue,
+                refresh runs straight through. */}
+            {confirmingRefresh && hasCache && queueCount > 0 ? (
+              <p className="px-2 pt-1 text-[11px] text-amber-700">
+                {queueCount} edit{queueCount === 1 ? '' : 's'} not yet
+                synced. Refresh anyway?
+              </p>
+            ) : null}
             <button
               type="button"
               onClick={() => {
+                if (
+                  hasCache &&
+                  queueCount > 0 &&
+                  !confirmingRefresh
+                ) {
+                  setConfirmingRefresh(true);
+                  return;
+                }
                 setOpen(false);
                 onDownload();
               }}
               disabled={downloadInFlight}
-              className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-ink-0 hover:bg-surface-2 disabled:opacity-50"
+              className={`flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm disabled:opacity-50 ${
+                confirmingRefresh && hasCache && queueCount > 0
+                  ? 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  : 'text-ink-0 hover:bg-surface-2'
+              }`}
             >
               {downloadInFlight ? (
                 <Loader2 className="h-4 w-4 animate-spin text-muted" />
               ) : hasCache ? (
-                <RefreshCw className="h-4 w-4 text-muted" />
+                <RefreshCw
+                  className={`h-4 w-4 ${
+                    confirmingRefresh && queueCount > 0
+                      ? 'text-amber-700'
+                      : 'text-muted'
+                  }`}
+                />
               ) : (
                 <CloudDownload className="h-4 w-4 text-muted" />
               )}
-              <span>{hasCache ? 'Refresh offline cache' : 'Download for offline'}</span>
+              <span>
+                {confirmingRefresh && hasCache && queueCount > 0
+                  ? 'Confirm refresh'
+                  : hasCache
+                    ? 'Refresh offline cache'
+                    : 'Download for offline'}
+              </span>
             </button>
             {/* Remove from device. Only meaningful when something is
                 cached, and we want a hard confirm step because the
