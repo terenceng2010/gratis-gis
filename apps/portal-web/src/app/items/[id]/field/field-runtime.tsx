@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Tag,
   Trash2,
   Wifi,
   X,
@@ -42,6 +43,10 @@ import {
 } from '@gratis-gis/form-schema';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas, type MapCanvasHandle } from '../map/map-canvas';
+import {
+  searchLayers,
+  type SearchResult as MapSearchResult,
+} from '../map/search-sources';
 import { FormRuntime } from '@/components/form-runtime';
 import { PwaInstallButton } from '@/components/pwa-install-button';
 import {
@@ -1279,6 +1284,8 @@ export function FieldRuntime({
               <div className="w-full max-w-xs">
                 <FieldAddressSearch
                   mapRef={mapRef}
+                  canvasRef={canvasRef}
+                  layers={mapData.layers ?? []}
                   autoFocus
                   onClose={() => setSearchExpanded(false)}
                 />
@@ -3523,10 +3530,22 @@ function DownloadProgressModal({
  */
 function FieldAddressSearch({
   mapRef,
+  canvasRef,
+  layers,
   autoFocus,
   onClose,
 }: {
   mapRef: React.MutableRefObject<maplibregl.Map | null>;
+  // #249.12: passing the canvas handle lets a feature pick reuse the
+  // same fly-and-highlight animation the desktop SearchBar fires, so a
+  // hit on Parcels by APN flashes the polygon exactly like clicking a
+  // search result on the desktop map.
+  canvasRef?: React.MutableRefObject<MapCanvasHandle | null>;
+  // #249.12: layers + their per-layer search settings (search.enabled,
+  // search.fields, search.labelTemplate). When omitted or empty the
+  // bar falls back to address-only behaviour, matching the previous
+  // shape so callers that don't have a map context still work.
+  layers?: MapLayer[];
   // #249.11: when the parent renders this in collapsed/expanded mode,
   // it asks us to grab focus on mount so the user can start typing
   // immediately, and surfaces a close affordance via the trailing X
@@ -3535,17 +3554,32 @@ function FieldAddressSearch({
   onClose?: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<
+  // #249.12: place results (Nominatim) and feature results (layer
+  // attributes) are tracked separately so the dropdown can render a
+  // Features section ahead of a Places section. Place results keep
+  // the previous shape (label / center / bbox); feature results carry
+  // the full SearchResult so the picker has the layer id + GeoJSON
+  // feature it needs for flyAndHighlight.
+  const [placeResults, setPlaceResults] = useState<
     Array<{
       label: string;
       center: [number, number] | null;
       bbox: [number, number, number, number] | null;
     }>
   >([]);
+  const [featureResults, setFeatureResults] = useState<MapSearchResult[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // #249.12: at least one layer in the deployment has search.enabled +
+  // a non-empty fields list. Used to gate the section heading so we
+  // don't render an empty Features header when the deployment author
+  // hasn't configured any searchable layers.
+  const anyLayerSearchable = (layers ?? []).some(
+    (l) => l.search?.enabled && l.search.fields.length > 0,
+  );
 
   // Auto-focus the input when the parent expands the bar from icon mode
   // (#249.11). Only fires once on mount; the parent unmounts us when
@@ -3566,12 +3600,50 @@ function FieldAddressSearch({
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
+  // #249.12: layer-attribute search runs synchronously off the map's
+  // current source data on every keystroke. Cheap (one pass through
+  // up to MAX_ATTRIBUTE_HITS_PER_LAYER features per layer), no
+  // network. Snapshot featuresByLayer from MapLibre via
+  // querySourceFeatures: for the GeoJSON sources field-runtime uses
+  // (URL-backed online, geojson-inline offline) this returns every
+  // feature in the source. Re-runs whenever the query, layer list,
+  // or layer ids change.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 1 || !layers || layers.length === 0) {
+      setFeatureResults([]);
+      return;
+    }
+    const map = mapRef.current;
+    const featuresByLayer: Record<string, GeoJSON.FeatureCollection | null> =
+      {};
+    if (map) {
+      for (const layer of layers) {
+        if (!layer.search?.enabled) continue;
+        if (layer.source.kind === 'arcgis-rest') continue;
+        const sourceId = `gg:${layer.id}`;
+        if (!map.getSource(sourceId)) continue;
+        try {
+          const features = map.querySourceFeatures(sourceId);
+          featuresByLayer[layer.id] = {
+            type: 'FeatureCollection',
+            features,
+          };
+        } catch {
+          /* style not ready yet for this source -- skip; the next
+             keystroke after the source loads will pick it up */
+        }
+      }
+    }
+    setFeatureResults(searchLayers(q, layers, featuresByLayer));
+  }, [query, layers, mapRef]);
+
   // Debounced geocode. Match the desktop SearchBar's 250 ms delay
   // and 3-character minimum so we don't hammer Nominatim.
   useEffect(() => {
     const q = query.trim();
     if (q.length < 3) {
-      setResults([]);
+      setPlaceResults([]);
       return;
     }
     const ctrl = new AbortController();
@@ -3613,7 +3685,7 @@ function FieldAddressSearch({
                 bbox,
               };
             });
-            setResults(mapped);
+            setPlaceResults(mapped);
             setLoading(false);
           },
         )
@@ -3628,7 +3700,7 @@ function FieldAddressSearch({
     };
   }, [query]);
 
-  function pick(r: {
+  function pickPlace(r: {
     bbox: [number, number, number, number] | null;
     center: [number, number] | null;
   }) {
@@ -3644,6 +3716,35 @@ function FieldAddressSearch({
       );
     } else if (r.center) {
       m.flyTo({ center: r.center, zoom: 16, duration: 400 });
+    }
+    setOpen(false);
+  }
+
+  // #249.12: feature picks reuse the canvas's flyAndHighlight so the
+  // hit feature briefly pulses, matching the desktop bar. Falls back
+  // to a plain flyTo on the picked feature's bbox/center when the
+  // canvas handle isn't available (shouldn't happen in field mode but
+  // keeps the code robust if a caller wires the bar up without a
+  // canvas).
+  function pickFeature(r: MapSearchResult) {
+    if (r.kind !== 'feature') return;
+    const handle = canvasRef?.current;
+    if (handle) {
+      // exactOptionalPropertyTypes is strict in this repo, so we
+      // build the args object without undefined-valued optional
+      // props rather than letting them through as `prop: undefined`.
+      const args: Parameters<MapCanvasHandle['flyAndHighlight']>[0] = {
+        bbox: r.bbox,
+        center: r.center,
+        layerId: r.layerId,
+      };
+      const fid = r.feature.id as string | number | undefined;
+      if (fid !== undefined) args.featureId = fid;
+      if (r.feature.properties)
+        args.featureProps = r.feature.properties as Record<string, unknown>;
+      handle.flyAndHighlight(args);
+    } else {
+      pickPlace({ bbox: r.bbox, center: r.center });
     }
     setOpen(false);
   }
@@ -3676,7 +3777,8 @@ function FieldAddressSearch({
               // clear the input. Either way wipe local state so a
               // re-expand starts clean.
               setQuery('');
-              setResults([]);
+              setPlaceResults([]);
+              setFeatureResults([]);
               setOpen(false);
               onClose?.();
             }}
@@ -3687,16 +3789,61 @@ function FieldAddressSearch({
           </button>
         ) : null}
       </label>
-      {open && (loading || results.length > 0) ? (
-        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-surface-1 text-sm shadow-overlay">
-          {loading ? (
-            <li className="px-3 py-2 text-xs text-muted">Searching...</li>
+      {open &&
+      (loading || featureResults.length > 0 || placeResults.length > 0) ? (
+        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-border bg-surface-1 text-sm shadow-overlay">
+          {/* #249.12: Features section -- only rendered when at least
+              one searchable layer is configured AND we have hits. The
+              hits are grouped by layer with the layer title as a sub-
+              heading so a worker scanning for "SMITH" sees Parcels
+              hits separately from Roads or Water Service hits. */}
+          {anyLayerSearchable && featureResults.length > 0
+            ? groupFeatureResultsByLayer(featureResults).map((group) => (
+                <li key={`layer-${group.layerId}`}>
+                  <div className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    {group.layerTitle}
+                  </div>
+                  {group.results.map((r, i) => (
+                    <button
+                      key={`${group.layerId}-${i}`}
+                      type="button"
+                      onClick={() => pickFeature(r)}
+                      className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-surface-2"
+                    >
+                      <Tag className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs text-ink-0">
+                          {r.kind === 'feature' ? r.label : ''}
+                        </div>
+                        {r.kind === 'feature' && r.subtitle ? (
+                          <div className="truncate text-[10px] text-muted">
+                            {r.subtitle}
+                          </div>
+                        ) : null}
+                      </div>
+                    </button>
+                  ))}
+                </li>
+              ))
+            : null}
+          {/* Places section -- the original Nominatim address path.
+              Heading only renders when feature results sit above so
+              the dropdown doesn't shout PLACES at a deployment that
+              never had any layer search. */}
+          {placeResults.length > 0 &&
+          anyLayerSearchable &&
+          featureResults.length > 0 ? (
+            <li>
+              <div className="border-b border-border bg-surface-2 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Places
+              </div>
+            </li>
           ) : null}
-          {results.map((r, i) => (
-            <li key={`${r.label}-${i}`}>
+          {placeResults.map((r, i) => (
+            <li key={`place-${r.label}-${i}`}>
               <button
                 type="button"
-                onClick={() => pick(r)}
+                onClick={() => pickPlace(r)}
                 className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-surface-2"
               >
                 <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
@@ -3706,10 +3853,43 @@ function FieldAddressSearch({
               </button>
             </li>
           ))}
+          {loading && placeResults.length === 0 ? (
+            <li className="px-3 py-2 text-xs text-muted">Searching...</li>
+          ) : null}
         </ul>
       ) : null}
     </div>
   );
+}
+
+/**
+ * #249.12: bucket SearchResult feature hits by their owning layer so
+ * the dropdown can render a sub-heading per layer. Place results
+ * (kind === 'place') aren't grouped here -- they live under their
+ * own Places section in the dropdown. Order is preserved so the
+ * relative ranking searchLayers() produces is honoured: the first
+ * layer with hits stays first.
+ */
+function groupFeatureResultsByLayer(
+  results: MapSearchResult[],
+): Array<{ layerId: string; layerTitle: string; results: MapSearchResult[] }> {
+  const out: Array<{
+    layerId: string;
+    layerTitle: string;
+    results: MapSearchResult[];
+  }> = [];
+  const indexById = new Map<string, number>();
+  for (const r of results) {
+    if (r.kind !== 'feature') continue;
+    let i = indexById.get(r.layerId);
+    if (i === undefined) {
+      i = out.length;
+      indexById.set(r.layerId, i);
+      out.push({ layerId: r.layerId, layerTitle: r.layerTitle, results: [] });
+    }
+    out[i]!.results.push(r);
+  }
+  return out;
 }
 
 /**
