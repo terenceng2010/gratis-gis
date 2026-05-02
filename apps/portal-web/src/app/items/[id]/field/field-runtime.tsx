@@ -968,94 +968,62 @@ export function FieldRuntime({
   // center and open the form pre-filled with presetAttributes. Used
   // by the "Add at center" button. Field Maps' equivalent: pan to
   // position, tap "Add Point", form opens.
+  // #249: shared commit path. Takes a template + a coord pair and
+  // opens the form modal with the matching geometry, plants the
+  // preview marker, and eases the camera so the marker isn't hidden
+  // behind the bottom-sheet form. Both the explicit "Add at center"
+  // and "Add at GPS" buttons funnel through here, AND the
+  // template-picker's onPick uses it directly when GPS is available
+  // so a single tap (FAB → pick template) collapses to one tap when
+  // there's only one template (the picker self-dismisses).
+  const commitTemplateAt = useCallback(
+    (tpl: FieldTemplate, lon: number, lat: number) => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (!isPointGeometry(tpl.layer.geometryType)) {
+        // eslint-disable-next-line no-alert
+        alert(
+          `Adding ${tpl.layer.geometryType} features arrives in a follow-up slice.`,
+        );
+        return;
+      }
+      setFormModal({
+        layer: tpl.layer,
+        mode: 'add',
+        geometry: { type: 'Point', coordinates: [lon, lat] },
+        presetAttributes: tpl.presetAttributes,
+      });
+      setActiveTemplate(null);
+      clearPendingMarker();
+      pendingMarkerRef.current = new maplibregl.Marker({ color: tpl.color })
+        .setLngLat([lon, lat])
+        .addTo(map);
+      // Form takes the bottom ~60%; offset the camera so the dropped
+      // marker stays visible above the sheet. Negative y shifts the
+      // geographic center upward on screen.
+      const h = map.getContainer().clientHeight;
+      map.easeTo({ center: [lon, lat], offset: [0, -h * 0.3], duration: 350 });
+    },
+    [clearPendingMarker],
+  );
+
   const commitAtCenter = useCallback(() => {
     const tpl = activeTemplate;
     const map = mapRef.current;
     if (!tpl || !map) return;
-    if (!isPointGeometry(tpl.layer.geometryType)) {
-      // Slice 2/3 ship point capture only. Polygon / line need a
-      // multi-step gesture (tap-to-add-vertex, double-tap-to-finish)
-      // and are #196 territory. Surface a hint and bail rather than
-      // dropping a degenerate single-point line.
-      // eslint-disable-next-line no-alert
-      alert(
-        `Adding ${tpl.layer.geometryType} features arrives in a follow-up slice.`,
-      );
-      return;
-    }
     const c = map.getCenter();
-    setFormModal({
-      layer: tpl.layer,
-      mode: 'add',
-      geometry: { type: 'Point', coordinates: [c.lng, c.lat] },
-      presetAttributes: tpl.presetAttributes,
-    });
-    setActiveTemplate(null);
-    // Plant a preview marker at the drop location so the user can
-    // see WHERE they're adding while filling in the form. The real
-    // feature only appears in the data source after a successful
-    // save (#194 refresh), so without this preview the location
-    // appears to vanish the moment the form opens. Tinted with the
-    // template's color so the visual carries through from the
-    // crosshair-reticle phase.
-    clearPendingMarker();
-    pendingMarkerRef.current = new maplibregl.Marker({ color: tpl.color })
-      .setLngLat([c.lng, c.lat])
-      .addTo(map);
-    // The form takes the bottom ~60% of the screen, which would hide
-    // the feature we just dropped at the geometric center. Ease the
-    // camera up so the same lng/lat ends up roughly in the middle of
-    // the visible (non-form) area. offset is in pixels; positive y
-    // moves the displayed center *down*, so a negative y here shifts
-    // the geographic center upward on screen. ~30% of viewport
-    // height splits the difference: feature lands centered in the
-    // ~40% of map still visible above the form.
-    const h = map.getContainer().clientHeight;
-    map.easeTo({
-      center: [c.lng, c.lat],
-      offset: [0, -h * 0.3],
-      duration: 350,
-    });
-  }, [activeTemplate, clearPendingMarker]);
+    commitTemplateAt(tpl, c.lng, c.lat);
+  }, [activeTemplate, commitTemplateAt]);
 
-  // Phase A3: drop a point at the current GPS fix instead of map
-  // center. Same flow as commitAtCenter otherwise (open form + plant
-  // preview marker + ease camera). For surveys / inspections the GPS
-  // location is almost always what the user wants; "Add at center"
-  // is the fallback when the dot drifts or you want to record a
-  // feature at a place you're not standing.
+  // Phase A3 / #249: drop a point at the current GPS fix. Funnels
+  // through commitTemplateAt so the marker + camera-pan logic stays
+  // in one place.
   const commitAtGps = useCallback(() => {
     const tpl = activeTemplate;
-    const map = mapRef.current;
     const pos = gps.position;
-    if (!tpl || !map || !pos) return;
-    if (!isPointGeometry(tpl.layer.geometryType)) {
-      // eslint-disable-next-line no-alert
-      alert(
-        `Adding ${tpl.layer.geometryType} features arrives in a follow-up slice.`,
-      );
-      return;
-    }
-    setFormModal({
-      layer: tpl.layer,
-      mode: 'add',
-      geometry: { type: 'Point', coordinates: [pos.lon, pos.lat] },
-      presetAttributes: tpl.presetAttributes,
-    });
-    setActiveTemplate(null);
-    clearPendingMarker();
-    pendingMarkerRef.current = new maplibregl.Marker({ color: tpl.color })
-      .setLngLat([pos.lon, pos.lat])
-      .addTo(map);
-    // Same screen-offset trick as commitAtCenter so the dropped marker
-    // doesn't end up under the form sheet.
-    const h = map.getContainer().clientHeight;
-    map.easeTo({
-      center: [pos.lon, pos.lat],
-      offset: [0, -h * 0.3],
-      duration: 350,
-    });
-  }, [activeTemplate, gps.position, clearPendingMarker]);
+    if (!tpl || !pos) return;
+    commitTemplateAt(tpl, pos.lon, pos.lat);
+  }, [activeTemplate, gps.position, commitTemplateAt]);
 
   return (
     // Field mode owns the entire viewport: AppShell suppresses its
@@ -1361,8 +1329,21 @@ export function FieldRuntime({
         <TemplatePicker
           templates={templates}
           onPick={(tpl) => {
-            setActiveTemplate(tpl);
             setPickerOpen(false);
+            // #249: Field Maps-style one-tap capture. When the GPS
+            // hook is producing a fix, picking a template commits
+            // immediately at the worker's current position -- no
+            // detour through the footer's "Add at GPS / Add at
+            // center" choice. The user can still revise the location
+            // via "Update Point" inside the form sheet, or by
+            // canceling and retrying with GPS off. When GPS isn't
+            // watching, we keep the footer-button flow so the user
+            // can drop the feature at the map center.
+            if (gps.position) {
+              commitTemplateAt(tpl, gps.position.lon, gps.position.lat);
+            } else {
+              setActiveTemplate(tpl);
+            }
           }}
           onClose={() => setPickerOpen(false)}
         />
