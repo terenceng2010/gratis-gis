@@ -1231,18 +1231,19 @@ export function FieldRuntime({
         </button>
         ) : null}
 
-        {/* Locate-me FAB (Phase A2). Sits bottom-left, above the
-            template footer so the worker's thumb has an easy reach
-            on mobile. Three-state interaction:
+        {/* Locate-me FAB. Sits top-right under MapLibre's zoom +
+            compass cluster (#249.13: moved from bottom-left so the
+            map's right rail groups all viewport controls together,
+            matching the natural left-to-right top-to-bottom scan).
+            Three-state interaction:
               - idle             -> tap requests permission + starts watch
               - watching, no follow -> tap centers on current fix
               - follow            -> button shows filled + tap toggles off
             The hook handles the OS subscription lifecycle; this
             button is purely a UI affordance. Hidden during active
-            collect (#249) -- the FormModal sheet covers the bottom
-            ~60vh, including this FAB's bottom-20 position, so it'd
-            be obscured anyway, AND the form's own "Update Point"
-            button serves the same re-snap-to-GPS purpose. */}
+            collect (#249) -- the FormModal sheet covers most of the
+            canvas, AND the form's own "Update Point" button serves
+            the same re-snap-to-GPS purpose. */}
         {formModal === null ? (
         <FieldLocateButton
           gpsStatus={gps.status}
@@ -2972,7 +2973,14 @@ function FieldLocateButton({
         gpsStatus === 'denied' ||
         gpsStatus === 'unavailable'
       }
-      className={`absolute left-3 bottom-20 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
+      // #249.13: locate button moved from bottom-left to top-right,
+      // anchored just below MapLibre's NavigationControl (zoom +/- +
+      // compass cluster). Per Matt: most users scan a map left-to-right
+      // across the top then down the right rail, so grouping the GPS
+      // affordance with the zoom controls matches that flow. Distance
+      // (top-32 = 8rem) clears the three stacked nav buttons + their
+      // top margin without leaving a visible gap.
+      className={`absolute right-3 top-32 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border shadow-card transition-colors disabled:opacity-50 ${tone}`}
     >
       {gpsStatus === 'requesting' ? (
         <Loader2 className="h-4 w-4 animate-spin" />
