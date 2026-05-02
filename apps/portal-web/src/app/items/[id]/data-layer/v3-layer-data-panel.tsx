@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   Database,
+  Plus,
   Table2,
   Upload,
 } from 'lucide-react';
@@ -92,6 +93,13 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
   >(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
+  // #248: remember which import mode the user chose when they opened
+  // the file picker. The native <input type="file"> dialog can't carry
+  // arbitrary state in its onChange event, so we stash the mode on a
+  // ref and read it back when the file is selected. Defaults to
+  // 'replace' so an unexpected open (e.g. system shortcut) still
+  // produces a safe re-import.
+  const pendingModeRef = useRef<'replace' | 'append'>('replace');
 
   function cancelUpload() {
     xhrRef.current?.abort();
@@ -100,7 +108,12 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
     setMessage(null);
   }
 
-  async function handleFile(file: File) {
+  // #248: import mode threaded through handleFile. Default is replace
+  // (the safe re-import-the-truth flow from #244). Append is opt-in
+  // via the split-button dropdown -- mostly useful when stitching
+  // monthly drops into a growing layer or merging two source files
+  // with non-overlapping content.
+  async function handleFile(file: File, mode: 'replace' | 'append') {
     setMessage(null);
     setBusy({
       phase: 'uploading',
@@ -112,19 +125,18 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
       // the wizard's "GDAL is listing layers" probe phase.
       copy: {
         reading: {
-          headline: 'Importing features',
+          headline: mode === 'append' ? 'Appending features' : 'Importing features',
           subhead:
-            'Parsing the file and bulk-inserting into PostGIS. Large layers (county-scale parcels) can take a few minutes.',
+            mode === 'append'
+              ? 'Parsing the file and inserting into PostGIS alongside existing rows. Large layers can take a few minutes.'
+              : 'Parsing the file and bulk-inserting into PostGIS. Large layers (county-scale parcels) can take a few minutes.',
         },
       },
     });
     try {
-      // #244: default to replace mode. Append-on-import was the
-      // historical behaviour and caused user-visible drift (a county
-      // parcel layer ended up with 1.3M rows when the source had 869k
-      // because partial-failure leftovers piled up). Replace makes
-      // re-imports idempotent: the new file IS the layer, full stop.
-      // Append-as-explicit-choice tracked as a follow-up.
+      // #244: replace is the default; #248: append is the opt-in
+      // split-button dropdown choice. The endpoint accepts both; we
+      // just forward whichever mode the caller picked.
       const out = await uploadWithProgress<{
         driver: string;
         sourceLayer: string;
@@ -132,7 +144,7 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
         mode: 'replace' | 'append';
         replaced?: number;
       }>(
-        `/api/portal/items/${itemId}/layers/${layer.id}/import?mode=replace`,
+        `/api/portal/items/${itemId}/layers/${layer.id}/import?mode=${mode}`,
         file,
         (e) => {
           setBusy((prev) =>
@@ -152,7 +164,7 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
         kind: 'success',
         text: `${out.inserted.toLocaleString()} feature${
           out.inserted === 1 ? '' : 's'
-        } imported from ${out.sourceLayer} (${out.driver})${replacedSuffix}`,
+        } ${out.mode === 'append' ? 'appended' : 'imported'} from ${out.sourceLayer} (${out.driver})${replacedSuffix}`,
       });
       // Refresh the server-rendered detail page so featureCount /
       // bbox on the header match the new state.
@@ -218,19 +230,18 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) void handleFile(f);
+                if (f) void handleFile(f, pendingModeRef.current);
                 e.target.value = '';
               }}
             />
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              disabled={busy !== null}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              Import features
-            </button>
+            <ImportButtonCluster
+              hasFeatures={(layer.featureCount ?? 0) > 0}
+              busy={busy !== null}
+              onPickFile={(mode) => {
+                pendingModeRef.current = mode;
+                inputRef.current?.click();
+              }}
+            />
           </>
         ) : null}
       </div>
@@ -263,5 +274,118 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
         />
       ) : null}
     </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * #248: Import features button cluster. When the layer is empty
+ * (featureCount === 0 or unknown) it's a single button -- replace
+ * and append are equivalent on an empty table, so the dropdown
+ * would just be noise. Once the layer has any rows the cluster
+ * grows a chevron that opens a small menu offering "Append instead",
+ * with replace remaining the default action of the main button.
+ *
+ * The cluster owns the menu open/close state but the file picker
+ * itself + the upload-mode ref live in the parent LayerRow -- one
+ * <input type="file"> covers both modes via pendingModeRef. Keeps
+ * this component small + stateless beyond the chevron toggle.
+ */
+function ImportButtonCluster({
+  hasFeatures,
+  busy,
+  onPickFile,
+}: {
+  hasFeatures: boolean;
+  busy: boolean;
+  onPickFile: (mode: 'replace' | 'append') => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRootRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside-click so the menu doesn't linger after the user
+  // drifts away. mousedown rather than click so the menu shuts before
+  // a tap on the canvas registers as a click somewhere else.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    function onDoc(e: MouseEvent) {
+      if (!menuRootRef.current) return;
+      if (menuRootRef.current.contains(e.target as Node)) return;
+      setMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [menuOpen]);
+
+  if (!hasFeatures) {
+    return (
+      <button
+        type="button"
+        onClick={() => onPickFile('replace')}
+        disabled={busy}
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+      >
+        <Upload className="h-3.5 w-3.5" />
+        Import features
+      </button>
+    );
+  }
+
+  return (
+    <div ref={menuRootRef} className="relative inline-flex">
+      {/* Main button = replace (the default since #244). The
+          chevron sits flush to its right and opens the alternate-mode
+          menu. Border treatment matches button-group conventions:
+          the main button's right edge is squared, the chevron's left
+          edge is squared, so the two read as one widget. */}
+      <button
+        type="button"
+        onClick={() => onPickFile('replace')}
+        disabled={busy}
+        className="inline-flex h-8 items-center gap-1.5 rounded-l-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+        title="Replace existing features with the contents of a new file"
+      >
+        <Upload className="h-3.5 w-3.5" />
+        Import features
+      </button>
+      <button
+        type="button"
+        onClick={() => setMenuOpen((v) => !v)}
+        disabled={busy}
+        aria-label="More import options"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        className="inline-flex h-8 items-center justify-center rounded-r-md border border-l-0 border-border bg-surface-1 px-1 text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+      >
+        <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+      {menuOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-9 z-20 w-56 rounded-md border border-border bg-surface-1 p-1 text-xs shadow-overlay"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenuOpen(false);
+              onPickFile('append');
+            }}
+            className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-surface-2"
+          >
+            <Plus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-medium text-ink-0">
+                Append instead
+              </span>
+              <span className="block text-[10px] text-muted">
+                Add the new file&apos;s features alongside the existing rows.
+              </span>
+            </span>
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
