@@ -269,6 +269,34 @@ export class V3TablesService {
   }
 
   /**
+   * Empty a layer's feature table without dropping it (#244).
+   *
+   * Replace-mode ingest needs "wipe what's there, then insert the new
+   * source." TRUNCATE is the right primitive: it preserves the table
+   * structure (columns, indexes, FKs back to the layer's metadata),
+   * resets the row count to zero, and drops history along with current
+   * rows. That last point matters: replace semantics mean "this is the
+   * data now, forget what was there before," which is incompatible
+   * with the temporal-versioning row history the table normally keeps.
+   *
+   * If the table doesn't exist yet (a fresh layer being imported into
+   * for the first time), the TRUNCATE is a no-op via the IF-EXISTS
+   * style guard the caller already runs (provisionLayer creates the
+   * table before this is called).
+   */
+  async truncateLayer(itemId: string, layerId: string): Promise<void> {
+    const tbl = toV3TableName(itemId, layerId);
+    // RESTART IDENTITY isn't strictly needed (we use UUIDs not serials)
+    // but it's defensive against future schema changes that add a
+    // serial column. CASCADE is required if anything FKs into this
+    // table; nothing does today, but cheap to keep correct.
+    await this.prisma.$executeRawUnsafe(
+      `TRUNCATE TABLE "${tbl}" RESTART IDENTITY CASCADE`,
+    );
+    this.log.log(`Truncated v3 layer table ${tbl}`);
+  }
+
+  /**
    * Drops tables for layers present in `prev` but not `next`, then
    * provisions (idempotent) every layer in `next`. Safe to re-run.
    */

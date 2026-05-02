@@ -119,12 +119,20 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
       },
     });
     try {
+      // #244: default to replace mode. Append-on-import was the
+      // historical behaviour and caused user-visible drift (a county
+      // parcel layer ended up with 1.3M rows when the source had 869k
+      // because partial-failure leftovers piled up). Replace makes
+      // re-imports idempotent: the new file IS the layer, full stop.
+      // Append-as-explicit-choice tracked as a follow-up.
       const out = await uploadWithProgress<{
         driver: string;
         sourceLayer: string;
         inserted: number;
+        mode: 'replace' | 'append';
+        replaced?: number;
       }>(
-        `/api/portal/items/${itemId}/layers/${layer.id}/import`,
+        `/api/portal/items/${itemId}/layers/${layer.id}/import?mode=replace`,
         file,
         (e) => {
           setBusy((prev) =>
@@ -136,11 +144,15 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
         xhrRef,
       );
       xhrRef.current = null;
+      const replacedSuffix =
+        out.mode === 'replace' && typeof out.replaced === 'number' && out.replaced > 0
+          ? ` (replaced ${out.replaced.toLocaleString()})`
+          : '';
       setMessage({
         kind: 'success',
         text: `${out.inserted.toLocaleString()} feature${
           out.inserted === 1 ? '' : 's'
-        } imported from ${out.sourceLayer} (${out.driver})`,
+        } imported from ${out.sourceLayer} (${out.driver})${replacedSuffix}`,
       });
       // Refresh the server-rendered detail page so featureCount /
       // bbox on the header match the new state.

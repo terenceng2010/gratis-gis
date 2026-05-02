@@ -22,6 +22,7 @@ import { FeaturesService } from '../features/features.service.js';
 import { V3FeaturesService } from '../features-v3/v3-features.service.js';
 import {
   V3TablesService,
+  toV3TableName,
   type V3LayerShape,
 } from '../features-v3/v3-tables.service.js';
 import { IngestService } from './ingest.service.js';
@@ -190,12 +191,23 @@ export class IngestController {
     @Param('layerId') layerId: string,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Query('sourceLayer') sourceLayer?: string,
+    // #244 replace-mode. Defaults to 'append' to preserve the existing
+    // detail-page behaviour (which is what currently-bookmarked import
+    // scripts assume); the UI's primary Import button passes
+    // mode=replace explicitly.
+    @Query('mode') mode?: 'replace' | 'append',
   ) {
     if (!file) {
       throw new BadRequestException(
         'No file uploaded; field name must be "file".',
       );
     }
+    if (mode !== undefined && mode !== 'replace' && mode !== 'append') {
+      throw new BadRequestException(
+        `Unknown mode "${mode}"; expected replace or append.`,
+      );
+    }
+    const ingestMode: 'replace' | 'append' = mode ?? 'append';
     const item = await this.items.get(user, itemId);
     if (item.type !== 'data_layer') {
       throw new BadRequestException(
@@ -222,8 +234,30 @@ export class IngestController {
     // Re-run provisionLayer before the insert so any pre-#240
     // single-geometry column (Polygon/Point/LineString) is migrated
     // to its Multi-* equivalent in place. Idempotent on tables that
-    // are already correctly typed.
+    // are already correctly typed. Has to run before truncate because
+    // truncate assumes the table exists (#244).
     await this.v3Tables.provisionLayer(itemId, layer);
+
+    // #244: replace mode wipes the layer's feature table before
+    // inserting. Solves the "I re-imported and now have 1.3M rows
+    // when the source has 869k" problem from a partial-failure left
+    // behind by an earlier attempt. Order matters: truncate first,
+    // ingest second, so a failed ingest still leaves the user with an
+    // empty layer rather than a half-old/half-new mix.
+    let truncated = 0;
+    if (ingestMode === 'replace') {
+      // We don't know the pre-truncate row count without an extra
+      // query; opportunistically capture it for the response so the
+      // UI can show "Replaced N rows with M". Fall back to skipping
+      // the count if it'd be expensive (large layers); for now the
+      // count is cheap.
+      const tbl = toV3TableName(itemId, layer.id);
+      const rows: Array<{ count: bigint }> = await this.prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::bigint AS count FROM "${tbl}"`,
+      );
+      truncated = Number(rows?.[0]?.count ?? 0n);
+      await this.v3Tables.truncateLayer(itemId, layerId);
+    }
 
     const { geojson, driver, layerName, sourceSrs } = await this.ingest.fileLayerToGeoJson(
       file.buffer,
@@ -261,7 +295,14 @@ export class IngestController {
       sourceSrs,
     });
 
-    return { driver, sourceLayer: layerName, inserted, sourceSrs };
+    return {
+      driver,
+      sourceLayer: layerName,
+      inserted,
+      sourceSrs,
+      mode: ingestMode,
+      ...(ingestMode === 'replace' ? { replaced: truncated } : {}),
+    };
   }
 
   /**
