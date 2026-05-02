@@ -276,6 +276,12 @@ export function FieldRuntime({
   const [hiddenLayerIds, setHiddenLayerIds] = useState<Set<string>>(
     () => new Set(),
   );
+  // #249.11: address search collapses to a single icon by default.
+  // Per-Matt: search isn't used often enough to justify the persistent
+  // bar at the top of the canvas, and on iPhone it overlapped MapLibre's
+  // top-right zoom controls. Tapping the magnifier expands an input;
+  // tapping the X collapses it again.
+  const [searchExpanded, setSearchExpanded] = useState(false);
 
   // Form modal state. mode='add' starts with the template's
   // presetAttributes plus a geometry stamped from the map center;
@@ -1259,22 +1265,35 @@ export function FieldRuntime({
         />
         ) : null}
 
-        {/* Address search overlay (#223.3). Positioned to the right
-            of the Layers button at the top of the canvas; on
-            mobile this is the most natural spot for a "find this
-            place" affordance and matches Field Maps' equivalent
-            location. The internal width grows with available
-            horizontal space; on tablet+ the bar is constrained to
-            keep the canvas usable. Hidden during active collect
-            (#249) -- the worker is committing a feature, not
-            navigating, and the form sheet sits where the search
-            bar would otherwise extend. */}
+        {/* Address search overlay (#223.3, collapsed by default in #249.11).
+            Sits to the right of the Layers FAB at top-left. Default state
+            is a magnifier icon; tapping expands an input. Right edge is
+            held at right-14 when expanded so the input never extends
+            under MapLibre's NavigationControl (zoom +/- + compass) at
+            top-right. Hidden during active collect (#249) -- the worker
+            is committing a feature, not navigating, and the form sheet
+            sits where the search bar would otherwise extend. */}
         {formModal === null ? (
-        <div className="pointer-events-none absolute left-14 right-3 top-3 z-10 flex justify-start">
-          <div className="pointer-events-auto w-full max-w-sm">
-            <FieldAddressSearch mapRef={mapRef} />
-          </div>
-        </div>
+          searchExpanded ? (
+            <div className="absolute left-14 right-14 top-3 z-10">
+              <div className="w-full max-w-xs">
+                <FieldAddressSearch
+                  mapRef={mapRef}
+                  autoFocus
+                  onClose={() => setSearchExpanded(false)}
+                />
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSearchExpanded(true)}
+              aria-label="Search address"
+              className="absolute left-14 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface-1 shadow-card hover:bg-surface-2"
+            >
+              <Search className="h-4 w-4 text-ink-1" />
+            </button>
+          )
         ) : null}
 
         {/* #249: Field Maps-style GPS accuracy banner during active
@@ -1348,8 +1367,13 @@ export function FieldRuntime({
               setPickerOpen(true);
             }}
             aria-label="Add feature"
-            className="absolute bottom-5 right-3 z-10 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-overlay hover:opacity-90 disabled:opacity-50"
-            style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+            // #249.11: previous version applied paddingBottom for safe
+            // area, which distorted the circle on iPhone (icon shoved
+            // off-center). Move the inset onto `bottom` so the button
+            // stays a perfect circle and just rides above the home
+            // indicator instead of stretching.
+            className="absolute right-3 z-10 inline-flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-overlay hover:opacity-90 disabled:opacity-50"
+            style={{ bottom: 'calc(1.25rem + env(safe-area-inset-bottom, 0px))' }}
           >
             <Plus className="h-7 w-7" />
           </button>
@@ -3499,8 +3523,16 @@ function DownloadProgressModal({
  */
 function FieldAddressSearch({
   mapRef,
+  autoFocus,
+  onClose,
 }: {
   mapRef: React.MutableRefObject<maplibregl.Map | null>;
+  // #249.11: when the parent renders this in collapsed/expanded mode,
+  // it asks us to grab focus on mount so the user can start typing
+  // immediately, and surfaces a close affordance via the trailing X
+  // button (collapses back to the icon).
+  autoFocus?: boolean;
+  onClose?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<
@@ -3513,6 +3545,14 @@ function FieldAddressSearch({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-focus the input when the parent expands the bar from icon mode
+  // (#249.11). Only fires once on mount; the parent unmounts us when
+  // collapsing so a fresh expand always re-focuses.
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
 
   // Close on outside click so the dropdown doesn't linger when the
   // user pans the map.
@@ -3613,6 +3653,7 @@ function FieldAddressSearch({
       <label className="relative block">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
         <input
+          ref={inputRef}
           type="search"
           value={query}
           onChange={(e) => {
@@ -3626,15 +3667,20 @@ function FieldAddressSearch({
           className="h-9 w-full rounded-md border border-border bg-surface-0 pl-8 pr-8 text-sm text-ink-0 placeholder:text-muted focus:border-accent focus:outline-none"
           aria-label="Search address"
         />
-        {query ? (
+        {query || onClose ? (
           <button
             type="button"
             onClick={() => {
+              // #249.11: when the parent owns expand/collapse state we
+              // collapse on the trailing-X press, otherwise we just
+              // clear the input. Either way wipe local state so a
+              // re-expand starts clean.
               setQuery('');
               setResults([]);
               setOpen(false);
+              onClose?.();
             }}
-            aria-label="Clear search"
+            aria-label={onClose ? 'Close search' : 'Clear search'}
             className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted hover:bg-surface-2"
           >
             <X className="h-3 w-3" />
