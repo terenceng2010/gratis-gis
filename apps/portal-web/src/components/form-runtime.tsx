@@ -71,6 +71,12 @@ export interface FormRuntimeProps {
    *  area -- used for designer preview to avoid accidental dummy
    *  submissions. */
   readOnly?: boolean;
+  /** When set, the inner <form> gets this DOM id. Lets a parent
+   *  surface (#249: the FormModal header Submit) attach a button
+   *  outside the form's tree that still submits it via the
+   *  `form={id}` HTML association. Pure DOM-level wiring; no shared
+   *  React state to keep in sync. */
+  formId?: string;
 }
 
 export function FormRuntime({
@@ -79,6 +85,7 @@ export function FormRuntime({
   onSubmit,
   submitLabel = 'Submit',
   readOnly = false,
+  formId,
 }: FormRuntimeProps) {
   const [response, setResponse] = useState<Response>(() =>
     applyCalculations(form, initial ?? {}),
@@ -195,6 +202,7 @@ export function FormRuntime({
       </header>
 
       <form
+        id={formId}
         className="space-y-5"
         onSubmit={(e) => {
           e.preventDefault();

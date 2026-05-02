@@ -2405,30 +2405,38 @@ function FormModal({
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[60vh] w-full flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)] sm:max-h-[55vh]"
       >
-        <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3 py-2.5">
-          <span
-            aria-hidden="true"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent"
+        {/* #249: Field Maps-style three-section header for the active
+            collect. Cancel (left, text button) | layer-name title
+            (center) | Submit (right, text button). The Submit button
+            doesn't sit inside the FormRuntime tree -- it associates
+            via the formId prop / HTML form attribute, so the click
+            triggers the form's existing onSubmit + validation. The
+            FormRuntime's own submit button stays at the bottom of
+            the scroll for users who reach the end of a long form. */}
+        <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface-1 px-2 py-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 shrink-0 items-center justify-center rounded-md px-3 text-base font-medium text-accent hover:bg-surface-2"
           >
-            <ClipboardList className="h-5 w-5" />
-          </span>
-          <div className="min-w-0 flex-1">
+            Cancel
+          </button>
+          <div className="min-w-0 flex-1 text-center">
             <h2 className="truncate text-base font-semibold text-ink-0">
               {modal.mode === 'add'
                 ? `New ${modal.layer.layerLabel}`
                 : `Edit ${modal.layer.layerLabel}`}
             </h2>
-            <p className="truncate text-xs text-muted">
+            <p className="truncate text-[11px] text-muted">
               {modal.layer.dataLayerTitle}
             </p>
           </div>
           <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
+            type="submit"
+            form={`field-form-${modal.layer.layerKey}`}
+            className="inline-flex h-10 shrink-0 items-center justify-center rounded-md px-3 text-base font-semibold text-accent hover:bg-surface-2"
           >
-            <X className="h-5 w-5" />
+            Submit
           </button>
         </header>
         {/* #249: Field Maps-style location bar. Shows the current
@@ -2495,6 +2503,7 @@ function FormModal({
             initial={initial}
             onSubmit={handleSubmit}
             submitLabel={modal.mode === 'add' ? 'Save feature' : 'Save changes'}
+            formId={`field-form-${modal.layer.layerKey}`}
           />
           {error ? (
             <p
