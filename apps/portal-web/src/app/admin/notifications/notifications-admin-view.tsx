@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -953,6 +953,28 @@ function TemplateEditModal({
     text: string;
     html: string;
   } | null>(null);
+  // #250: per-type variable manifest, populated from the GET
+  // /templates endpoint. Drives the click-to-insert palette so admins
+  // don't have to memorize the placeholder names.
+  type VariableDescriptor = {
+    name: string;
+    label: string;
+    description?: string;
+    example?: string;
+    raw?: boolean;
+  };
+  const [variables, setVariables] = useState<VariableDescriptor[]>([]);
+  // #250: ref to the input/textarea that last had focus, so the
+  // palette can insert at the caret in whichever field the admin
+  // was last editing. We track only the focused element + its
+  // selection range; the actual insert reads the live ref off the
+  // DOM at click time.
+  const subjectRef = useRef<HTMLInputElement | null>(null);
+  const bodyHtmlRef = useRef<HTMLTextAreaElement | null>(null);
+  const bodyTextRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastFocused = useRef<
+    'subject' | 'bodyHtml' | 'bodyText' | null
+  >(null);
   const [preview, setPreview] = useState<{
     subject: string;
     text: string;
@@ -982,9 +1004,11 @@ function TemplateEditModal({
             updatedAt: string;
           } | null;
           defaultPreview: { subject: string; text: string; html: string };
+          variables?: VariableDescriptor[];
         };
         if (cancelled) return;
         setDefaultPreview(json.defaultPreview);
+        setVariables(json.variables ?? []);
         if (json.override) {
           setSubject(json.override.subject);
           setBodyText(json.override.bodyText);
@@ -1015,6 +1039,103 @@ function TemplateEditModal({
       cancelled = true;
     };
   }, [type, channel]);
+
+  /**
+   * #250: insert `{{name}}` (or `{{{name}}}` when raw=true) at the
+   * caret of whichever input was focused last. The element refs and
+   * the `lastFocused` tracker drive the target selection: clicking a
+   * palette button blurs the input briefly, so we have to remember
+   * which one was active. Falls back to bodyHtml when the admin
+   * hasn't focused anything yet (most common starting case for
+   * everyone-already-knows-what-they-want flows).
+   */
+  function insertVariable(v: VariableDescriptor) {
+    const placeholder = v.raw ? `{{{${v.name}}}}` : `{{${v.name}}}`;
+    const target = lastFocused.current ?? 'bodyHtml';
+    if (target === 'subject') {
+      const el = subjectRef.current;
+      if (!el) return;
+      const start = el.selectionStart ?? subject.length;
+      const end = el.selectionEnd ?? subject.length;
+      const next = subject.slice(0, start) + placeholder + subject.slice(end);
+      setSubject(next);
+      // Restore caret just after the inserted token. Defer to the
+      // next tick so React's state-batched re-render runs first.
+      window.requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + placeholder.length;
+        el.setSelectionRange(pos, pos);
+      });
+      schedulePreview();
+      return;
+    }
+    if (target === 'bodyHtml') {
+      const el = bodyHtmlRef.current;
+      if (!el) return;
+      const start = el.selectionStart ?? bodyHtml.length;
+      const end = el.selectionEnd ?? bodyHtml.length;
+      const next = bodyHtml.slice(0, start) + placeholder + bodyHtml.slice(end);
+      setBodyHtml(next);
+      window.requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + placeholder.length;
+        el.setSelectionRange(pos, pos);
+      });
+      schedulePreview();
+      return;
+    }
+    if (target === 'bodyText') {
+      const el = bodyTextRef.current;
+      if (!el) return;
+      const start = el.selectionStart ?? bodyText.length;
+      const end = el.selectionEnd ?? bodyText.length;
+      const next = bodyText.slice(0, start) + placeholder + bodyText.slice(end);
+      setBodyText(next);
+      window.requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + placeholder.length;
+        el.setSelectionRange(pos, pos);
+      });
+      schedulePreview();
+      return;
+    }
+  }
+
+  /**
+   * #250: derive a plain-text fallback from the current HTML body so
+   * admins don't have to maintain two copies by hand. Strips tags
+   * and collapses whitespace; the worker still runs the templates
+   * separately so substitution still works on whatever placeholders
+   * survived the strip. Best-effort -- complex tables and lists
+   * don't survive perfectly, but the result is always better than
+   * an empty plain-text body for spam-filter heuristics.
+   */
+  function derivePlainTextFromHtml() {
+    if (typeof document === 'undefined') return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = bodyHtml;
+    // Replace block-ish elements with line breaks so paragraphs
+    // don't end up jammed onto one line.
+    tmp.querySelectorAll('p, br, li, h1, h2, h3, h4, h5, h6, div').forEach(
+      (el) => {
+        if (el.tagName === 'BR') {
+          el.replaceWith(document.createTextNode('\n'));
+          return;
+        }
+        el.appendChild(document.createTextNode('\n'));
+      },
+    );
+    // List items get a leading bullet for readability.
+    tmp.querySelectorAll('li').forEach((el) => {
+      el.prepend(document.createTextNode('- '));
+    });
+    const text = (tmp.textContent ?? '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    setBodyText(text);
+    schedulePreview();
+  }
 
   function schedulePreview() {
     if (typeof window === 'undefined') return;
@@ -1132,16 +1253,54 @@ function TemplateEditModal({
         ) : (
           <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto px-4 py-4 lg:grid-cols-2">
             <div className="space-y-3">
+              {/* #250: variable palette. Click any variable to insert
+                  it at the caret of the input/textarea that was last
+                  focused. Avoids having to memorize {{itemTitle}} vs
+                  {{itemId}} -- the substitution names are visible and
+                  one tap drops them in. Standard ctx vars (orgLabel,
+                  baseUrl) follow per-type vars so the most-relevant
+                  ones sit closest to the inputs. */}
+              {variables.length > 0 ? (
+                <div className="rounded-md border border-border bg-surface-0 p-2">
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Insert variable
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {variables.map((v) => (
+                      <button
+                        key={v.name}
+                        type="button"
+                        onClick={() => insertVariable(v)}
+                        title={
+                          (v.description ? `${v.description}\n\n` : '') +
+                          (v.example ? `Example: ${v.example}` : '')
+                        }
+                        className="inline-flex items-center gap-1 rounded border border-border bg-surface-1 px-1.5 py-0.5 text-[10px] text-ink-1 hover:bg-surface-2"
+                      >
+                        <span className="font-mono text-muted">
+                          {`{{${v.name}}}`}
+                        </span>
+                        <span>{v.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               <Field
                 label="Subject"
-                hint="Mustache-lite. {{itemTitle}}, {{orgLabel}}, etc."
+                hint="Mustache-lite. Use the variable buttons above to insert."
               >
                 <input
+                  ref={subjectRef}
                   type="text"
                   value={subject}
                   onChange={(e) => {
                     setSubject(e.target.value);
                     schedulePreview();
+                  }}
+                  onFocus={() => {
+                    lastFocused.current = 'subject';
                   }}
                   className={inputClass}
                 />
@@ -1152,11 +1311,15 @@ function TemplateEditModal({
                 hint="{{name}} escapes, {{{name}}} passes raw HTML."
               >
                 <textarea
+                  ref={bodyHtmlRef}
                   rows={10}
                   value={bodyHtml}
                   onChange={(e) => {
                     setBodyHtml(e.target.value);
                     schedulePreview();
+                  }}
+                  onFocus={() => {
+                    lastFocused.current = 'bodyHtml';
                   }}
                   className="w-full rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
                 />
@@ -1166,15 +1329,28 @@ function TemplateEditModal({
                 label="Plain-text body"
                 hint="Sent as the multipart/alternative fallback."
               >
-                <textarea
-                  rows={6}
-                  value={bodyText}
-                  onChange={(e) => {
-                    setBodyText(e.target.value);
-                    schedulePreview();
-                  }}
-                  className="w-full rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-                />
+                <div className="space-y-1">
+                  <textarea
+                    ref={bodyTextRef}
+                    rows={6}
+                    value={bodyText}
+                    onChange={(e) => {
+                      setBodyText(e.target.value);
+                      schedulePreview();
+                    }}
+                    onFocus={() => {
+                      lastFocused.current = 'bodyText';
+                    }}
+                    className="w-full rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={derivePlainTextFromHtml}
+                    className="text-[10px] text-accent hover:underline"
+                  >
+                    Generate from HTML body
+                  </button>
+                </div>
               </Field>
 
               {err ? (

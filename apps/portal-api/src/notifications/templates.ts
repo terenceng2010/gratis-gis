@@ -163,6 +163,203 @@ export interface DataCollectionSchemaBreakPayload {
   geometryChangedLayerKeys: string[];
 }
 
+/**
+ * #250: per-type variable manifest exposed to the admin template
+ * editor. Each entry describes a placeholder the admin can drop into
+ * subject / bodyHtml / bodyText with click-to-insert -- no need to
+ * memorize {{itemTitle}} vs {{itemId}}. The shape is intentionally
+ * shallow (no nested vars yet) because mustache-lite doesn't support
+ * dotted paths anyway.
+ */
+export interface TemplateVariableDescriptor {
+  /** Substitution name as it appears inside `{{...}}`. */
+  name: string;
+  /** Short human-friendly label for the palette button. */
+  label: string;
+  /** One-line description shown in the palette button's tooltip. */
+  description?: string;
+  /** Concrete example value the admin can preview against. Mirrors
+   *  the value in SAMPLE_PAYLOADS so what they see in the palette
+   *  matches what the live preview substitutes. */
+  example?: string;
+  /** When true, the variable holds HTML (e.g. a pre-rendered link)
+   *  and should be inserted as `{{{name}}}` (raw / unescaped) rather
+   *  than `{{name}}`. None of the existing renderers expose any HTML
+   *  variables, but the field exists so future templates can. */
+  raw?: boolean;
+}
+
+/**
+ * #250: standard variables available to EVERY type. The runtime
+ * always merges these in via RenderContext, so the palette should
+ * always offer them too.
+ */
+const STANDARD_VARIABLES: TemplateVariableDescriptor[] = [
+  {
+    name: 'orgLabel',
+    label: 'Organization name',
+    description: 'Your portal\'s display name (PORTAL_NAME env).',
+    example: 'GratisGIS',
+  },
+  {
+    name: 'baseUrl',
+    label: 'Portal base URL',
+    description: 'Public-facing URL prefix for deep links.',
+    example: 'https://gratisgis.org',
+  },
+];
+
+/**
+ * #250: per-NotificationType variable manifest. Keys mirror the
+ * NotificationType enum + the payload shapes above; values describe
+ * each variable for the palette. Adding a new type? Drop an entry
+ * here next to the renderer + sample payload entries -- if a type
+ * is missing the palette falls back to the standard variables only.
+ */
+const TYPE_VARIABLES: { [K in NotificationType]?: TemplateVariableDescriptor[] } = {
+  share_created: [
+    { name: 'itemId', label: 'Item ID', example: '00000000-0000-4000-8000-000000000001' },
+    { name: 'itemTitle', label: 'Item title', example: 'City Park Trees' },
+    { name: 'itemType', label: 'Item type', example: 'data-layer' },
+    {
+      name: 'permission',
+      label: 'Permission',
+      description: 'view / download / edit / admin',
+      example: 'view',
+    },
+    { name: 'sharedByName', label: 'Shared by', example: 'Admin User' },
+    {
+      name: 'expiresAt',
+      label: 'Expires at',
+      description: 'ISO timestamp; empty when share has no expiry.',
+      example: 'in 7 days',
+    },
+  ],
+  share_expiring: [
+    { name: 'itemId', label: 'Item ID' },
+    { name: 'itemTitle', label: 'Item title', example: 'City Park Trees' },
+    { name: 'itemType', label: 'Item type' },
+    { name: 'expiresAt', label: 'Expires at', example: 'in 3 days' },
+    { name: 'principalType', label: 'Recipient type', description: 'user or group' },
+    { name: 'principalId', label: 'Recipient ID' },
+  ],
+  share_expired: [
+    { name: 'itemId', label: 'Item ID' },
+    { name: 'itemTitle', label: 'Item title', example: 'City Park Trees' },
+    { name: 'itemType', label: 'Item type' },
+    { name: 'expiresAt', label: 'Expired at', example: 'yesterday' },
+    { name: 'principalType', label: 'Recipient type' },
+    { name: 'principalId', label: 'Recipient ID' },
+  ],
+  user_auto_disable_warning: [
+    {
+      name: 'autoDisableAt',
+      label: 'Auto-disable date',
+      example: 'in 5 days',
+    },
+  ],
+  user_disabled: [
+    { name: 'autoDisableAt', label: 'Disabled at', example: 'yesterday' },
+  ],
+  editor_feature_created: [
+    { name: 'editorId', label: 'Editor item ID' },
+    { name: 'editorTitle', label: 'Editor title', example: 'Storm Drain Inspection' },
+    { name: 'dataLayerId', label: 'Data layer ID' },
+    { name: 'dataLayerTitle', label: 'Data layer', example: 'Storm Drains' },
+    { name: 'layerKey', label: 'Layer key', example: 'drains' },
+    { name: 'featureId', label: 'Feature ID', example: 'drains/123' },
+    { name: 'createdByName', label: 'Created by', example: 'Contributor User' },
+    {
+      name: 'summary',
+      label: 'Summary',
+      description: 'First non-empty user field on the new feature.',
+      example: 'Inspection #4127 (cracked grate)',
+    },
+  ],
+  data_collection_feature_created: [
+    { name: 'dataCollectionId', label: 'Deployment ID' },
+    {
+      name: 'dataCollectionTitle',
+      label: 'Deployment',
+      example: 'Yard Inspection',
+    },
+    { name: 'dataLayerId', label: 'Data layer ID' },
+    { name: 'dataLayerTitle', label: 'Data layer', example: 'Inspection Points' },
+    { name: 'layerKey', label: 'Layer key', example: 'points' },
+    { name: 'featureId', label: 'Feature ID', example: 'points/456' },
+    { name: 'createdByName', label: 'Created by', example: 'Field Worker' },
+    {
+      name: 'summary',
+      label: 'Summary',
+      description: 'First non-empty user field on the new feature.',
+      example: 'Point near pool fence',
+    },
+  ],
+  form_submission_received: [
+    { name: 'formItemId', label: 'Form item ID' },
+    { name: 'formTitle', label: 'Form title', example: 'Volunteer Sign-Up' },
+    { name: 'submissionId', label: 'Submission ID' },
+    { name: 'submittedByName', label: 'Submitted by', example: 'Visitor' },
+    {
+      name: 'summary',
+      label: 'Summary',
+      description: 'First answered question.',
+      example: 'jane@example.com',
+    },
+  ],
+  user_invited: [
+    {
+      name: 'invitedEmail',
+      label: 'Invited email',
+      example: 'newuser@example.com',
+    },
+    { name: 'invitedByName', label: 'Invited by', example: 'Admin User' },
+    {
+      name: 'inviteLink',
+      label: 'Invite link',
+      description: 'One-time-use link to accept the invite.',
+      example: 'https://auth.example.org/...',
+    },
+    { name: 'expiresAt', label: 'Expires at', example: 'in 7 days' },
+  ],
+  data_collection_schema_break: [
+    { name: 'dataCollectionId', label: 'Deployment ID' },
+    {
+      name: 'dataCollectionTitle',
+      label: 'Deployment',
+      example: 'Yard Inspection',
+    },
+    { name: 'dataLayerId', label: 'Data layer ID' },
+    { name: 'dataLayerTitle', label: 'Data layer', example: 'Inspection Points' },
+    { name: 'changedByName', label: 'Changed by', example: 'Admin User' },
+    {
+      name: 'droppedLayerKeys',
+      label: 'Dropped layers',
+      description: 'Comma-joined list of layer keys removed from the schema.',
+      example: 'burrow_points',
+    },
+    {
+      name: 'geometryChangedLayerKeys',
+      label: 'Geometry changed',
+      description: 'Comma-joined list of layer keys whose geometry type changed.',
+      example: '(none)',
+    },
+  ],
+};
+
+/**
+ * #250: return the variable manifest available to the editor for a
+ * given type. Always returns at least the standard ctx variables,
+ * even when the type has no per-payload entry yet, so the palette
+ * is never empty.
+ */
+export function getTemplateVariables(
+  type: NotificationType,
+): TemplateVariableDescriptor[] {
+  const typeVars = TYPE_VARIABLES[type] ?? [];
+  return [...typeVars, ...STANDARD_VARIABLES];
+}
+
 type Renderer<T> = (payload: T, ctx: RenderContext) => RenderedNotification;
 
 const renderers: { [K in NotificationType]?: Renderer<unknown> } = {

@@ -36,7 +36,11 @@ import { SystemSettingsService, type SmtpConfig } from './system-settings.servic
 import { NotificationTypeDefaultService } from './notification-type-default.service.js';
 import { NotificationTemplateService } from './notification-template.service.js';
 import { EmailTransport } from './email-transport.js';
-import { renderNotification } from './templates.js';
+import {
+  renderNotification,
+  getTemplateVariables,
+  type TemplateVariableDescriptor,
+} from './templates.js';
 import { SAMPLE_PAYLOADS } from './sample-payloads.js';
 import { KeycloakAdminService } from '../admin/keycloak-admin.service.js';
 
@@ -521,6 +525,12 @@ export class NotificationsAdminController {
   ): Promise<{
     override: { subject: string; bodyText: string; bodyHtml: string; updatedAt: string } | null;
     defaultPreview: { subject: string; text: string; html: string };
+    /**
+     * #250: per-type variable manifest for the click-to-insert
+     * palette. Always at least 2 entries (orgLabel + baseUrl) even
+     * for types we haven't enumerated payload vars for yet.
+     */
+    variables: TemplateVariableDescriptor[];
   }> {
     const type = parseType(typeRaw);
     const channel = parseChannel(channelRaw);
@@ -542,6 +552,7 @@ export class NotificationsAdminController {
     return {
       override,
       defaultPreview: { subject: def.subject, text: def.text, html: def.html },
+      variables: getTemplateVariables(type),
     };
   }
 
