@@ -875,6 +875,56 @@ export function FieldRuntime({
     });
   }, [gps.follow, gps.position]);
 
+  // #249: tap-on-map-to-override during active collect. When the
+  // FormModal is open in add-mode for a point layer, a tap on the
+  // visible map area (the part above the bottom-anchored sheet) sets
+  // the proposed location to the tap point. Complementary to the
+  // FormModal's "Update Point" button: Update Point re-snaps to GPS,
+  // tap-to-override picks an arbitrary spot. Both feed through the
+  // same setActiveGeometry path inside the modal via the
+  // pendingMarker.setLngLat we already wired, plus a state hand-off
+  // through a small bridge.
+  //
+  // Implementation: register map.on('click') only while the gating
+  // conditions hold; cleanup detaches when the modal closes or the
+  // mode changes. The handler is a no-op outside the gated state, so
+  // the existing popup/feature-tap behaviour in MapCanvas keeps
+  // working in non-collect mode.
+  const isPointAddCollect =
+    formModal?.mode === 'add' && formModal.layer.geometryType === 'point';
+  useEffect(() => {
+    if (!isPointAddCollect) return;
+    const map = mapRef.current;
+    if (!map) return;
+    function onMapClick(e: maplibregl.MapMouseEvent) {
+      const { lng, lat } = e.lngLat;
+      // Move the preview marker to the tap; the FormModal's coord
+      // readout reads from activeGeometry which we update via a
+      // dedicated bridge below. We also update the modal's geometry
+      // by mutating formModal in place via setFormModal so the next
+      // render of FormModal re-initializes activeGeometry from the
+      // new geometry (init effect fires on modal-object change).
+      if (pendingMarkerRef.current) {
+        pendingMarkerRef.current.setLngLat([lng, lat]);
+      }
+      // Update the formModal's geometry so the FormModal re-derives
+      // its activeGeometry on next render. setFormModal with a new
+      // object reference is the trigger.
+      setFormModal((prev) =>
+        prev && prev.mode === 'add'
+          ? {
+              ...prev,
+              geometry: { type: 'Point', coordinates: [lng, lat] },
+            }
+          : prev,
+      );
+    }
+    map.on('click', onMapClick);
+    return () => {
+      map.off('click', onMapClick);
+    };
+  }, [isPointAddCollect]);
+
   // Tap-to-edit was Field Maps Quick Capture style: tap a feature,
   // form opens directly in edit mode. Matt's prod test feedback
   // surfaced two problems with that flow: (1) it suppressed the
@@ -1436,6 +1486,14 @@ export function FieldRuntime({
                 map.easeTo({ center: [lon, lat], duration: 200 });
               }
             }
+            // Echo the change back into the modal-state geometry so
+            // the FormModal's sync effect re-derives activeGeometry.
+            // Map-tap-to-override (the click handler we register on
+            // the map) takes the same path: setFormModal(... new
+            // geom ...), so the form's coord readout converges.
+            setFormModal((prev) =>
+              prev && prev.mode === 'add' ? { ...prev, geometry: geom } : prev,
+            );
           }}
         />
       ) : null}
@@ -2156,6 +2214,16 @@ function FormModal({
   const [activeGeometry, setActiveGeometry] = useState<
     GeoJSON.Geometry | null
   >(modal.geometry);
+  // #249: keep activeGeometry in sync with modal.geometry so a parent
+  // update (e.g. tap-on-map-to-override) flows into the coord readout
+  // without remounting the modal. The "Update Point" button still
+  // calls setActiveGeometry directly for snappy in-form feedback;
+  // the parent's onUpdateGeometry callback echoes the same value
+  // back through modal.geometry, so this effect ends up as a no-op
+  // for the GPS-resnap path.
+  useEffect(() => {
+    setActiveGeometry(modal.geometry);
+  }, [modal.geometry]);
 
   const form = useMemo<FormSchema>(() => {
     let base: FormSchema;
@@ -2393,16 +2461,16 @@ function FormModal({
           ? `Add ${modal.layer.layerLabel}`
           : `Edit ${modal.layer.layerLabel}`
       }
-      // Bottom-anchored sheet: form occupies the lower portion of the
-      // viewport so the map stays visible above. Matches Field Maps'
-      // pattern, which is the right call for field collection -- the
-      // collector can verify their dropped location while they fill
-      // out attributes. Tap the dim backdrop above to dismiss.
-      className="fixed inset-0 z-30 flex flex-col justify-end bg-black/40"
-      onClick={onClose}
+      // #249: bottom-anchored only. Field Maps doesn't dim the map
+      // while a collect is in progress -- the collector wants to keep
+      // panning, zooming, and (next slice) tap-to-override the
+      // location while the form is open. Drop the full-viewport
+      // wrapper that captured every tap; Cancel in the header is the
+      // dismiss path now. inset-x-0 + bottom-0 keeps the sheet
+      // pinned to the bottom edge across iPhone safe-area variants.
+      className="fixed inset-x-0 bottom-0 z-30 flex flex-col"
     >
       <div
-        onClick={(e) => e.stopPropagation()}
         className="flex max-h-[60vh] w-full flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)] sm:max-h-[55vh]"
       >
         {/* #249: Field Maps-style three-section header for the active
