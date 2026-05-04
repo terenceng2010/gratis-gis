@@ -3124,10 +3124,26 @@ function FormModal({
     //
     // Form-supplied values always win (a user typing into a captured_at
     // field overrides our stamp); we only fill blanks.
+    // Merge presetAttributes UNDER the form response so system-set
+    // keys that the form doesn't surface (e.g. the parentFkColumn
+    // that wires a related Status row to its parent Inspection
+    // Point -- the auto-form-from-schema doesn't render a question
+    // for it because it's not a user-declared field, but the value
+    // still needs to land on the saved row). Form values still win
+    // on collision (a preset can be overridden by typing). Edit
+    // mode skips presets: the existing properties are the source
+    // of truth and presets aren't carried into edit anyway.
+    // #268 / #269: this fix keeps the parentFK on the saved row so
+    // the related-records list filter sees the correct value AND
+    // re-opening the row doesn't show empty fields.
+    const responseWithPresets: FormResponse =
+      modal.mode === 'add'
+        ? { ...modal.presetAttributes, ...response }
+        : response;
     const properties: FormResponse =
       modal.mode === 'add' && gpsPosition
-        ? stampGpsMetadata(modal.layer.fields, response, gpsPosition)
-        : response;
+        ? stampGpsMetadata(modal.layer.fields, responseWithPresets, gpsPosition)
+        : responseWithPresets;
     // Identity. For inserts we generate the globalId client-side so
     // the queue and the local feature row share a key with the
     // eventual server row -- a re-drained queue (or a sync that
