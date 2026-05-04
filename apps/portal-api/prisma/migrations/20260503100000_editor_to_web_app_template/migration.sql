@@ -17,14 +17,15 @@
 --     deprecation window. Drop it in a follow-up migration once
 --     all consumers are off the literal.
 
--- The Item model maps to lowercase `item` via @@map (Prisma's
--- snake_case convention applied to every table in this schema).
--- The Item.data column is mapped to `data_json` for the same
--- reason. Both names need to be the database identifiers, not the
--- Prisma model property names.
+-- The Item model maps to lowercase `item` via @@map and the data
+-- field maps to `data_json`. The ItemType enum's `web_app` value
+-- is stored under the hyphenated raw name `web-app` (Prisma's
+-- @map on the enum value). All three names need to be the DB
+-- identifiers, not the Prisma model/property/enum-member names.
+-- The `editor` enum value has no @map, so it stays as 'editor'.
 UPDATE "item"
 SET
-  type = 'web_app',
+  type = 'web-app',
   data_json = jsonb_build_object(
     'version', 1,
     'template', 'editor',
