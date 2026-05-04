@@ -16,17 +16,55 @@ covers:
 - **Editor** (`web_app` with `data.template === 'editor'`) — adds
   drawing/editing tools on top of one or more `data_layer` targets.
   Folded in via #258.
-- **Dashboard** (planned) — read-only KPI / chart layout on top of
-  one or more `data_layer` items. When it lands, it lands as a
-  `web_app` template, not its own type.
-- **Survey-response viewer** (planned) — opens onto a `form` item's
-  submission collection. `web_app` template.
-- **Story map / scrolly map** (planned) — narrative layout on top of
-  one or more `map` items. `web_app` template.
+- **Viewer** (planned, see roadmap below) — read-only map app with
+  Zoom, Pan, Query, Layers, Legend, Attribute Table, Select, Print.
+- **Survey-response viewer / editor** (planned) — opens onto a
+  `form` item's submission collection.
+- **Custom (visual designer)** (planned) — drag-and-drop widget
+  layout, balanced between Web AppBuilder simplicity and
+  Experience Builder flexibility.
+- **Dashboard** (planned, later) — read-only KPI / chart layout on
+  top of one or more `data_layer` items. Deferred until the simpler
+  templates ship.
+- **Story map / scrolly map** (future) — narrative layout on top of
+  one or more `map` items.
 
 The shared parts of the `web_app` shape (title, description, sharing,
 folder membership, lifecycle) come for free. Only the
 template-specific config lives in `data.config`.
+
+## Template roadmap (2026-05-04)
+
+Matt's prioritization for the Web App Builder, in order:
+
+1. **Basic Read-Only Viewer** — Zoom, Pan, Query, Layers, Legend,
+   Attribute Table, Select tools, Print. The bread-and-butter "share
+   a map publicly or with a group" surface. This is the first
+   template to ship after the editor consolidation lands because it
+   reuses most of the editor's read-side runtime (MapLibre canvas,
+   layer panel, attribute table) without the editing tools.
+2. **Editor** (already exists, gets folded into the same template
+   registry via #258) — same shell as the viewer, plus the editing
+   toolbar and per-target write policy.
+3. **Survey Response Viewer / Editor** — opens onto a `form` item's
+   submission collection. View, filter, edit responses; ties into
+   the related-records work already done for the field runtime.
+4. **Custom (visual designer)** — drag-and-drop widget designer.
+   Design philosophy: aim for a balance between Esri's Web AppBuilder
+   (simple, opinionated, fast for new users) and Experience Builder
+   (powerful but overwhelming for infrequent users). Widgets pulled
+   from a curated palette, not a free-form canvas.
+
+**Dashboards are deferred** — more complex (chart/KPI authoring,
+data binding, per-tile filtering) and will come after the four
+templates above. When dashboards land, they land as a `web_app`
+template too, not their own item type.
+
+The runtime layout of these templates is intentionally similar so
+users can move between them without re-learning. Editor IS Viewer
+plus tools. The custom designer's "viewer widget" should be the
+same component the standalone viewer renders. This lets us share
+runtime code across all four templates instead of forking it.
 
 ## The exception: dedicated `ItemType` when the data shape is genuinely different
 
