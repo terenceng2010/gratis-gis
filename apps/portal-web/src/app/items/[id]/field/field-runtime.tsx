@@ -553,6 +553,147 @@ export function FieldRuntime({
     }
   }, []);
 
+  // #273: line/polygon vertex collection state. While the user is
+  // drawing a multi-vertex feature, vertices accumulate here and a
+  // live preview line / ring renders on the map. Empty array means
+  // we're not in vertex-collection mode (the active template is a
+  // point template, OR no template is armed).
+  const [pendingVertices, setPendingVertices] = useState<
+    Array<[number, number]>
+  >([]);
+  // Per-vertex MapLibre Markers so each tap leaves a visible dot at
+  // its actual position. Held by ref so React doesn't churn on
+  // every push; the UI vertex count reads from `pendingVertices`.
+  const vertexMarkersRef = useRef<maplibregl.Marker[]>([]);
+  // GeoJSON source id used by the live preview line / ring. The
+  // source is added lazily on the first vertex push (we can't add
+  // it before the map is ready) and removed on cancel / finish.
+  const PENDING_GEOM_SRC = 'gratis-pending-geom';
+  const PENDING_GEOM_LINE_LAYER = 'gratis-pending-geom-line';
+  const PENDING_GEOM_FILL_LAYER = 'gratis-pending-geom-fill';
+
+  /**
+   * Clear every vertex marker, the preview source/layers, and the
+   * accumulated coordinates. Used by Cancel and after a successful
+   * Finish.
+   */
+  const clearVertices = useCallback(() => {
+    for (const m of vertexMarkersRef.current) {
+      try {
+        m.remove();
+      } catch {
+        /* maplibre is forgiving here; ignore */
+      }
+    }
+    vertexMarkersRef.current = [];
+    const map = mapRef.current;
+    if (map) {
+      try {
+        if (map.getLayer(PENDING_GEOM_FILL_LAYER)) {
+          map.removeLayer(PENDING_GEOM_FILL_LAYER);
+        }
+        if (map.getLayer(PENDING_GEOM_LINE_LAYER)) {
+          map.removeLayer(PENDING_GEOM_LINE_LAYER);
+        }
+        if (map.getSource(PENDING_GEOM_SRC)) {
+          map.removeSource(PENDING_GEOM_SRC);
+        }
+      } catch {
+        /* style may be in flight on basemap swap; safe to skip */
+      }
+    }
+    setPendingVertices([]);
+  }, []);
+
+  /**
+   * Update (or create) the live preview line/ring on the map from
+   * the current vertex array + the in-progress template. Called on
+   * each push / undo so the worker sees what they're drawing as
+   * they tap.
+   *
+   * The source always carries a Polygon feature (with a closed ring)
+   * for polygon templates and a LineString for line templates.
+   * Both layer types tolerate sparse vertex counts (an open
+   * 2-vertex polygon ring still renders as a triangle stub once we
+   * close it). Below 2 vertices we tear the source down -- a single
+   * marker is enough visual context.
+   */
+  const refreshPreviewGeom = useCallback(
+    (verts: Array<[number, number]>, color: string, isPolygon: boolean) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const tearDown = () => {
+        try {
+          if (map.getLayer(PENDING_GEOM_FILL_LAYER)) {
+            map.removeLayer(PENDING_GEOM_FILL_LAYER);
+          }
+          if (map.getLayer(PENDING_GEOM_LINE_LAYER)) {
+            map.removeLayer(PENDING_GEOM_LINE_LAYER);
+          }
+          if (map.getSource(PENDING_GEOM_SRC)) {
+            map.removeSource(PENDING_GEOM_SRC);
+          }
+        } catch {
+          /* style may be in flight on basemap swap; safe to skip */
+        }
+      };
+      if (verts.length < 2) {
+        tearDown();
+        return;
+      }
+      const data: GeoJSON.Feature = isPolygon
+        ? {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[...verts, verts[0]!]],
+            },
+          }
+        : {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: verts,
+            },
+          };
+      const existing = map.getSource(PENDING_GEOM_SRC) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (existing) {
+        existing.setData(data);
+        return;
+      }
+      map.addSource(PENDING_GEOM_SRC, { type: 'geojson', data });
+      if (isPolygon) {
+        // Translucent fill underneath the dashed line so the
+        // worker sees the area they're enclosing. Light enough
+        // that the basemap stays legible.
+        map.addLayer({
+          id: PENDING_GEOM_FILL_LAYER,
+          type: 'fill',
+          source: PENDING_GEOM_SRC,
+          paint: {
+            'fill-color': color,
+            'fill-opacity': 0.15,
+          },
+        });
+      }
+      map.addLayer({
+        id: PENDING_GEOM_LINE_LAYER,
+        type: 'line',
+        source: PENDING_GEOM_SRC,
+        paint: {
+          'line-color': color,
+          'line-width': 3,
+          'line-dasharray': [2, 1.5],
+        },
+      });
+    },
+    [],
+  );
+
   // Online/offline detection. navigator.onLine is the simplest
   // signal; combined with online/offline events it covers the
   // typical "connection dropped" path. We default to online during
@@ -1202,6 +1343,16 @@ export function FieldRuntime({
     };
   }, [isPointAddCollect]);
 
+  // #273: tap-to-add-vertex during line/polygon collection. The
+  // effect itself lives below commitTemplateAt's declaration so
+  // the closure captures it without a hoist error; this gate is
+  // declared up front because featureSheetGate (next block) reads
+  // it.
+  const isLineOrPolyArming =
+    activeTemplate !== null &&
+    activeTemplate.layer.geometryType !== 'point' &&
+    formModal === null;
+
   // #249.16 / #253: Field-Maps-style tap-to-popup. When the user
   // taps a feature on the canvas (and we're not in template-arming
   // or active-collect modes) we collect every hit at the point with
@@ -1215,6 +1366,16 @@ export function FieldRuntime({
   // override-tap paths stay untouched.
   const featureSheetGate =
     formModal === null && activeTemplate === null && !isPointAddCollect;
+  // #273: when the user cancels a line/polygon template (X on the
+  // chip in the footer), drop any vertices they'd accumulated.
+  // Done as an effect so the cleanup runs even if the cancel comes
+  // from a non-X path (Escape key in a future slice, route
+  // navigation, etc).
+  useEffect(() => {
+    if (activeTemplate === null && pendingVertices.length > 0) {
+      clearVertices();
+    }
+  }, [activeTemplate, pendingVertices.length, clearVertices]);
   useEffect(() => {
     if (!featureSheetGate) return;
     const map = mapRef.current;
@@ -1470,32 +1631,116 @@ export function FieldRuntime({
     (tpl: FieldTemplate, lon: number, lat: number) => {
       const map = mapRef.current;
       if (!map) return;
-      if (!isPointGeometry(tpl.layer.geometryType)) {
-        // eslint-disable-next-line no-alert
-        alert(
-          `Adding ${tpl.layer.geometryType} features arrives in a follow-up slice.`,
-        );
+      if (isPointGeometry(tpl.layer.geometryType)) {
+        // Point: drop immediately, open the form. This is the
+        // original Field-Maps-style one-tap commit path.
+        setFormModal({
+          layer: tpl.layer,
+          mode: 'add',
+          geometry: { type: 'Point', coordinates: [lon, lat] },
+          presetAttributes: tpl.presetAttributes,
+        });
+        setActiveTemplate(null);
+        clearPendingMarker();
+        pendingMarkerRef.current = new maplibregl.Marker({ color: tpl.color })
+          .setLngLat([lon, lat])
+          .addTo(map);
+        // Form takes the bottom ~60%; offset the camera so the
+        // dropped marker stays visible above the sheet. Negative y
+        // shifts the geographic center upward on screen.
+        const h = map.getContainer().clientHeight;
+        map.easeTo({
+          center: [lon, lat],
+          offset: [0, -h * 0.3],
+          duration: 350,
+        });
         return;
       }
-      setFormModal({
-        layer: tpl.layer,
-        mode: 'add',
-        geometry: { type: 'Point', coordinates: [lon, lat] },
-        presetAttributes: tpl.presetAttributes,
+      // #273: line / polygon path. Each call from here PUSHES a
+      // vertex onto pendingVertices and refreshes the preview, but
+      // does NOT commit -- the user has to tap Finish on the footer
+      // when they have enough vertices.
+      const isPolygon = tpl.layer.geometryType === 'polygon';
+      setPendingVertices((prev) => {
+        const next: Array<[number, number]> = [...prev, [lon, lat]];
+        refreshPreviewGeom(next, tpl.color, isPolygon);
+        return next;
       });
-      setActiveTemplate(null);
-      clearPendingMarker();
-      pendingMarkerRef.current = new maplibregl.Marker({ color: tpl.color })
+      // Vertex marker (dot at the tapped location). Smaller than the
+      // point-template marker so the polyline reads as the primary
+      // visual.
+      const marker = new maplibregl.Marker({
+        color: tpl.color,
+        scale: 0.6,
+      })
         .setLngLat([lon, lat])
         .addTo(map);
-      // Form takes the bottom ~60%; offset the camera so the dropped
-      // marker stays visible above the sheet. Negative y shifts the
-      // geographic center upward on screen.
-      const h = map.getContainer().clientHeight;
-      map.easeTo({ center: [lon, lat], offset: [0, -h * 0.3], duration: 350 });
+      vertexMarkersRef.current.push(marker);
     },
-    [clearPendingMarker],
+    [clearPendingMarker, refreshPreviewGeom],
   );
+
+  /**
+   * #273: remove the last vertex pushed. Field-mapping convention
+   * is "single tap removes one." If the user undoes the last
+   * remaining vertex, vertex-collection mode stays armed (template
+   * is still active) -- they can keep tapping to start over.
+   */
+  const undoLastVertex = useCallback(() => {
+    const tpl = activeTemplate;
+    if (!tpl) return;
+    setPendingVertices((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.slice(0, -1);
+      const removed = vertexMarkersRef.current.pop();
+      if (removed) {
+        try {
+          removed.remove();
+        } catch {
+          /* ignore */
+        }
+      }
+      refreshPreviewGeom(
+        next,
+        tpl.color,
+        tpl.layer.geometryType === 'polygon',
+      );
+      return next;
+    });
+  }, [activeTemplate, refreshPreviewGeom]);
+
+  /**
+   * #273: finalize the in-progress geometry and open the form
+   * modal. Validates min vertex count (2 for line, 3 for polygon)
+   * before committing. Polygon rings are closed automatically -- we
+   * append the first vertex to the end so PostGIS / GeoJSON sees a
+   * valid linear ring without making the user tap the start vertex
+   * again.
+   */
+  const finishVertices = useCallback(() => {
+    const tpl = activeTemplate;
+    if (!tpl) return;
+    const isPolygon = tpl.layer.geometryType === 'polygon';
+    const minVerts = isPolygon ? 3 : 2;
+    if (pendingVertices.length < minVerts) return;
+    const geometry: GeoJSON.Geometry = isPolygon
+      ? {
+          type: 'Polygon',
+          coordinates: [[...pendingVertices, pendingVertices[0]!]],
+        }
+      : {
+          type: 'LineString',
+          coordinates: pendingVertices,
+        };
+    setFormModal({
+      layer: tpl.layer,
+      mode: 'add',
+      geometry,
+      presetAttributes: tpl.presetAttributes,
+    });
+    setActiveTemplate(null);
+    clearVertices();
+  }, [activeTemplate, pendingVertices, clearVertices]);
 
   const commitAtCenter = useCallback(() => {
     const tpl = activeTemplate;
@@ -1514,6 +1759,29 @@ export function FieldRuntime({
     if (!tpl || !pos) return;
     commitTemplateAt(tpl, pos.lon, pos.lat);
   }, [activeTemplate, gps.position, commitTemplateAt]);
+
+  // #273: map-click handler that pushes a vertex while a line/
+  // polygon template is armed. Mirrors the isPointAddCollect
+  // handler structure (gated useEffect that attaches/detaches the
+  // listener) so the tap-to-popup, tap-to-override-point, and
+  // tap-to-add-vertex flows don't fight each other. Lives below
+  // commitTemplateAt's declaration so the closure captures the
+  // helper without a use-before-declaration error.
+  useEffect(() => {
+    if (!isLineOrPolyArming) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const tpl = activeTemplate;
+    if (!tpl) return;
+    function onMapClick(e: maplibregl.MapMouseEvent) {
+      const { lng, lat } = e.lngLat;
+      commitTemplateAt(tpl!, lng, lat);
+    }
+    map.on('click', onMapClick);
+    return () => {
+      map.off('click', onMapClick);
+    };
+  }, [isLineOrPolyArming, activeTemplate, commitTemplateAt]);
 
   return (
     // Field mode owns the entire viewport: AppShell suppresses its
@@ -1839,7 +2107,11 @@ export function FieldRuntime({
               // tap from FAB to FormModal.
               if (templates.length === 1) {
                 const only = templates[0]!;
-                if (gps.position) {
+                // #273: same gating as the picker -- only the
+                // point geometry uses the GPS one-tap commit;
+                // line/polygon templates always enter vertex
+                // collection.
+                if (gps.position && only.layer.geometryType === 'point') {
                   commitTemplateAt(only, gps.position.lon, gps.position.lat);
                 } else {
                   setActiveTemplate(only);
@@ -1948,66 +2220,127 @@ export function FieldRuntime({
             No editable layers in this map.
           </p>
         ) : activeTemplate ? (
-          <>
-            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5">
-              <span
-                aria-hidden="true"
-                className="h-4 w-4 shrink-0 rounded-sm border border-border"
-                style={{ backgroundColor: activeTemplate.color }}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-ink-0">
-                  {activeTemplate.label}
-                </p>
-                <p className="truncate text-[11px] text-muted">
-                  {activeTemplate.sublabel}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveTemplate(null)}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-1"
-                aria-label="Cancel"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            {/* When GPS is watching, "Add at my location" is the
-                primary action because it's what the field worker
-                wants 90% of the time. "Add at center" stays as the
-                fallback when the user wants to record a feature
-                somewhere they're not standing (e.g., the parcel's
-                centroid, a feature visible from a vantage point).
-                When GPS is idle/denied/unavailable the only button
-                shown is "Add at center". */}
-            {gps.status === 'watching' && gps.position ? (
-              <button
-                type="button"
-                onClick={commitAtGps}
-                title={`Drop the feature at your current location (~${
-                  gps.position.accuracyM < 1
-                    ? '<1'
-                    : Math.round(gps.position.accuracyM)
-                } m accuracy)`}
-                className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90"
-              >
-                <LocateFixed className="h-4 w-4" />
-                Add at GPS
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={commitAtCenter}
-              className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold shadow-card hover:opacity-90 ${
-                gps.status === 'watching' && gps.position
-                  ? 'border border-border bg-surface-1 text-ink-1'
-                  : 'bg-accent text-accent-foreground'
-              }`}
-            >
-              <MapPin className="h-4 w-4" />
-              Add at center
-            </button>
-          </>
+          (() => {
+            const isMultiVertex =
+              activeTemplate.layer.geometryType === 'line' ||
+              activeTemplate.layer.geometryType === 'polygon';
+            const isPolygon =
+              activeTemplate.layer.geometryType === 'polygon';
+            const minVerts = isPolygon ? 3 : 2;
+            const canFinish = pendingVertices.length >= minVerts;
+            return (
+              <>
+                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="h-4 w-4 shrink-0 rounded-sm border border-border"
+                    style={{ backgroundColor: activeTemplate.color }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-ink-0">
+                      {activeTemplate.label}
+                    </p>
+                    <p className="truncate text-[11px] text-muted">
+                      {/* #273: in vertex-collection mode the
+                          subtitle reports the in-progress vertex
+                          count + the threshold so the worker knows
+                          how close they are to being able to
+                          Finish. Falls back to the template's
+                          sublabel for point templates. */}
+                      {isMultiVertex
+                        ? `${pendingVertices.length} vertex${
+                            pendingVertices.length === 1 ? '' : 'es'
+                          }${
+                            canFinish
+                              ? ' — tap Finish'
+                              : ` — need ${minVerts - pendingVertices.length} more`
+                          }`
+                        : activeTemplate.sublabel}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTemplate(null)}
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-1"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {/* #273: line/polygon path adds Undo + Finish to
+                    the action row; the GPS / center buttons reuse
+                    the same commitAt* callbacks (which now PUSH a
+                    vertex instead of committing) but get relabeled
+                    so the worker reads "Vertex at GPS" instead of
+                    "Add at GPS". */}
+                {isMultiVertex ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={undoLastVertex}
+                      disabled={pendingVertices.length === 0}
+                      title="Remove the last vertex"
+                      className="inline-flex h-11 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                      Undo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={finishVertices}
+                      disabled={!canFinish}
+                      title={
+                        canFinish
+                          ? 'Open the form for this feature'
+                          : `Need at least ${minVerts} vertices`
+                      }
+                      className="inline-flex h-11 shrink-0 items-center gap-1 rounded-md bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+                    >
+                      <Check className="h-4 w-4" />
+                      Finish
+                    </button>
+                  </>
+                ) : null}
+                {/* When GPS is watching, "Add at my location" is the
+                    primary action because it's what the field worker
+                    wants 90% of the time. "Add at center" stays as
+                    the fallback when the user wants to record a
+                    feature somewhere they're not standing (e.g., the
+                    parcel's centroid, a feature visible from a
+                    vantage point). When GPS is idle/denied/unavailable
+                    the only button shown is "Add at center". */}
+                {gps.status === 'watching' && gps.position ? (
+                  <button
+                    type="button"
+                    onClick={commitAtGps}
+                    title={`Drop the ${
+                      isMultiVertex ? 'vertex' : 'feature'
+                    } at your current location (~${
+                      gps.position.accuracyM < 1
+                        ? '<1'
+                        : Math.round(gps.position.accuracyM)
+                    } m accuracy)`}
+                    className="inline-flex h-11 shrink-0 items-center gap-2 rounded-md bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-card hover:opacity-90"
+                  >
+                    <LocateFixed className="h-4 w-4" />
+                    {isMultiVertex ? 'Vertex at GPS' : 'Add at GPS'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={commitAtCenter}
+                  className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold shadow-card hover:opacity-90 ${
+                    gps.status === 'watching' && gps.position
+                      ? 'border border-border bg-surface-1 text-ink-1'
+                      : 'bg-accent text-accent-foreground'
+                  }`}
+                >
+                  <MapPin className="h-4 w-4" />
+                  {isMultiVertex ? 'Vertex at center' : 'Add at center'}
+                </button>
+              </>
+            );
+          })()
         ) : null}
       </footer>
       ) : null}
@@ -2018,15 +2351,21 @@ export function FieldRuntime({
           onPick={(tpl) => {
             setPickerOpen(false);
             // #249: Field Maps-style one-tap capture. When the GPS
-            // hook is producing a fix, picking a template commits
-            // immediately at the worker's current position -- no
-            // detour through the footer's "Add at GPS / Add at
-            // center" choice. The user can still revise the location
-            // via "Update Point" inside the form sheet, or by
-            // canceling and retrying with GPS off. When GPS isn't
-            // watching, we keep the footer-button flow so the user
-            // can drop the feature at the map center.
-            if (gps.position) {
+            // hook is producing a fix AND this is a point template,
+            // picking a template commits immediately at the worker's
+            // current position -- no detour through the footer's
+            // "Add at GPS / Add at center" choice. The user can
+            // still revise the location via "Update Point" inside
+            // the form sheet, or by canceling and retrying with GPS
+            // off. When GPS isn't watching, we keep the footer-
+            // button flow so the user can drop the feature at the
+            // map center.
+            //
+            // #273: line/polygon templates always go through
+            // setActiveTemplate first so the user enters vertex-
+            // collection mode (single-tap commit doesn't apply --
+            // they need 2+ vertices for line, 3+ for polygon).
+            if (gps.position && tpl.layer.geometryType === 'point') {
               commitTemplateAt(tpl, gps.position.lon, gps.position.lat);
             } else {
               setActiveTemplate(tpl);
