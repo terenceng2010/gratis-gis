@@ -9,7 +9,11 @@ import type {
   MapData,
   PickListData,
 } from '@gratis-gis/shared-types';
-import { DEFAULT_EDITOR } from '@gratis-gis/shared-types';
+import {
+  DEFAULT_EDITOR,
+  isEditorItem,
+  readEditorData,
+} from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { apiFetch } from '@/lib/api';
 import { buildEditorMapData, type ResolvedTarget } from '../build-map-data';
@@ -81,24 +85,30 @@ function basemapItemToCustomBasemap(
  * the actual editing tools in slice 3b-2.
  */
 export default async function EditorRuntimePage({ params }: Props) {
-  let editorItem: Item<EditorData>;
+  // Loaded as Item<unknown> because the editor data may be at the
+  // top level (legacy type='editor') or nested inside WebAppData
+  // under data.config.editor (migrated type='web_app' rows after
+  // #258). readEditorData unwraps either layout below.
+  let editorItem: Item<unknown>;
   let me: { id: string; orgRole: string };
   try {
     [editorItem, me] = await Promise.all([
-      apiFetch<Item<EditorData>>(`/api/items/${params.id}`),
+      apiFetch<Item<unknown>>(`/api/items/${params.id}`),
       apiFetch<{ id: string; orgRole: string }>('/api/users/me'),
     ]);
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
     throw err;
   }
-  if (editorItem.type !== 'editor') notFound();
+  if (!isEditorItem(editorItem)) notFound();
 
   // Merge persisted data with defaults so older editors that predate
-  // a field don't crash the runtime.
+  // a field don't crash the runtime. readEditorData handles both
+  // legacy (type='editor', data is EditorData) and migrated
+  // (type='web_app', data.template='editor', data.config.editor) shapes.
   const editor: EditorData = {
     ...DEFAULT_EDITOR,
-    ...((editorItem.data ?? {}) as Partial<EditorData>),
+    ...((readEditorData(editorItem) ?? {}) as Partial<EditorData>),
   };
 
   // Phase 2 fetches in parallel:

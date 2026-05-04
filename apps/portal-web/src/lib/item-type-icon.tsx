@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
+import { isEditorItem } from '@gratis-gis/shared-types';
 
 /**
  * Per-item-type icon mapping. Kept in portal-web (not @gratis-gis/ui)
@@ -171,8 +172,19 @@ export function getItemTypeIcon(type: ItemType): LucideIcon {
  * Add new entries here when a future item type grows a workspace.
  * Most callers just pass `getItemHref(item)` and forget about it.
  */
-export function getItemHref(item: { id: string; type: ItemType }): string {
-  if (item.type === 'editor') return `/items/${item.id}/editor/run`;
+export function getItemHref(item: {
+  id: string;
+  type: ItemType;
+  /** Optional payload so we can recognize templated web_apps (e.g.
+   *  the editor template after #258). When the caller has the full
+   *  item already, pass it through; the helper degrades gracefully
+   *  to type-only routing if not. */
+  data?: unknown;
+}): string {
+  // #258: editor lives both as legacy type='editor' AND as migrated
+  // type='web_app' + data.template='editor'. Both deep-link to the
+  // editor runtime so the user-facing word stays "Editor".
+  if (isEditorItem(item)) return `/items/${item.id}/editor/run`;
   // data_collection items go straight to field-mode runtime (#193).
   // The config / sharing surface is still reachable via the back
   // button or the Edit link from inside the runtime.

@@ -35,6 +35,8 @@ import {
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
+  isEditorItem,
+  readEditorData,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
 import { ItemTypeBadge, getItemTypeLabel } from '@/lib/item-type-icon';
@@ -531,13 +533,13 @@ export default async function ItemDetailPage({ params }: Props) {
             folderAccess={item.access}
           />
         </section>
-      ) : item.type === 'editor' ? (
+      ) : isEditorItem(item) ? (
         <section className="mb-6">
           <EditorDetail
             itemId={item.id}
             initial={{
               ...DEFAULT_EDITOR,
-              ...((item.data ?? {}) as Partial<EditorData>),
+              ...((readEditorData(item) ?? {}) as Partial<EditorData>),
             }}
             canEdit={canManage}
           />
@@ -602,7 +604,15 @@ export default async function ItemDetailPage({ params }: Props) {
           </h2>
           <SharingPanel
             itemId={item.id}
-            itemType={item.type}
+            // #258: editor-templated web_apps need the same
+            // dep-chain pre-share audit the legacy 'editor' type
+            // gets. Pass 'editor' for either shape so SharingPanel's
+            // internal `'editor'` branches fire correctly without
+            // having to plumb the WebAppData shape into it. Rename
+            // the prop to something less type-shaped (like
+            // `dependencyChainKind`) when the deprecation window
+            // closes and the literal 'editor' type goes away.
+            itemType={isEditorItem(item) ? 'editor' : item.type}
             initialAccess={item.access}
             initialShares={item.shares}
             groups={groups}
