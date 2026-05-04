@@ -11,16 +11,34 @@ import {
 import { authOptions } from '@/lib/auth';
 import { PublicLanding } from './public-landing';
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: { preview?: string };
+}) {
   const session = await getServerSession(authOptions);
+
+  // #255: ?preview=project lets a signed-in admin preview the
+  // landing page (with the open-source project section forced on)
+  // without flipping the NEXT_PUBLIC_PROJECT_LANDING env flag and
+  // without signing out. The PublicLanding component reads the
+  // override via a forceProjectSection prop. Any other ?preview=
+  // value is ignored. Useful for getting a layout check on prod
+  // before committing to the public alpha.
+  const previewProject = searchParams?.preview === 'project';
 
   // Unauthenticated visitors see a dedicated landing page outside
   // the app-shell. Landing data comes from the portal-api's public
   // endpoint: no session cookie, no bearer, anyone-on-the-internet
   // can read it.
-  if (!session) {
+  if (!session || previewProject) {
     const data = await loadLandingData();
-    return <PublicLanding data={data} />;
+    return (
+      <PublicLanding
+        data={data}
+        forceProjectSection={previewProject}
+      />
+    );
   }
 
   const name = session.user?.name?.split(' ')[0] ?? 'there';

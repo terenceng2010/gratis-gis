@@ -56,9 +56,16 @@ interface LandingData {
 
 interface Props {
   data: LandingData;
+  /**
+   * #255: when true, render the open-source project section even
+   * if NEXT_PUBLIC_PROJECT_LANDING isn't set. Used by the page-
+   * level ?preview=project override so an admin can layout-check
+   * the public alpha view without flipping the env flag.
+   */
+  forceProjectSection?: boolean;
 }
 
-export function PublicLanding({ data }: Props) {
+export function PublicLanding({ data, forceProjectSection }: Props) {
   const { org, items } = data;
 
   return (
@@ -82,13 +89,16 @@ export function PublicLanding({ data }: Props) {
         heroImageUrl={org.heroImageUrl}
       />
 
-      {/* #255: open-source project section. Renders only when the
-          deployment opts in via NEXT_PUBLIC_PROJECT_LANDING=1; per-
-          tenant deployments leave it off so their landing reads as a
+      {/* #255: open-source project section. Renders when the
+          deployment opts in via NEXT_PUBLIC_PROJECT_LANDING=1, OR
+          when the parent forces it via the forceProjectSection
+          prop (?preview=project URL override). Per-tenant
+          deployments leave both off so their landing reads as a
           tenant page (datasets + sign-in), not a "what is GratisGIS"
           marketing page. The canonical gratisgis.org deployment
           flips the flag on for the public alpha. */}
-      {process.env.NEXT_PUBLIC_PROJECT_LANDING === '1' ? (
+      {process.env.NEXT_PUBLIC_PROJECT_LANDING === '1' ||
+      forceProjectSection ? (
         <ProjectAboutSection />
       ) : null}
 
