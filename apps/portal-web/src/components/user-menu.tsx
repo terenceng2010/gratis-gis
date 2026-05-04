@@ -114,7 +114,22 @@ export function UserMenu({ seed, displayName, orgName, avatarUrl }: Props) {
                   // will reject on the next API call. Still navigate
                   // to federated-logout so Keycloak's SSO is killed.
                 }
-                window.location.assign('/api/auth/federated-logout');
+                // #249.17: when signing out from inside the field PWA
+                // (/field or /field/<id>), redirect Keycloak's
+                // post-logout back to /field. The unauthenticated
+                // /field load then routes through middleware ->
+                // /signin?callbackUrl=/field -> Keycloak login ->
+                // /field, keeping a mobile field user "in the field
+                // sandbox" through a sign-out + sign-in cycle. Other
+                // sign-outs (admin, items page, etc.) still return
+                // to the landing page.
+                const onFieldRoute =
+                  typeof window !== 'undefined' &&
+                  window.location.pathname.startsWith('/field');
+                const target = onFieldRoute
+                  ? '/api/auth/federated-logout?redirect=/field'
+                  : '/api/auth/federated-logout';
+                window.location.assign(target);
               }}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-danger/5"
             >

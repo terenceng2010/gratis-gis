@@ -39,11 +39,24 @@ export async function GET(req: NextRequest) {
   const base = (
     process.env.NEXTAUTH_URL ?? new URL(req.url).origin
   ).replace(/\/$/, '');
-  // Land back on the public landing page; it already handles the
-  // unauthenticated view, so a separate "you are signed out" card is
-  // dead weight that makes the portal feel like it bounced out to
-  // somewhere else.
-  const postLogoutRedirectUri = `${base}/`;
+  // #249.17 Phase 1: callers can pass `?redirect=<path>` to override
+  // the post-logout landing target. Used by the field PWA so signing
+  // out from /field returns to /field rather than the landing page.
+  // The unauthenticated /field load then routes through the
+  // middleware -> /signin?callbackUrl=/field -> Keycloak login ->
+  // /field, which keeps a mobile field user "in the field sandbox"
+  // through a sign-out + sign-in cycle. Validation: only same-origin
+  // path-like values pass through to prevent open-redirect bugs;
+  // anything that includes a scheme or doesn't start with '/' falls
+  // back to the default landing page. Default behaviour preserved
+  // (`/`) when the param is absent so non-field sign-outs are
+  // unchanged.
+  const requested = new URL(req.url).searchParams.get('redirect');
+  const safeRedirect =
+    requested && requested.startsWith('/') && !requested.startsWith('//')
+      ? requested
+      : '/';
+  const postLogoutRedirectUri = `${base}${safeRedirect}`;
 
   const endSession = new URL(keycloakEndSessionBase);
   if (idToken) endSession.searchParams.set('id_token_hint', idToken);

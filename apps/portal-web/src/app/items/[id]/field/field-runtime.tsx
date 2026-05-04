@@ -1166,6 +1166,23 @@ export function FieldRuntime({
       </header>
       ) : null}
 
+      {/* #249.18: persistent GPS accuracy strip below the header.
+          Field Maps shows accuracy in a thin always-visible band so
+          the worker can glance up at any time -- not just during a
+          capture -- and know whether the fix is good enough to act
+          on. Sits between the header and the canvas; hidden during
+          active collect because the FormModal already shows its own
+          accuracy banner at the top of the canvas in that mode. The
+          strip is hidden entirely when GPS hasn't been requested
+          yet (idle) so unauthorized users don't see a stale "no
+          fix" message; once they enable location it surfaces. */}
+      {formModal === null ? (
+        <FieldGpsStrip
+          gpsStatus={gps.status}
+          accuracyM={gps.position?.accuracyM ?? null}
+        />
+      ) : null}
+
       <div className="relative min-h-0 flex-1">
         <MapCanvas
           ref={canvasRef}
@@ -3218,6 +3235,51 @@ function FieldLocateButton({
         <LocateFixed className="h-5 w-5" />
       )}
     </button>
+  );
+}
+
+/**
+ * #249.18: thin always-visible GPS accuracy strip rendered between
+ * the field-runtime header and the canvas. Field Maps shows the
+ * fix accuracy in a similar band so the worker doesn't have to be
+ * mid-capture to know whether their position is trustworthy.
+ *
+ * States:
+ *   - idle / requesting / denied / unavailable: nothing renders.
+ *     The strip only surfaces once we have an actual fix.
+ *   - watching with a fix: shows "GPS accuracy <N> m" with the
+ *     band-tinted background (excellent/good = emerald, fair =
+ *     amber, poor = rose) so a glance gives both the number and a
+ *     fitness assessment.
+ *
+ * Two visual styles intentionally match: the during-collect banner
+ * inside the canvas + this header strip use the same gpsAccuracyBand
+ * helper so the worker sees the same color whether the form is open
+ * or closed.
+ */
+function FieldGpsStrip({
+  gpsStatus,
+  accuracyM,
+}: {
+  gpsStatus: import('./use-geolocation').GpsStatus;
+  accuracyM: number | null;
+}) {
+  if (gpsStatus !== 'watching' || accuracyM === null) return null;
+  const band = gpsAccuracyBand(accuracyM);
+  const tone =
+    band === 'excellent' || band === 'good'
+      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : band === 'fair'
+        ? 'bg-amber-50 text-amber-700 border-amber-200'
+        : 'bg-rose-50 text-rose-700 border-rose-200';
+  return (
+    <div
+      aria-live="polite"
+      className={`flex shrink-0 items-center justify-center gap-1.5 border-b px-3 py-1 text-xs font-medium ${tone}`}
+    >
+      <LocateFixed className="h-3.5 w-3.5" aria-hidden="true" />
+      GPS accuracy {accuracyM < 1 ? '<1' : Math.round(accuracyM)} m
+    </div>
   );
 }
 
