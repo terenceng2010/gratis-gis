@@ -22,6 +22,7 @@ import {
 import { Type } from 'class-transformer';
 
 import type { ItemShare } from '@prisma/client';
+import { isEditorItem } from '@gratis-gis/shared-types';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -286,9 +287,11 @@ export class V3FeaturesController {
     try {
       const editor = await this.prisma.item.findUnique({
         where: { id: args.editorId },
-        select: { id: true, title: true, ownerId: true, type: true },
+        select: { id: true, title: true, ownerId: true, type: true, data: true },
       });
-      if (!editor || editor.type !== 'editor') return;
+      // #258: accept both legacy type='editor' and migrated
+      // type='web_app' + data.template='editor'.
+      if (!editor || !isEditorItem(editor)) return;
       const dataLayer = await this.prisma.item.findUnique({
         where: { id: args.dataLayerId },
         select: { title: true },

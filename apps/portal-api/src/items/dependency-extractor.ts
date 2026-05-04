@@ -1,4 +1,5 @@
 import type { ItemType } from '@prisma/client';
+import { isEditorItem, readEditorData } from '@gratis-gis/shared-types';
 
 /**
  * Walks an item's data payload and returns the references it holds to
@@ -95,7 +96,7 @@ export function extractDependencies(
     }
   }
 
-  if (item.type === 'editor') {
+  if (isEditorItem(item)) {
     // An Editor item references:
     //   - data.mapId         -> the map providing basemap + reference
     //                            layers in the runtime
@@ -107,15 +108,22 @@ export function extractDependencies(
     // ("Used by: this editor") shows up on the map / data_layer
     // detail pages so authors can see which editors expose them
     // before purging or restructuring. See docs/editing-and-collection.md.
-    const mapRef = (data as { mapId?: unknown }).mapId;
-    if (typeof mapRef === 'string' && mapRef.length > 0) {
-      itemIds.add(mapRef);
-    }
-    const targets = (data as { targets?: unknown }).targets;
-    if (Array.isArray(targets)) {
-      for (const t of targets as Array<Record<string, unknown>>) {
-        const dl = t?.dataLayerId;
-        if (typeof dl === 'string' && dl.length > 0) itemIds.add(dl);
+    //
+    // #258: works for legacy `type='editor'` rows AND migrated
+    // `type='web_app' + data.template='editor'` rows. readEditorData
+    // unwraps either layout to give us the underlying EditorData.
+    const editorData = readEditorData(item);
+    if (editorData) {
+      const mapRef = editorData.mapId;
+      if (typeof mapRef === 'string' && mapRef.length > 0) {
+        itemIds.add(mapRef);
+      }
+      const targets = editorData.targets;
+      if (Array.isArray(targets)) {
+        for (const t of targets) {
+          const dl = t?.dataLayerId;
+          if (typeof dl === 'string' && dl.length > 0) itemIds.add(dl);
+        }
       }
     }
   }
@@ -325,13 +333,20 @@ function walkQuestionRefs(
  *  list to drive reverse-index scans -- e.g. when computing a
  *  data_layer's "Used by" panel, only items of these types are
  *  searched for forward refs. If we expand this, update the
- *  service's dependents scan to include the new types. */
+ *  service's dependents scan to include the new types.
+ *
+ *  #258: 'editor' stays in the list for the deprecation window so
+ *  any not-yet-migrated rows are still walked; 'web_app' is included
+ *  so the editor-template branch (and future templates that hold
+ *  refs) get scanned. The branches above guard via isEditorItem so
+ *  generic untemplated web_app items are no-ops. */
 export const REFERENCER_TYPES: ItemType[] = [
   'map',
   'data_layer',
   'derived_layer',
   'folder',
   'editor',
+  'web_app',
   'form',
   'data_collection',
 ];

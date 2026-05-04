@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { isEditorItem, readEditorData } from '@gratis-gis/shared-types';
 
 import { ItemsService } from './items.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -46,23 +47,18 @@ export class EditorPolicyService {
     };
   }): Promise<void> {
     const editor = await this.items.get(args.user, args.editorId);
-    if (editor.type !== 'editor') {
-      // Same response as "you can't see this": treating type-mismatch
-      // as not-found avoids leaking the existence of an Editor item
-      // pointed at the wrong layer.
+    // #258: accept both legacy type='editor' rows and the migrated
+    // type='web_app' + data.template='editor' shape. readEditorData
+    // unwraps either layout. Treating a non-editor (or malformed)
+    // item as not-found avoids leaking which Editors exist via the
+    // x-editor-id header.
+    if (!isEditorItem(editor)) {
       throw new NotFoundException('Editor not found');
     }
-    const data = (editor.data ?? {}) as {
-      targets?: Array<{
-        dataLayerId: string;
-        layerKey: string;
-        canCreate?: boolean;
-        canEditGeometry?: boolean;
-        canEditAttributes?: boolean;
-        canDelete?: boolean;
-        editableFields?: string[] | null;
-      }>;
-    };
+    const data = readEditorData(editor);
+    if (!data) {
+      throw new NotFoundException('Editor not found');
+    }
     const target = (data.targets ?? []).find(
       (t) => t.dataLayerId === args.dataLayerId && t.layerKey === args.layerKey,
     );
