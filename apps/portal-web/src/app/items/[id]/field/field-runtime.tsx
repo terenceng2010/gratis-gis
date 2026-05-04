@@ -2724,6 +2724,15 @@ function LayerSwatch({
       : layer.style?.polygon?.strokeColor) ||
     layer.style?.line?.color ||
     '#374151';
+  // #264: respect fillOpacity so an outline-only polygon (Riverside
+  // Parcels has fillColor=blue but fillOpacity=0 + strokeColor=green;
+  // the map paints invisible fill + green outline) shows the same
+  // way in the swatch. Threshold at 0.15 -- below that the fill is
+  // visually a no-op so we drop it and use the stroke color as the
+  // border. The square stays square (geometry shape unchanged), it
+  // just becomes a hollow outline that matches what's on screen.
+  const fillOpacity = layer.style?.polygon?.fillOpacity ?? 1;
+  const polygonHollow = geom === 'polygon' && fillOpacity < 0.15;
   const opacity = dimmed ? 0.4 : 1;
 
   // #249.21: geometry-shaped className. point -> filled circle,
@@ -2735,6 +2744,18 @@ function LayerSwatch({
         ? 'h-1 w-4 rounded-full'
         : 'h-3.5 w-3.5 rounded-sm';
 
+  // #264: polygon-with-transparent-fill renders as outline-only.
+  // Border thickness is bumped to 2 so the color reads at the
+  // 14px swatch size (1px borders disappear on hi-DPI screens).
+  const polygonHollowProps = polygonHollow
+    ? {
+        backgroundColor: 'transparent',
+        borderColor: stroke,
+        borderWidth: 2,
+        opacity,
+      }
+    : null;
+
   if (layer.renderer?.kind === 'unique-values') {
     const cats = layer.renderer.categories ?? [];
     const sample = cats.slice(0, 3);
@@ -2743,7 +2764,13 @@ function LayerSwatch({
         <span
           aria-hidden="true"
           className={`${baseShape} shrink-0 border`}
-          style={{ backgroundColor: fallback, borderColor: stroke, opacity }}
+          style={
+            polygonHollowProps ?? {
+              backgroundColor: fallback,
+              borderColor: stroke,
+              opacity,
+            }
+          }
         />
       );
     }
@@ -2771,7 +2798,13 @@ function LayerSwatch({
         <span
           aria-hidden="true"
           className={`${baseShape} shrink-0 border`}
-          style={{ backgroundColor: fallback, borderColor: stroke, opacity }}
+          style={
+            polygonHollowProps ?? {
+              backgroundColor: fallback,
+              borderColor: stroke,
+              opacity,
+            }
+          }
         />
       );
     }
@@ -2798,7 +2831,13 @@ function LayerSwatch({
     <span
       aria-hidden="true"
       className={`${baseShape} shrink-0 border`}
-      style={{ backgroundColor: fallback, borderColor: stroke, opacity }}
+      style={
+        polygonHollowProps ?? {
+          backgroundColor: fallback,
+          borderColor: stroke,
+          opacity,
+        }
+      }
     />
   );
 }
