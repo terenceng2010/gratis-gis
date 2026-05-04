@@ -1,12 +1,16 @@
 import Link from 'next/link';
 import {
+  Bell,
+  Brush,
   Compass,
   Database,
   Github,
   Globe,
   LogIn,
   MessageSquarePlus,
+  RefreshCw,
   Smartphone,
+  Users,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
@@ -208,18 +212,18 @@ function ProjectAboutSection() {
             Open source GIS portal
           </p>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink-0 sm:text-3xl">
-            A self-hosted alternative to ArcGIS Online
+            An open-source alternative to commercial GIS portals
           </h2>
           <p className="mt-2 text-sm text-muted sm:text-base">
-            GratisGIS is a free, open-source portal for publishing
-            datasets, web maps, forms, and dashboards. It feels
-            familiar to Esri users but runs on open components: PostGIS,
-            MapLibre, and Keycloak. A small org can stand up their own
-            GIS portal with no commercial licenses.
+            GratisGIS is a free, self-hosted portal for publishing
+            datasets, web maps, forms, and dashboards. Built on open
+            components (PostGIS, MapLibre, Keycloak) so a small org can
+            stand up their own GIS portal with no commercial licenses,
+            no per-seat fees, and no token meters.
           </p>
         </div>
 
-        <ul className="mb-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <ul className="mb-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <FeatureTile
             icon={Database}
             title="Your data, your hardware"
@@ -228,7 +232,7 @@ function ProjectAboutSection() {
           <FeatureTile
             icon={Smartphone}
             title="Field-ready PWA"
-            body="A Field-Maps-style data-collection app that installs to the home screen, works offline, and syncs when you're back online."
+            body="A data-collection app that installs to the home screen, works offline, and syncs when you're back online."
           />
           <FeatureTile
             icon={Globe}
@@ -239,6 +243,41 @@ function ProjectAboutSection() {
             icon={Wrench}
             title="Built for self-hosting"
             body="Docker compose, single-command deploy. No SaaS lock-in, no per-seat fees, no token meters."
+          />
+        </ul>
+
+        {/* #255: "problems we solve" section. The four tiles above
+            position the project; this row calls out concrete pain
+            points the user has hit on commercial portals. Each tile
+            is one specific failure mode + how GratisGIS handles it. */}
+        <div className="mb-10 max-w-3xl">
+          <p className="text-xs font-semibold uppercase tracking-wide text-accent">
+            What we set out to fix
+          </p>
+          <h3 className="mt-1 text-xl font-semibold tracking-tight text-ink-0 sm:text-2xl">
+            Real problems, addressed by default
+          </h3>
+        </div>
+        <ul className="mb-12 grid gap-6 sm:grid-cols-2">
+          <FeatureTile
+            icon={Brush}
+            title="Housekeeping that runs itself"
+            body="Stale items get flagged. Inactive users get auto-disabled. Expiring shares trigger warnings. Spatial extents get recomputed on a schedule. Admins get a dashboard, not a backlog."
+          />
+          <FeatureTile
+            icon={RefreshCw}
+            title="Sync that doesn't lose your work"
+            body="Offline edits go to a per-edit queue with isolated retries. A bad row doesn't poison the rest. Schema changes notify every device that has cached the deployment so the field crew rebuilds before they next sync."
+          />
+          <FeatureTile
+            icon={Bell}
+            title="Email notifications you actually control"
+            body="Built-in templates for shares, expirations, schema changes, form submissions, and field captures. Org admins customize the copy through a guided editor with click-to-insert variables. Routed through one SMTP, not a sprawl of webhooks."
+          />
+          <FeatureTile
+            icon={Users}
+            title="Sharing granularity that makes sense"
+            body="Share an item with a user, a group, or a folder. Folder shares cascade to every item in the folder. Per-share row scope ('all' vs 'own') and geographic clip (polygon) layer on top. View / download / edit / admin tiers, not a single 'shared' bit."
           />
         </ul>
 
