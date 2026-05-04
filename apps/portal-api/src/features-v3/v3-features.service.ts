@@ -191,12 +191,20 @@ export class V3FeaturesService {
     // with "Failed to convert rust `String` into napi `string`",
     // which surfaced to the user as a 500 in the detail-page
     // Browse panel and the map attribute table. The cap keeps
-    // those surfaces functional for big layers (paginated/preview
-    // shape) without changing behaviour for typical-sized layers.
-    // The map render path that genuinely needs all features for
-    // a viewport gets there via bbox-narrowed requests; clients
-    // that want more should also pass `?bbox=` to scope down.
-    // Real fix for genuinely large unbounded reads is MVT (#245).
+    // those surfaces functional for big layers (preview shape)
+    // without changing behaviour for typical-sized layers.
+    //
+    // The map render path passes `?bbox=` and hits the GIST index
+    // on `geom`, so it never returns more than the rows that
+    // actually intersect the viewport (typical city-zoom result
+    // is dozens to low thousands, well under the cap). This is
+    // the same pattern Esri's hosted feature services use:
+    // spatial index + bbox-clipped reads, no precomputed tiles.
+    // If we hit a viewport that's both unusually dense AND not
+    // narrow enough to be under the cap, server-side
+    // simplification (ST_SimplifyPreserveTopology) keyed off the
+    // requested zoom is the next lever -- still no MVT required
+    // for normal interactive use.
     const HARD_CAP = 10000;
     const sql = `
       SELECT gid, global_id, ${geomProjection} properties,

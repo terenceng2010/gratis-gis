@@ -669,20 +669,19 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
   // Live bbox-driven refetch for portal data-layer sources. Mirrors
   // the arcgis-rest effect above. The default `sourceData()` for
-  // data-layer returns the unscoped /geojson URL, which is fine for
-  // small layers but breaks at scale: the server caps the response
-  // at 10k features (#258 follow-up), and on a 800k-polygon table
-  // those 10k arbitrary rows almost never include the user's
-  // current viewport, so the map renders blank.
+  // data-layer returns the unscoped /geojson URL, which is fine
+  // for small layers but breaks at scale: the server caps the
+  // response, and on a 800k-polygon table those capped rows almost
+  // never include the user's current viewport, so the map renders
+  // blank.
   //
-  // This effect fixes that by fetching `/geojson?bbox=<viewport>`
-  // on every camera settle and replacing the source data. Small
-  // layers see no behaviour change (the bbox-scoped query just
-  // returns the same rows). Big layers get viewport-clipped data
-  // that actually intersects what the user is looking at.
-  //
-  // Real long-term solution is MVT vector tiles (#245); this is
-  // the unblock until then.
+  // This effect fetches `/geojson?bbox=<viewport>` on every camera
+  // settle and replaces the source data. The server hits the GIST
+  // index on `geom` so the query returns only intersecting rows,
+  // typically dozens to low thousands at city/neighborhood zoom,
+  // well below the cap. Same pattern hosted feature services use:
+  // spatial index + bbox-clipped reads. Small layers see no
+  // behaviour change.
   const dataLayerControllers = useRef<Record<string, AbortController>>({});
   useEffect(() => {
     const m = mapRef.current;
