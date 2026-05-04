@@ -1639,6 +1639,7 @@ export function FieldRuntime({
         {layerPanelOpen ? (
           <LayerVisibilityPanel
             layers={mapData.layers ?? []}
+            editableLayers={editableLayers}
             hiddenLayerIds={hiddenLayerIds}
             onToggle={(layerId) => {
               setHiddenLayerIds((prev) => {
@@ -2312,6 +2313,7 @@ function TemplatePicker({
  */
 function LayerVisibilityPanel({
   layers,
+  editableLayers,
   hiddenLayerIds,
   onToggle,
   basemaps,
@@ -2328,6 +2330,10 @@ function LayerVisibilityPanel({
   onClearTiles,
 }: {
   layers: MapLayer[];
+  /** #249.21: editable-layer list so the panel can look up the
+   *  underlying sublayer geometry type per MapLayer (used for the
+   *  swatch shape + table-row hiding). */
+  editableLayers: EditableLayer[];
   hiddenLayerIds: Set<string>;
   onToggle: (layerId: string) => void;
   /** Available basemap items the user can swap to. */
@@ -2552,13 +2558,70 @@ function LayerVisibilityPanel({
         </div>
       ) : null}
       <ul className="min-h-0 flex-1 overflow-y-auto p-1">
-        {layers.length === 0 ? (
-          <li className="p-3 text-center text-sm text-muted">
-            No layers in this map.
-          </li>
-        ) : (
-          layers.map((l) => {
+        {(() => {
+          // #249.21: filter the layer list for the field collection
+          // context. Per request:
+          //   - Table sublayers (geometryType === null on the
+          //     underlying data_layer) are always-on and have no
+          //     symbol; surfacing them here is noise and the toggle
+          //     would be misleading anyway. Hide them outright.
+          //   - Group headers whose every child got filtered are also
+          //     hidden (an empty section header is just visual debt).
+          // Compute the visible set once so we can both render and
+          // know whether to render the empty state.
+          const layerInfo = layers.map((l) => {
             const isGroup = l.source?.kind === 'group';
+            let geometryType: LayerGeometryType = null;
+            if (l.source?.kind === 'data-layer') {
+              const src = l.source;
+              const dl = editableLayers.find(
+                (e) =>
+                  e.dataLayerId === src.itemId &&
+                  e.layerKey === src.layerKey,
+              );
+              geometryType = dl?.geometryType ?? null;
+            } else if (!isGroup) {
+              // Non-data-layer overlays (arcgis-rest, geojson-url):
+              // we don't have a strict geometryType, but they're
+              // always renderable -- treat them as polygon for
+              // swatch purposes.
+              geometryType = 'polygon';
+            }
+            const isTable =
+              !isGroup &&
+              l.source?.kind === 'data-layer' &&
+              geometryType === null;
+            return { layer: l, isGroup, isTable, geometryType };
+          });
+          // Drop tables entirely. Then drop group headers that have
+          // no surviving children below them in the list. Walk
+          // backwards so a group header at position i counts only
+          // children at i+1+ that aren't another group header.
+          const kept = layerInfo.filter((entry) => !entry.isTable);
+          const finalSet: typeof kept = [];
+          for (let i = 0; i < kept.length; i += 1) {
+            const entry = kept[i]!;
+            if (entry.isGroup) {
+              // Look ahead: is there at least one non-group entry
+              // before the next group header?
+              let hasChild = false;
+              for (let j = i + 1; j < kept.length; j += 1) {
+                if (kept[j]!.isGroup) break;
+                hasChild = true;
+                break;
+              }
+              if (!hasChild) continue;
+            }
+            finalSet.push(entry);
+          }
+          if (finalSet.length === 0) {
+            return (
+              <li className="p-3 text-center text-sm text-muted">
+                No layers in this map.
+              </li>
+            );
+          }
+          return finalSet.map(({ layer: l, isGroup, geometryType }) => {
             if (isGroup) {
               return (
                 <li
@@ -2583,7 +2646,11 @@ function LayerVisibilityPanel({
                   ) : (
                     <EyeOff className="h-5 w-5 shrink-0 text-muted" />
                   )}
-                  <LayerSwatch layer={l} dimmed={!visible} />
+                  <LayerSwatch
+                    layer={l}
+                    dimmed={!visible}
+                    geometryType={geometryType}
+                  />
                   <span
                     className={`min-w-0 flex-1 truncate ${
                       visible ? 'text-ink-0' : 'text-muted line-through'
@@ -2594,8 +2661,8 @@ function LayerVisibilityPanel({
                 </button>
               </li>
             );
-          })
-        )}
+          });
+        })()}
       </ul>
     </div>
   );
@@ -2620,24 +2687,51 @@ function LayerVisibilityPanel({
 function LayerSwatch({
   layer,
   dimmed,
+  geometryType,
 }: {
   layer: MapLayer;
   dimmed: boolean;
+  /** #249.21: geometry type of the underlying sublayer. Drives the
+   *  swatch shape (circle for point, stripe for line, square for
+   *  polygon) so the legend matches what the worker sees on the
+   *  map. Falls back to polygon when null/undefined. */
+  geometryType?: LayerGeometryType;
 }) {
-  // Pick a primary color for the simple-renderer fallback. Polygon
-  // fill wins if present (most common case for area layers); falls
-  // through to point color, then line color, then a neutral.
+  const geom = geometryType ?? 'polygon';
+  // Pick a primary color for the simple-renderer fallback. Match the
+  // geometry type: a point swatch should pull from style.point, a
+  // polygon from style.polygon, a line from style.line. The earlier
+  // fallback chain (polygon -> point -> line) was wrong for layers
+  // whose actual geometry is point but whose style.polygon happens
+  // to be populated with default values.
   const primary =
+    geom === 'point'
+      ? layer.style?.point?.color
+      : geom === 'line'
+        ? layer.style?.line?.color
+        : layer.style?.polygon?.fillColor;
+  const fallback =
+    primary ||
     layer.style?.polygon?.fillColor ||
     layer.style?.point?.color ||
     layer.style?.line?.color ||
     '#6b7280';
   const stroke =
-    layer.style?.polygon?.strokeColor ||
-    layer.style?.point?.strokeColor ||
+    (geom === 'point'
+      ? layer.style?.point?.strokeColor
+      : layer.style?.polygon?.strokeColor) ||
     layer.style?.line?.color ||
     '#374151';
   const opacity = dimmed ? 0.4 : 1;
+
+  // #249.21: geometry-shaped className. point -> filled circle,
+  // line -> thin horizontal stripe, polygon -> rounded square.
+  const baseShape =
+    geom === 'point'
+      ? 'h-3.5 w-3.5 rounded-full'
+      : geom === 'line'
+        ? 'h-1 w-4 rounded-full'
+        : 'h-3.5 w-3.5 rounded-sm';
 
   if (layer.renderer?.kind === 'unique-values') {
     const cats = layer.renderer.categories ?? [];
@@ -2646,8 +2740,8 @@ function LayerSwatch({
       return (
         <span
           aria-hidden="true"
-          className="h-3.5 w-3.5 shrink-0 rounded-sm border"
-          style={{ backgroundColor: primary, borderColor: stroke, opacity }}
+          className={`${baseShape} shrink-0 border`}
+          style={{ backgroundColor: fallback, borderColor: stroke, opacity }}
         />
       );
     }
@@ -2674,8 +2768,8 @@ function LayerSwatch({
       return (
         <span
           aria-hidden="true"
-          className="h-3.5 w-3.5 shrink-0 rounded-sm border"
-          style={{ backgroundColor: primary, borderColor: stroke, opacity }}
+          className={`${baseShape} shrink-0 border`}
+          style={{ backgroundColor: fallback, borderColor: stroke, opacity }}
         />
       );
     }
@@ -2695,12 +2789,14 @@ function LayerSwatch({
     );
   }
 
-  // simple renderer (or no renderer): one square.
+  // simple renderer (or no renderer): one swatch shaped to the
+  // underlying geometry so the legend reads as the same symbology
+  // the worker sees on the canvas.
   return (
     <span
       aria-hidden="true"
-      className="h-3.5 w-3.5 shrink-0 rounded-sm border"
-      style={{ backgroundColor: primary, borderColor: stroke, opacity }}
+      className={`${baseShape} shrink-0 border`}
+      style={{ backgroundColor: fallback, borderColor: stroke, opacity }}
     />
   );
 }
@@ -3285,8 +3381,8 @@ function FormModal({
               now: the offline buffer for blobs is queued separately
               (#200). */}
           {modal.mode === 'edit' ? (
-            <div className="mt-4 border-t border-border pt-3">
-              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <div className="mt-5 border-t border-border pt-4">
+              <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-1">
                 Attachments
               </p>
               <V3FeatureAttachments
@@ -3307,11 +3403,11 @@ function FormModal({
               button disabled so the user knows they exist. */}
           {modal.mode === 'edit' &&
           (modal.layer.childLayers ?? []).length > 0 ? (
-            <div className="mt-4 border-t border-border pt-3">
-              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <div className="mt-5 border-t border-border pt-4">
+              <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-1">
                 Related records
               </p>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {(modal.layer.childLayers ?? []).map((c) => {
                   const childEditable = editableLayers.find(
                     (e) =>
@@ -3321,27 +3417,26 @@ function FormModal({
                   const state = relatedRowsByChild[c.layerKey];
                   const count = state?.rows.length ?? 0;
                   return (
-                    <div key={c.layerKey} className="space-y-1.5">
-                      {/* #247: per-child header row. Layer label, geometry +
-                          link hint, count badge, and the Add affordance.
-                          The count is loaded from the parentFk fetch
-                          and only renders once we have a definitive
-                          state (loading suppresses the badge so an
-                          empty list doesn't briefly flash "0"). */}
+                    <div key={c.layerKey} className="space-y-2">
+                      {/* #247 / #249.21: per-child header row. Bumped
+                          to text-base for the layer name + thumb-
+                          friendly Add button, since this is a primary
+                          field-collection action read at arm's length
+                          outdoors. */}
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <p className="flex items-center gap-1.5 truncate text-xs font-medium text-ink-0">
+                          <p className="flex items-center gap-2 truncate text-base font-semibold text-ink-0">
                             {c.layerLabel}
                             {state && !state.loading && !state.error ? (
-                              <span className="inline-flex items-center justify-center rounded-full bg-surface-2 px-1.5 py-0 text-[10px] font-semibold text-muted">
+                              <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-surface-2 px-1.5 text-xs font-semibold text-ink-1">
                                 {count}
                               </span>
                             ) : null}
                             {state?.loading ? (
-                              <Loader2 className="h-3 w-3 animate-spin text-muted" />
+                              <Loader2 className="h-4 w-4 animate-spin text-muted" />
                             ) : null}
                           </p>
-                          <p className="truncate text-[10px] text-muted">
+                          <p className="truncate text-xs text-muted">
                             {(c.geometryType ?? 'table').toUpperCase()} ·
                             linked via {c.parentFkColumn}
                           </p>
@@ -3362,38 +3457,35 @@ function FormModal({
                               ? `Add a new ${c.layerLabel} record under this feature`
                               : 'This child layer is not editable in this deployment'
                           }
-                          className="inline-flex h-7 shrink-0 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                          className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
                         >
-                          <Plus className="h-3 w-3" />
+                          <Plus className="h-4 w-4" />
                           Add
                         </button>
                       </div>
-                      {/* #247: existing-row list. Empty / error / rows
-                          are mutually exclusive states; loading is the
-                          spinner in the header above so we avoid a
-                          double-spinner here. Each row has its own
-                          Open button that hands the full feature back
-                          to the runtime via onOpenRelated. */}
+                      {/* #247 / #249.21: existing-row list. Bumped to
+                          text-base for outdoor visibility; row min-h
+                          enforces a 44 px thumb target. */}
                       {state && !state.loading ? (
                         state.error ? (
-                          <p className="text-[10px] text-rose-700">
+                          <p className="text-sm text-rose-700">
                             Couldn&apos;t load existing {c.layerLabel}
                             {' '}records ({state.error}). Tap Add to
                             create a new one.
                           </p>
                         ) : state.rows.length === 0 ? (
-                          <p className="text-[10px] text-muted">
+                          <p className="text-sm text-muted">
                             No {c.layerLabel.toLowerCase()} records yet.
                           </p>
                         ) : (
-                          <ul className="space-y-1">
+                          <ul className="space-y-1.5">
                             {state.rows.map((row) => (
                               <li
                                 key={row.id}
-                                className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5"
+                                className="flex min-h-[44px] items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-3 py-2"
                               >
                                 <div className="min-w-0 flex-1">
-                                  <p className="truncate text-xs text-ink-0">
+                                  <p className="truncate text-base text-ink-0">
                                     {pickRelatedRowTitle(row.properties) ??
                                       row.id.slice(0, 8)}
                                   </p>
@@ -3410,7 +3502,7 @@ function FormModal({
                                       ? `Open this ${c.layerLabel} record`
                                       : 'This child layer is not editable in this deployment'
                                   }
-                                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[10px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                                  className="inline-flex h-9 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-1 hover:bg-surface-2 disabled:opacity-50"
                                 >
                                   Open
                                 </button>
