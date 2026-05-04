@@ -667,6 +667,83 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     };
   }, [map.layers, iconsTick]);
 
+  // Live bbox-driven refetch for portal data-layer sources. Mirrors
+  // the arcgis-rest effect above. The default `sourceData()` for
+  // data-layer returns the unscoped /geojson URL, which is fine for
+  // small layers but breaks at scale: the server caps the response
+  // at 10k features (#258 follow-up), and on a 800k-polygon table
+  // those 10k arbitrary rows almost never include the user's
+  // current viewport, so the map renders blank.
+  //
+  // This effect fixes that by fetching `/geojson?bbox=<viewport>`
+  // on every camera settle and replacing the source data. Small
+  // layers see no behaviour change (the bbox-scoped query just
+  // returns the same rows). Big layers get viewport-clipped data
+  // that actually intersects what the user is looking at.
+  //
+  // Real long-term solution is MVT vector tiles (#245); this is
+  // the unblock until then.
+  const dataLayerControllers = useRef<Record<string, AbortController>>({});
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const dataLayers = map.layers.filter(
+      (l) => l.visible && l.source.kind === 'data-layer',
+    );
+    for (const id of Object.keys(dataLayerControllers.current)) {
+      if (!dataLayers.some((l) => l.id === id)) {
+        dataLayerControllers.current[id]?.abort();
+        delete dataLayerControllers.current[id];
+      }
+    }
+    if (dataLayers.length === 0) return;
+
+    const refetchAll = () => {
+      const b = m.getBounds();
+      const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+      for (const layer of dataLayers) {
+        const src = m.getSource(`gg:${layer.id}`) as
+          | maplibregl.GeoJSONSource
+          | undefined;
+        if (!src) continue;
+        if (layer.source.kind !== 'data-layer') continue;
+        const dataSource = layer.source;
+        dataLayerControllers.current[layer.id]?.abort();
+        const controller = new AbortController();
+        dataLayerControllers.current[layer.id] = controller;
+        const base = dataSource.layerKey
+          ? `/api/portal/items/${dataSource.itemId}/layers/${encodeURIComponent(dataSource.layerKey)}/geojson`
+          : `/api/portal/items/${dataSource.itemId}/geojson`;
+        const params = new URLSearchParams({ bbox });
+        if (layer.boundaryFilterItemId) {
+          params.set('clip', layer.boundaryFilterItemId);
+        }
+        fetch(`${base}?${params}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`${res.status}`);
+            return res.json();
+          })
+          .then((featureCollection: GeoJSON.FeatureCollection) => {
+            if (controller.signal.aborted) return;
+            src.setData(featureCollection);
+          })
+          .catch((err) => {
+            if ((err as Error)?.name === 'AbortError') return;
+            // eslint-disable-next-line no-console
+            console.warn(`[data-layer] ${layer.title}:`, (err as Error).message);
+          });
+      }
+    };
+    refetchAll();
+    m.on('moveend', refetchAll);
+    return () => {
+      m.off('moveend', refetchAll);
+    };
+  }, [map.layers, iconsTick]);
+
   // Click handlers for popups, hover handlers for highlight + cursor.
   // Attached once, dispatches dynamically based on the current layer set.
   useEffect(() => {
