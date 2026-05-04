@@ -1,5 +1,15 @@
 import Link from 'next/link';
-import { Compass, LogIn, type LucideIcon } from 'lucide-react';
+import {
+  Compass,
+  Database,
+  Github,
+  Globe,
+  LogIn,
+  MessageSquarePlus,
+  Smartphone,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
 import {
   getItemTypeIcon,
@@ -72,6 +82,16 @@ export function PublicLanding({ data }: Props) {
         heroImageUrl={org.heroImageUrl}
       />
 
+      {/* #255: open-source project section. Renders only when the
+          deployment opts in via NEXT_PUBLIC_PROJECT_LANDING=1; per-
+          tenant deployments leave it off so their landing reads as a
+          tenant page (datasets + sign-in), not a "what is GratisGIS"
+          marketing page. The canonical gratisgis.org deployment
+          flips the flag on for the public alpha. */}
+      {process.env.NEXT_PUBLIC_PROJECT_LANDING === '1' ? (
+        <ProjectAboutSection />
+      ) : null}
+
       {org.showPublicItems ? (
         <section className="mx-auto w-full max-w-6xl flex-1 px-6 py-12">
           <div className="mb-6">
@@ -123,6 +143,141 @@ export function PublicLanding({ data }: Props) {
         Powered by GratisGIS
       </footer>
     </div>
+  );
+}
+
+/**
+ * #255: open-source project marketing section. Sits below the
+ * Hero on canonical gratisgis.org-style deployments (gated by
+ * NEXT_PUBLIC_PROJECT_LANDING=1) so visitors who hit the apex
+ * domain see "what is GratisGIS" before "what's in this tenant".
+ *
+ * Three columns of value props, a row of CTAs (GitHub repo, file
+ * an issue, view the docs), and a feedback affordance that
+ * pre-fills a GitHub issue. The pre-fill keeps the surface zero-
+ * backend: GitHub does the auth + the routing; we just hand them
+ * a link with title + body params. If/when we want a smoother
+ * unauthenticated-feedback flow, swap the link for a backend
+ * bridge endpoint (NEXT_PUBLIC_FEEDBACK_ENDPOINT or similar).
+ */
+function ProjectAboutSection() {
+  // GitHub coordinates. Pulled from env so a fork can swap them
+  // without code changes, with sensible defaults to the upstream
+  // repo for the canonical deployment.
+  const repo =
+    process.env.NEXT_PUBLIC_GITHUB_REPO ?? 'palavido-dev/gratis-gis';
+  const repoUrl = `https://github.com/${repo}`;
+  // Pre-filled issue link: the labels list nudges feedback into a
+  // single triage queue without requiring the user to know our
+  // labelling conventions. Title is intentionally bare so the user
+  // owns the framing.
+  const feedbackUrl =
+    `${repoUrl}/issues/new?` +
+    `labels=feedback%2Calpha&` +
+    'title=&' +
+    'body=' +
+    encodeURIComponent(
+      [
+        '<!-- Thanks for trying GratisGIS. Tell us what worked, what didn\'t, what surprised you. Screenshots welcome. -->',
+        '',
+        '**What were you trying to do?**',
+        '',
+        '**What happened?**',
+        '',
+        '**What did you expect?**',
+        '',
+        '**Browser / device:**',
+      ].join('\n'),
+    );
+
+  return (
+    <section className="border-b border-border bg-surface-0 px-6 py-12">
+      <div className="mx-auto w-full max-w-5xl">
+        <div className="mb-8 max-w-3xl">
+          <p className="text-xs font-semibold uppercase tracking-wide text-accent">
+            Open source GIS portal
+          </p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink-0 sm:text-3xl">
+            A self-hosted alternative to ArcGIS Online
+          </h2>
+          <p className="mt-2 text-sm text-muted sm:text-base">
+            GratisGIS is a free, open-source portal for publishing
+            datasets, web maps, forms, and dashboards. It feels
+            familiar to Esri users but runs on open components: PostGIS,
+            MapLibre, and Keycloak. A small org can stand up their own
+            GIS portal with no commercial licenses.
+          </p>
+        </div>
+
+        <ul className="mb-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <FeatureTile
+            icon={Database}
+            title="Your data, your hardware"
+            body="PostGIS-backed datasets, web maps, and forms. Bring data in from shapefiles, GeoJSON, GDB, or any OGR-supported format."
+          />
+          <FeatureTile
+            icon={Smartphone}
+            title="Field-ready PWA"
+            body="A Field-Maps-style data-collection app that installs to the home screen, works offline, and syncs when you're back online."
+          />
+          <FeatureTile
+            icon={Globe}
+            title="Stays standards-friendly"
+            body="OGC API Features, CSW / ISO 19115 catalogs, Schema.org JSON-LD, WMS / WFS service item types. Plays well with the rest of the open-data ecosystem."
+          />
+          <FeatureTile
+            icon={Wrench}
+            title="Built for self-hosting"
+            body="Docker compose, single-command deploy. No SaaS lock-in, no per-seat fees, no token meters."
+          />
+        </ul>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <a
+            href={repoUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface-1 px-4 text-sm font-medium text-ink-1 hover:bg-surface-2"
+          >
+            <Github className="h-4 w-4" />
+            View on GitHub
+          </a>
+          <a
+            href={feedbackUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            Send feedback
+          </a>
+          <span className="text-xs text-muted sm:ml-2">
+            Feedback opens a pre-filled issue on GitHub. We triage
+            from the same queue we ship from.
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FeatureTile({
+  icon: Icon,
+  title,
+  body,
+}: {
+  icon: LucideIcon;
+  title: string;
+  body: string;
+}) {
+  return (
+    <li className="flex flex-col gap-2">
+      <span className="flex h-9 w-9 items-center justify-center rounded-md bg-accent/10 text-accent">
+        <Icon className="h-5 w-5" />
+      </span>
+      <h3 className="text-sm font-semibold text-ink-0">{title}</h3>
+      <p className="text-sm text-muted">{body}</p>
+    </li>
   );
 }
 
