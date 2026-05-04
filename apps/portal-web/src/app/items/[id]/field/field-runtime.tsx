@@ -138,6 +138,184 @@ export interface EditableLayer {
   }>;
 }
 
+/**
+ * #247 / #265 / #266: a row in a parent feature's related-records list.
+ * Surfaced both from the FormModal (edit-mode parent) and from the
+ * popup bottom sheet (#265). _pending=true when the row was sourced
+ * from the offline queue; the renderer shows an "unsynced" badge so
+ * the worker can tell their just-captured row apart.
+ */
+type RelatedFeature = {
+  id: string;
+  properties: Record<string, unknown>;
+  geometry: GeoJSON.Geometry | null;
+  _pending?: boolean;
+};
+
+type RelatedRowsState = {
+  loading: boolean;
+  error: string | null;
+  rows: RelatedFeature[];
+};
+
+/**
+ * #247 / #265 / #266: build a per-child-layer map of related-record
+ * rows for a given parent feature. Online: fetch synced rows from
+ * the API + merge pending-insert rows from the offline queue (those
+ * land first in the rendered list, tagged _pending=true). Offline
+ * or fetch failure: render only the pending rows. Returns a stable
+ * empty map ({}) when there's no parent or no child layers, which
+ * lets callers always render unconditionally.
+ *
+ * Used by FormModal (parent in edit mode) AND FieldFeaturePopupSheet
+ * (#265: popup.showRelatedRecords). Both surfaces want exactly the
+ * same data so the queue/sync logic stays in one place.
+ */
+function useRelatedRowsByChild(args: {
+  parentDataLayerId: string | null;
+  parentId: string | null;
+  childLayers:
+    | Array<{
+        layerKey: string;
+        layerLabel: string;
+        geometryType: LayerGeometryType;
+        parentFkColumn: string;
+      }>
+    | undefined;
+  dataCollectionId: string;
+  isOnline: boolean;
+}): Record<string, RelatedRowsState> {
+  const {
+    parentDataLayerId,
+    parentId,
+    childLayers,
+    dataCollectionId,
+    isOnline,
+  } = args;
+  const [state, setState] = useState<Record<string, RelatedRowsState>>({});
+
+  useEffect(() => {
+    if (!parentId || !parentDataLayerId) return undefined;
+    const children = childLayers ?? [];
+    if (children.length === 0) return undefined;
+    const ctrl = new AbortController();
+    setState((prev) => {
+      const next: Record<string, RelatedRowsState> = { ...prev };
+      for (const c of children) {
+        next[c.layerKey] = { loading: true, error: null, rows: [] };
+      }
+      return next;
+    });
+
+    const loadQueued = async (): Promise<Map<string, RelatedFeature[]>> => {
+      const out = new Map<string, RelatedFeature[]>();
+      try {
+        const all = await listQueue(dataCollectionId);
+        for (const c of children) {
+          const matches: RelatedFeature[] = [];
+          for (const q of all) {
+            if (q.op !== 'insert') continue;
+            if (q.syncStatus !== 'pending') continue;
+            if (q.dataLayerId !== parentDataLayerId) continue;
+            if (q.layerKey !== c.layerKey) continue;
+            const props = (q.properties ?? {}) as Record<string, unknown>;
+            if (props[c.parentFkColumn] !== parentId) continue;
+            matches.push({
+              id: q.globalId,
+              properties: props,
+              geometry: q.geometry ?? null,
+              _pending: true,
+            });
+          }
+          out.set(c.layerKey, matches);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[related] queue read failed:', err);
+      }
+      return out;
+    };
+
+    void (async () => {
+      const queuedByLayer = await loadQueued();
+      if (ctrl.signal.aborted) return;
+
+      if (!isOnline) {
+        setState((prev) => {
+          const next: Record<string, RelatedRowsState> = { ...prev };
+          for (const c of children) {
+            next[c.layerKey] = {
+              loading: false,
+              error: null,
+              rows: queuedByLayer.get(c.layerKey) ?? [],
+            };
+          }
+          return next;
+        });
+        return;
+      }
+
+      await Promise.all(
+        children.map(async (c) => {
+          const queued = queuedByLayer.get(c.layerKey) ?? [];
+          try {
+            const url =
+              `/api/portal/items/${parentDataLayerId}/layers/${c.layerKey}` +
+              `/features?parentFk=${encodeURIComponent(c.parentFkColumn)}` +
+              `&parentId=${encodeURIComponent(parentId)}`;
+            const res = await fetch(url, {
+              signal: ctrl.signal,
+              headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status}`);
+            }
+            const json = (await res.json()) as {
+              features?: Array<{
+                id?: string;
+                properties?: Record<string, unknown>;
+                geometry?: GeoJSON.Geometry | null;
+              }>;
+            };
+            const synced: RelatedFeature[] = (json.features ?? []).map(
+              (f) => ({
+                id: String(f.id ?? ''),
+                properties: f.properties ?? {},
+                geometry: f.geometry ?? null,
+              }),
+            );
+            const syncedIds = new Set(synced.map((r) => r.id));
+            const stillPending = queued.filter((q) => !syncedIds.has(q.id));
+            const rows = [...stillPending, ...synced];
+            setState((prev) => ({
+              ...prev,
+              [c.layerKey]: { loading: false, error: null, rows },
+            }));
+          } catch (err) {
+            if ((err as { name?: string })?.name === 'AbortError') return;
+            setState((prev) => ({
+              ...prev,
+              [c.layerKey]: {
+                loading: false,
+                error:
+                  err instanceof Error ? err.message : 'Failed to load',
+                rows: queued,
+              },
+            }));
+          }
+        }),
+      );
+    })();
+
+    return () => {
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentId, parentDataLayerId, dataCollectionId, isOnline]);
+
+  return state;
+}
+
 interface Props {
   dataCollectionId: string;
   title: string;
@@ -1790,8 +1968,25 @@ export function FieldRuntime({
       {featureSheet && formModal === null ? (
         <FieldFeaturePopupSheet
           state={featureSheet}
+          dataCollectionId={dataCollectionId}
+          isOnline={isOnline}
+          editableLayers={editableLayers}
           onChangeState={setFeatureSheet}
           onClose={() => setFeatureSheet(null)}
+          onOpenRelated={(childLayer, feature) => {
+            // #265: tap a related row in the popup -> jump straight
+            // into editing it. Mirrors the FormModal's onOpenRelated
+            // path; clearing the popup first so the FormModal owns
+            // the bottom of the viewport.
+            setFeatureSheet(null);
+            setFormModal({
+              layer: childLayer,
+              mode: 'edit',
+              featureId: feature.id,
+              properties: feature.properties,
+              geometry: feature.geometry,
+            });
+          }}
           onEdit={(hit) => {
             // Switch the FormModal to edit mode for the hit's
             // editable layer. The same shape the legacy tap-to-edit
@@ -2952,184 +3147,18 @@ function FormModal({
     setActiveGeometry(modal.geometry);
   }, [modal.geometry]);
 
-  // #247: per-child fetch + cache of existing related rows. Keyed by
-  // childLayer.layerKey because that's what the modal already has in
-  // hand from modal.layer.childLayers. Each entry tracks loading,
-  // error, and the row payload so the rendered list can show a
-  // spinner while in flight, an error pill on failure, and the rows
-  // (with global_id + properties + geometry) once loaded.
-  type RelatedFeature = {
-    id: string;
-    properties: Record<string, unknown>;
-    geometry: GeoJSON.Geometry | null;
-    /** #266: true when this row is sourced from the offline
-     *  queue (insert pending sync). The list renders an
-     *  "(unsynced)" badge so the worker sees the row immediately
-     *  but knows it hasn't reached the server yet. */
-    _pending?: boolean;
-  };
-  type RelatedRowsState = {
-    loading: boolean;
-    error: string | null;
-    rows: RelatedFeature[];
-  };
-  const [relatedRowsByChild, setRelatedRowsByChild] = useState<
-    Record<string, RelatedRowsState>
-  >({});
-
-  // #247 / #266: in edit mode, build the related-records list per
-  // child layer. Online: fetch synced rows from the API
-  // (?parentFk=...&parentId=...) AND merge any offline-queued
-  // inserts so a worker who just tapped Add sees their unsynced
-  // row immediately, marked _pending=true. Offline: drop the
-  // network call and render only the queued rows.
-  //
-  // Aborts the in-flight fetch on unmount / re-fire so a quick
-  // tap-through doesn't leave dangling fetches scribbling stale
-  // state. The IDB read is fast and uncancelable; we tolerate
-  // the (rare) case where the effect re-fires before IDB resolves
-  // by checking the abort signal before setState.
-  useEffect(() => {
-    if (modal.mode !== 'edit') return undefined;
-    const children = modal.layer.childLayers ?? [];
-    if (children.length === 0) return undefined;
-    const parentId = modal.featureId;
-    const parentDataLayerId = modal.layer.dataLayerId;
-    const ctrl = new AbortController();
-    setRelatedRowsByChild((prev) => {
-      const next: Record<string, RelatedRowsState> = { ...prev };
-      for (const c of children) {
-        next[c.layerKey] = { loading: true, error: null, rows: [] };
-      }
-      return next;
-    });
-
-    // Read offline-queued inserts for THIS data_collection that
-    // target one of the relevant child layers AND whose properties
-    // carry the parent FK pointing at this parent feature. The
-    // queue is keyed by data_collection so we filter client-side
-    // by (layerKey, parentFk match). Pending inserts are the only
-    // op type we surface here -- updates are reflected in the
-    // server-returned row once it syncs (and our local cache will
-    // be in the cached features store anyway).
-    const loadQueued = async (): Promise<
-      Map<string, RelatedFeature[]>
-    > => {
-      const out = new Map<string, RelatedFeature[]>();
-      try {
-        const all = await listQueue(dataCollectionId);
-        for (const c of children) {
-          const matches: RelatedFeature[] = [];
-          for (const q of all) {
-            if (q.op !== 'insert') continue;
-            if (q.syncStatus !== 'pending') continue;
-            if (q.dataLayerId !== parentDataLayerId) continue;
-            if (q.layerKey !== c.layerKey) continue;
-            const props = (q.properties ?? {}) as Record<string, unknown>;
-            if (props[c.parentFkColumn] !== parentId) continue;
-            matches.push({
-              id: q.globalId,
-              properties: props,
-              geometry: q.geometry ?? null,
-              _pending: true,
-            });
-          }
-          out.set(c.layerKey, matches);
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[related] queue read failed:', err);
-      }
-      return out;
-    };
-
-    void (async () => {
-      const queuedByLayer = await loadQueued();
-      if (ctrl.signal.aborted) return;
-
-      if (!isOnline) {
-        // Offline: render only queued rows, no error state.
-        setRelatedRowsByChild((prev) => {
-          const next: Record<string, RelatedRowsState> = { ...prev };
-          for (const c of children) {
-            next[c.layerKey] = {
-              loading: false,
-              error: null,
-              rows: queuedByLayer.get(c.layerKey) ?? [],
-            };
-          }
-          return next;
-        });
-        return;
-      }
-
-      await Promise.all(
-        children.map(async (c) => {
-          const queued = queuedByLayer.get(c.layerKey) ?? [];
-          try {
-            const url =
-              `/api/portal/items/${parentDataLayerId}/layers/${c.layerKey}` +
-              `/features?parentFk=${encodeURIComponent(c.parentFkColumn)}` +
-              `&parentId=${encodeURIComponent(parentId)}`;
-            const res = await fetch(url, {
-              signal: ctrl.signal,
-              headers: { Accept: 'application/json' },
-            });
-            if (!res.ok) {
-              throw new Error(`HTTP ${res.status}`);
-            }
-            const json = (await res.json()) as {
-              features?: Array<{
-                id?: string;
-                properties?: Record<string, unknown>;
-                geometry?: GeoJSON.Geometry | null;
-              }>;
-            };
-            const synced: RelatedFeature[] = (json.features ?? []).map((f) => ({
-              id: String(f.id ?? ''),
-              properties: f.properties ?? {},
-              geometry: f.geometry ?? null,
-            }));
-            // Pending rows go first so the user sees their just-
-            // captured work at the top of the list. Drop any
-            // queued rows whose globalId already came back from
-            // the server (a sync that completed between IDB read
-            // and the network response).
-            const syncedIds = new Set(synced.map((r) => r.id));
-            const stillPending = queued.filter((q) => !syncedIds.has(q.id));
-            const rows = [...stillPending, ...synced];
-            setRelatedRowsByChild((prev) => ({
-              ...prev,
-              [c.layerKey]: { loading: false, error: null, rows },
-            }));
-          } catch (err) {
-            if ((err as { name?: string })?.name === 'AbortError') return;
-            // Online fetch failed but queued rows are still useful.
-            setRelatedRowsByChild((prev) => ({
-              ...prev,
-              [c.layerKey]: {
-                loading: false,
-                error:
-                  err instanceof Error ? err.message : 'Failed to load',
-                rows: queued,
-              },
-            }));
-          }
-        }),
-      );
-    })();
-
-    return () => {
-      ctrl.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    modal.mode,
-    modal.mode === 'edit' ? modal.featureId : null,
-    modal.layer.dataLayerId,
+  // #247 / #265 / #266: in edit mode, build the related-records list
+  // per child layer. Logic extracted to useRelatedRowsByChild so the
+  // popup bottom sheet (#265) can render the same list on a tap-on-
+  // feature gesture without going through the form modal first.
+  const relatedRowsByChild = useRelatedRowsByChild({
+    parentDataLayerId:
+      modal.mode === 'edit' ? modal.layer.dataLayerId : null,
+    parentId: modal.mode === 'edit' ? modal.featureId : null,
+    childLayers: modal.layer.childLayers,
     dataCollectionId,
     isOnline,
-  ]);
+  });
 
   const form = useMemo<FormSchema>(() => {
     let base: FormSchema;
@@ -3794,10 +3823,14 @@ function FieldLocateButton({
  */
 function FieldFeaturePopupSheet({
   state,
+  dataCollectionId,
+  isOnline,
+  editableLayers,
   onChangeState,
   onClose,
   onEdit,
   onCopy,
+  onOpenRelated,
 }: {
   state: NonNullable<
     | { mode: 'list'; hits: Array<unknown>; expanded: boolean }
@@ -3809,6 +3842,18 @@ function FieldFeaturePopupSheet({
         expanded: boolean;
       }
   >;
+  /** #265: data_collection id for the offline-queue read in
+   *  useRelatedRowsByChild. Same value that the runtime hands to the
+   *  FormModal. */
+  dataCollectionId: string;
+  /** #265: drives whether the related-records hook fetches from the
+   *  API or only renders queued offline rows. */
+  isOnline: boolean;
+  /** #265: the runtime's full editable-layer list. The popup looks up
+   *  a child layer key against this when the user taps a related row
+   *  so the FormModal can open with the full EditableLayer (fields,
+   *  form binding, etc.). */
+  editableLayers: EditableLayer[];
   onChangeState: (
     next:
       | null
@@ -3863,6 +3908,17 @@ function FieldFeaturePopupSheet({
     geometry: GeoJSON.Geometry | null;
     editable: EditableLayer | null;
   }) => void;
+  /** #265: open a child related record straight from the popup. The
+   *  runtime owns the FormModal so the popup just hands off the
+   *  resolved (childLayer, feature) pair. */
+  onOpenRelated: (
+    childLayer: EditableLayer,
+    feature: {
+      id: string;
+      properties: Record<string, unknown>;
+      geometry: GeoJSON.Geometry | null;
+    },
+  ) => void;
 }) {
   // Cast through unknown to the concrete shape the parent passes; the
   // public prop type uses unknown to avoid duplicating the type alias
@@ -3889,6 +3945,27 @@ function FieldFeaturePopupSheet({
   const sheetClass = expanded
     ? 'max-h-[92dvh] min-h-[92dvh]'
     : 'max-h-[55dvh] min-h-[55dvh]';
+
+  // #265: in detail mode, surface the parent feature's child-layer
+  // rows under the attribute table. We pull the editable layer's
+  // childLayers descriptor (the same one the FormModal uses) and
+  // pass parentDataLayerId + parentId to the shared hook. Hook is
+  // called unconditionally so React's rules-of-hooks stay happy in
+  // list mode (the hook's first guard short-circuits on a null
+  // parentId).
+  const detailHit = concrete.mode === 'detail' ? concrete.hit : null;
+  const parentEditable =
+    detailHit && detailHit.editable && detailHit.globalId
+      ? detailHit.editable
+      : null;
+  const relatedRowsByChild = useRelatedRowsByChild({
+    parentDataLayerId: parentEditable?.dataLayerId ?? null,
+    parentId:
+      parentEditable && detailHit?.globalId ? detailHit.globalId : null,
+    childLayers: parentEditable?.childLayers,
+    dataCollectionId,
+    isOnline,
+  });
 
   return (
     <div
@@ -4042,27 +4119,128 @@ function FieldFeaturePopupSheet({
               ))}
             </ul>
           ) : (
-            <dl className="divide-y divide-border">
-              {Object.entries(concrete.hit.properties).map(([k, v]) => (
-                <div key={k} className="px-3 py-2">
-                  <dt className="text-[11px] uppercase tracking-wide text-muted">
-                    {k}
-                  </dt>
-                  <dd className="mt-0.5 break-words text-sm text-ink-0">
-                    {v === null || v === undefined || v === ''
-                      ? <span className="text-muted">(empty)</span>
-                      : typeof v === 'object'
-                        ? JSON.stringify(v)
-                        : String(v)}
-                  </dd>
-                </div>
-              ))}
-              {Object.keys(concrete.hit.properties).length === 0 ? (
-                <div className="px-3 py-4 text-sm text-muted">
-                  No attributes on this feature.
+            <>
+              <dl className="divide-y divide-border">
+                {Object.entries(concrete.hit.properties).map(([k, v]) => (
+                  <div key={k} className="px-3 py-2">
+                    <dt className="text-[11px] uppercase tracking-wide text-muted">
+                      {k}
+                    </dt>
+                    <dd className="mt-0.5 break-words text-sm text-ink-0">
+                      {v === null || v === undefined || v === ''
+                        ? <span className="text-muted">(empty)</span>
+                        : typeof v === 'object'
+                          ? JSON.stringify(v)
+                          : String(v)}
+                    </dd>
+                  </div>
+                ))}
+                {Object.keys(concrete.hit.properties).length === 0 ? (
+                  <div className="px-3 py-4 text-sm text-muted">
+                    No attributes on this feature.
+                  </div>
+                ) : null}
+              </dl>
+
+              {/* #265: related-records (popup.showRelatedRecords).
+                  Surface the parent feature's child-layer rows so a
+                  worker can drill straight into a Status / Inspection
+                  / etc record from the popup without first opening
+                  the parent in edit mode. Same shape as the FormModal
+                  list -- pending rows tagged with an unsynced badge
+                  via _pending. Only rendered when the layer actually
+                  declares childLayers and we have a globalId to
+                  filter on. */}
+              {parentEditable &&
+              (parentEditable.childLayers?.length ?? 0) > 0 ? (
+                <div className="border-t border-border bg-surface-0/50">
+                  {(parentEditable.childLayers ?? []).map((c) => {
+                    const child = editableLayers.find(
+                      (e) => e.layerKey === c.layerKey,
+                    );
+                    const rowsState = relatedRowsByChild[c.layerKey];
+                    return (
+                      <section
+                        key={c.layerKey}
+                        className="border-t border-border first:border-t-0 px-3 py-3"
+                      >
+                        <div className="mb-2 flex items-baseline justify-between gap-2">
+                          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                            {c.layerLabel}
+                          </h3>
+                          {rowsState && !rowsState.loading ? (
+                            <span className="text-[11px] text-muted">
+                              {rowsState.rows.length} row
+                              {rowsState.rows.length === 1 ? '' : 's'}
+                            </span>
+                          ) : null}
+                        </div>
+                        {!rowsState || rowsState.loading ? (
+                          <p className="text-sm text-muted">Loading...</p>
+                        ) : rowsState.error ? (
+                          <p className="text-sm text-rose-700">
+                            Couldn&apos;t load {c.layerLabel} records
+                            ({rowsState.error}).
+                          </p>
+                        ) : rowsState.rows.length === 0 ? (
+                          <p className="text-sm text-muted">
+                            No {c.layerLabel.toLowerCase()} records yet.
+                          </p>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {rowsState.rows.map((row) => {
+                              const pending = row._pending === true;
+                              const canOpen = !!child && !pending;
+                              return (
+                                <li
+                                  key={row.id}
+                                  className={
+                                    'flex min-h-[44px] items-center justify-between gap-2 rounded-md border px-3 py-2 ' +
+                                    (pending
+                                      ? 'border-amber-300 bg-amber-50'
+                                      : 'border-border bg-surface-0')
+                                  }
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-base text-ink-0">
+                                      {pickRelatedRowTitle(row.properties) ??
+                                        row.id.slice(0, 8)}
+                                      {pending ? (
+                                        <span className="ml-2 inline-flex items-center rounded bg-amber-200 px-1.5 py-0.5 text-xs font-medium text-amber-900">
+                                          unsynced
+                                        </span>
+                                      ) : null}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    disabled={!canOpen}
+                                    onClick={() => {
+                                      if (!canOpen || !child) return;
+                                      onOpenRelated(child, row);
+                                    }}
+                                    title={
+                                      pending
+                                        ? 'This record is waiting to sync. It will be openable once it reaches the server.'
+                                        : !child
+                                          ? 'You do not have edit access to this layer'
+                                          : `Open this ${c.layerLabel} record`
+                                    }
+                                    className="inline-flex h-9 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-1 px-3 text-sm text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                                  >
+                                    Open
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </section>
+                    );
+                  })}
                 </div>
               ) : null}
-            </dl>
+            </>
           )}
         </div>
       </div>
