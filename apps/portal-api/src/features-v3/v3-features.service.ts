@@ -185,12 +185,26 @@ export class V3FeaturesService {
     // omit the cast entirely; rowToFeature falls back to geometry:null
     // when row.geom is undefined.
     const geomProjection = opts.isTable ? '' : 'ST_AsGeoJSON(geom) AS geom,';
+    // Hard cap on the result set. With 800k+ polygon layers, an
+    // unbounded SELECT here returned a row buffer too large for
+    // Prisma's napi bridge: the rust->js String conversion blew up
+    // with "Failed to convert rust `String` into napi `string`",
+    // which surfaced to the user as a 500 in the detail-page
+    // Browse panel and the map attribute table. The cap keeps
+    // those surfaces functional for big layers (paginated/preview
+    // shape) without changing behaviour for typical-sized layers.
+    // The map render path that genuinely needs all features for
+    // a viewport gets there via bbox-narrowed requests; clients
+    // that want more should also pass `?bbox=` to scope down.
+    // Real fix for genuinely large unbounded reads is MVT (#245).
+    const HARD_CAP = 10000;
     const sql = `
       SELECT gid, global_id, ${geomProjection} properties,
              valid_from, valid_to, created_by, created_at, edited_by, edited_at
       FROM "${tbl}"
       WHERE ${whereClauses.join(' AND ')}
       ORDER BY gid
+      LIMIT ${HARD_CAP}
     `;
     const rows = await this.prisma.$queryRawUnsafe<V3Row[]>(sql, ...params);
     return {
