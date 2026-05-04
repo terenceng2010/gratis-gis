@@ -74,16 +74,22 @@ export interface TileWarmProgress {
   bytes: number;
 }
 
-const DEFAULT_ZOOM: [number, number] = [12, 17];
-// #270: bumped from 5_000 because the 5k cap was silently truncating
-// offline tile coverage -- a worker downloading a city/county-scale
-// area got a non-deterministic 5k tile subset with no UI signal.
-// At ~25 KB/tile that's a ~125 MB cap; bumped to 50k (~1.25 GB) so
-// city/county-scale areas finish without hitting the cap. Modern
-// devices comfortably hold this; if a user truly needs more we'll
-// add a per-area override knob, but 50k matches what Esri Field
-// Maps allows out of the box.
-const DEFAULT_MAX_TILES = 50_000;
+// #272: default upper zoom bumped from 17 to 19. z17 (~300 m/tile)
+// reads as "building-scale, blurry" for parcel-edge work; z19 is
+// the deepest standard basemap providers serve (OSM Standard, Esri
+// World Imagery default, Mapbox Streets all top out at z19). A
+// future slice exposes this as a per-download UI slider with a
+// live tile-count estimate (#272); for now [12, 19] is a sensible
+// "most detailed by default" baseline.
+const DEFAULT_ZOOM: [number, number] = [12, 19];
+// #270 / #272: tile cap raised from 50k to 200k because the new
+// default upper zoom (19, was 17) multiplies tile count by ~16x
+// for the same bbox -- a city-scale area that fit in 5k tiles
+// z12-17 wants ~80k z12-19. Modern devices hold 200k tiles
+// comfortably (at ~25 KB/tile that's ~5 GB); a real per-download
+// UI knob (#272) is the long-term fix so the cap can stay flexible
+// per area instead of one global value.
+const DEFAULT_MAX_TILES = 200_000;
 const DEFAULT_CONCURRENCY = 6;
 const ESTIMATED_BYTES_PER_TILE_MISSING_HEADER = 25_000;
 

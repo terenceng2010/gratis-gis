@@ -1001,7 +1001,19 @@ export function FieldRuntime({
           pickListIds: Array.from(pickListIdSet),
           ...(viewportBbox !== undefined ? { bbox: viewportBbox } : {}),
           ...(tileUrlTemplates.length > 0
-            ? { tileUrlTemplates, tileZoomRange: [12, 17] as [number, number] }
+            ? {
+                tileUrlTemplates,
+                // #272: zoom range bumped 17 -> 19 so the offline
+                // basemap holds the deepest tiles most providers
+                // serve (OSM Standard, Esri World Imagery, Mapbox
+                // Streets all top out at z19). A real per-download
+                // slider is the long-term fix; this default makes
+                // the field PWA usable for parcel-edge work without
+                // it. The warmer's DEFAULT_MAX_TILES (200k as of
+                // #272) keeps the cap loose enough to cover a
+                // city-scale area at this depth.
+                tileZoomRange: [12, 19] as [number, number],
+              }
             : {}),
         },
         (p) => setDownloadProgress({ ...p }),
