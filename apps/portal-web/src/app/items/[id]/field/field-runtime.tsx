@@ -4142,6 +4142,22 @@ function FieldFeaturePopupSheet({
                 ) : null}
               </dl>
 
+              {/* #267: attachments (read-only thumbnails). Mounted
+                  only when we have an editable layer + globalId so
+                  the V3FeatureAttachments fetch URL is well-formed.
+                  canEdit=false hides the upload button -- the popup
+                  is a read view; users tap Edit to upload. */}
+              {parentEditable && detailHit?.globalId ? (
+                <div className="border-t border-border bg-surface-0/50 px-3 py-3">
+                  <V3FeatureAttachments
+                    itemId={parentEditable.dataLayerId}
+                    layerId={parentEditable.layerKey}
+                    featureId={detailHit.globalId}
+                    canEdit={false}
+                  />
+                </div>
+              ) : null}
+
               {/* #265: related-records (popup.showRelatedRecords).
                   Surface the parent feature's child-layer rows so a
                   worker can drill straight into a Status / Inspection
