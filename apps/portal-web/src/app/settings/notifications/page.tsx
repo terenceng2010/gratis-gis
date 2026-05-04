@@ -29,8 +29,14 @@ export const metadata = { title: 'Notification preferences' };
  * slow round-trip doesn't make the toggle feel laggy.
  */
 export default async function NotificationsSettingsPage() {
+  // apiFetch is the server-side helper; it talks to portal-api
+  // directly, so the path it gets is the API's actual URL (no
+  // `/api/portal/` BFF prefix). Other server components in this
+  // app all use `/api/...` here -- this caller had the BFF path
+  // by mistake, which made portal-api receive
+  // `/api/portal/users/me/notification-preferences` and 404.
   const data = await apiFetch<PreferencesPayload>(
-    '/api/portal/users/me/notification-preferences',
+    '/api/users/me/notification-preferences',
   );
 
   return (

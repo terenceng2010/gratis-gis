@@ -295,6 +295,40 @@ export class IngestController {
       sourceSrs,
     });
 
+    // Recompute item-level bbox from the freshly-loaded layer
+    // tables. Without this, the items list spatial-search filter
+    // and the data_layer detail page's map preview have nothing to
+    // anchor on (item.bbox stays empty), so a just-ingested layer
+    // can't be panned to or rendered until the next housekeeping
+    // recompute pass runs (which can be hours away).
+    //
+    // We re-read item.data so we aggregate over the canonical layer
+    // list (insertFeatures and any concurrent layer edits could
+    // have shifted things). Failures here are non-fatal: the
+    // ingest already succeeded, the bbox just remains stale until
+    // the next housekeeping pass.
+    try {
+      const fresh = await this.prisma.item.findUnique({
+        where: { id: itemId },
+        select: { data: true },
+      });
+      const layers = ((fresh?.data ?? null) as { layers?: V3LayerShape[] } | null)
+        ?.layers;
+      if (Array.isArray(layers)) {
+        const bbox = await this.v3Tables.aggregateBbox(itemId, layers);
+        await this.prisma.item.update({
+          where: { id: itemId },
+          data: { bbox: bbox ?? [] },
+        });
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ingestV3Layer] bbox recompute failed for ${itemId}/${layerId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
     return {
       driver,
       sourceLayer: layerName,
