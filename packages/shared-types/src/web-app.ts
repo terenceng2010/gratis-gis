@@ -17,13 +17,14 @@
  */
 
 import type { EditorData } from './editor';
+import type { ViewerData } from './viewer';
 
 /**
  * Tag of which template a web_app implements. Each value pairs with
  * a config sub-shape in WebAppData.config. Adding a value: extend
  * this union and the WebAppData['config'] discriminated branch.
  */
-export type WebAppTemplate = 'editor';
+export type WebAppTemplate = 'editor' | 'viewer';
 
 /**
  * Top-level shape on a web_app's `data` field.
@@ -61,6 +62,7 @@ export interface WebAppData {
  */
 export type WebAppConfig =
   | { template: 'editor'; editor: EditorData }
+  | { template: 'viewer'; viewer: ViewerData }
   | { template: string; [key: string]: unknown };
 
 /**
@@ -116,6 +118,48 @@ export function readEditorData(item: {
   // migration ran correctly, but tolerate).
   if (cfg && typeof cfg === 'object' && 'targets' in cfg) {
     return cfg as unknown as EditorData;
+  }
+  return null;
+}
+
+/**
+ * Type guard: was this item created as the viewer (Read-Only Viewer)
+ * template? Mirrors isEditorItem; no legacy top-level `type='viewer'`
+ * to support since the viewer template never existed pre-#258.
+ *
+ * Accepts the broad `Item` shape (not narrowed to a generic) so the
+ * helper can be reused on ItemWithShares, list rows, etc.
+ */
+export function isViewerItem(item: {
+  type: string;
+  data?: unknown;
+}): boolean {
+  if (item.type !== 'web_app') return false;
+  const d = item.data as WebAppData | null | undefined;
+  return d?.template === 'viewer';
+}
+
+/**
+ * Read the ViewerData out of a web_app+viewer item. Returns null
+ * when the item isn't a viewer (or when the data is missing /
+ * malformed). Mirrors readEditorData.
+ */
+export function readViewerData(item: {
+  type: string;
+  data?: unknown;
+}): ViewerData | null {
+  if (item.type !== 'web_app') return null;
+  const d = item.data as WebAppData | null | undefined;
+  if (d?.template !== 'viewer') return null;
+  const cfg = d.config as
+    | { template: 'viewer'; viewer?: ViewerData }
+    | null
+    | undefined;
+  if (cfg?.template === 'viewer' && cfg.viewer) return cfg.viewer;
+  // Fallback: data.config IS the ViewerData (defensive — shouldn't
+  // happen if create / migration paths follow the canonical shape).
+  if (cfg && typeof cfg === 'object' && 'targets' in cfg) {
+    return cfg as unknown as ViewerData;
   }
   return null;
 }

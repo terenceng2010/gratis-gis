@@ -24,5 +24,6 @@ export * from './basemap';
 export * from './wms-service';
 export * from './folder';
 export * from './editor';
+export * from './viewer';
 export * from './web-app';
 export * from './data-collection';
