@@ -35,6 +35,7 @@ import type {
   Item,
   ItemAccess,
   ItemType,
+  WebAppData,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
@@ -671,11 +672,24 @@ export function NewItemWizard() {
       // "Add to folder" multi-select and drag-drop in Phase 1b.
       data = DEFAULT_FOLDER;
     } else if (type === 'editor') {
-      // Empty editor scaffold; the detail page handles target-layer
-      // configuration and template authoring. The runtime renders
-      // an empty-state prompt until the first target is added. See
-      // docs/editing-and-collection.md.
-      data = DEFAULT_EDITOR;
+      // #258: new editor items go in as web_app + template='editor'
+      // directly so we don't keep accumulating legacy `type='editor'`
+      // rows during the deprecation window. The user-facing word
+      // stays "Editor" (see the picker option above) but the persisted
+      // shape is the consolidated WebAppData. readEditorData() unwraps
+      // the nested EditorData on read; isEditorItem() identifies
+      // these rows for routing and policy.
+      //
+      // The detail page handles target-layer configuration and
+      // template authoring on top of an empty editor scaffold. The
+      // runtime renders an empty-state prompt until the first target
+      // is added. See docs/editing-and-collection.md.
+      const webApp: WebAppData = {
+        version: 1,
+        template: 'editor',
+        config: { template: 'editor', editor: DEFAULT_EDITOR },
+      };
+      data = webApp;
     } else if (type === 'data_collection') {
       // mapId is structural: a data_collection without a map has
       // nothing for collectors to tap on. Block create until the
@@ -719,8 +733,16 @@ export function NewItemWizard() {
       data = {};
     }
 
+    // #258: the picker still surfaces an "Editor" option that sets
+    // type='editor' so the rest of the wizard's gating, validation,
+    // and copy reads naturally. The persisted shape is web_app +
+    // template='editor' though, so swap the type here at the
+    // payload-build boundary. Keeps the user-facing word stable
+    // while we collapse the storage model.
+    const payloadType: ItemType = type === 'editor' ? 'web_app' : type;
+
     const payload = {
-      type,
+      type: payloadType,
       title: title.trim(),
       description: description.trim(),
       tags: tagsText
