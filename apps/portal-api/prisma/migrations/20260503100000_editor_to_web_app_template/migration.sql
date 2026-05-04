@@ -17,15 +17,20 @@
 --     deprecation window. Drop it in a follow-up migration once
 --     all consumers are off the literal.
 
-UPDATE "Item"
+-- The Item model maps to lowercase `item` via @@map (Prisma's
+-- snake_case convention applied to every table in this schema).
+-- The Item.data column is mapped to `data_json` for the same
+-- reason. Both names need to be the database identifiers, not the
+-- Prisma model property names.
+UPDATE "item"
 SET
   type = 'web_app',
-  data = jsonb_build_object(
+  data_json = jsonb_build_object(
     'version', 1,
     'template', 'editor',
     'config', jsonb_build_object(
       'template', 'editor',
-      'editor', COALESCE(data, '{}'::jsonb)
+      'editor', COALESCE(data_json, '{}'::jsonb)
     )
   )
 WHERE type = 'editor';
