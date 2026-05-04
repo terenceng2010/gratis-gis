@@ -162,11 +162,16 @@ export default async function FieldRuntimePage({ params }: Props) {
   // Build the per-layer "editable target" descriptors the runtime
   // consumes. Each entry pairs a v3 sublayer with its parent
   // data_layer id and (when present) the explicit form binding from
-  // the data_collection. Spatial-only for Slice 2: table sublayers
-  // (geometryType=null) are excluded because there's no point of
-  // entry on the map for them yet -- they're event-tracking related
-  // tables, surfaced via parent-feature popups in a later slice.
+  // the data_collection. Spatial sublayers come from the map's
+  // layer refs (one entry per map layer); table sublayers reachable
+  // as event-tracking related tables get added too so the field
+  // runtime's "Add related" affordance can target them. Without the
+  // table-sublayer entries, the related-records list shows them but
+  // the Add button stays disabled.
   const editableLayers: EditableLayer[] = [];
+  // Track (dataLayerId, layerKey) we've already pushed so the
+  // table-sublayer pass below doesn't duplicate spatial entries.
+  const seenLayerKey = new Set<string>();
   for (const ref of dataLayerRefs) {
     const dlItem = dataLayerById.get(ref.dataLayerId);
     if (!dlItem) continue;
@@ -179,7 +184,7 @@ export default async function FieldRuntimePage({ params }: Props) {
       ? data.layers.find((l) => l.id === ref.layerKey)
       : data.layers.find((l) => l.geometryType !== null);
     if (!sublayer) continue;
-    if (sublayer.geometryType === null) continue; // tables: out-of-scope for Slice 2
+    if (sublayer.geometryType === null) continue; // spatial-only at this pass
     const binding = dc.formBindings?.[sublayer.id];
     // Phase C: enumerate child layers within the same data_layer
     // item that reference this layer via parentFkColumn. Used by
@@ -217,6 +222,38 @@ export default async function FieldRuntimePage({ params }: Props) {
       ...(binding ? { boundFormItemId: binding.formItemId } : {}),
       ...(childLayers.length > 0 ? { childLayers } : {}),
     });
+    seenLayerKey.add(`${dlItem.id}:${sublayer.id}`);
+  }
+  // Second pass: pull in table-typed child sublayers referenced from
+  // any spatial parent we just registered. These don't show on the
+  // map (no geometry) but the parent-feature edit drawer's "Add
+  // related" button needs an EditableLayer entry to wire onto.
+  // Without this pass the button stays disabled even when the
+  // schema declares a child relationship.
+  for (const parent of [...editableLayers]) {
+    const dlItem = dataLayerById.get(parent.dataLayerId);
+    if (!dlItem) continue;
+    const data = dlItem.data as DataLayerData | undefined;
+    if (!data || data.version !== 3) continue;
+    for (const child of parent.childLayers ?? []) {
+      if (child.geometryType !== null) continue; // spatial children already covered by their own map ref
+      const key = `${parent.dataLayerId}:${child.layerKey}`;
+      if (seenLayerKey.has(key)) continue;
+      const sub = data.layers.find((l) => l.id === child.layerKey);
+      if (!sub) continue;
+      const binding = dc.formBindings?.[sub.id];
+      editableLayers.push({
+        dataLayerId: parent.dataLayerId,
+        dataLayerTitle: parent.dataLayerTitle,
+        layerKey: sub.id,
+        layerLabel: sub.label ?? sub.id,
+        geometryType: sub.geometryType,
+        fields: sub.fields,
+        editingPolicy: sub.editingPolicy ?? 'all-rows',
+        ...(binding ? { boundFormItemId: binding.formItemId } : {}),
+      });
+      seenLayerKey.add(key);
+    }
   }
 
   // Resolve any pick_list items referenced by an editable layer's

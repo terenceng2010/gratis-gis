@@ -113,9 +113,11 @@ export interface EditableLayer {
   layerKey: string;
   /** Sublayer label; the runtime's primary on-screen identifier. */
   layerLabel: string;
-  /** Sublayer geometry type; null = table (filtered out at the page
-   *  level for Slice 2). */
-  geometryType: Exclude<LayerGeometryType, null>;
+  /** Sublayer geometry type. null = table (no geometry). Spatial
+   *  sublayers appear in the Add-feature picker and the layer panel;
+   *  table sublayers are reachable as related-record targets from a
+   *  parent feature's edit drawer (see childLayers below). */
+  geometryType: LayerGeometryType;
   fields: FeatureField[];
   editingPolicy: 'all-rows' | 'own-rows-only';
   /** Optional explicit form binding from the data_collection's
@@ -3435,10 +3437,6 @@ function FormModal({
                             {state?.loading ? (
                               <Loader2 className="h-4 w-4 animate-spin text-muted" />
                             ) : null}
-                          </p>
-                          <p className="truncate text-xs text-muted">
-                            {(c.geometryType ?? 'table').toUpperCase()} ·
-                            linked via {c.parentFkColumn}
                           </p>
                         </div>
                         <button
