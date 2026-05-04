@@ -128,12 +128,19 @@ export class V3FeaturesController {
       if (geom) opts.boundaryClip = geom;
     }
     if (rowScope === 'own') opts.ownRowsOnly = { userId: user.id };
-    // #247: parent-FK filter. Two-step validation:
+    // #247 / #268: parent-FK filter. Two-step validation:
     //   1. column name must be a safe identifier (regex) so it can be
     //      embedded in the SQL string literal `properties->>'col'`
     //      without escaping shenanigans.
-    //   2. column must actually exist in the target layer's schema.
-    //      A typo / spoofed column never reaches the SQL.
+    //   2. column must be a real attribute on this layer -- either a
+    //      user-declared field OR the layer's parentFkColumn (the
+    //      relate-back FK that lives alongside fields[] on the v3
+    //      layer descriptor, not inside it). Without #2 a typo /
+    //      spoofed column never reaches the SQL; without the
+    //      parentFkColumn branch the legitimate filter from a
+    //      child-of-parent query was silently dropped, which made
+    //      the field runtime show every related row under every
+    //      parent (#268).
     // parentId is parameterized so any string is fine.
     if (parentFk && parentId) {
       if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(parentFk)) {
@@ -142,7 +149,10 @@ export class V3FeaturesController {
         // rows" gracefully and the worker can still tap Add. Logging
         // this would also be reasonable; for now the silent drop
         // matches how a missing geo_boundary clip is handled above.
-      } else if (!schemaHasField(layer, parentFk)) {
+      } else if (
+        !schemaHasField(layer, parentFk) &&
+        !layerHasParentFk(layer, parentFk)
+      ) {
         // Column not on this layer's schema -- same silent-drop
         // rationale as the regex case.
       } else {
@@ -493,13 +503,18 @@ export class V3FeaturesController {
      */
     isTable: boolean;
     /**
-     * #247: the resolved layer schema. Callers that need to validate
-     * a request-supplied field name (e.g. parentFk) against the
-     * actual column list use this rather than re-fetching the item.
-     * Optional shape because the controller only needs `fields`
-     * today; widen as more callers grow needs.
+     * #247 / #268: the resolved layer schema. Callers that need to
+     * validate a request-supplied field name (e.g. parentFk) against
+     * the actual column list use this rather than re-fetching the
+     * item. Includes `parentFkColumn` so the parent-FK filter can
+     * recognize the relate-back column even though it's not inside
+     * fields[].
      */
-    layer: { id: string; fields?: Array<{ name: string }> };
+    layer: {
+      id: string;
+      fields?: Array<{ name: string }>;
+      parentFkColumn?: string;
+    };
   }> {
     const item = await this.items.get(user, itemId);
     if (item.type !== 'data_layer') {
@@ -513,6 +528,7 @@ export class V3FeaturesController {
         editingPolicy?: 'all-rows' | 'own-rows-only';
         geometryType?: string | null;
         fields?: Array<{ name: string }>;
+        parentFkColumn?: string;
       }>;
     } | null;
     if (data?.version !== 3) {
@@ -581,6 +597,24 @@ function schemaHasField(
 ): boolean {
   if (!layer || !Array.isArray(layer.fields)) return false;
   return layer.fields.some((f) => f.name === fieldName);
+}
+
+/**
+ * Is `name` the parentFkColumn declared on this layer? The
+ * parentFkColumn is the relate-back FK a child layer declares to
+ * point at its parent (e.g. status -> inspection_point); it lives
+ * as a sibling property on the layer descriptor, NOT inside
+ * fields[]. The parent-FK filter is the one place a request-supplied
+ * column name should match against parentFkColumn rather than the
+ * fields list (#268).
+ */
+function layerHasParentFk(
+  layer: { parentFkColumn?: string } | undefined,
+  fieldName: string,
+): boolean {
+  if (!layer) return false;
+  return typeof layer.parentFkColumn === 'string'
+    && layer.parentFkColumn === fieldName;
 }
 
 /**
