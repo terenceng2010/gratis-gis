@@ -2323,24 +2323,31 @@ function LayerVisibilityPanel({
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
   const activeBasemap = basemaps.find((b) => b.id === currentBasemapId);
   return (
+    // #257: layer panel converted to a bottom sheet (was a small
+    // floating popover anchored to the Layers FAB at top-left).
+    // Bottom-sheet matches the new feature popup pattern and gives
+    // a thumb-friendly surface for outdoor use; the FAB stays as
+    // the entry point. Default height ~60dvh; the panel scrolls
+    // internally if content overflows.
+    // #256: header + row text bumped to text-base for outdoor
+    // visibility (was text-xs / text-sm). Touch targets (close
+    // button, basemap chip, layer rows) all read at >= 44 px tall.
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Layer visibility"
-      className="absolute right-3 top-14 z-20 w-64 max-w-[calc(100vw-1.5rem)] rounded-md border border-border bg-surface-1 shadow-overlay"
+      className="fixed inset-x-0 bottom-0 z-30 flex max-h-[60dvh] flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)]"
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Layers
-        </h3>
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2.5">
+        <h3 className="text-base font-semibold text-ink-0">Layers</h3>
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-1"
+          className="inline-flex h-10 w-10 items-center justify-center rounded text-ink-1 hover:bg-surface-2"
           aria-label="Close"
         >
-          <X className="h-3.5 w-3.5" />
+          <X className="h-5 w-5" />
         </button>
       </div>
       {/* Basemap chip at the top of the layer list (#223.8). Field
@@ -2356,14 +2363,14 @@ function LayerVisibilityPanel({
           <button
             type="button"
             onClick={() => setBasemapPickerOpen((v) => !v)}
-            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5 text-left text-xs font-medium text-ink-0 hover:border-accent hover:text-accent"
+            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0 px-3 py-2 text-left text-sm font-medium text-ink-0 hover:border-accent hover:text-accent"
             aria-expanded={basemapPickerOpen}
           >
-            <Layers className="h-3.5 w-3.5 shrink-0 text-muted" />
+            <Layers className="h-4 w-4 shrink-0 text-muted" />
             <span className="min-w-0 flex-1 truncate">
               Basemap: {activeBasemap?.label ?? 'default'}
             </span>
-            <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted">
+            <span className="shrink-0 text-xs uppercase tracking-wide text-muted">
               {basemapPickerOpen ? 'Hide' : 'Change'}
             </span>
           </button>
@@ -2379,7 +2386,7 @@ function LayerVisibilityPanel({
                         onBasemapChange(b.id);
                         setBasemapPickerOpen(false);
                       }}
-                      className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs ${
+                      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
                         active
                           ? 'bg-accent/10 text-accent'
                           : 'text-ink-0 hover:bg-surface-2'
@@ -2414,12 +2421,12 @@ function LayerVisibilityPanel({
           type="button"
           onClick={onDownload}
           disabled={isDownloading}
-          className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-surface-0 px-3 text-xs font-medium text-ink-0 hover:border-accent hover:text-accent disabled:opacity-50"
+          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-border bg-surface-0 px-3 text-sm font-medium text-ink-0 hover:border-accent hover:text-accent disabled:opacity-50"
         >
           {isDownloading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <CloudDownload className="h-3.5 w-3.5" />
+            <CloudDownload className="h-4 w-4" />
           )}
           {cachedDeployment ? 'Refresh offline cache' : 'Download for offline'}
         </button>
@@ -2504,9 +2511,9 @@ function LayerVisibilityPanel({
           ) : null}
         </div>
       ) : null}
-      <ul className="max-h-72 overflow-y-auto p-1">
+      <ul className="min-h-0 flex-1 overflow-y-auto p-1">
         {layers.length === 0 ? (
-          <li className="p-2 text-center text-xs text-muted">
+          <li className="p-3 text-center text-sm text-muted">
             No layers in this map.
           </li>
         ) : (
@@ -2516,7 +2523,7 @@ function LayerVisibilityPanel({
               return (
                 <li
                   key={l.id}
-                  className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted"
+                  className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted"
                 >
                   {l.title}
                 </li>
@@ -2528,13 +2535,13 @@ function LayerVisibilityPanel({
                 <button
                   type="button"
                   onClick={() => onToggle(l.id)}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-surface-2"
+                  className="flex min-h-[44px] w-full items-center gap-3 rounded px-2 py-2 text-left text-base hover:bg-surface-2"
                   aria-pressed={visible}
                 >
                   {visible ? (
-                    <Eye className="h-4 w-4 shrink-0 text-accent" />
+                    <Eye className="h-5 w-5 shrink-0 text-accent" />
                   ) : (
-                    <EyeOff className="h-4 w-4 shrink-0 text-muted" />
+                    <EyeOff className="h-5 w-5 shrink-0 text-muted" />
                   )}
                   <LayerSwatch layer={l} dimmed={!visible} />
                   <span
