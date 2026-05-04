@@ -205,7 +205,16 @@ export class V3FeaturesService {
     // simplification (ST_SimplifyPreserveTopology) keyed off the
     // requested zoom is the next lever -- still no MVT required
     // for normal interactive use.
-    const HARD_CAP = 10000;
+    // #270: bumped from 10000 to 100000 because the 10k limit was
+    // silently truncating offline-area downloads -- the field PWA
+    // builder hits this same endpoint and a worker downloading a
+    // city/county-scale parcel layer ended up with a non-deterministic
+    // 10k subset of rows with no UI signal that anything was missing.
+    // Modern devices have plenty of storage; the byte-budget concern
+    // (napi-string overflow at ~800k rows) is still ~8x away.
+    // Pagination via offset+limit is the proper fix when we need to
+    // exceed 100k; this value is the working ceiling for now.
+    const HARD_CAP = 100000;
     const sql = `
       SELECT gid, global_id, ${geomProjection} properties,
              valid_from, valid_to, created_by, created_at, edited_by, edited_at

@@ -75,7 +75,15 @@ export interface TileWarmProgress {
 }
 
 const DEFAULT_ZOOM: [number, number] = [12, 17];
-const DEFAULT_MAX_TILES = 5_000;
+// #270: bumped from 5_000 because the 5k cap was silently truncating
+// offline tile coverage -- a worker downloading a city/county-scale
+// area got a non-deterministic 5k tile subset with no UI signal.
+// At ~25 KB/tile that's a ~125 MB cap; bumped to 50k (~1.25 GB) so
+// city/county-scale areas finish without hitting the cap. Modern
+// devices comfortably hold this; if a user truly needs more we'll
+// add a per-area override knob, but 50k matches what Esri Field
+// Maps allows out of the box.
+const DEFAULT_MAX_TILES = 50_000;
 const DEFAULT_CONCURRENCY = 6;
 const ESTIMATED_BYTES_PER_TILE_MISSING_HEADER = 25_000;
 

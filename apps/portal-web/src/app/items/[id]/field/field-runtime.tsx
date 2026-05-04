@@ -1029,15 +1029,33 @@ export function FieldRuntime({
 
   // Remove this deployment from the device. Cascades through every
   // IDB store keyed on dataCollectionId (features, queue, forms,
-  // pick lists, manifest). Tile cache is left alone because it's a
-  // shared origin-wide cache and other deployments may still need
-  // those tiles. The user is sent back to /field afterwards so the
-  // catalog reflects the new state and they don't sit on a now-
-  // hollow runtime view.
+  // pick lists, manifest), AND clears the tile cache (#270).
+  //
+  // The original design left the tile cache alone on remove because
+  // it's a shared origin-wide cache and other deployments may still
+  // need those tiles. In practice that means a worker who removes a
+  // city-scale offline area and downloads a smaller one keeps paying
+  // for the old area's tiles forever -- the storage gauge never goes
+  // down even though the IDB rows are gone. For a small org with one
+  // or two active deployments at a time, clearing the tile cache on
+  // remove is the right tradeoff: a tiny re-download cost on the
+  // next download in exchange for honest storage accounting and
+  // actually reclaiming the bytes the user just asked us to free.
+  // The user is sent back to /field afterwards so the catalog
+  // reflects the new state.
   const removeCache = useCallback(async () => {
     try {
       await deleteDeployment(dataCollectionId);
       setCachedDeployment(null);
+      // Clear the SW tile cache too so the storage gauge reflects
+      // the removal. Best-effort: a failure here doesn't block the
+      // remove (the IDB rows are gone regardless).
+      try {
+        await clearTileCache();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('Tile cache clear failed during remove:', err);
+      }
       // Beacon the now-empty manifest so the admin's field-queues
       // view stops showing this deployment as cached. Bypasses the
       // throttle because this is a meaningful state change, not the
