@@ -81,6 +81,7 @@ import {
 } from '@/lib/offline-storage-quota';
 import {
   clearTileCache,
+  estimateTileCount,
   readTileCacheStats,
 } from '@/lib/offline-tile-warmer';
 import {
@@ -95,6 +96,7 @@ import {
 import { createGpsMarker, type GpsMarkerHandle } from './gps-map-marker';
 import { stampGpsMetadata } from './gps-metadata-stamp';
 import { V3FeatureAttachments } from '../data-layer/v3-feature-attachments';
+import { describeZoom } from '@/lib/map-scale';
 
 /**
  * Per-layer descriptor the field runtime consumes. Server-built (see
@@ -854,6 +856,16 @@ export function FieldRuntime({
     count: number;
     bytes: number;
   } | null>(null);
+  // #272: per-download tile zoom range. Defaults to the global
+  // [12, 19] from the offline-tile-warmer (the deepest most
+  // basemap providers serve), but the layer panel exposes a
+  // pair of pickers so a worker can shrink to [12, 17] for a
+  // faster smaller cache or push to [12, 22] when their basemap
+  // supports it. Persisted as session state -- the next visit to
+  // this deployment defaults back to [12, 19] until the user
+  // adjusts again.
+  const [tileZoomMin, setTileZoomMin] = useState<number>(12);
+  const [tileZoomMax, setTileZoomMax] = useState<number>(19);
   useEffect(() => {
     void (async () => {
       const [persisted, est, tiles] = await Promise.all([
@@ -1003,16 +1015,19 @@ export function FieldRuntime({
           ...(tileUrlTemplates.length > 0
             ? {
                 tileUrlTemplates,
-                // #272: zoom range bumped 17 -> 19 so the offline
-                // basemap holds the deepest tiles most providers
-                // serve (OSM Standard, Esri World Imagery, Mapbox
-                // Streets all top out at z19). A real per-download
-                // slider is the long-term fix; this default makes
-                // the field PWA usable for parcel-edge work without
-                // it. The warmer's DEFAULT_MAX_TILES (200k as of
-                // #272) keeps the cap loose enough to cover a
-                // city-scale area at this depth.
-                tileZoomRange: [12, 19] as [number, number],
+                // #272: user-chosen range from the layer-panel
+                // pickers. Defaults to [12, 19] (deepest most
+                // basemap providers serve), shrinkable for a
+                // smaller/faster cache, or expandable up to z22
+                // when the basemap supports it. The warmer's
+                // DEFAULT_MAX_TILES (200k) is still the hard
+                // ceiling -- the live tile-count estimate next to
+                // the picker tells the worker if they're about to
+                // hit it.
+                tileZoomRange: [tileZoomMin, tileZoomMax] as [
+                  number,
+                  number,
+                ],
               }
             : {}),
         },
@@ -1886,6 +1901,37 @@ export function FieldRuntime({
               const ok = await clearTileCache();
               if (ok) await refreshTileCacheStats();
             }}
+            tileZoomMin={tileZoomMin}
+            tileZoomMax={tileZoomMax}
+            onTileZoomMinChange={(z) => {
+              // Keep the pair coherent: if the user shrinks the
+              // upper bound below the lower bound, snap the lower
+              // bound to match. Same the other way around in the
+              // max handler.
+              setTileZoomMin(z);
+              if (z > tileZoomMax) setTileZoomMax(z);
+            }}
+            onTileZoomMaxChange={(z) => {
+              setTileZoomMax(z);
+              if (z < tileZoomMin) setTileZoomMin(z);
+            }}
+            estimatedTileCount={(() => {
+              // #272: live estimate against the current viewport.
+              // Recomputed on every render of the panel; cheap math
+              // (just sums per-zoom tile counts), no allocation.
+              const map = mapRef.current;
+              if (!map) return 0;
+              const b = map.getBounds();
+              return estimateTileCount(
+                [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+                [tileZoomMin, tileZoomMax],
+              );
+            })()}
+            centerLat={(() => {
+              const map = mapRef.current;
+              if (!map) return 0;
+              return map.getCenter().lat;
+            })()}
           />
         ) : null}
       </div>
@@ -2542,6 +2588,32 @@ function TemplatePicker({
 }
 
 /**
+ * #272: zoom levels exposed in the offline-download scale picker.
+ * Hand-picked instead of a continuous range so the dropdowns stay
+ * a manageable length (12 entries instead of 23) and each entry
+ * lands on a familiar map / engineering scale step:
+ *
+ *   z6  ~ regional         (~1:9.2M)
+ *   z9  ~ metro             (~1:1.1M)
+ *   z11 ~ small region     (~1:289k)
+ *   z12 ~ city              (~1:144k)
+ *   z14 ~ neighborhood     (~1:36k)
+ *   z15 ~ district          (~1:18k)
+ *   z16 ~ block            (~1:9k)
+ *   z17 ~ buildings         (~1:4.5k)
+ *   z18 ~ rough parcels    (~1:2.3k)
+ *   z19 ~ parcels          (~1:1.1k, 1"=100 ft)
+ *   z20 ~ survey           (~1:564,  1"=50 ft)
+ *   z22 ~ subcentimeter    (~1:141)
+ *
+ * Most basemap providers cap at z19, so 20-22 may 404 against
+ * standard tile sources -- the picker doesn't lock those out
+ * (some providers do go deeper) but the user pays a network bill
+ * for the failed requests.
+ */
+const ZOOM_PICKER_OPTIONS = [6, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 22];
+
+/**
  * Compact panel that lists every map layer with an eye toggle.
  * Session-local (doesn't mutate the bound map item). Clicking the
  * eye flips visibility for this open of the deployment only.
@@ -2563,6 +2635,12 @@ function LayerVisibilityPanel({
   onRequestPersist,
   tileCache,
   onClearTiles,
+  tileZoomMin,
+  tileZoomMax,
+  onTileZoomMinChange,
+  onTileZoomMaxChange,
+  estimatedTileCount,
+  centerLat,
 }: {
   layers: MapLayer[];
   /** #249.21: editable-layer list so the panel can look up the
@@ -2596,6 +2674,22 @@ function LayerVisibilityPanel({
   /** Drops every cached tile via the SW message channel. Used for
    *  the "free up space" affordance when the storage gauge is red. */
   onClearTiles: () => void;
+  /** #272: per-download tile zoom min/max. Drives the scale picker
+   *  shown above the Download button so a worker can choose how
+   *  detailed the cached basemap should be ("city scale" vs
+   *  "parcel detail"). */
+  tileZoomMin: number;
+  tileZoomMax: number;
+  onTileZoomMinChange: (z: number) => void;
+  onTileZoomMaxChange: (z: number) => void;
+  /** #272: live tile count for the chosen zoom range against the
+   *  current viewport. Updated as the user adjusts the pickers
+   *  so they see the storage consequence before tapping Download. */
+  estimatedTileCount: number;
+  /** #272: center latitude of the viewport. Drives the zoom-to-
+   *  scale conversion so "1:1,128" reflects what the worker is
+   *  actually looking at, not the equator-baseline. */
+  centerLat: number;
 }) {
   // Group sources are headers, not togglable rows themselves -- but
   // we still show them so the panel reads like the desktop layer
@@ -2697,6 +2791,58 @@ function LayerVisibilityPanel({
           ) : null}
         </div>
       ) : null}
+      {/* #272: scale picker for the offline tile cache. Two paired
+          dropdowns -- "least detailed" (zMin) and "most detailed"
+          (zMax) -- each labeled with the user-facing map scale
+          (1:1,128) and the engineering equivalent (1"=100 ft) at
+          the viewport's center latitude. The zoom number rides
+          along in parens for the technical user. The estimated
+          tile count under the pickers updates live so the worker
+          can see "this'll be 24,500 tiles" before tapping
+          Download. */}
+      <div className="border-b border-border px-3 py-2">
+        <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Map detail to cache
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-muted">
+              Least detail
+            </span>
+            <select
+              value={tileZoomMin}
+              onChange={(e) => onTileZoomMinChange(Number(e.target.value))}
+              className="h-9 rounded-md border border-border bg-surface-0 px-2 text-xs text-ink-0"
+            >
+              {ZOOM_PICKER_OPTIONS.filter((z) => z <= tileZoomMax).map((z) => (
+                <option key={z} value={z}>
+                  {describeZoom(z, centerLat)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-muted">
+              Most detail
+            </span>
+            <select
+              value={tileZoomMax}
+              onChange={(e) => onTileZoomMaxChange(Number(e.target.value))}
+              className="h-9 rounded-md border border-border bg-surface-0 px-2 text-xs text-ink-0"
+            >
+              {ZOOM_PICKER_OPTIONS.filter((z) => z >= tileZoomMin).map((z) => (
+                <option key={z} value={z}>
+                  {describeZoom(z, centerLat)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="mt-1.5 text-[10px] text-muted">
+          ~{estimatedTileCount.toLocaleString('en-US')} tiles at the
+          current viewport. Cap is 200,000.
+        </p>
+      </div>
       <div className="border-b border-border px-3 py-2">
         <button
           type="button"

@@ -178,6 +178,33 @@ export async function warmTiles(
  *
  * Exposed for tests and for future polygon-clipping refinement.
  */
+/**
+ * Cheap tile-count estimate for a bbox + zoom range. Same math
+ * enumerateTiles uses, but sums per-zoom counts instead of
+ * allocating coordinate objects. Used by the per-download zoom
+ * slider (#272) so the user sees a live count without blocking
+ * the UI on a million-element array allocation at the upper
+ * end of the zoom range.
+ */
+export function estimateTileCount(
+  bbox: [number, number, number, number],
+  zoomRange: [number, number],
+): number {
+  const [w, s, e, n] = bbox;
+  const [zMin, zMax] = zoomRange;
+  let total = 0;
+  for (let z = zMin; z <= zMax; z += 1) {
+    const xMin = lonToTileX(w, z);
+    const xMax = lonToTileX(e, z);
+    const yMin = latToTileY(n, z);
+    const yMax = latToTileY(s, z);
+    const xs = Math.max(0, xMax - xMin + 1);
+    const ys = Math.max(0, yMax - yMin + 1);
+    total += xs * ys;
+  }
+  return total;
+}
+
 export function enumerateTiles(
   bbox: [number, number, number, number],
   zoomRange: [number, number],
