@@ -8,6 +8,7 @@ import {
   Check,
   ClipboardList,
   ExternalLink,
+  Eye,
   FileText,
   FlaskConical,
   Folder as FolderIcon,
@@ -49,6 +50,7 @@ import {
   DEFAULT_WFS_SERVICE,
   DEFAULT_FOLDER,
   DEFAULT_EDITOR,
+  DEFAULT_VIEWER,
   ITEM_TYPES,
 } from '@gratis-gis/shared-types';
 import { ImageUploader } from '@/components/image-uploader';
@@ -76,7 +78,13 @@ import { MetadataXmlImporter } from './metadata-xml-importer';
 type Step = 'pick' | 'details';
 
 interface TypeOption {
-  value: ItemType;
+  /**
+   * Picker value. Most options match an actual ItemType. A small set
+   * of wizard-only sentinels (e.g. 'viewer' in #259) get remapped to
+   * web_app + a template tag at submit time so the storage model
+   * stays collapsed while the picker keeps Esri-friendly names.
+   */
+  value: ItemType | 'viewer';
   label: string;
   desc: string;
   Icon: LucideIcon;
@@ -179,6 +187,12 @@ const TYPE_GROUPS: TypeGroup[] = [
         Icon: PencilRuler,
       },
       {
+        value: 'viewer',
+        label: 'Viewer',
+        desc: 'Read-only app for zooming, querying, and printing. No editing tools; layers are presented as-is.',
+        Icon: Eye,
+      },
+      {
         value: 'data_collection',
         label: 'Data collection',
         desc: 'Field-mode deployment: tap features on a map to add or edit them. Forms come from the layer schema by default.',
@@ -275,7 +289,11 @@ export function NewItemWizard() {
       ? ((searchParams.get('type') as ItemType) as ItemType)
       : null;
   const [step, setStep] = useState<Step>(queryType ? 'details' : 'pick');
-  const [type, setType] = useState<ItemType | null>(queryType);
+  // #259: 'viewer' is a wizard-only sentinel that maps to web_app +
+  // template='viewer' at submit time. It isn't a persisted ItemType
+  // (the picker stays an Esri-friendly noun while the storage stays
+  // collapsed under web_app templates).
+  const [type, setType] = useState<ItemType | 'viewer' | null>(queryType);
 
   // Metadata persists across back/forward between steps so the user
   // doesn't lose typed input when they pop back to change type.
@@ -360,7 +378,7 @@ export function NewItemWizard() {
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const pickType = useCallback((t: ItemType) => {
+  const pickType = useCallback((t: ItemType | 'viewer') => {
     setType(t);
     setStep('details');
     setError(null);
@@ -690,6 +708,19 @@ export function NewItemWizard() {
         config: { template: 'editor', editor: DEFAULT_EDITOR },
       };
       data = webApp;
+    } else if (type === 'viewer') {
+      // #259: viewer items go in as web_app + template='viewer' from
+      // day one (no legacy top-level type='viewer' to migrate from).
+      // Same shape pattern as the editor branch above; the runtime
+      // and detail-page dispatch unwrap via readViewerData /
+      // isViewerItem. Empty targets + map; the detail page wires
+      // those up post-create.
+      const webApp: WebAppData = {
+        version: 1,
+        template: 'viewer',
+        config: { template: 'viewer', viewer: DEFAULT_VIEWER },
+      };
+      data = webApp;
     } else if (type === 'data_collection') {
       // mapId is structural: a data_collection without a map has
       // nothing for collectors to tap on. Block create until the
@@ -739,7 +770,8 @@ export function NewItemWizard() {
     // template='editor' though, so swap the type here at the
     // payload-build boundary. Keeps the user-facing word stable
     // while we collapse the storage model.
-    const payloadType: ItemType = type === 'editor' ? 'web_app' : type;
+    const payloadType: ItemType =
+      type === 'editor' || type === 'viewer' ? 'web_app' : type;
 
     const payload = {
       type: payloadType,

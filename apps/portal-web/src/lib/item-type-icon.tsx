@@ -21,7 +21,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
-import { isEditorItem } from '@gratis-gis/shared-types';
+import { isEditorItem, isViewerItem } from '@gratis-gis/shared-types';
 
 /**
  * Per-item-type icon mapping. Kept in portal-web (not @gratis-gis/ui)
@@ -185,6 +185,9 @@ export function getItemHref(item: {
   // type='web_app' + data.template='editor'. Both deep-link to the
   // editor runtime so the user-facing word stays "Editor".
   if (isEditorItem(item)) return `/items/${item.id}/editor/run`;
+  // #259: viewer template is web_app + data.template='viewer'. Deep
+  // link to the viewer runtime route.
+  if (isViewerItem(item)) return `/items/${item.id}/viewer/run`;
   // data_collection items go straight to field-mode runtime (#193).
   // The config / sharing surface is still reachable via the back
   // button or the Edit link from inside the runtime.

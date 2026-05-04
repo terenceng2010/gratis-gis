@@ -36,7 +36,9 @@ import {
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
   isEditorItem,
+  isViewerItem,
   readEditorData,
+  readViewerData,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
 import { ItemTypeBadge, getItemTypeLabel } from '@/lib/item-type-icon';
@@ -567,6 +569,36 @@ export default async function ItemDetailPage({ params }: Props) {
             }}
             canEdit={canManage}
           />
+        </section>
+      ) : isViewerItem(item) ? (
+        <section className="mb-6">
+          {/* #259: viewer config UI is a follow-up slice. For now,
+              surface the open-runtime affordance + a hint about the
+              data shape so admins know what's wired and where the
+              configuration knobs are coming. */}
+          <div className="rounded-lg border border-border bg-surface-1 p-4">
+            <h2 className="text-lg font-semibold text-ink-0">
+              Read-Only Viewer
+            </h2>
+            <p className="mt-1 text-sm text-muted">
+              Open the viewer to explore this app&apos;s map. A
+              configuration surface for picking the source map and
+              target layers is coming in a follow-up; for now a viewer
+              created here renders against
+              {' '}
+              {(readViewerData(item)?.targets?.length ?? 0) === 0
+                ? 'no targets and a default basemap.'
+                : `${readViewerData(item)?.targets?.length} target layer(s).`}
+            </p>
+            <div className="mt-3">
+              <Link
+                href={`/items/${item.id}/viewer/run`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium text-ink-1 hover:bg-surface-2"
+              >
+                Open viewer
+              </Link>
+            </div>
+          </div>
         </section>
       ) : item.type === 'data_collection' ? (
         <section className="mb-6">
