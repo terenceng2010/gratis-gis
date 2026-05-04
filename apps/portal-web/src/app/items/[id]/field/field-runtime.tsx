@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   Check,
+  ChevronUp,
   CircleSlash,
   CloudDownload,
   CloudOff,
@@ -284,11 +285,49 @@ export function FieldRuntime({
     () => new Set(),
   );
   // #249.11: address search collapses to a single icon by default.
-  // Per-Matt: search isn't used often enough to justify the persistent
+  // Per-request: search isn't used often enough to justify the persistent
   // bar at the top of the canvas, and on iPhone it overlapped MapLibre's
   // top-right zoom controls. Tapping the magnifier expands an input;
   // tapping the X collapses it again.
   const [searchExpanded, setSearchExpanded] = useState(false);
+
+  // #249.16 / #253: Field-Maps-style feature popup state. Tapping a
+  // feature on the map surfaces a bottom sheet (instead of a
+  // MapLibre canvas popup). Two modes:
+  //   - 'list': the user tapped a point with multiple overlapping
+  //     features; show one row per feature with the layer label,
+  //     a swatch, and the row title. Tap a row to drill into detail.
+  //   - 'detail': single feature view: title, full attribute table,
+  //     and Edit / Copy / More action buttons.
+  // The sheet is also expandable from default (~55vh) to fullscreen
+  // (~92vh) so a long attribute list can spread out without leaving
+  // the sheet.
+  type FeatureSheetHit = {
+    /** MapLayer id that produced this hit. */
+    mapLayerId: string;
+    /** Layer label rendered in the sheet header / list row. */
+    layerLabel: string;
+    /** global_id of the feature, if available -- needed for Edit. */
+    globalId: string | null;
+    /** Properties exposed to the user (underscore-prefixed system
+     *  metadata is stripped). */
+    properties: Record<string, unknown>;
+    /** Raw geometry as MapLibre returned it. */
+    geometry: GeoJSON.Geometry | null;
+    /** Editable layer if the user has edit access; null otherwise. */
+    editable: EditableLayer | null;
+  };
+  type FeatureSheetState =
+    | null
+    | { mode: 'list'; hits: FeatureSheetHit[]; expanded: boolean }
+    | {
+        mode: 'detail';
+        hit: FeatureSheetHit;
+        from: 'list' | 'direct';
+        listHits: FeatureSheetHit[];
+        expanded: boolean;
+      };
+  const [featureSheet, setFeatureSheet] = useState<FeatureSheetState>(null);
 
   // Form modal state. mode='add' starts with the template's
   // presetAttributes plus a geometry stamped from the map center;
@@ -938,8 +977,140 @@ export function FieldRuntime({
     };
   }, [isPointAddCollect]);
 
+  // #249.16 / #253: Field-Maps-style tap-to-popup. When the user
+  // taps a feature on the canvas (and we're not in template-arming
+  // or active-collect modes) we collect every hit at the point with
+  // a small radius, build a FeatureSheetHit per layer, and open the
+  // bottom sheet. One hit -> detail mode; two or more -> list mode.
+  // No hit -> close any open sheet so a clear-canvas tap dismisses
+  // the popup.
+  //
+  // Gated to formModal === null AND activeTemplate === null AND
+  // !isPointAddCollect so the existing collect / template-arming /
+  // override-tap paths stay untouched.
+  const featureSheetGate =
+    formModal === null && activeTemplate === null && !isPointAddCollect;
+  useEffect(() => {
+    if (!featureSheetGate) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const liveMap = map;
+
+    function onClick(e: maplibregl.MapMouseEvent) {
+      // Build the list of MapLibre style-layer ids that correspond
+      // to MapData.layers' overlay layers. We accept any of -fill /
+      // -line / -circle suffixes (added by the canvas's symbology
+      // composer) plus the bare id (legacy single-layer renderers).
+      const styleLayers = liveMap.getStyle().layers ?? [];
+      const styleLayerIds = new Set<string>(
+        styleLayers.map((l) => l.id),
+      );
+      const queryLayerIds: string[] = [];
+      for (const ml of mapData.layers ?? []) {
+        for (const suffix of ['', '-fill', '-line', '-circle', '-stroke']) {
+          const id = `${ml.id}${suffix}`;
+          if (styleLayerIds.has(id)) queryLayerIds.push(id);
+        }
+      }
+      if (queryLayerIds.length === 0) {
+        setFeatureSheet(null);
+        return;
+      }
+      // Use a small bbox around the tap so a slightly-off touch
+      // still grabs the feature. 10px on each side matches Field
+      // Maps' touch tolerance roughly.
+      const bbox: [
+        [number, number],
+        [number, number],
+      ] = [
+        [e.point.x - 10, e.point.y - 10],
+        [e.point.x + 10, e.point.y + 10],
+      ];
+      const rawHits = liveMap.queryRenderedFeatures(bbox, {
+        layers: queryLayerIds,
+      });
+      // Dedupe across the -fill/-line/-circle expansions: keep one
+      // hit per (mapLayerId, globalId). Walking in order preserves
+      // top-most-on-canvas wins.
+      const seen = new Set<string>();
+      const hits: FeatureSheetHit[] = [];
+      for (const raw of rawHits) {
+        const styleLayerId = (raw.layer as { id?: string }).id ?? '';
+        const ml = (mapData.layers ?? []).find(
+          (l) =>
+            styleLayerId === l.id ||
+            styleLayerId.startsWith(`${l.id}-`),
+        );
+        if (!ml) continue;
+        const props =
+          (raw.properties as Record<string, unknown> | null) ?? {};
+        const globalId =
+          typeof props._global_id === 'string'
+            ? (props._global_id as string)
+            : typeof raw.id === 'string' || typeof raw.id === 'number'
+              ? String(raw.id)
+              : null;
+        const dedupeKey = `${ml.id}:${globalId ?? `_p${hits.length}`}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        // Strip underscore-prefixed system metadata for the user-
+        // facing attribute table; keep them on the raw hit if a
+        // future feature needs them.
+        const cleanProps: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(props)) {
+          if (k.startsWith('_')) continue;
+          cleanProps[k] = v;
+        }
+        // Resolve to an EditableLayer when possible (the Edit
+        // button is gated on this). data-layer-sourced layers are
+        // the only ones the field runtime can edit; arcgis-rest is
+        // out of scope for v1.
+        let editable: EditableLayer | null = null;
+        if (ml.source && ml.source.kind === 'data-layer') {
+          // Narrow `ml.source` once into a local so the find()
+          // closure doesn't lose the discriminator. TS's structural
+          // narrowing across `ml.source!.x` is too pessimistic
+          // inside arrow callbacks.
+          const src = ml.source;
+          const dl = editableLayers.find(
+            (e) =>
+              e.dataLayerId === src.itemId && e.layerKey === src.layerKey,
+          );
+          if (dl) editable = dl;
+        }
+        hits.push({
+          mapLayerId: ml.id,
+          layerLabel: ml.title || ml.id,
+          globalId,
+          properties: cleanProps,
+          geometry: (raw.geometry as GeoJSON.Geometry | null) ?? null,
+          editable,
+        });
+      }
+      if (hits.length === 0) {
+        setFeatureSheet(null);
+        return;
+      }
+      if (hits.length === 1) {
+        setFeatureSheet({
+          mode: 'detail',
+          hit: hits[0]!,
+          from: 'direct',
+          listHits: hits,
+          expanded: false,
+        });
+        return;
+      }
+      setFeatureSheet({ mode: 'list', hits, expanded: false });
+    }
+    liveMap.on('click', onClick);
+    return () => {
+      liveMap.off('click', onClick);
+    };
+  }, [featureSheetGate, mapData.layers, editableLayers]);
+
   // Tap-to-edit was Field Maps Quick Capture style: tap a feature,
-  // form opens directly in edit mode. Matt's prod test feedback
+  // form opens directly in edit mode. Earlier prod test feedback
   // surfaced two problems with that flow: (1) it suppressed the
   // popup that shows attribute values, which is the primary "what's
   // here" affordance users expect, and (2) without an explicit Edit
@@ -1565,6 +1736,74 @@ export function FieldRuntime({
             }
           }}
           onClose={() => setPickerOpen(false)}
+        />
+      ) : null}
+
+      {/* #253: Field-Maps-style feature popup. Bottom sheet that
+          surfaces tapped-feature info; expandable to fullscreen via
+          the chevron in the header. Hidden whenever the FormModal
+          is open (the form sheet owns the bottom half of the
+          viewport in that mode). */}
+      {featureSheet && formModal === null ? (
+        <FieldFeaturePopupSheet
+          state={featureSheet}
+          onChangeState={setFeatureSheet}
+          onClose={() => setFeatureSheet(null)}
+          onEdit={(hit) => {
+            // Switch the FormModal to edit mode for the hit's
+            // editable layer. The same shape the legacy tap-to-edit
+            // flow used; the sheet just makes the path explicit.
+            if (!hit.editable || !hit.globalId) return;
+            setFeatureSheet(null);
+            setFormModal({
+              layer: hit.editable,
+              mode: 'edit',
+              featureId: hit.globalId,
+              properties: hit.properties,
+              geometry: hit.geometry,
+            });
+          }}
+          onCopy={(hit) => {
+            // #253: Field Maps' Copy = make a new feature with the
+            // tapped feature's attributes, leaving the user to
+            // place + tweak it. We pre-fill via presetAttributes
+            // (string-keyed because that's what the existing
+            // add-mode plumbing accepts). Geometry: drop a fresh
+            // point at the tapped feature's centroid, or fall
+            // through to GPS / map center via the same fallback
+            // the FAB uses. For non-point geometries, fall back
+            // to no geometry; the FormModal already handles that.
+            if (!hit.editable) return;
+            const presetAttributes: Record<string, string> = {};
+            for (const [k, v] of Object.entries(hit.properties)) {
+              if (v === null || v === undefined) continue;
+              presetAttributes[k] = typeof v === 'string' ? v : String(v);
+            }
+            const map = mapRef.current;
+            const gpsPos = gps.position;
+            const center = map ? map.getCenter() : null;
+            let initialGeometry: GeoJSON.Geometry | null = null;
+            if (hit.editable.geometryType === 'point') {
+              if (gpsPos) {
+                initialGeometry = {
+                  type: 'Point',
+                  coordinates: [gpsPos.lon, gpsPos.lat],
+                };
+              } else if (center) {
+                initialGeometry = {
+                  type: 'Point',
+                  coordinates: [center.lng, center.lat],
+                };
+              }
+            }
+            setFeatureSheet(null);
+            setFormModal({
+              layer: hit.editable,
+              mode: 'add',
+              geometry: initialGeometry,
+              presetAttributes,
+            });
+          }}
         />
       ) : null}
 
@@ -3235,6 +3474,302 @@ function FieldLocateButton({
         <LocateFixed className="h-5 w-5" />
       )}
     </button>
+  );
+}
+
+/**
+ * #253: Field-Maps-style feature popup. Bottom sheet rendered when
+ * the user taps a feature on the canvas. Two modes:
+ *
+ *   - list: tapped a point with multiple overlapping features.
+ *     Renders one row per hit with the layer label as a header
+ *     group, the row's title (first non-system property), and a
+ *     chevron. Tap a row to drill into detail.
+ *   - detail: single feature view. Header has back arrow (when
+ *     coming from a list), feature title, and X close. Body shows
+ *     the full attribute table; an action bar at top has Edit /
+ *     Copy / Delete (Delete is a follow-up).
+ *
+ * Two height states: default (~55vh) and expanded (~92vh). The
+ * chevron in the header toggles. Tap-on-backdrop is intentionally
+ * NOT a dismiss path -- a stray tap on the map shouldn't lose the
+ * worker's feature context. X is the dismiss.
+ */
+function FieldFeaturePopupSheet({
+  state,
+  onChangeState,
+  onClose,
+  onEdit,
+  onCopy,
+}: {
+  state: NonNullable<
+    | { mode: 'list'; hits: Array<unknown>; expanded: boolean }
+    | {
+        mode: 'detail';
+        hit: unknown;
+        from: 'list' | 'direct';
+        listHits: Array<unknown>;
+        expanded: boolean;
+      }
+  >;
+  onChangeState: (
+    next:
+      | null
+      | {
+          mode: 'list';
+          hits: Array<{
+            mapLayerId: string;
+            layerLabel: string;
+            globalId: string | null;
+            properties: Record<string, unknown>;
+            geometry: GeoJSON.Geometry | null;
+            editable: EditableLayer | null;
+          }>;
+          expanded: boolean;
+        }
+      | {
+          mode: 'detail';
+          hit: {
+            mapLayerId: string;
+            layerLabel: string;
+            globalId: string | null;
+            properties: Record<string, unknown>;
+            geometry: GeoJSON.Geometry | null;
+            editable: EditableLayer | null;
+          };
+          from: 'list' | 'direct';
+          listHits: Array<{
+            mapLayerId: string;
+            layerLabel: string;
+            globalId: string | null;
+            properties: Record<string, unknown>;
+            geometry: GeoJSON.Geometry | null;
+            editable: EditableLayer | null;
+          }>;
+          expanded: boolean;
+        },
+  ) => void;
+  onClose: () => void;
+  onEdit: (hit: {
+    mapLayerId: string;
+    layerLabel: string;
+    globalId: string | null;
+    properties: Record<string, unknown>;
+    geometry: GeoJSON.Geometry | null;
+    editable: EditableLayer | null;
+  }) => void;
+  onCopy: (hit: {
+    mapLayerId: string;
+    layerLabel: string;
+    globalId: string | null;
+    properties: Record<string, unknown>;
+    geometry: GeoJSON.Geometry | null;
+    editable: EditableLayer | null;
+  }) => void;
+}) {
+  // Cast through unknown to the concrete shape the parent passes; the
+  // public prop type uses unknown to avoid duplicating the type alias
+  // outside the parent's lexical scope.
+  type Hit = {
+    mapLayerId: string;
+    layerLabel: string;
+    globalId: string | null;
+    properties: Record<string, unknown>;
+    geometry: GeoJSON.Geometry | null;
+    editable: EditableLayer | null;
+  };
+  const concrete = state as
+    | { mode: 'list'; hits: Hit[]; expanded: boolean }
+    | {
+        mode: 'detail';
+        hit: Hit;
+        from: 'list' | 'direct';
+        listHits: Hit[];
+        expanded: boolean;
+      };
+
+  const expanded = concrete.expanded;
+  const sheetClass = expanded
+    ? 'max-h-[92dvh] min-h-[92dvh]'
+    : 'max-h-[55dvh] min-h-[55dvh]';
+
+  return (
+    <div
+      className="fixed inset-x-0 bottom-0 z-30 flex flex-col"
+      // The sheet itself blocks the canvas; backdrop area above is
+      // pointer-events-none so the user can still tap the map (which
+      // queries new features and replaces the sheet).
+    >
+      <div
+        className={`flex w-full flex-col overflow-hidden rounded-t-xl border-t border-border bg-surface-1 shadow-overlay pb-[env(safe-area-inset-bottom)] ${sheetClass}`}
+      >
+        {/* Header: back-or-X button on the left, title in the
+            middle, expand-chevron + X on the right. The back button
+            only appears when we drilled in from a list. */}
+        <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-2 py-2.5">
+          {concrete.mode === 'detail' && concrete.from === 'list' ? (
+            <button
+              type="button"
+              onClick={() => {
+                onChangeState({
+                  mode: 'list',
+                  hits: concrete.listHits,
+                  expanded: concrete.expanded,
+                });
+              }}
+              aria-label="Back to list"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          ) : (
+            <span className="h-10 w-10 shrink-0" aria-hidden="true" />
+          )}
+          <div className="min-w-0 flex-1 text-center">
+            {concrete.mode === 'list' ? (
+              <h2 className="truncate text-base font-semibold text-ink-0">
+                {concrete.hits.length} item
+                {concrete.hits.length === 1 ? '' : 's'}
+              </h2>
+            ) : (
+              <>
+                <h2 className="truncate text-base font-semibold text-ink-0">
+                  {pickRelatedRowTitle(concrete.hit.properties) ??
+                    concrete.hit.layerLabel}
+                </h2>
+                <p className="truncate text-[11px] text-muted">
+                  {concrete.hit.layerLabel}
+                </p>
+              </>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onChangeState({
+                ...concrete,
+                expanded: !concrete.expanded,
+              } as typeof concrete);
+            }}
+            aria-label={expanded ? 'Collapse sheet' : 'Expand sheet'}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
+          >
+            <ChevronUp
+              className={`h-5 w-5 transition-transform ${
+                expanded ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </header>
+
+        {/* Action bar (detail mode only). Edit / Copy as primary;
+            the More menu can land in a follow-up. */}
+        {concrete.mode === 'detail' ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-0 px-3 py-2">
+            <button
+              type="button"
+              disabled={
+                !concrete.hit.editable || !concrete.hit.globalId
+              }
+              onClick={() => onEdit(concrete.hit)}
+              className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+              title={
+                concrete.hit.editable
+                  ? 'Edit this feature'
+                  : 'You do not have edit access to this layer'
+              }
+            >
+              <Crosshair className="h-4 w-4" />
+              Edit
+            </button>
+            <button
+              type="button"
+              disabled={!concrete.hit.editable}
+              onClick={() => onCopy(concrete.hit)}
+              className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+              title={
+                concrete.hit.editable
+                  ? 'Create a new feature with these attributes'
+                  : 'You do not have edit access to this layer'
+              }
+            >
+              <Plus className="h-4 w-4" />
+              Copy
+            </button>
+          </div>
+        ) : null}
+
+        {/* Body */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {concrete.mode === 'list' ? (
+            <ul className="divide-y divide-border">
+              {concrete.hits.map((hit, i) => (
+                <li key={`${hit.mapLayerId}-${hit.globalId ?? i}`}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChangeState({
+                        mode: 'detail',
+                        hit,
+                        from: 'list',
+                        listHits: concrete.hits,
+                        expanded: concrete.expanded,
+                      });
+                    }}
+                    className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-surface-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        {hit.layerLabel}
+                      </p>
+                      <p className="truncate text-base font-medium text-ink-0">
+                        {pickRelatedRowTitle(hit.properties) ??
+                          hit.globalId?.slice(0, 8) ??
+                          '(unnamed)'}
+                      </p>
+                    </div>
+                    <ChevronUp
+                      className="mt-1 h-4 w-4 shrink-0 rotate-90 text-muted"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <dl className="divide-y divide-border">
+              {Object.entries(concrete.hit.properties).map(([k, v]) => (
+                <div key={k} className="px-3 py-2">
+                  <dt className="text-[11px] uppercase tracking-wide text-muted">
+                    {k}
+                  </dt>
+                  <dd className="mt-0.5 break-words text-sm text-ink-0">
+                    {v === null || v === undefined || v === ''
+                      ? <span className="text-muted">(empty)</span>
+                      : typeof v === 'object'
+                        ? JSON.stringify(v)
+                        : String(v)}
+                  </dd>
+                </div>
+              ))}
+              {Object.keys(concrete.hit.properties).length === 0 ? (
+                <div className="px-3 py-4 text-sm text-muted">
+                  No attributes on this feature.
+                </div>
+              ) : null}
+            </dl>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
