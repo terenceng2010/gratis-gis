@@ -185,6 +185,14 @@ export default async function FieldRuntimePage({ params }: Props) {
       : data.layers.find((l) => l.geometryType !== null);
     if (!sublayer) continue;
     if (sublayer.geometryType === null) continue; // spatial-only at this pass
+    // #271: skip layers the data_layer marks as not editable. A
+    // read-only reference layer (e.g. Riverside County Parcels with
+    // editingEnabled=false) is on the map for context, but the
+    // field PWA's Add picker should not offer it as an Add target.
+    // Without this gate, the picker shows every map data-layer
+    // regardless of editability and the worker can attempt an Add
+    // that the API would reject anyway.
+    if (sublayer.editingEnabled === false) continue;
     const binding = dc.formBindings?.[sublayer.id];
     // Phase C: enumerate child layers within the same data_layer
     // item that reference this layer via parentFkColumn. Used by

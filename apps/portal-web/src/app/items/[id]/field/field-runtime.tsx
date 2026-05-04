@@ -2257,6 +2257,14 @@ function buildTemplates(
 ): FieldTemplate[] {
   const out: FieldTemplate[] = [];
   for (const layer of editableLayers) {
+    // #271: skip table sublayers (geometryType === null). They live
+    // in editableLayers so the FormModal's Add-related affordance
+    // can wire to them from a parent feature, but they have no
+    // geometry to drop and aren't valid standalone Add targets.
+    // Without this filter the picker shows e.g. a "Status" table as
+    // an Add option alongside spatial layers, which the user can't
+    // actually use because Add starts with a map gesture.
+    if (layer.geometryType === null) continue;
     // Find the corresponding MapLayer so we can read its renderer.
     // Match on dataLayerId + layerKey. Multiple MapLayers could
     // reference the same v3 sublayer (rare but possible if the
