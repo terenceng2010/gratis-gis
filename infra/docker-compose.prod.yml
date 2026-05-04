@@ -218,6 +218,17 @@ services:
     build:
       context: ..
       dockerfile: apps/portal-web/Dockerfile
+      args:
+        # #274: NEXT_PUBLIC_* vars must be present at build time so
+        # Next.js inlines them into the client bundle. Setting these
+        # only in `environment:` below would not reach the static
+        # output that the standalone server serves.
+        # Defaults to "1" for the canonical gratisgis.org deploy so
+        # the open-source project section renders below the Hero. A
+        # per-tenant fork can pass PROJECT_LANDING= in .env.prod (or
+        # explicitly export PROJECT_LANDING=0) to suppress it.
+        NEXT_PUBLIC_PROJECT_LANDING: ${PROJECT_LANDING:-1}
+        NEXT_PUBLIC_GITHUB_REPO: ${GITHUB_REPO:-palavido-dev/gratis-gis}
     restart: unless-stopped
     depends_on:
       portal-api:

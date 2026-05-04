@@ -67,10 +67,26 @@ interface Props {
    * the public alpha view without flipping the env flag.
    */
   forceProjectSection?: boolean;
+  /**
+   * #274: render an "Open my items" CTA instead of "Sign in" when
+   * the visitor already has a session. Lets the / route be
+   * consistently public-facing for everyone (including authenticated
+   * users hitting the apex domain) while still giving signed-in
+   * folks a clear path back into their workspace. Authenticated
+   * users still see all the public marketing/items copy -- they
+   * just don't get prompted to sign in again.
+   */
+  isAuthenticated?: boolean;
 }
 
-export function PublicLanding({ data, forceProjectSection }: Props) {
+export function PublicLanding({
+  data,
+  forceProjectSection,
+  isAuthenticated,
+}: Props) {
   const { org, items } = data;
+  const ctaHref = isAuthenticated ? '/items' : '/signin';
+  const ctaLabel = isAuthenticated ? 'Open my items' : 'Sign in';
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -124,11 +140,11 @@ export function PublicLanding({ data, forceProjectSection }: Props) {
                 portal account, sign in to see content shared with you.
               </p>
               <Link
-                href="/signin"
+                href={ctaHref}
                 className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
               >
                 <LogIn className="h-4 w-4" />
-                Sign in
+                {ctaLabel}
               </Link>
             </div>
           ) : (
@@ -144,11 +160,11 @@ export function PublicLanding({ data, forceProjectSection }: Props) {
         // the page has something the user can actually do.
         <section className="flex flex-1 items-center justify-center px-6 py-12">
           <Link
-            href="/signin"
+            href={ctaHref}
             className="inline-flex h-11 items-center gap-2 rounded-md bg-accent px-5 text-base font-medium text-accent-foreground shadow-card hover:opacity-90"
           >
             <LogIn className="h-5 w-5" />
-            Sign in
+            {ctaLabel}
           </Link>
         </section>
       )}

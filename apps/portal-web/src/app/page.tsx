@@ -1,13 +1,5 @@
-import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import type { ItemType } from '@gratis-gis/shared-types';
-import {
-  ArrowRight,
-  FileSpreadsheet,
-  Layers,
-  Map as MapIcon,
-  Users,
-} from 'lucide-react';
 import { authOptions } from '@/lib/auth';
 import { PublicLanding } from './public-landing';
 
@@ -18,66 +10,28 @@ export default async function HomePage({
 }) {
   const session = await getServerSession(authOptions);
 
-  // #255: ?preview=project lets a signed-in admin preview the
-  // landing page (with the open-source project section forced on)
-  // without flipping the NEXT_PUBLIC_PROJECT_LANDING env flag and
-  // without signing out. The PublicLanding component reads the
-  // override via a forceProjectSection prop. Any other ?preview=
-  // value is ignored. Useful for getting a layout check on prod
-  // before committing to the public alpha.
+  // #274: / always shows the public landing now, including for
+  // authenticated visitors. This keeps the apex domain consistent
+  // for every visitor (open-source marketing + the org's public
+  // items) and gives signed-in folks an "Open my items" CTA that
+  // takes them into their workspace. The previous tile-grid
+  // dashboard ("Hey {name}, what would you like to do?") was a
+  // lightweight redirect surface that doesn't earn its place when
+  // the items list, top-bar nav, and per-item deep links are all
+  // one click from anywhere else in the app.
+  //
+  // #255: ?preview=project remains as a dev override for forcing
+  // the open-source project section on regardless of the
+  // NEXT_PUBLIC_PROJECT_LANDING build flag (useful for layout
+  // checks on prod before flipping the per-tenant flag).
   const previewProject = searchParams?.preview === 'project';
-
-  // Unauthenticated visitors see a dedicated landing page outside
-  // the app-shell. Landing data comes from the portal-api's public
-  // endpoint: no session cookie, no bearer, anyone-on-the-internet
-  // can read it.
-  if (!session || previewProject) {
-    const data = await loadLandingData();
-    return (
-      <PublicLanding
-        data={data}
-        forceProjectSection={previewProject}
-      />
-    );
-  }
-
-  const name = session.user?.name?.split(' ')[0] ?? 'there';
+  const data = await loadLandingData();
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-10">
-      <header className="mb-10">
-        <p className="text-sm text-muted">Hey {name},</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-          What would you like to do?
-        </h1>
-      </header>
-
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile
-          href="/items?scope=mine"
-          title="My items"
-          desc="Everything you own: maps, forms, apps, reports."
-          icon={<Layers className="h-5 w-5" />}
-        />
-        <Tile
-          href="/items?scope=all"
-          title="Browse"
-          desc="Items shared with you and your groups."
-          icon={<MapIcon className="h-5 w-5" />}
-        />
-        <Tile
-          href="/groups"
-          title="Groups"
-          desc="Collaborate with teammates and share content."
-          icon={<Users className="h-5 w-5" />}
-        />
-        {/* Reports is a planned route (see middleware matcher) but
-            no page lives at /reports yet. Hiding the tile rather
-            than rendering a Link that 404s on prefetch every render
-            -- a stack trace of those 404s came up while debugging
-            sign-out, separate symptom but distracting noise. Bring
-            the tile back when /reports lands. */}
-      </section>
-    </div>
+    <PublicLanding
+      data={data}
+      forceProjectSection={previewProject}
+      isAuthenticated={!!session}
+    />
   );
 }
 
@@ -118,34 +72,6 @@ async function loadLandingData(): Promise<
       items: [],
     };
   }
-}
-
-function Tile({
-  href,
-  title,
-  desc,
-  icon,
-}: {
-  href: string;
-  title: string;
-  desc: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group flex flex-col rounded-lg border border-border bg-surface-1 p-5 shadow-card transition-all hover:-translate-y-0.5 hover:shadow-raised"
-    >
-      <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-accent/10 text-accent">
-        {icon}
-      </div>
-      <div className="font-medium text-ink-1">{title}</div>
-      <div className="mt-1 text-sm text-muted">{desc}</div>
-      <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-accent opacity-0 transition-opacity group-hover:opacity-100">
-        Open <ArrowRight className="h-3.5 w-3.5" />
-      </div>
-    </Link>
-  );
 }
 
 // Narrow helper for ItemType usage by callers; referenced to keep

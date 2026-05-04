@@ -38,6 +38,19 @@ RUN pnpm -C packages/shared-types build
 
 # Telemetry is a noisy build-time stderr; not useful here.
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# #274: NEXT_PUBLIC_* env vars must be present at build time so
+# Next.js can inline them into the client bundle. Setting them in
+# the runtime container env doesn't reach client components. The
+# canonical gratisgis.org deployment passes
+# NEXT_PUBLIC_PROJECT_LANDING=1 as a build arg from compose so the
+# project marketing section renders below the Hero. Per-tenant
+# deployments leave it unset and the Hero stands alone.
+ARG NEXT_PUBLIC_PROJECT_LANDING=
+ENV NEXT_PUBLIC_PROJECT_LANDING=$NEXT_PUBLIC_PROJECT_LANDING
+ARG NEXT_PUBLIC_GITHUB_REPO=
+ENV NEXT_PUBLIC_GITHUB_REPO=$NEXT_PUBLIC_GITHUB_REPO
+
 RUN pnpm -C apps/portal-web build
 
 FROM base AS runtime
