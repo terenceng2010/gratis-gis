@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ClipboardList } from 'lucide-react';
+import { ClipboardList, LogIn } from 'lucide-react';
 import type { ItemWithShares } from '@gratis-gis/shared-types';
 import { apiFetch } from '@/lib/api';
 import { EmptyState } from '@/components/empty-state';
@@ -30,15 +30,26 @@ export default async function FieldCatalogPage() {
   // single round-trip; we forward the rows verbatim and let the
   // client component merge the IDB-side state.
   let deployments: ItemWithShares[] = [];
+  let sessionExpired = false;
   try {
     deployments = await apiFetch<ItemWithShares[]>(
       '/api/items?type=data_collection',
     );
-  } catch {
-    // Non-fatal: the page renders an empty state below. A network
-    // failure here usually means the user signed out in another
-    // tab; the empty state's primary action takes them home, which
-    // re-runs auth.
+  } catch (err) {
+    // #254 phase 2: distinguish auth failure (silent session expiry,
+    // common after the PWA has been backgrounded for a while) from
+    // anything else. A 401 is the case the field user runs into
+    // most: the cookie is still present (so middleware lets them
+    // through to this server component) but the JWT is expired (so
+    // portal-api rejects). Without this branch, the page rendered
+    // the empty "no deployments yet" state, leaving the user
+    // confused about why their existing deployments disappeared.
+    const status = (err as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      sessionExpired = true;
+    }
+    // Non-401 failures fall through to the same empty state as
+    // before; the homepage CTA gives them a path out.
     deployments = [];
   }
 
@@ -88,7 +99,30 @@ export default async function FieldCatalogPage() {
         </Link>
       </header>
 
-      {rows.length === 0 ? (
+      {sessionExpired ? (
+        // #254 phase 2: session-expiry-specific empty state. The
+        // sign-in link carries callbackUrl=/field so a successful
+        // re-auth lands the user back on this catalog (not /items),
+        // matching the field-only sandbox semantics from phase 1.
+        // Using a plain <a> instead of <Link> so the browser does
+        // a full navigation -- NextAuth's signin route relies on
+        // server-side redirect handling that can be foiled by
+        // client-side router prefetching.
+        <EmptyState
+          icon={<LogIn className="h-5 w-5" />}
+          title="Your session expired"
+          description="Sign in again to load your field deployments. Any features you've already saved offline are safe; they'll sync once you're back online and signed in."
+          action={
+            <a
+              href="/api/auth/signin?callbackUrl=%2Ffield"
+              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
+            >
+              <LogIn className="h-4 w-4" />
+              Sign in
+            </a>
+          }
+        />
+      ) : rows.length === 0 ? (
         <EmptyState
           icon={<ClipboardList className="h-5 w-5" />}
           title="No field deployments yet"

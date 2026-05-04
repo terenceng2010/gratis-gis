@@ -41,7 +41,16 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const tFetch = trace ? Date.now() : 0;
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`portal-api ${res.status}: ${body}`);
+    // #254 phase 2: structured error so callers can distinguish auth
+    // failures (401 / 403) from server errors. The field-catalog page
+    // surfaces 401 as "your session expired" with a sign-in button
+    // rather than the generic empty state, so a stale-cookie load
+    // doesn't silently look like "no deployments".
+    const err = new Error(`portal-api ${res.status}: ${body}`) as Error & {
+      status?: number;
+    };
+    err.status = res.status;
+    throw err;
   }
   const json = (await res.json()) as T;
   if (trace) {
