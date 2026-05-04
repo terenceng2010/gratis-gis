@@ -1005,10 +1005,23 @@ export function FieldRuntime({
       const styleLayerIds = new Set<string>(
         styleLayers.map((l) => l.id),
       );
+      // #253 fix: MapCanvas synthesizes overlay style layers with the
+      // 'gg:' prefix and a fixed set of suffixes (see overlayLayerIds
+      // in map-canvas.tsx). The original suffix list here was wrong
+      // ('' / '-fill' / '-line' / '-circle' / '-stroke' with no
+      // 'gg:' prefix) which made queryRenderedFeatures match nothing
+      // and the sheet never opened. Mirror the canvas's exact list.
       const queryLayerIds: string[] = [];
       for (const ml of mapData.layers ?? []) {
-        for (const suffix of ['', '-fill', '-line', '-circle', '-stroke']) {
-          const id = `${ml.id}${suffix}`;
+        for (const suffix of [
+          '-fill',
+          '-poly-line',
+          '-line',
+          '-icon-halo',
+          '-circle',
+          '-label',
+        ]) {
+          const id = `gg:${ml.id}${suffix}`;
           if (styleLayerIds.has(id)) queryLayerIds.push(id);
         }
       }
@@ -1036,11 +1049,29 @@ export function FieldRuntime({
       const hits: FeatureSheetHit[] = [];
       for (const raw of rawHits) {
         const styleLayerId = (raw.layer as { id?: string }).id ?? '';
-        const ml = (mapData.layers ?? []).find(
-          (l) =>
-            styleLayerId === l.id ||
-            styleLayerId.startsWith(`${l.id}-`),
-        );
+        // #253 fix: match the 'gg:<mlId>...' shape that the canvas
+        // emits. Strip the 'gg:' prefix once and find the longest
+        // matching MapLayer.id by prefix; longest-prefix wins so a
+        // layer named 'foo' doesn't accidentally claim a hit on
+        // 'foo-bar-fill'.
+        const stripped = styleLayerId.startsWith('gg:')
+          ? styleLayerId.slice(3)
+          : styleLayerId;
+        const candidates = mapData.layers ?? [];
+        type Candidate = (typeof candidates)[number];
+        let ml: Candidate | null = null;
+        let bestMatchLen = -1;
+        for (const candidate of candidates) {
+          if (
+            stripped === candidate.id ||
+            stripped.startsWith(`${candidate.id}-`)
+          ) {
+            if (candidate.id.length > bestMatchLen) {
+              ml = candidate;
+              bestMatchLen = candidate.id.length;
+            }
+          }
+        }
         if (!ml) continue;
         const props =
           (raw.properties as Record<string, unknown> | null) ?? {};
@@ -1371,6 +1402,15 @@ export function FieldRuntime({
           // sized to match Layers / Search / Locate / FAB. The default
           // 29px buttons looked tiny next to the 44px field controls.
           hideNavigationControl
+          // #253 fix: suppress MapLibre's HTML popup. The field
+          // runtime now owns the click-on-feature surface via
+          // FieldFeaturePopupSheet (a bottom sheet). Without this,
+          // the canvas's popup fires alongside the bottom sheet and
+          // wins the visual layer because it's rendered as a fixed
+          // anchored overlay; the user sees the old HTML popup with
+          // raw "_created_by / _edited_at" rows instead of the new
+          // sheet.
+          suppressPopup
         />
 
         {/* Crosshair reticle: only visible while a template is armed.
