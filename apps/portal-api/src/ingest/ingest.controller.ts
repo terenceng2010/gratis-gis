@@ -265,6 +265,28 @@ export class IngestController {
       sourceLayer,
     );
 
+    // Honor the layer's declared schema as a whitelist: only keep
+    // properties whose key matches a declared field name. Without
+    // this, importing a shapefile drops every column from the file
+    // into properties (including ESRI internal ones like
+    // OBJECTID, Shape_Area, Shape_Length) regardless of what the
+    // user declared during create. The wizard probe shows the user
+    // the file's full column set; if they want all of them, they
+    // need to declare all of them. Sparse schemas are honored.
+    //
+    // Edge case: a layer with zero declared fields is treated as
+    // "I haven't decided yet, take everything" so a one-shot
+    // wizard create doesn't silently drop all data.
+    const fieldNames = new Set((layer.fields ?? []).map((f) => f.name));
+    const filterProps = (props: Record<string, unknown>) => {
+      if (fieldNames.size === 0) return props;
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(props)) {
+        if (fieldNames.has(k)) out[k] = props[k];
+      }
+      return out;
+    };
+
     const { inserted } = await this.v3Features.insertFeatures(
       itemId,
       layerId,
@@ -275,7 +297,7 @@ export class IngestController {
         };
         return {
           geometry: feat.geometry,
-          properties: feat.properties ?? {},
+          properties: filterProps(feat.properties ?? {}),
         };
       }),
       user,

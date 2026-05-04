@@ -177,10 +177,18 @@ export function V3FeatureBrowser({
   const columnKeys = useMemo(() => {
     // Column order = declared field order, then any extra keys seen on
     // features (in insertion order) so unregistered fields still show.
+    // Skip underscore-prefixed system metadata (_global_id,
+    // _created_by, _created_at, _edited_by, _edited_at): the api
+    // inlines those for popup/attribute-footer use, but they're
+    // noise in the browse table -- the user sees raw UUIDs and the
+    // gid column already covers row identity. The Esri convention is
+    // a separate metadata panel for these; we already have one in
+    // the popup metadata footer. See task #39.
     const declared = new Set(fields.map((f) => f.name));
     const extras = new Set<string>();
     for (const f of features) {
       for (const k of Object.keys(f.properties ?? {})) {
+        if (k.startsWith('_')) continue;
         if (!declared.has(k)) extras.add(k);
       }
     }

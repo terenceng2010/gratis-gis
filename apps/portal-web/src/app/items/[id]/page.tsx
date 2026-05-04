@@ -262,6 +262,29 @@ export default async function ItemDetailPage({ params }: Props) {
     }
   }
 
+  // Resolve importedBy UUIDs on data_layer items so the provenance
+  // panel renders "by Mateo" instead of "by e39beba6". Cheap: one
+  // /api/users?ids=... lookup per page render, scoped to the org.
+  // Skipped for non-data_layer items.
+  let userNamesForProvenance: Record<string, string> = {};
+  if (item.type === 'data_layer') {
+    const dl = item.data as { layers?: Array<{ source?: { importedBy?: string } }> } | null;
+    const ids = new Set<string>();
+    for (const l of dl?.layers ?? []) {
+      const u = l?.source?.importedBy;
+      if (typeof u === 'string' && u.length > 0) ids.add(u);
+    }
+    if (ids.size > 0) {
+      const rows = await apiFetch<
+        Array<{ id: string; fullName?: string | null; username?: string | null }>
+      >(`/api/users?ids=${Array.from(ids).join(',')}`).catch(() => []);
+      for (const r of rows) {
+        userNamesForProvenance[r.id] =
+          (r.fullName?.trim() || r.username || '').trim();
+      }
+    }
+  }
+
   const badgeClass = typeBadge[item.type] ?? 'bg-slate-100 text-slate-800';
   // "Workspace" item types are content-heavy (map, feature service,
   // arcgis service). For those, we collapse the metadata header so the
@@ -441,6 +464,7 @@ export default async function ItemDetailPage({ params }: Props) {
               recorded (legacy / hand-seeded). */}
           <DataLayerProvenance
             data={item.data as DataLayerData | null}
+            userNames={userNamesForProvenance}
           />
           {/* Schema inspector collapses by default (the editor below
               is the primary surface); opens to show the field table
