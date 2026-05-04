@@ -27,6 +27,8 @@ import type {
   FolderData,
   ItemType,
   ItemWithShares,
+  WebAppData,
+  WebAppTemplate,
 } from '@gratis-gis/shared-types';
 import { isItemType } from '@gratis-gis/shared-types';
 import {
@@ -121,6 +123,13 @@ export function ItemsView({
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [sortBy, setSortBy] = useState<SortBy>('updated-desc');
   const [typeFilter, setTypeFilter] = useState<Set<ItemType>>(new Set());
+  // #258: secondary facet for `web_app` items, surfaced in the
+  // filter popover under Type. Lets "show me my editors" remain a
+  // single filter action after the editor type folded into web_app
+  // templates. Empty Set means "all templates" (no narrowing).
+  const [templateFilter, setTemplateFilter] = useState<Set<WebAppTemplate>>(
+    new Set(),
+  );
   // Bulk-select state: ids of items the current user has ticked for
   // ownership reassignment. Kept as a Set so toggles are O(1). Only
   // items the user can manage (their own + all for admins) can land
@@ -205,6 +214,21 @@ export function ItemsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only hydrate
   }, []);
 
+  // Same mount-only hydrate for the template facet. Right now the
+  // only valid template is 'editor' (#258); future templates land
+  // here as the union widens. We keep the filter values lenient: an
+  // unknown template string just gets dropped instead of erroring.
+  useEffect(() => {
+    const raw = searchParams?.get('template');
+    if (!raw) return;
+    const parsed = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s): s is WebAppTemplate => s === 'editor');
+    if (parsed.length > 0) setTemplateFilter(new Set(parsed));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only hydrate
+  }, []);
+
   // Mirror the type filter back to the URL so reload + share work.
   // We use `window.history.replaceState` rather than `router.replace`
   // because the latter triggers a server round-trip in the App
@@ -224,6 +248,23 @@ export function ItemsView({
     }
     window.history.replaceState({}, '', url.toString());
   }, [typeFilter]);
+
+  // Mirror the template filter back to the URL too, same pattern
+  // as the type filter. Param name is 'template' so a bookmarked
+  // "?type=web_app&template=editor" survives reload.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (templateFilter.size === 0) {
+      if (!url.searchParams.has('template')) return;
+      url.searchParams.delete('template');
+    } else {
+      const next = Array.from(templateFilter).sort().join(',');
+      if (url.searchParams.get('template') === next) return;
+      url.searchParams.set('template', next);
+    }
+    window.history.replaceState({}, '', url.toString());
+  }, [templateFilter]);
 
   function persistView(next: ViewMode) {
     setViewMode(next);
@@ -292,17 +333,47 @@ export function ItemsView({
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [sourceItems]);
 
+  // #258: web_app template counts. Walks the same sourceItems pool
+  // and pulls each web_app's `data.template` discriminator. Items
+  // without a template (the legacy "external link" web_app shape)
+  // are bucketed under '__none__' and filtered out of the popover
+  // surface. Driven off the data so adding new templates (viewer,
+  // survey-response, custom) shows up automatically without UI
+  // changes -- they just need to be written into items by the
+  // wizard / migration.
+  const templateCounts = useMemo(() => {
+    const counts = new Map<WebAppTemplate, number>();
+    for (const it of sourceItems) {
+      if (it.type !== 'web_app') continue;
+      const t = (it.data as WebAppData | null | undefined)?.template;
+      if (!t) continue;
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [sourceItems]);
+
   const filteredItems = useMemo(() => {
-    const pool =
+    let pool =
       typeFilter.size === 0
         ? sourceItems
         : sourceItems.filter((it) => typeFilter.has(it.type));
+    // Template facet narrows web_app items; non-web_app items pass
+    // through untouched (the facet is meaningless for them). Lets a
+    // user combine "Map + web_app:editor" in one query without
+    // losing the maps from the result.
+    if (templateFilter.size > 0) {
+      pool = pool.filter((it) => {
+        if (it.type !== 'web_app') return true;
+        const t = (it.data as WebAppData | null | undefined)?.template;
+        return t ? templateFilter.has(t) : false;
+      });
+    }
     // Sort on every filter/sort change. copyWithin keeps the original
     // array intact (it's the server prop).
     const sorted = [...pool];
     sorted.sort((a, b) => compareItems(a, b, sortBy));
     return sorted;
-  }, [sourceItems, typeFilter, sortBy]);
+  }, [sourceItems, typeFilter, templateFilter, sortBy]);
 
   function toggleType(t: ItemType) {
     setTypeFilter((prev) => {
@@ -313,8 +384,18 @@ export function ItemsView({
     });
   }
 
+  function toggleTemplate(t: WebAppTemplate) {
+    setTemplateFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  }
+
   function clearFilters() {
     setTypeFilter(new Set());
+    setTemplateFilter(new Set());
   }
 
   async function applyAreaSearch(
@@ -686,6 +767,9 @@ export function ItemsView({
         typeFilter={typeFilter}
         typeCounts={typeCounts}
         onToggleType={toggleType}
+        templateFilter={templateFilter}
+        templateCounts={templateCounts}
+        onToggleTemplate={toggleTemplate}
         onClearFilters={clearFilters}
         totalCount={sourceItems.length}
         filteredCount={filteredItems.length}
@@ -1309,6 +1393,9 @@ interface ToolbarProps {
   typeFilter: Set<ItemType>;
   typeCounts: Array<[ItemType, number]>;
   onToggleType: (t: ItemType) => void;
+  templateFilter: Set<WebAppTemplate>;
+  templateCounts: Array<[WebAppTemplate, number]>;
+  onToggleTemplate: (t: WebAppTemplate) => void;
   onClearFilters: () => void;
   totalCount: number;
   filteredCount: number;
@@ -1329,6 +1416,9 @@ function Toolbar({
   typeFilter,
   typeCounts,
   onToggleType,
+  templateFilter,
+  templateCounts,
+  onToggleTemplate,
   onClearFilters,
   totalCount,
   filteredCount,
@@ -1353,6 +1443,20 @@ function Toolbar({
     summaryParts.push({
       key: 'type',
       label: `Type: ${labels}`,
+      onClear: onClearFilters,
+    });
+  }
+  if (templateFilter.size > 0) {
+    // Template values are short ('editor' today, viewer/survey-
+    // response/custom in the roadmap). Capitalize for display so
+    // they read as proper names rather than raw enum literals.
+    const labels = Array.from(templateFilter)
+      .map((t) => t.charAt(0).toUpperCase() + t.slice(1))
+      .sort()
+      .join(', ');
+    summaryParts.push({
+      key: 'template',
+      label: `Template: ${labels}`,
       onClear: onClearFilters,
     });
   }
@@ -1406,6 +1510,9 @@ function Toolbar({
           typeFilter={typeFilter}
           typeCounts={typeCounts}
           onToggleType={onToggleType}
+          templateFilter={templateFilter}
+          templateCounts={templateCounts}
+          onToggleTemplate={onToggleTemplate}
           onClearTypes={onClearFilters}
           areaActive={areaActive}
           areaPanelOpen={areaPanelOpen}

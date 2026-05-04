@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Crosshair, SlidersHorizontal, X } from 'lucide-react';
-import type { ItemType } from '@gratis-gis/shared-types';
+import type { ItemType, WebAppTemplate } from '@gratis-gis/shared-types';
 import {
   getItemTypeAccent,
   getItemTypeIcon,
@@ -39,6 +39,14 @@ interface Props {
    *  full present-in-data set; the popover renders them all. */
   typeCounts: Array<[ItemType, number]>;
   onToggleType: (t: ItemType) => void;
+  /** #258: secondary facet for `web_app` items, surfaced as a
+   *  Template chip strip below Type when at least one template
+   *  shows up in the visible items. Today's only template is
+   *  'editor'; viewer / survey-response / custom join the union as
+   *  they ship. Empty Set means "all templates". */
+  templateFilter: Set<WebAppTemplate>;
+  templateCounts: Array<[WebAppTemplate, number]>;
+  onToggleTemplate: (t: WebAppTemplate) => void;
   onClearTypes: () => void;
   /** Geographic-area state. The popover surfaces a single button that
    *  opens the existing AreaSearchPanel; the panel itself is rendered
@@ -50,10 +58,22 @@ interface Props {
   onClearAreaSearch: () => void;
 }
 
+/**
+ * User-facing labels for web_app templates. The internal value is a
+ * lowercase enum literal ('editor'); the popover and summary chip
+ * render the human title here. Update as templates land.
+ */
+const TEMPLATE_LABELS: Record<WebAppTemplate, string> = {
+  editor: 'Editor',
+};
+
 export function FilterPopover({
   typeFilter,
   typeCounts,
   onToggleType,
+  templateFilter,
+  templateCounts,
+  onToggleTemplate,
   onClearTypes,
   areaActive,
   areaPanelOpen,
@@ -63,7 +83,8 @@ export function FilterPopover({
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  const activeCount = typeFilter.size + (areaActive ? 1 : 0);
+  const activeCount =
+    typeFilter.size + templateFilter.size + (areaActive ? 1 : 0);
 
   // Close on outside click + Escape. Same pattern as folder-row-menu.
   useEffect(() => {
@@ -179,6 +200,46 @@ export function FilterPopover({
               })}
             </div>
           )}
+
+          {/* #258: Template facet for web_app items. Renders only
+              when the visible set actually contains templated
+              web_apps (template-counts has entries) so the popover
+              stays quiet when the user has no editors / viewers /
+              etc to show. The icon mirrors the web_app type icon
+              for visual consistency. */}
+          {templateCounts.length > 0 ? (
+            <>
+              <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                  Template
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {templateCounts.map(([t, count]) => {
+                  const active = templateFilter.has(t);
+                  const Icon = getItemTypeIcon('web_app');
+                  const accent = getItemTypeAccent('web_app');
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => onToggleTemplate(t)}
+                      aria-pressed={active}
+                      className={`inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors ${
+                        active
+                          ? 'border-accent bg-accent/10 text-accent'
+                          : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+                      }`}
+                    >
+                      <Icon className={`h-3 w-3 ${active ? '' : accent}`} />
+                      {TEMPLATE_LABELS[t] ?? t}
+                      <span className="text-muted">({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
 
           <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
