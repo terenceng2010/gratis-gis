@@ -28,6 +28,7 @@ import type {
   PickListData,
   MapData,
   ServiceData,
+  ViewerData,
   WfsServiceData,
   WmsServiceData,
 } from '@gratis-gis/shared-types';
@@ -39,6 +40,7 @@ import {
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
+  DEFAULT_VIEWER,
   isEditorItem,
   isViewerItem,
   readEditorData,
@@ -120,6 +122,7 @@ import { DataCollectionDetail } from './data-collection/data-collection-detail';
 import { FileDetail } from './file/file-detail';
 import { OgcServiceEditor } from './ogc-service/editor';
 import { ServiceEditor } from './service/editor';
+import { ViewerDetail } from './viewer/detail';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -616,33 +619,18 @@ export default async function ItemDetailPage({ params }: Props) {
         </section>
       ) : isViewerItem(item) ? (
         <section className="mb-6">
-          {/* #259: viewer config UI is a follow-up slice. For now,
-              surface the open-runtime affordance + a hint about the
-              data shape so admins know what's wired and where the
-              configuration knobs are coming. */}
-          <div className="rounded-lg border border-border bg-surface-1 p-4">
-            <h2 className="text-lg font-semibold text-ink-0">
-              Read-Only Viewer
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              Open the viewer to explore this app&apos;s map. A
-              configuration surface for picking the source map and
-              target layers is coming in a follow-up; for now a viewer
-              created here renders against
-              {' '}
-              {(readViewerData(item)?.targets?.length ?? 0) === 0
-                ? 'no targets and a default basemap.'
-                : `${readViewerData(item)?.targets?.length} target layer(s).`}
-            </p>
-            <div className="mt-3">
-              <Link
-                href={`/items/${item.id}/viewer/run`}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium text-ink-1 hover:bg-surface-2"
-              >
-                Open viewer
-              </Link>
-            </div>
-          </div>
+          {/* #259 slice 3: real configuration surface. Pick a
+              reference map, manage target layers, and trim the
+              read-side toolbar. canEdit follows the same owner /
+              admin gate every other detail editor uses. */}
+          <ViewerDetail
+            itemId={item.id}
+            initial={{
+              ...DEFAULT_VIEWER,
+              ...((readViewerData(item) ?? {}) as Partial<ViewerData>),
+            }}
+            canEdit={canManage}
+          />
         </section>
       ) : item.type === 'data_collection' ? (
         <section className="mb-6">

@@ -1,0 +1,613 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  ExternalLink,
+  Eye,
+  Layers,
+  Loader2,
+  Map as MapIcon,
+  Play,
+  Plus,
+  Trash2,
+  Wrench,
+  X,
+} from 'lucide-react';
+import Link from 'next/link';
+import type {
+  DataLayerData,
+  DataLayerSublayer,
+  Item,
+  ViewerData,
+  ViewerTarget,
+  ViewerTool,
+} from '@gratis-gis/shared-types';
+import { DEFAULT_VIEWER_TOOLS } from '@gratis-gis/shared-types';
+import { AddTargetDialog } from '../editor/add-target-dialog';
+import { PickMapDialog } from '../editor/pick-map-dialog';
+
+interface Props {
+  itemId: string;
+  initial: ViewerData;
+  canEdit: boolean;
+}
+
+/**
+ * Viewer item detail page (#259 slice 3).
+ *
+ * Mirrors EditorDetail's shape but trims the editing-specific knobs:
+ * a viewer is read-only by definition, so each target is just an
+ * identity reference (dataLayerId + layerKey). No capability flags,
+ * no editable-fields multiselect, no row-scope, no templates,
+ * no snapping. The remaining authoring surfaces are:
+ *
+ *   1. Reference map: optional pointer to a `map` item; the runtime
+ *      inherits its basemap, viewport, layer order, and reference
+ *      symbology. Same picker the EditorDetail uses (PickMapDialog
+ *      is reused as-is).
+ *
+ *   2. Target layers: which v3 data_layer sublayers this viewer
+ *      exposes. Reuses EditorDetail's AddTargetDialog with
+ *      `allowNonEditable` flipped on, since a viewer that's purely
+ *      reading shouldn't be blocked by an editing toggle on the
+ *      data_layer.
+ *
+ *   3. Tool palette: subset of the read-side toolbar
+ *      (select / query / measure / attribute-table / legend / print).
+ *      Authors trim to a narrower app if the workflow doesn't need
+ *      all six. Print is the new tool for #259; everything else is
+ *      already implemented in the runtime.
+ *
+ * Persistence: PATCH /api/portal/items/<id> with `{ data: viewer }`.
+ * Same shape and dirty/save flow as MapEditor and EditorDetail.
+ */
+export function ViewerDetail({ itemId, initial, canEdit }: Props) {
+  // Working copy. Seed `tools` from the default palette when the
+  // persisted item is older than the tools field landing (matches
+  // EditorDetail's pattern).
+  const [viewer, setViewer] = useState<ViewerData>(() => ({
+    ...initial,
+    tools:
+      initial.tools && initial.tools.length > 0
+        ? initial.tools
+        : DEFAULT_VIEWER_TOOLS,
+  }));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [pickingMap, setPickingMap] = useState(false);
+
+  // Resolved title for the referenced map. Looked up by id so a
+  // rename of the map flows through automatically.
+  const [mapTitle, setMapTitle] = useState<string | null>(null);
+  const [mapMissing, setMapMissing] = useState(false);
+  useEffect(() => {
+    if (!viewer.mapId) {
+      setMapTitle(null);
+      setMapMissing(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/portal/items/${viewer.mapId}`);
+        if (cancelled) return;
+        if (!res.ok) {
+          setMapTitle(null);
+          setMapMissing(true);
+          return;
+        }
+        const item = (await res.json()) as Item;
+        setMapTitle(item.title);
+        setMapMissing(false);
+      } catch {
+        if (!cancelled) {
+          setMapTitle(null);
+          setMapMissing(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewer.mapId]);
+
+  // Resolved (item, sublayer) per target. Populates target rows with
+  // titles + geometry pills + warnings when a target points at a
+  // deleted or renamed layer.
+  const [resolved, setResolved] = useState<
+    Record<string, { item: Item; layer: DataLayerSublayer | null }>
+  >({});
+  const [resolving, setResolving] = useState(false);
+  const resolveSeqRef = useRef(0);
+
+  useEffect(() => {
+    const ids = Array.from(new Set(viewer.targets.map((t) => t.dataLayerId)));
+    if (ids.length === 0) {
+      setResolved({});
+      return;
+    }
+    const seq = ++resolveSeqRef.current;
+    setResolving(true);
+    let cancelled = false;
+    (async () => {
+      try {
+        const results = await Promise.all(
+          ids.map((id) =>
+            fetch(`/api/portal/items/${id}`)
+              .then((r) => (r.ok ? (r.json() as Promise<Item>) : null))
+              .catch(() => null),
+          ),
+        );
+        if (cancelled || resolveSeqRef.current !== seq) return;
+        const byId = new Map<string, Item>();
+        for (let i = 0; i < ids.length; i += 1) {
+          const it = results[i];
+          if (it) byId.set(ids[i]!, it);
+        }
+        const next: Record<string, { item: Item; layer: DataLayerSublayer | null }> = {};
+        for (const t of viewer.targets) {
+          const key = `${t.dataLayerId}:${t.layerKey}`;
+          const item = byId.get(t.dataLayerId);
+          if (!item) continue;
+          const data = item.data as DataLayerData | undefined;
+          const layer =
+            data && data.version === 3
+              ? (data.layers.find((l) => l.id === t.layerKey) ?? null)
+              : null;
+          next[key] = { item, layer };
+        }
+        setResolved(next);
+      } finally {
+        if (!cancelled && resolveSeqRef.current === seq) setResolving(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewer.targets]);
+
+  // Browser nag on unsaved changes. Same pattern as MapEditor /
+  // EditorDetail.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
+
+  const markDirty = useCallback(() => {
+    setDirty(true);
+    setSaved(false);
+  }, []);
+
+  function removeTarget(index: number) {
+    setViewer((cur) => ({
+      ...cur,
+      targets: cur.targets.filter((_, i) => i !== index),
+    }));
+    markDirty();
+  }
+
+  function addTarget(input: {
+    dataLayerId: string;
+    layerKey: string;
+    layer: DataLayerSublayer;
+    dataLayerTitle: string;
+  }) {
+    const target: ViewerTarget = {
+      dataLayerId: input.dataLayerId,
+      layerKey: input.layerKey,
+    };
+    setViewer((cur) => ({ ...cur, targets: [...cur.targets, target] }));
+    // Pre-seed the resolved cache so the new card paints
+    // immediately without waiting for the metadata refetch.
+    setResolved((cur) => ({
+      ...cur,
+      [`${input.dataLayerId}:${input.layerKey}`]: {
+        item: {
+          id: input.dataLayerId,
+          title: input.dataLayerTitle,
+        } as unknown as Item,
+        layer: input.layer,
+      },
+    }));
+    markDirty();
+  }
+
+  function pickMap(mapId: string | null) {
+    setViewer((cur) => {
+      const next = { ...cur };
+      if (mapId === null) delete next.mapId;
+      else next.mapId = mapId;
+      return next;
+    });
+    markDirty();
+  }
+
+  function toggleTool(tool: ViewerTool, on: boolean) {
+    setViewer((cur) => {
+      const set = new Set(cur.tools);
+      if (on) set.add(tool);
+      else set.delete(tool);
+      return { ...cur, tools: Array.from(set) };
+    });
+    markDirty();
+  }
+
+  async function save() {
+    setError(null);
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/portal/items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ data: viewer }),
+      });
+      if (!res.ok) {
+        setError(`Save failed: ${res.status} ${await res.text()}`);
+        return;
+      }
+      setDirty(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function cancel() {
+    setViewer({
+      ...initial,
+      tools:
+        initial.tools && initial.tools.length > 0
+          ? initial.tools
+          : DEFAULT_VIEWER_TOOLS,
+    });
+    setDirty(false);
+    setError(null);
+  }
+
+  const existingKeys = useMemo(
+    () => new Set(viewer.targets.map((t) => `${t.dataLayerId}:${t.layerKey}`)),
+    [viewer.targets],
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Sticky save bar mirrors map-editor's UX. The "Open in
+          workspace" link is always visible so a viewer (no edit
+          rights) can still launch the runtime. */}
+      <div className="sticky top-0 z-10 flex items-center justify-between rounded-md border border-border bg-surface-1 px-4 py-2 shadow-sm">
+        <div className="flex items-center gap-2 text-sm">
+          <Eye className="h-4 w-4 text-purple-600" />
+          <span className="font-medium text-ink-0">Viewer configuration</span>
+          {canEdit && dirty ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+              Unsaved changes
+            </span>
+          ) : canEdit && saved ? (
+            <span className="text-[11px] text-emerald-700">Saved</span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/items/${itemId}/viewer/run`}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            title="Open this viewer in workspace mode"
+          >
+            <Play className="h-3.5 w-3.5" />
+            Open viewer
+          </Link>
+          {canEdit ? (
+            <>
+              <button
+                type="button"
+                onClick={cancel}
+                disabled={!dirty || saving}
+                className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={!dirty || saving}
+                className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+              >
+                {saving ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Save
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {error ? (
+        <div
+          className="rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-sm text-danger"
+          role="alert"
+        >
+          {error}
+        </div>
+      ) : null}
+
+      {/* Reference map. The viewer inherits this map's basemap,
+          viewport, layer order, and reference-layer symbology. */}
+      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
+              <MapIcon className="h-4 w-4 text-emerald-600" />
+              Reference map
+            </h2>
+            <p className="text-xs text-muted">
+              The viewer opens against this map's basemap, viewport,
+              and layer order. Layers in the map that are not viewer
+              targets render as read-only reference context.
+            </p>
+          </div>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => setPickingMap(true)}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            >
+              {viewer.mapId ? 'Change map' : 'Pick map'}
+            </button>
+          ) : null}
+        </div>
+        <div className="px-4 py-3 text-sm">
+          {viewer.mapId ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <MapIcon className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span className="truncate font-medium text-ink-0">
+                  {mapTitle ?? <span className="text-muted">Loading...</span>}
+                </span>
+                {mapMissing ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+                    <AlertTriangle className="h-3 w-3" />
+                    Map not found
+                  </span>
+                ) : null}
+                {!mapMissing && mapTitle ? (
+                  <Link
+                    href={`/items/${viewer.mapId}`}
+                    className="inline-flex items-center gap-1 text-xs text-muted hover:text-accent"
+                  >
+                    Open <ExternalLink className="h-3 w-3" />
+                  </Link>
+                ) : null}
+              </div>
+              {canEdit ? (
+                <button
+                  type="button"
+                  onClick={() => pickMap(null)}
+                  className="inline-flex items-center gap-1 rounded-md p-1 text-muted hover:bg-surface-2 hover:text-danger"
+                  aria-label="Clear reference map"
+                  title="Clear reference map"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-muted">
+              No reference map.{' '}
+              {canEdit
+                ? 'Without one, the viewer opens on a default basemap and fits to the union of its target layers.'
+                : ''}
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Targets section. Each row is just identity + a remove
+          button: the viewer doesn't need per-layer policy knobs. */}
+      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
+              <Layers className="h-4 w-4 text-sky-600" />
+              Layers in this viewer
+            </h2>
+            <p className="text-xs text-muted">
+              Layers exposed in the layer panel, legend, and attribute
+              table. Symbology comes from the underlying data layer.
+            </p>
+          </div>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add layer
+            </button>
+          ) : null}
+        </div>
+        {viewer.targets.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-muted">
+            No layers yet.
+            {canEdit ? ' Use "Add layer" to expose a data layer here.' : ''}
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {viewer.targets.map((target, index) => (
+              <TargetRow
+                key={`${target.dataLayerId}:${target.layerKey}`}
+                target={target}
+                resolved={
+                  resolved[`${target.dataLayerId}:${target.layerKey}`] ?? null
+                }
+                resolving={resolving}
+                canEdit={canEdit}
+                onRemove={() => removeTarget(index)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Tool palette. Authors trim the toolbar for narrower
+          workflows (a results-only viewer might keep just legend +
+          attribute-table; a kiosk might keep only print). */}
+      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
+            <Wrench className="h-4 w-4 text-muted" />
+            Toolbar
+          </h2>
+          <p className="text-xs text-muted">
+            Read-side tools the viewer exposes. Every tool here is
+            non-destructive.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-3">
+          {ALL_TOOLS.map(({ key, label, hint }) => {
+            const on = viewer.tools.includes(key);
+            return (
+              <label
+                key={key}
+                className="flex items-start gap-2 text-sm"
+                title={hint}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={!canEdit}
+                  onChange={(e) => toggleTool(key, e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer"
+                />
+                <span>
+                  <span className="font-medium text-ink-1">{label}</span>
+                  <span className="block text-[11px] text-muted">{hint}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </section>
+
+      <AddTargetDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        existingTargets={existingKeys}
+        allowNonEditable
+        onAdd={addTarget}
+      />
+
+      <PickMapDialog
+        open={pickingMap}
+        onClose={() => setPickingMap(false)}
+        onPick={(m) => pickMap(m.id)}
+      />
+    </div>
+  );
+}
+
+const ALL_TOOLS: Array<{ key: ViewerTool; label: string; hint: string }> = [
+  { key: 'select', label: 'Select', hint: 'Pick features to inspect.' },
+  {
+    key: 'query',
+    label: 'Query',
+    hint: 'Filter visible features by attribute or extent.',
+  },
+  {
+    key: 'measure',
+    label: 'Measure',
+    hint: 'Distance and area readouts on the canvas.',
+  },
+  {
+    key: 'attribute-table',
+    label: 'Attribute table',
+    hint: 'Browse layer rows in a sortable table.',
+  },
+  { key: 'legend', label: 'Legend', hint: 'Symbology key for the visible layers.' },
+  {
+    key: 'print',
+    label: 'Print',
+    hint: 'Export the current view as a printable layout.',
+  },
+];
+
+interface TargetRowProps {
+  target: ViewerTarget;
+  resolved: { item: Item; layer: DataLayerSublayer | null } | null;
+  resolving: boolean;
+  canEdit: boolean;
+  onRemove: () => void;
+}
+
+/**
+ * One viewer target. Renders the resolved data layer + sublayer
+ * label, geometry-type pill, and a remove button. When the layer
+ * can't be resolved the row surfaces a warning so the user knows
+ * the target is broken (item deleted, layer key renamed, etc.).
+ */
+function TargetRow({ target, resolved, resolving, canEdit, onRemove }: TargetRowProps) {
+  const layer = resolved?.layer ?? null;
+  const item = resolved?.item ?? null;
+  const broken = resolved !== null && layer === null;
+
+  return (
+    <li className="flex items-start justify-between gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-ink-0">
+            {item?.title ?? (
+              <span className="text-muted">
+                {resolving ? 'Loading...' : target.dataLayerId.slice(0, 8)}
+              </span>
+            )}
+          </span>
+          <span className="text-muted">/</span>
+          <span className="text-sm text-ink-1">
+            {layer?.label ?? target.layerKey}
+          </span>
+          {layer?.geometryType ? (
+            <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+              {layer.geometryType}
+            </span>
+          ) : null}
+        </div>
+        {item ? (
+          <Link
+            href={`/items/${item.id}`}
+            className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted hover:text-accent"
+          >
+            Open data layer <ExternalLink className="h-3 w-3" />
+          </Link>
+        ) : null}
+        {broken ? (
+          <p className="mt-2 inline-flex items-center gap-1 text-xs text-amber-800">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            The referenced layer could not be loaded. It may have been
+            deleted or renamed.
+          </p>
+        ) : null}
+      </div>
+      {canEdit ? (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-danger"
+          aria-label="Remove layer"
+          title="Remove layer"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      ) : null}
+    </li>
+  );
+}

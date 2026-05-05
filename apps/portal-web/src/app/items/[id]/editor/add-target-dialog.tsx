@@ -18,6 +18,14 @@ interface Props {
    * from creating duplicates.
    */
   existingTargets: ReadonlySet<string>;
+  /**
+   * When true, layers with `editingEnabled === false` remain
+   * pickable. Used by the Viewer detail page (#259), where
+   * editability is not a target-pick precondition: the viewer
+   * just reads. Editor leaves this false (default) so authors get
+   * a clear "flip the toggle on the data layer first" signal.
+   */
+  allowNonEditable?: boolean;
   onAdd: (input: {
     dataLayerId: string;
     layerKey: string;
@@ -51,6 +59,7 @@ export function AddTargetDialog({
   open,
   onClose,
   existingTargets,
+  allowNonEditable = false,
   onAdd,
 }: Props) {
   const [items, setItems] = useState<Item[]>([]);
@@ -269,10 +278,13 @@ export function AddTargetDialog({
                   const key = `${selected.id}:${layer.id}`;
                   const already = existingTargets.has(key);
                   const editable = layer.editingEnabled;
-                  const disabled = already || !editable;
+                  // Viewer (#259) passes allowNonEditable=true: the
+                  // app reads, never writes, so the layer's
+                  // editing toggle is irrelevant.
+                  const disabled = already || (!editable && !allowNonEditable);
                   const tooltip = already
                     ? 'Already a target'
-                    : !editable
+                    : !editable && !allowNonEditable
                       ? 'Editing is disabled on this layer. Turn it on in the data layer\'s detail page first.'
                       : '';
                   return (
@@ -301,10 +313,13 @@ export function AddTargetDialog({
                           <div className="text-xs text-muted">
                             {layer.fields.length} field
                             {layer.fields.length === 1 ? '' : 's'}
-                            {layer.editingPolicy === 'own-rows-only'
+                            {layer.editingPolicy === 'own-rows-only' &&
+                            !allowNonEditable
                               ? ' / own-rows policy'
                               : ''}
-                            {!editable ? ' / editing disabled' : ''}
+                            {!editable && !allowNonEditable
+                              ? ' / editing disabled'
+                              : ''}
                           </div>
                         </div>
                         {already ? (
