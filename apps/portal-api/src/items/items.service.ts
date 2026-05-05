@@ -1025,6 +1025,30 @@ export class ItemsService {
         input.data,
       )) as Prisma.InputJsonValue;
     }
+    // For form items, preserve linkedLayerId / linkedLayerKey across
+    // a `data` patch (#283 / #284). The form designer's save sends
+    // the whole FormSchema as data, which would otherwise overwrite
+    // the link to the paired data_layer that was set at create time
+    // and break the submission mirror. The link is server-state, not
+    // author-state: clients can't (and shouldn't) round-trip it.
+    if (input.data !== undefined && item.type === 'form') {
+      const prevData = (item.data ?? {}) as Record<string, unknown>;
+      const incoming = (nextData ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...incoming };
+      if (
+        typeof prevData.linkedLayerId === 'string' &&
+        typeof merged.linkedLayerId !== 'string'
+      ) {
+        merged.linkedLayerId = prevData.linkedLayerId;
+      }
+      if (
+        typeof prevData.linkedLayerKey === 'string' &&
+        typeof merged.linkedLayerKey !== 'string'
+      ) {
+        merged.linkedLayerKey = prevData.linkedLayerKey;
+      }
+      nextData = merged as Prisma.InputJsonValue;
+    }
 
     // Recompute the cached extent when the data blob changes; leave
     // it untouched on metadata-only edits so we don't churn the

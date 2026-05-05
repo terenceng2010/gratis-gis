@@ -381,9 +381,13 @@ function GroupField({
   onChange: (v: unknown) => void;
 }) {
   // Repeating group: stored as an array of Response objects.
-  // Non-repeating group: child responses live at the top level
-  // (group is purely a visual container).
+  // Non-repeating group: child responses live nested under the
+  // group's id, mirroring the repeat-group shape so onSet can build
+  // the next value with a simple object spread. (An older comment
+  // here claimed children lived at the top level; that didn't match
+  // the write path, so the read had to be patched to follow suit.)
   if (!q.repeat) {
+    const inner = (response[q.id] as Response | undefined) ?? ({} as Response);
     return (
       <fieldset className="rounded-md border border-border bg-surface-2/30 p-3">
         <legend className="px-2 text-sm font-medium text-ink-0">
@@ -391,11 +395,11 @@ function GroupField({
         </legend>
         <PackedRows
           questions={q.children}
-          response={response}
+          response={inner}
           readOnly={readOnly}
           onSet={(id, v) =>
             onChange({
-              ...(response[q.id] as object | undefined),
+              ...inner,
               [id]: v,
             })
           }
