@@ -1770,7 +1770,14 @@ function syncOverlays(
       return expr;
     };
 
-    const SEL_ACCENT = '#2563eb';
+    // High-contrast bright orange (Tailwind orange-500). Was previously
+    // a blue (#2563eb) which rendered selected features invisible when
+    // the layer's own fill was also blue (very common for default
+    // point symbology). Orange stands out against virtually every
+    // basemap and any blue/green/red layer color, so the selection
+    // feedback (SEL_ACCENT stroke ring + thicker line) is visible
+    // regardless of what color the layer normally paints with.
+    const SEL_ACCENT = '#f97316';
 
     // Point sizes grow smoothly with zoom so features don't dominate
     // the view at continent-level zooms and stay legible at street
