@@ -10,6 +10,7 @@ import {
   queueSubmission,
   type QueuedSubmission,
 } from '@/lib/form-offline';
+import { uploadPendingAttachmentsInResponse } from '@/lib/form-attachment-upload';
 
 interface Props {
   form: FormSchema;
@@ -55,6 +56,13 @@ export function RespondClient({ form, formItemTitle }: Props) {
     setDraining(true);
     try {
       await drain(form.id, async (row) => {
+        // Upload any offline-captured attachments before posting (#280).
+        // The walk mutates row.response in place so a partial drain
+        // (some attachments uploaded, some still pending) doesn't have
+        // to redo successful uploads on retry. uploadPendingAttachments
+        // throws on failure; the outer drain marks the row failed and
+        // the queue will retry next online tick.
+        await uploadPendingAttachmentsInResponse(row.response);
         const res = await fetch(
           `/api/portal/forms/${form.id}/submissions`,
           {

@@ -31,6 +31,7 @@ import {
   type Response,
   type ValidationError,
 } from '@gratis-gis/form-schema';
+import { uploadFormAttachment } from '@/lib/form-attachment-upload';
 
 /**
  * Mobile-first runtime that renders any FormSchema and captures a
@@ -1133,6 +1134,82 @@ function Input({
   }
 }
 
+/**
+ * Photo answer entry. Two shapes supported:
+ *
+ *   - Uploaded:  { name, mimeType, sizeBytes, url, key }
+ *     The capture went straight to MinIO; only the URL travels in
+ *     the response JSON. This is the steady-state shape and what
+ *     the server stores.
+ *
+ *   - Pending:   { name, mimeType, sizeBytes, dataUrl }
+ *     Capture happened offline. The bytes ride along in IndexedDB
+ *     as a data URL until the queue drain step uploads them and
+ *     swaps in the URL form.
+ *
+ * For backward compat with the legacy string-only response shape, a
+ * raw string entry is treated as a pending data URL with synthesized
+ * metadata. Old submissions still render correctly and roll forward
+ * cleanly when next edited.
+ */
+type PhotoEntry =
+  | {
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+      url: string;
+      key: string;
+    }
+  | {
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+      dataUrl: string;
+    };
+
+function normalizePhotoValue(value: unknown): PhotoEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item): PhotoEntry | null => {
+      if (typeof item === 'string') {
+        // Legacy: bare data URL string. Assume image/jpeg so the
+        // mime is sane on render; size unknown.
+        return {
+          name: 'photo',
+          mimeType: 'image/jpeg',
+          sizeBytes: 0,
+          dataUrl: item,
+        };
+      }
+      if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>;
+        if (typeof o.url === 'string' && typeof o.key === 'string') {
+          return {
+            name: typeof o.name === 'string' ? o.name : 'photo',
+            mimeType: typeof o.mimeType === 'string' ? o.mimeType : 'image/jpeg',
+            sizeBytes: typeof o.sizeBytes === 'number' ? o.sizeBytes : 0,
+            url: o.url,
+            key: o.key,
+          };
+        }
+        if (typeof o.dataUrl === 'string') {
+          return {
+            name: typeof o.name === 'string' ? o.name : 'photo',
+            mimeType: typeof o.mimeType === 'string' ? o.mimeType : 'image/jpeg',
+            sizeBytes: typeof o.sizeBytes === 'number' ? o.sizeBytes : 0,
+            dataUrl: o.dataUrl,
+          };
+        }
+      }
+      return null;
+    })
+    .filter((p): p is PhotoEntry => p !== null);
+}
+
+function photoSrc(p: PhotoEntry): string {
+  return 'url' in p ? p.url : p.dataUrl;
+}
+
 function PhotoInput({
   q,
   value,
@@ -1144,20 +1221,20 @@ function PhotoInput({
   readOnly: boolean;
   onChange: (v: unknown) => void;
 }) {
-  // Phase 1: capture as data URLs in IndexedDB-friendly arrays. The
-  // server-side upload-to-MinIO wiring lands in Phase 2.
-  const photos: string[] = Array.isArray(value) ? (value as string[]) : [];
+  const photos = normalizePhotoValue(value);
   const max = q.maxCount ?? 1;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
-        {photos.map((src, i) => (
+        {photos.map((p, i) => (
           <div
             key={i}
             className="relative h-20 w-20 overflow-hidden rounded-md border border-border bg-surface-2"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={src} alt="" className="h-full w-full object-cover" />
+            <img src={photoSrc(p)} alt="" className="h-full w-full object-cover" />
             {!readOnly ? (
               <button
                 type="button"
@@ -1171,24 +1248,69 @@ function PhotoInput({
           </div>
         ))}
         {!readOnly && photos.length < max ? (
-          <label className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border bg-surface-1 text-xs text-muted hover:bg-surface-2">
+          <label
+            className={`flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border bg-surface-1 text-xs text-muted hover:bg-surface-2 ${
+              busy ? 'opacity-60' : ''
+            }`}
+          >
             <Camera className="h-5 w-5" />
-            Photo
+            {busy ? 'Saving...' : 'Photo'}
             <input
               type="file"
               accept="image/*"
               capture="environment"
               className="hidden"
+              disabled={busy}
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
-                const dataUrl = await fileToDataUrl(file);
-                onChange([...photos, dataUrl]);
+                // Reset the input so re-selecting the same file fires
+                // change again. Without this, picking-then-removing-
+                // then-re-picking the same photo silently no-ops.
+                e.target.value = '';
+                setBusy(true);
+                setErr(null);
+                try {
+                  // Online path: upload directly to MinIO so the
+                  // submission JSON stays small. Falls through to the
+                  // pending-dataUrl path on any failure (no network,
+                  // 5xx, MinIO down): the queue drain will retry.
+                  if (typeof navigator !== 'undefined' && navigator.onLine) {
+                    try {
+                      const uploaded = await uploadFormAttachment(file);
+                      onChange([...photos, uploaded]);
+                      return;
+                    } catch (upErr) {
+                      // Surface the error briefly but still queue the
+                      // photo offline so the user doesn't lose it.
+                      setErr(
+                        upErr instanceof Error
+                          ? upErr.message
+                          : 'Upload failed; saved offline.',
+                      );
+                    }
+                  }
+                  const dataUrl = await fileToDataUrl(file);
+                  onChange([
+                    ...photos,
+                    {
+                      name: file.name || 'photo',
+                      mimeType: file.type || 'image/jpeg',
+                      sizeBytes: file.size,
+                      dataUrl,
+                    },
+                  ]);
+                } finally {
+                  setBusy(false);
+                }
               }}
             />
           </label>
         ) : null}
       </div>
+      {err ? (
+        <p className="text-[11px] text-amber-700">{err}</p>
+      ) : null}
       <p className="text-[11px] text-muted">
         {photos.length} of {max} {max === 1 ? 'photo' : 'photos'}
       </p>
@@ -1227,22 +1349,39 @@ function MediaCaptureInput({
   onChange: (v: unknown) => void;
   kind: 'audio' | 'video';
 }) {
-  type Clip = {
-    name: string;
-    mimeType: string;
-    sizeBytes: number;
-    dataUrl: string;
-    durationSec?: number;
-  };
+  // A captured clip is in one of two shapes (see PhotoEntry above for
+  // the same pattern). Online capture: { ..., url, key }. Offline
+  // capture: { ..., dataUrl }. The drain step uploads any pending
+  // dataUrl-shaped clips before posting the submission.
+  type Clip =
+    | {
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+        url: string;
+        key: string;
+        durationSec?: number;
+      }
+    | {
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+        dataUrl: string;
+        durationSec?: number;
+      };
+  const clipSrc = (c: Clip): string => ('url' in c ? c.url : c.dataUrl);
   const clips: Clip[] = Array.isArray(value)
     ? (value as Clip[]).filter(
         (c): c is Clip =>
           c !== null &&
           typeof c === 'object' &&
-          typeof (c as Clip).dataUrl === 'string' &&
+          (typeof (c as { url?: unknown }).url === 'string' ||
+            typeof (c as { dataUrl?: unknown }).dataUrl === 'string') &&
           typeof (c as Clip).mimeType === 'string',
       )
     : [];
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const max = q.maxCount ?? 1;
   const acceptMime = kind === 'audio' ? 'audio/*' : 'video/*';
   const captureLabel = kind === 'audio' ? 'Audio' : 'Video';
@@ -1287,12 +1426,12 @@ function MediaCaptureInput({
           >
             {kind === 'video' ? (
               <video
-                src={c.dataUrl}
+                src={clipSrc(c)}
                 controls
                 className="max-h-48 w-full rounded bg-black"
               />
             ) : (
-              <audio src={c.dataUrl} controls className="w-full" />
+              <audio src={clipSrc(c)} controls className="w-full" />
             )}
             <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
               <span className="truncate">
@@ -1332,22 +1471,58 @@ function MediaCaptureInput({
             // browsers ignore `capture` and fall back to file pick.
             capture={kind === 'video' ? 'environment' : undefined}
             className="hidden"
+            disabled={busy}
             onChange={async (e) => {
               const file = e.target.files?.[0];
               if (!file) return;
-              const dataUrl = await fileToDataUrl(file);
-              const durationSec = await probeDuration(dataUrl);
-              const next: Clip = {
-                name: file.name,
-                mimeType: file.type || acceptMime,
-                sizeBytes: file.size,
-                dataUrl,
-                ...(typeof durationSec === 'number' ? { durationSec } : {}),
-              };
-              onChange([...clips, next]);
+              e.target.value = '';
+              setBusy(true);
+              setErr(null);
+              try {
+                // Online: upload to MinIO, store url. Offline or
+                // failed upload: fall back to dataUrl, queue uploads
+                // it on drain. Same pattern as PhotoInput.
+                if (typeof navigator !== 'undefined' && navigator.onLine) {
+                  try {
+                    const uploaded = await uploadFormAttachment(file);
+                    // Probe duration from the public URL post-upload
+                    // (a media element can stream from MinIO).
+                    const durationSec = await probeDuration(uploaded.url);
+                    const next: Clip = {
+                      ...uploaded,
+                      ...(typeof durationSec === 'number'
+                        ? { durationSec }
+                        : {}),
+                    };
+                    onChange([...clips, next]);
+                    return;
+                  } catch (upErr) {
+                    setErr(
+                      upErr instanceof Error
+                        ? upErr.message
+                        : 'Upload failed; saved offline.',
+                    );
+                  }
+                }
+                const dataUrl = await fileToDataUrl(file);
+                const durationSec = await probeDuration(dataUrl);
+                const next: Clip = {
+                  name: file.name || captureLabel.toLowerCase(),
+                  mimeType: file.type || acceptMime,
+                  sizeBytes: file.size,
+                  dataUrl,
+                  ...(typeof durationSec === 'number' ? { durationSec } : {}),
+                };
+                onChange([...clips, next]);
+              } finally {
+                setBusy(false);
+              }
             }}
           />
         </label>
+      ) : null}
+      {err ? (
+        <p className="text-[11px] text-amber-700">{err}</p>
       ) : null}
       <p className="text-[11px] text-muted">
         {clips.length} of {max}{' '}
@@ -1668,40 +1843,79 @@ function FileInput({
   readOnly: boolean;
   onChange: (v: unknown) => void;
 }) {
-  type Attachment = {
-    name: string;
-    mimeType: string;
-    sizeBytes: number;
-    dataUrl: string;
-  };
+  // Same dual shape as PhotoInput / MediaCaptureInput. Uploaded
+  // attachments carry url+key; offline-pending ones carry dataUrl.
+  type Attachment =
+    | {
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+        url: string;
+        key: string;
+      }
+    | {
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+        dataUrl: string;
+      };
   const files: Attachment[] = Array.isArray(value)
     ? (value as Attachment[]).filter(
         (f): f is Attachment =>
           f !== null &&
           typeof f === 'object' &&
           typeof (f as Attachment).name === 'string' &&
-          typeof (f as Attachment).dataUrl === 'string',
+          (typeof (f as { url?: unknown }).url === 'string' ||
+            typeof (f as { dataUrl?: unknown }).dataUrl === 'string'),
       )
     : [];
   const max = q.maxCount ?? 1;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     if (readOnly) return;
     const picked = e.target.files;
     if (!picked || picked.length === 0) return;
-    const next: Attachment[] = files.slice();
-    for (const f of Array.from(picked)) {
-      if (next.length >= max) break;
-      const dataUrl = await fileToDataUrl(f);
-      next.push({
-        name: f.name,
-        mimeType: f.type || 'application/octet-stream',
-        sizeBytes: f.size,
-        dataUrl,
-      });
-    }
-    onChange(next);
     e.target.value = '';
+    setBusy(true);
+    setErr(null);
+    try {
+      const next: Attachment[] = files.slice();
+      for (const f of Array.from(picked)) {
+        if (next.length >= max) break;
+        // Online: upload to MinIO and store URL. Offline or upload
+        // failure: queue with dataUrl; drain will retry the upload.
+        let added = false;
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const uploaded = await uploadFormAttachment(f);
+            next.push(uploaded);
+            added = true;
+          } catch (upErr) {
+            setErr(
+              upErr instanceof Error
+                ? upErr.message
+                : 'Upload failed; saved offline.',
+            );
+          }
+        }
+        if (!added) {
+          // eslint-disable-next-line no-await-in-loop
+          const dataUrl = await fileToDataUrl(f);
+          next.push({
+            name: f.name,
+            mimeType: f.type || 'application/octet-stream',
+            sizeBytes: f.size,
+            dataUrl,
+          });
+        }
+      }
+      onChange(next);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function remove(idx: number) {
@@ -1743,17 +1957,23 @@ function FileInput({
         </ul>
       ) : null}
       {!readOnly && files.length < max ? (
-        <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border border-dashed border-border bg-surface-1 px-3 text-sm text-ink-1 hover:bg-surface-2">
+        <label
+          className={`inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border border-dashed border-border bg-surface-1 px-3 text-sm text-ink-1 hover:bg-surface-2 ${
+            busy ? 'opacity-60' : ''
+          }`}
+        >
           <Plus className="h-4 w-4 text-muted" />
-          <span>Add file</span>
+          <span>{busy ? 'Saving...' : 'Add file'}</span>
           <input
             type="file"
             className="sr-only"
             accept={q.accept}
+            disabled={busy}
             onChange={onPick}
           />
         </label>
       ) : null}
+      {err ? <p className="text-[11px] text-amber-700">{err}</p> : null}
       <p className="text-[11px] text-muted">
         {files.length} of {max} {max === 1 ? 'file' : 'files'} attached
       </p>
