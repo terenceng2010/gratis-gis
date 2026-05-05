@@ -10,6 +10,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from '../admin/admin.guard.js';
+import { HousekeepingScheduleService } from '../admin/housekeeping-schedule.service.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -30,6 +31,7 @@ export class FieldQueueAdminController {
   constructor(
     private readonly service: FieldQueueService,
     private readonly prisma: PrismaService,
+    private readonly schedule: HousekeepingScheduleService,
   ) {}
 
   @Get()
@@ -121,18 +123,18 @@ export class FieldQueueAdminController {
   }
 
   /**
-   * #275: Bulk Forget all stale manifests in this org. "Stale"
-   * means: the manifest is empty (no queued records anywhere)
-   * AND the last beacon was more than 7 days ago. Returns the
-   * count deleted so the UI can confirm.
-   *
-   * The 7-day cutoff matches the default-filter threshold the
-   * UI uses to hide rows; both are kept aligned so the bulk
-   * action wipes exactly what the default view hides.
+   * #275 / #276: Bulk Forget all stale manifests in this org.
+   * "Stale" means: the manifest is empty (no queued records
+   * anywhere) AND the last beacon was more than fieldQueueStaleDays
+   * (default 7) ago. The threshold reads from the configurable
+   * housekeeping config so admin tweaks land here without code
+   * changes. Returns the count deleted so the UI can confirm.
    */
   @Post('forget-stale')
   async forgetStale(@CurrentUser() user: AuthUser) {
-    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cfg = await this.schedule.getConfig();
+    const days = cfg.fieldQueueStaleDays;
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     // Pull candidates first so we can apply the JSON-shape predicate
     // (manifest is jsonb, the queuedRecords array on each entry has
     // to be empty for the row to count as stale). Doing this in

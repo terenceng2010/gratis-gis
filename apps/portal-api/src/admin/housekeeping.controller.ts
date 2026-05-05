@@ -32,6 +32,11 @@ class HousekeepingConfigDto {
   @IsOptional() @IsBoolean() autoDisableEnabled?: boolean;
   @IsOptional() @IsInt() @Min(1) @Max(3650) autoDisableDays?: number | null;
   @IsOptional() @IsBoolean() recomputeExtentsEnabled?: boolean;
+  @IsOptional() @IsInt() @Min(1) @Max(3650)
+  fieldQueueStaleDays?: number | null;
+  @IsOptional() @IsBoolean() fieldQueueAutoPruneEnabled?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Max(3650)
+  fieldQueueAutoPruneGraceDays?: number | null;
   @IsOptional() @IsEnum(['off', 'daily', 'weekly'])
   scheduleMode?: HousekeepingScheduleMode;
   @IsOptional() @IsInt() @Min(0) @Max(23) scheduleHour?: number;

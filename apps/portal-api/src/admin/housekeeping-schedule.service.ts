@@ -27,6 +27,18 @@ export interface HousekeepingConfig {
   /** When true, the periodic pass recomputes item.bbox for every
    *  spatial item alongside the trash + disable passes (#93). */
   recomputeExtentsEnabled: boolean;
+  /** #276: how many days an empty field-queue manifest can sit idle
+   *  before the admin field-queues view hides it by default + the
+   *  bulk-forget endpoint considers it stale. */
+  fieldQueueStaleDays: number;
+  /** #276: when true, the periodic pass deletes empty field-queue
+   *  manifest rows older than (fieldQueueStaleDays +
+   *  fieldQueueAutoPruneGraceDays). Off by default; admin opts in. */
+  fieldQueueAutoPruneEnabled: boolean;
+  /** #276: extra cushion past the stale threshold before the cron
+   *  actually deletes a row. Defaults so the auto-prune is
+   *  conservative. */
+  fieldQueueAutoPruneGraceDays: number;
   scheduleMode: HousekeepingScheduleMode;
   scheduleHour: number;
   scheduleMinute: number;
@@ -45,6 +57,9 @@ export interface HousekeepingConfigPatch {
   autoDisableEnabled?: boolean;
   autoDisableDays?: number | null;
   recomputeExtentsEnabled?: boolean;
+  fieldQueueStaleDays?: number | null;
+  fieldQueueAutoPruneEnabled?: boolean;
+  fieldQueueAutoPruneGraceDays?: number | null;
   scheduleMode?: HousekeepingScheduleMode;
   scheduleHour?: number;
   scheduleMinute?: number;
@@ -104,6 +119,12 @@ export class HousekeepingScheduleService {
       data.autoDisableDays = patch.autoDisableDays;
     if (patch.recomputeExtentsEnabled !== undefined)
       data.recomputeExtentsEnabled = patch.recomputeExtentsEnabled;
+    if (patch.fieldQueueStaleDays !== undefined)
+      data.fieldQueueStaleDays = patch.fieldQueueStaleDays;
+    if (patch.fieldQueueAutoPruneEnabled !== undefined)
+      data.fieldQueueAutoPruneEnabled = patch.fieldQueueAutoPruneEnabled;
+    if (patch.fieldQueueAutoPruneGraceDays !== undefined)
+      data.fieldQueueAutoPruneGraceDays = patch.fieldQueueAutoPruneGraceDays;
     if (patch.scheduleMode !== undefined)
       data.scheduleMode = patch.scheduleMode;
     if (patch.scheduleHour !== undefined) data.scheduleHour = patch.scheduleHour;
@@ -148,6 +169,9 @@ export class HousekeepingScheduleService {
       autoDisableEnabled: boolean;
       autoDisableDays: number | null;
       recomputeExtentsEnabled: boolean;
+      fieldQueueStaleDays: number | null;
+      fieldQueueAutoPruneEnabled: boolean;
+      fieldQueueAutoPruneGraceDays: number | null;
       scheduleMode: string;
       scheduleHour: number;
       scheduleMinute: number;
@@ -156,6 +180,14 @@ export class HousekeepingScheduleService {
   ): HousekeepingConfig {
     const autoTrashDaysEnv = this.envInt('HOUSEKEEPING_STALE_ITEM_DAYS', 90);
     const autoDisableDaysEnv = this.envInt('HOUSEKEEPING_STALE_USER_DAYS', 180);
+    const fieldQueueStaleDaysEnv = this.envInt(
+      'HOUSEKEEPING_FIELD_QUEUE_STALE_DAYS',
+      7,
+    );
+    const fieldQueueGraceDaysEnv = this.envInt(
+      'HOUSEKEEPING_FIELD_QUEUE_AUTO_PRUNE_GRACE_DAYS',
+      90,
+    );
     const mode =
       (row?.scheduleMode as HousekeepingScheduleMode | undefined) ?? 'off';
     const hour = row?.scheduleHour ?? 3;
@@ -164,10 +196,14 @@ export class HousekeepingScheduleService {
     const autoTrash = row?.autoTrashEnabled ?? false;
     const autoDisable = row?.autoDisableEnabled ?? false;
     const recompute = row?.recomputeExtentsEnabled ?? false;
+    const fieldQueueAutoPrune = row?.fieldQueueAutoPruneEnabled ?? false;
 
     let effectiveCron: string | null = null;
     let summary = 'Off';
-    if (mode !== 'off' && (autoTrash || autoDisable || recompute)) {
+    if (
+      mode !== 'off' &&
+      (autoTrash || autoDisable || recompute || fieldQueueAutoPrune)
+    ) {
       const m = String(minute).padStart(2, '0');
       const h = String(hour).padStart(2, '0');
       if (mode === 'daily') {
@@ -180,7 +216,13 @@ export class HousekeepingScheduleService {
           ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d] ?? 'Monday';
         summary = `Weekly on ${dayName} at ${h}:${m}`;
       }
-    } else if (!autoTrash && !autoDisable && !recompute && mode !== 'off') {
+    } else if (
+      !autoTrash &&
+      !autoDisable &&
+      !recompute &&
+      !fieldQueueAutoPrune &&
+      mode !== 'off'
+    ) {
       summary = 'Schedule set, but no auto-actions enabled';
     }
 
@@ -190,6 +232,11 @@ export class HousekeepingScheduleService {
       autoDisableEnabled: autoDisable,
       autoDisableDays: row?.autoDisableDays ?? autoDisableDaysEnv,
       recomputeExtentsEnabled: recompute,
+      fieldQueueStaleDays:
+        row?.fieldQueueStaleDays ?? fieldQueueStaleDaysEnv,
+      fieldQueueAutoPruneEnabled: fieldQueueAutoPrune,
+      fieldQueueAutoPruneGraceDays:
+        row?.fieldQueueAutoPruneGraceDays ?? fieldQueueGraceDaysEnv,
       scheduleMode: mode,
       scheduleHour: hour,
       scheduleMinute: minute,
@@ -256,6 +303,37 @@ export class HousekeepingScheduleService {
               }`,
             );
           }
+        }
+      }
+      // #276: auto-prune stale field-queue manifests. Deletes rows
+      // whose manifest is empty AND whose last beacon is older than
+      // (staleDays + graceDays). Off by default; admin opts in.
+      // Deliberately conservative -- a row with non-empty queue is
+      // signal even if silent, and the grace window ensures we
+      // don't delete a row a worker could still come back to.
+      if (cfg.fieldQueueAutoPruneEnabled) {
+        const totalDays =
+          cfg.fieldQueueStaleDays + cfg.fieldQueueAutoPruneGraceDays;
+        const cutoff = new Date(Date.now() - totalDays * 24 * 60 * 60 * 1000);
+        const candidates = await this.prisma.fieldQueueManifest.findMany({
+          where: { reportedAt: { lt: cutoff } },
+          select: { id: true, manifest: true },
+        });
+        const stale = candidates.filter((r) => {
+          const m = (r.manifest as Array<{
+            queuedRecords?: Array<unknown>;
+          }> | null) ?? [];
+          return m.every(
+            (entry) => (entry.queuedRecords?.length ?? 0) === 0,
+          );
+        });
+        if (stale.length > 0) {
+          const result = await this.prisma.fieldQueueManifest.deleteMany({
+            where: { id: { in: stale.map((r) => r.id) } },
+          });
+          this.log.log(
+            `field-queue-auto-prune: deleted ${result.count} manifests (cutoff ${totalDays}d)`,
+          );
         }
       }
       // Keycloak -> Prisma user mirror reconcile. Runs unconditionally

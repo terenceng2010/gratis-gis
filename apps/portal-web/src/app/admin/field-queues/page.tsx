@@ -31,9 +31,24 @@ export default async function AdminFieldQueuesPage() {
   if (me.orgRole !== 'admin') redirect('/items');
 
   let rows: FieldQueueRow[] = [];
+  let staleAfterDays = 7;
   let error: string | null = null;
   try {
-    rows = await apiFetch<FieldQueueRow[]>('/api/admin/field-queues');
+    // #276: pull rows + the configured stale threshold in parallel
+    // so the view's default-hide filter matches the bulk-forget
+    // cutoff on the server. The threshold lives in
+    // HousekeepingConfig (singleton); admin tweaks it on the
+    // Housekeeping page.
+    const [rowsRes, cfgRes] = await Promise.all([
+      apiFetch<FieldQueueRow[]>('/api/admin/field-queues'),
+      apiFetch<{ fieldQueueStaleDays: number }>(
+        '/api/admin/housekeeping/config',
+      ),
+    ]);
+    rows = rowsRes;
+    if (typeof cfgRes.fieldQueueStaleDays === 'number') {
+      staleAfterDays = cfgRes.fieldQueueStaleDays;
+    }
   } catch (err) {
     error =
       err instanceof Error
@@ -74,7 +89,7 @@ export default async function AdminFieldQueuesPage() {
         </div>
       ) : null}
 
-      <FieldQueuesView rows={rows} />
+      <FieldQueuesView rows={rows} staleAfterDays={staleAfterDays} />
     </div>
   );
 }

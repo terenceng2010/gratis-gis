@@ -572,6 +572,27 @@ model HousekeepingConfig {
   /// services are present, so we keep it explicit-opt-in.
   recomputeExtentsEnabled Boolean @default(false) @map("recompute_extents_enabled")
 
+  /// #276: how many days an empty field_queue_manifest row can sit
+  /// idle before the admin UI hides it by default + bulk-forget
+  /// considers it stale. Null falls back to a 7-day default in
+  /// code so a fresh deployment matches the documented behavior
+  /// without the admin having to set anything.
+  fieldQueueStaleDays Int? @map("field_queue_stale_days")
+
+  /// #276: whether the scheduled housekeeping pass should auto-prune
+  /// stale field-queue manifest rows. Off by default; admins opt in
+  /// explicitly. When on, the cron deletes rows where the manifest
+  /// is empty AND last reportedAt is older than
+  /// (fieldQueueStaleDays + fieldQueueAutoPruneGraceDays).
+  fieldQueueAutoPruneEnabled Boolean @default(false) @map("field_queue_auto_prune_enabled")
+
+  /// #276: extra cushion past the stale threshold the cron must
+  /// observe before actually deleting a row. Null falls back to a
+  /// 90-day default. So the auto-prune only touches rows that
+  /// have been empty + silent for stale_days + grace_days, well
+  /// past any reasonable "left my phone in a drawer" window.
+  fieldQueueAutoPruneGraceDays Int? @map("field_queue_auto_prune_grace_days")
+
   /// 'off' | 'daily' | 'weekly'. Matches BackupConfig structure but
   /// without the monthly / custom modes (housekeeping cadence is
   /// never high-frequency in practice).

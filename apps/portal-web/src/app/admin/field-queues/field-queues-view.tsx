@@ -60,26 +60,37 @@ export interface FieldQueueRow {
  * mutates state remotely; the unit of recovery is "ask Alice to open
  * her iPad").
  */
-/** #275: same 7-day cutoff the API's bulk-forget endpoint uses.
- *  A manifest is "stale" when it has no queued records anywhere
- *  AND the last beacon was more than 7 days ago. Stale rows are
- *  hidden by default; the toggle reveals them. */
-const STALE_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
-
-function isStale(row: FieldQueueRow): boolean {
+/** #275 / #276: a manifest is "stale" when it has no queued records
+ *  anywhere AND the last beacon was more than `staleAfterDays`
+ *  ago. The threshold is configurable in the Housekeeping admin
+ *  surface; the value reads from the server-rendered prop so the
+ *  default-hide filter matches the bulk-forget cutoff on the
+ *  API. */
+function isStale(row: FieldQueueRow, staleAfterDays: number): boolean {
   if (countQueued(row) > 0) return false;
   const reportedMs = Date.now() - new Date(row.reportedAt).getTime();
-  return reportedMs > STALE_CUTOFF_MS;
+  return reportedMs > staleAfterDays * 24 * 60 * 60 * 1000;
 }
 
-export function FieldQueuesView({ rows }: { rows: FieldQueueRow[] }) {
+export function FieldQueuesView({
+  rows,
+  staleAfterDays,
+}: {
+  rows: FieldQueueRow[];
+  /** #276: server-supplied threshold; matches the
+   *  fieldQueueStaleDays setting on Housekeeping. Falls back to 7
+   *  via the page-level fetch if the setting is unreachable. */
+  staleAfterDays: number;
+}) {
   const router = useRouter();
   const [showStale, setShowStale] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // row id being forgotten or 'bulk'
   const [error, setError] = useState<string | null>(null);
 
   const visibleRows = useMemo(() => {
-    const filtered = showStale ? rows : rows.filter((r) => !isStale(r));
+    const filtered = showStale
+      ? rows
+      : rows.filter((r) => !isStale(r, staleAfterDays));
     // Stuck records first (urgent), then oldest report (silent
     // device, possibly worker hasn't opened the app in a while).
     return [...filtered].sort((a, b) => {
@@ -88,11 +99,11 @@ export function FieldQueuesView({ rows }: { rows: FieldQueueRow[] }) {
       if (aStuck !== bStuck) return bStuck - aStuck;
       return a.reportedAt.localeCompare(b.reportedAt);
     });
-  }, [rows, showStale]);
+  }, [rows, showStale, staleAfterDays]);
 
   const staleCount = useMemo(
-    () => rows.filter(isStale).length,
-    [rows],
+    () => rows.filter((r) => isStale(r, staleAfterDays)).length,
+    [rows, staleAfterDays],
   );
 
   const forgetOne = async (id: string) => {
@@ -121,7 +132,7 @@ export function FieldQueuesView({ rows }: { rows: FieldQueueRow[] }) {
       !confirm(
         `Forget ${staleCount} manifest${
           staleCount === 1 ? '' : 's'
-        } with empty queues last seen 7+ days ago? Each device will re-register if it's still in use.`,
+        } with empty queues last seen ${staleAfterDays}+ days ago? Each device will re-register if it's still in use.`,
       )
     ) {
       return;
@@ -200,7 +211,7 @@ export function FieldQueuesView({ rows }: { rows: FieldQueueRow[] }) {
         <div className="rounded-lg border border-border bg-surface-1 px-4 py-10 text-center text-sm text-muted">
           {showStale
             ? 'No devices to show.'
-            : 'No active devices. Toggle "Show stale rows" to see manifests last beaconed >7 days ago.'}
+            : `No active devices. Toggle "Show stale rows" to see manifests last beaconed >${staleAfterDays} days ago.`}
         </div>
       ) : (
         <ul className="space-y-3">

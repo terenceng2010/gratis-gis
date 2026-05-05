@@ -18,6 +18,16 @@ export interface HousekeepingConfig {
   autoDisableDays: number;
   /** Periodic recompute-extents pass (#93). Off by default. */
   recomputeExtentsEnabled: boolean;
+  /** #276: stale threshold for the field-queues admin view + bulk
+   *  forget endpoint. Defaults to 7. */
+  fieldQueueStaleDays: number;
+  /** #276: when on, the cron also auto-prunes field-queue rows
+   *  with empty queues that have been silent past the threshold +
+   *  grace window. Off by default. */
+  fieldQueueAutoPruneEnabled: boolean;
+  /** #276: extra days past the stale threshold the cron observes
+   *  before deleting. Defaults to 90. */
+  fieldQueueAutoPruneGraceDays: number;
   scheduleMode: 'off' | 'daily' | 'weekly';
   scheduleHour: number;
   scheduleMinute: number;
@@ -95,6 +105,9 @@ export function HousekeepingScheduleCard({
           autoDisableEnabled: config.autoDisableEnabled,
           autoDisableDays: config.autoDisableDays,
           recomputeExtentsEnabled: config.recomputeExtentsEnabled,
+          fieldQueueStaleDays: config.fieldQueueStaleDays,
+          fieldQueueAutoPruneEnabled: config.fieldQueueAutoPruneEnabled,
+          fieldQueueAutoPruneGraceDays: config.fieldQueueAutoPruneGraceDays,
           scheduleMode: config.scheduleMode,
           scheduleHour: config.scheduleHour,
           scheduleMinute: config.scheduleMinute,
@@ -240,6 +253,70 @@ export function HousekeepingScheduleCard({
             service, so leave it off if you have many external
             services and a slow link to them.
           </p>
+        </fieldset>
+
+        {/* #276: field-queue retention. Two knobs --
+            staleDays drives the admin UI default-hide filter +
+            the bulk-forget cutoff; autoPrune (off by default) lets
+            the cron also delete rows older than staleDays + grace.
+            Both span both columns since the explanatory copy is
+            longer. */}
+        <fieldset className="space-y-3 rounded-md border border-border p-3 md:col-span-2">
+          <p className="text-sm font-medium">Field device queue cleanup</p>
+          <label className="block text-xs text-ink-1">
+            On the Field device queues page, hide a device&apos;s
+            row by default if it has nothing queued AND hasn&apos;t
+            checked in for at least{' '}
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              value={config.fieldQueueStaleDays}
+              onChange={(e) =>
+                set(
+                  'fieldQueueStaleDays',
+                  Math.max(1, Number(e.target.value)),
+                )
+              }
+              className="inline h-7 w-20 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+            />{' '}
+            days. The same threshold applies to the &quot;Forget all
+            stale&quot; button on that page.
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={config.fieldQueueAutoPruneEnabled}
+              onChange={(e) =>
+                set('fieldQueueAutoPruneEnabled', e.target.checked)
+              }
+              className="h-4 w-4 rounded border-border text-accent focus:ring-accent/30"
+            />
+            Auto-prune long-idle device rows
+          </label>
+          <label className="block text-xs text-ink-1">
+            When on, the cleanup pass deletes device rows with empty
+            queues that have been silent for at least the threshold
+            above plus an extra{' '}
+            <input
+              type="number"
+              min={0}
+              max={3650}
+              value={config.fieldQueueAutoPruneGraceDays}
+              onChange={(e) =>
+                set(
+                  'fieldQueueAutoPruneGraceDays',
+                  Math.max(0, Number(e.target.value)),
+                )
+              }
+              disabled={!config.fieldQueueAutoPruneEnabled}
+              className="inline h-7 w-20 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50"
+            />{' '}
+            days of grace. So with the defaults (7 + 90), the cron
+            only touches rows that have been idle for 97+ days. Rows
+            with anything queued are never auto-pruned -- those are
+            the actually-stuck devices the page is for.
+          </label>
         </fieldset>
       </div>
 
