@@ -27,6 +27,8 @@ import type {
   GeoBoundaryData,
   PickListData,
   MapData,
+  WfsServiceData,
+  WmsServiceData,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
@@ -115,6 +117,7 @@ import { EditorDetail } from './editor/editor-detail';
 import { FormDesigner } from './form/designer';
 import { DataCollectionDetail } from './data-collection/data-collection-detail';
 import { FileDetail } from './file/file-detail';
+import { OgcServiceEditor } from './ogc-service/editor';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -682,6 +685,17 @@ export default async function ItemDetailPage({ params }: Props) {
               );
             })()}
           </div>
+        </section>
+      ) : item.type === 'wms_service' || item.type === 'wfs_service' ? (
+        <section className="mb-6">
+          <OgcServiceEditor
+            itemId={item.id}
+            kind={item.type === 'wms_service' ? 'wms' : 'wfs'}
+            initial={
+              (item.data ?? {}) as WmsServiceData | WfsServiceData
+            }
+            canEdit={canManage}
+          />
         </section>
       ) : item.type === 'file' ? (
         <section className="mb-6">
