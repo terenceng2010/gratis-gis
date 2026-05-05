@@ -90,7 +90,14 @@ export function PublicLanding({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <TopBar orgName={org.name} />
+      {/* #274: TopBar duplicates the org wordmark + an auth CTA.
+          For authenticated visitors the AppShell's left rail and
+          top bar already cover both, so showing the public TopBar
+          here renders a redundant "Sign in" button next to the
+          shell's signed-in badge. Hide it when isAuthenticated;
+          unauthenticated visitors still see it as their only
+          surface for the org name + sign-in entry. */}
+      {!isAuthenticated ? <TopBar orgName={org.name} /> : null}
 
       {/* Schema.org JSON-LD so search engines / open-data
           aggregators can index this page's public items. Server
