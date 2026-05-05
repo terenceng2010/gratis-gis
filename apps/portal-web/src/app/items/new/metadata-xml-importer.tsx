@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { AlertTriangle, Check, FileCode, Upload } from 'lucide-react';
+import { AlertTriangle, Check, FileCode } from 'lucide-react';
 
 import {
   parseMetadataXml,
@@ -75,7 +75,16 @@ export function MetadataXmlImporter({ onApply }: Props) {
   }
 
   return (
-    <section className="rounded-md border border-dashed border-border bg-surface-0 p-3">
+    // Tighter, more clearly-secondary styling than v1: the dashed
+    // border + dimmed background + explicit "Optional" label keep
+    // this from reading as a primary action. Authors creating a
+    // file item have repeatedly confused the old "Pick a file"
+    // button with the actual content upload; the rename + the
+    // "Optional - metadata only" framing removes that ambiguity.
+    <section
+      aria-label="Optional metadata XML import"
+      className="rounded-md border border-dashed border-border bg-surface-0/60 p-3"
+    >
       <input
         ref={inputRef}
         type="file"
@@ -88,18 +97,28 @@ export function MetadataXmlImporter({ onApply }: Props) {
         }}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <FileCode className="h-4 w-4 text-muted" />
-        <span className="text-xs text-ink-1">
-          Have a metadata XML file? Drop it in to pre-fill the title,
-          description, and tags below.
-        </span>
+        <FileCode className="h-4 w-4 shrink-0 text-muted" />
+        <div className="min-w-0 flex-1 text-xs text-ink-1">
+          <span className="mr-1 rounded border border-border bg-surface-1 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+            Optional
+          </span>
+          Pre-fill title, description, and tags from a{' '}
+          <strong className="text-ink-0">metadata XML</strong> file
+          (ISO 19115, FGDC CSDGM, Dublin Core).
+        </div>
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
+          // Clear, specific verb + noun. The previous "Pick a file"
+          // collided with content-upload buttons elsewhere in the
+          // wizard (e.g. the file item type's own uploader). A user
+          // glancing at this card while creating a file item should
+          // never be unsure which button uploads the actual content.
           className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2"
+          title="Import an ISO 19115 / FGDC / Dublin Core XML file to pre-fill metadata fields"
         >
-          <Upload className="h-3.5 w-3.5" />
-          Pick a file
+          <FileCode className="h-3.5 w-3.5" />
+          Import metadata XML
         </button>
       </div>
       {status.kind === 'parsed' ? (
@@ -119,7 +138,7 @@ export function MetadataXmlImporter({ onApply }: Props) {
         </p>
       ) : null}
       <p className="mt-1 text-[11px] text-muted">
-        Supported: ISO 19115 / 19139, FGDC CSDGM, Dublin Core. Your
+        Metadata only -- this does not upload the item&rsquo;s content. Your
         file stays in the browser.
       </p>
     </section>
