@@ -13,6 +13,7 @@ const ASSET_KINDS: AssetKind[] = [
   'user-avatar',
   'org-hero',
   'feature-attachment',
+  'item-file',
 ];
 
 class PresignUploadDto {

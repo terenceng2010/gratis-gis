@@ -22,7 +22,11 @@ export type AssetKind =
   | 'group-thumb'
   | 'user-avatar'
   | 'org-hero'
-  | 'feature-attachment';
+  | 'feature-attachment'
+  // #296: arbitrary file uploaded as the body of a `file` item (PDF,
+  // CSV, image, zipped shapefile, etc.). Same any-MIME treatment as
+  // feature-attachment; size cap bumped to fit larger documents.
+  | 'item-file';
 
 const ALLOWED_CONTENT_TYPES = new Set([
   'image/png',
@@ -35,6 +39,13 @@ const ALLOWED_CONTENT_TYPES = new Set([
  *  up to a higher cap. The picker on the client side is what decides
  *  how to render them; the service just stores bytes. */
 const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
+
+/** File items wrap one arbitrary upload that's the whole point of
+ *  the item -- a CSV deliverable, a PDF report, a zipped shapefile.
+ *  Accepts any MIME, larger ceiling than feature attachments because
+ *  these stand alone rather than ride along on a feature row. Still
+ *  bounded so a runaway upload can't fill the bucket. */
+const FILE_ITEM_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB; thumbnails should be small.
 
@@ -189,12 +200,15 @@ export class StorageService implements OnModuleInit {
    * URL we'll persist on the entity once upload succeeds.
    */
   async presignUpload(kind: AssetKind, contentType: string): Promise<PresignResult> {
-    // Thumbnails/avatars stay image-only. Feature attachments accept
-    // any MIME type because they legitimately include PDFs, audio,
-    // CAD exports, whatever the field team captures. The caller's
-    // kind choice determines which rule applies.
+    // Thumbnails/avatars stay image-only. Feature attachments + file
+    // items accept any MIME type because they legitimately include
+    // PDFs, audio, CAD exports, zipped shapefiles -- whatever the
+    // field team or author captures. The caller's kind choice
+    // determines which rule applies.
     const isAttachment = kind === 'feature-attachment';
-    if (!isAttachment && !ALLOWED_CONTENT_TYPES.has(contentType)) {
+    const isFileItem = kind === 'item-file';
+    const anyMime = isAttachment || isFileItem;
+    if (!anyMime && !ALLOWED_CONTENT_TYPES.has(contentType)) {
       throw new Error(`Unsupported content type: ${contentType}`);
     }
     // Lazy retry: if bootstrap was deferred because MinIO wasn't up at
@@ -216,10 +230,11 @@ export class StorageService implements OnModuleInit {
       Key: key,
       ContentType: contentType,
     });
-    // Tight expiry: 60s is enough for a 5 MB thumbnail and short enough
-    // that a leaked URL is effectively harmless. Attachments bump to
-    // 300s because 25 MB over slow mobile links takes longer.
-    const expiresIn = isAttachment ? 300 : 60;
+    // Tight expiry: 60s is enough for a 5 MB thumbnail and short
+    // enough that a leaked URL is effectively harmless. Attachments
+    // and file items bump to 600s because a 100 MB upload over a
+    // slow office link takes longer than the 60s window covers.
+    const expiresIn = anyMime ? 600 : 60;
     const uploadUrl = await getSignedUrl(this.client, cmd, { expiresIn });
     const publicUrl = `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
     return {
@@ -227,7 +242,11 @@ export class StorageService implements OnModuleInit {
       publicUrl,
       key,
       contentType,
-      maxBytes: isAttachment ? ATTACHMENT_MAX_BYTES : MAX_UPLOAD_BYTES,
+      maxBytes: isFileItem
+        ? FILE_ITEM_MAX_BYTES
+        : isAttachment
+          ? ATTACHMENT_MAX_BYTES
+          : MAX_UPLOAD_BYTES,
     };
   }
 

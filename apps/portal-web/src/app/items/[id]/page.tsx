@@ -15,6 +15,7 @@ import type {
   BasemapData,
   DataCollectionData,
   DerivedLayerData,
+  FileData,
   FolderData,
   Item,
   ItemShare,
@@ -113,6 +114,7 @@ import { FolderDetail } from './folder/folder-detail';
 import { EditorDetail } from './editor/editor-detail';
 import { FormDesigner } from './form/designer';
 import { DataCollectionDetail } from './data-collection/data-collection-detail';
+import { FileDetail } from './file/file-detail';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -153,11 +155,17 @@ export default async function ItemDetailPage({ params }: Props) {
   // before doing anything else; with it we pay one wall-clock unit
   // for both. Same for the bigger second batch below.
   let item: ItemWithShares;
-  let me: { id: string; orgRole: string };
+  let me: { id: string; orgId: string; orgRole: string };
   try {
     [item, me] = await Promise.all([
       apiFetch<ItemWithShares>(`/api/items/${params.id}`),
-      apiFetch<{ id: string; orgRole: string }>('/api/users/me'),
+      // /api/users/me serializes the full AuthUser plus profile
+      // bits; orgId is always present even though older callers only
+      // typed id+orgRole. Add it here so #296's view-side download
+      // gate can compare item.orgId.
+      apiFetch<{ id: string; orgId: string; orgRole: string }>(
+        '/api/users/me',
+      ),
     ]);
   } catch (err) {
     // apiFetch throws on non-2xx. 404 from the API means "not found
@@ -166,6 +174,17 @@ export default async function ItemDetailPage({ params }: Props) {
     throw err;
   }
   const canManage = me.id === item.ownerId || me.orgRole === 'admin';
+  // #296 + #32: download tier on the viewer side. Mirrors the
+  // server-side SharingService.canDownload conditions that don't
+  // require knowing the user's group memberships: owner/admin,
+  // public access, or same-org access. An explicit per-share
+  // 'download' grant against a private item won't surface the
+  // affordance here in Phase 1 because we don't load the user's
+  // groupIds on this page; the user can still hit the storage URL
+  // directly (bucket is public-read like every other portal asset),
+  // so this only gates the visible button.
+  const viewerCanDownload =
+    item.access === 'public' || (item.access === 'org' && item.orgId === me.orgId);
   const isMap = item.type === 'map';
   const isFolder = item.type === 'folder';
   const mapData = isMap ? (item.data as MapData | null) : null;
@@ -663,6 +682,52 @@ export default async function ItemDetailPage({ params }: Props) {
               );
             })()}
           </div>
+        </section>
+      ) : item.type === 'file' ? (
+        <section className="mb-6">
+          {/* #296: file items render their metadata + an inline preview
+              when the MIME type supports one (image / PDF). The
+              Download button is gated by canDownload so a view-only
+              share doesn't get a free copy of the bytes. The
+              underlying MinIO URL is bucket-public, so "view only"
+              just hides the affordance -- not a perfect ACL but it
+              matches every other public asset we serve and keeps the
+              UI honest about what the share actually grants. */}
+          {(() => {
+            const fileData =
+              item.data && typeof item.data === 'object' && !Array.isArray(item.data)
+                ? (item.data as Partial<FileData>)
+                : ({} as Partial<FileData>);
+            // Defensive read: an item written before #296 (or one with
+            // a corrupted data blob) should still render the page with
+            // a friendly empty state rather than blowing up server-
+            // side. Required string fields default to empty so the
+            // detail body shows "No file" gracefully.
+            const safe: FileData = {
+              version: 1,
+              storageKey:
+                typeof fileData.storageKey === 'string' ? fileData.storageKey : '',
+              storageUrl:
+                typeof fileData.storageUrl === 'string' ? fileData.storageUrl : '',
+              fileName:
+                typeof fileData.fileName === 'string' ? fileData.fileName : '',
+              mimeType:
+                typeof fileData.mimeType === 'string'
+                  ? fileData.mimeType
+                  : 'application/octet-stream',
+              sizeBytes:
+                typeof fileData.sizeBytes === 'number' ? fileData.sizeBytes : 0,
+              uploadedAt: (typeof fileData.uploadedAt === 'string'
+                ? fileData.uploadedAt
+                : new Date(0).toISOString()) as FileData['uploadedAt'],
+            };
+            // Owner/admin can always download; everyone else needs the
+            // 'download' permission tier (#32). canManage covers owner
+            // + org admin; viewerCanDownload reads the share-level
+            // permission resolved server-side.
+            const canDownload = canManage || viewerCanDownload;
+            return <FileDetail data={safe} canDownload={canDownload} />;
+          })()}
         </section>
       ) : (
         <section className="mb-6">

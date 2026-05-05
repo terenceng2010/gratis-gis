@@ -32,6 +32,7 @@ import type {
   DataCollectionData,
   DataLayerDataV3,
   DerivedLayerData,
+  FileData,
   ISODateString,
   Item,
   ItemAccess,
@@ -373,6 +374,12 @@ export function NewItemWizard() {
   const [dataCollectionMapId, setDataCollectionMapId] = useState<string | null>(
     null,
   );
+
+  // #296: file item upload state. The wizard does the presign + PUT
+  // up front so the item is fully populated on create -- no "create
+  // empty, then upload" two-step. Null until the user picks a file
+  // and the upload completes; submit() blocks on it.
+  const [fileItemUpload, setFileItemUpload] = useState<FileData | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -738,6 +745,16 @@ export function NewItemWizard() {
         mapId: dataCollectionMapId,
       };
       data = dc;
+    } else if (type === 'file') {
+      // #296: the wizard already presigned + PUT the file when the
+      // user picked it; we just have to require the upload finished
+      // and stamp it onto the item's data here. No bytes flow through
+      // the API; we only persist the metadata.
+      if (!fileItemUpload) {
+        setError('Choose a file to upload before creating the item.');
+        return;
+      }
+      data = fileItemUpload;
     } else if (type === 'derived_layer') {
       // The wizard's DerivedLayerBuilder gathers the source layer +
       // pipeline up front (the recipe is structural, not optional).
@@ -1210,6 +1227,10 @@ export function NewItemWizard() {
         />
       ) : null}
 
+      {type === 'file' ? (
+        <FileItemUploader value={fileItemUpload} onChange={setFileItemUpload} />
+      ) : null}
+
       {error ? (
         <div
           className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
@@ -1244,6 +1265,158 @@ export function NewItemWizard() {
       </div>
     </div>
   );
+}
+
+/**
+ * Wizard pane for type='file' (#296). Picks one file from the user's
+ * disk, presigns + PUTs it to MinIO, and reports the resulting
+ * FileData up to the wizard. Same direct-to-MinIO pattern the form
+ * runtime + ImageUploader use, just with the bigger 100 MB cap and
+ * the any-MIME relaxation the storage service grants the
+ * 'item-file' kind.
+ *
+ * Once the upload completes the user sees the file metadata + a
+ * "Replace" button to reupload. The wizard's submit() blocks until
+ * an upload is registered.
+ */
+function FileItemUploader({
+  value,
+  onChange,
+}: {
+  value: FileData | null;
+  onChange: (next: FileData | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFile(file: File) {
+    setError(null);
+    setBusy(true);
+    try {
+      const presignRes = await fetch('/api/portal/storage/presign-upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'item-file',
+          contentType: file.type || 'application/octet-stream',
+        }),
+      });
+      if (!presignRes.ok) {
+        setError(`Could not start upload: ${presignRes.status}`);
+        return;
+      }
+      const { uploadUrl, publicUrl, key, maxBytes } =
+        (await presignRes.json()) as {
+          uploadUrl: string;
+          publicUrl: string;
+          key: string;
+          maxBytes: number;
+        };
+      if (file.size > maxBytes) {
+        const maxMb = Math.round(maxBytes / (1024 * 1024));
+        setError(`File too large. Max is ${maxMb} MB.`);
+        return;
+      }
+
+      const putRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'content-type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      if (!putRes.ok) {
+        setError(`Upload failed: ${putRes.status}`);
+        return;
+      }
+
+      onChange({
+        version: 1,
+        storageKey: key,
+        storageUrl: publicUrl,
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        sizeBytes: file.size,
+        uploadedAt: new Date().toISOString() as ISODateString,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-surface-1 p-4">
+      <h2 className="mb-1 text-sm font-medium text-ink-0">File</h2>
+      <p className="mb-3 text-xs text-muted">
+        Pick the file to upload. Max 100 MB. Stays on your portal&rsquo;s
+        own storage; no third-party services.
+      </p>
+      {value ? (
+        <div className="flex items-start gap-3 rounded-md border border-border bg-surface-2 p-3 text-sm">
+          <FileText className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-medium text-ink-0">
+              {value.fileName}
+            </div>
+            <div className="mt-0.5 text-xs text-muted">
+              {humanFileSize(value.sizeBytes)} &middot;{' '}
+              <span className="font-mono">{value.mimeType}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onChange(null);
+              inputRef.current?.click();
+            }}
+            disabled={busy}
+            className="h-8 shrink-0 rounded-md border border-border bg-surface-1 px-3 text-xs text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            Replace
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          disabled={busy}
+          className="inline-flex h-10 items-center gap-2 rounded-md border border-dashed border-border bg-surface-2 px-4 text-sm text-ink-1 hover:bg-surface-1 disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileText className="h-4 w-4" />
+          )}
+          {busy ? 'Uploading...' : 'Choose a file'}
+        </button>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) handleFile(f);
+          // Reset so re-picking the same file fires onChange again.
+          e.target.value = '';
+        }}
+      />
+      {error ? (
+        <p className="mt-2 text-xs text-danger" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Human-friendly size string for the file metadata row. */
+function humanFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 interface ArcgisConfigProps {
