@@ -862,7 +862,12 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
           },
           apply: onSelectionChangeRef.current,
         });
-        return;
+        // Fall through to the popup branch below so click-select
+        // also opens the inspect popup -- this matches AGOL's
+        // Select / Identify behavior where a click both highlights
+        // the feature and shows its attributes. Skip the popup
+        // only when suppressPopup is set (e.g. during measure /
+        // edit, where the parent owns the click).
       }
 
       // tool === 'off' â†’ popup behaviour, unless the parent told

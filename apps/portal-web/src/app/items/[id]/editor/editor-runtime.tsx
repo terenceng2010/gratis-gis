@@ -2129,12 +2129,15 @@ export function EditorRuntime({
             // dropdown for box / polygon select.
             selectTool={activeTool === 'select' ? 'click' : 'off'}
             // Suppress the canvas's default click-to-popup behavior
-            // while a tool that owns clicks is active. Measure uses
-            // terra-draw to place vertices and the popup was firing
-            // alongside the vertex placement; add / edit / delete
-            // similarly need the click for their own purposes.
-            // Without this, every measure tap or feature-edit click
-            // also opened an inspect popup.
+            // only while a tool that fully owns the click is active.
+            // Measure uses terra-draw to place vertices, and add /
+            // edit / delete use clicks to start their own modal
+            // flows; popups would compete. Select is the exception:
+            // it WANTS the popup so the user gets feature info
+            // alongside the selection highlight (AGOL-style
+            // Select / Identify behavior). The MapCanvas 'click'
+            // branch falls through to the popup logic so a single
+            // click both highlights and pops.
             suppressPopup={
               activeTool === 'measure' ||
               activeTool === 'add' ||
