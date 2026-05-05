@@ -379,6 +379,39 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
         body: JSON.stringify({ data: form }),
       });
       if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      // Path-1 schema sync (#293 / #281d). Walk top-level and group
+      // children for question types that map cleanly to typed
+      // columns. Add missing columns to the linked layer's matching
+      // sublayer; preserve existing fields untouched. Pure-additive
+      // semantics: never rename, drop, or change a column's type.
+      // Those fall under the schema-mutation API in #281b.
+      //
+      // Failure here is non-fatal: the form save already succeeded
+      // and the runtime keeps working via the JSONB properties path.
+      // We surface the error in-line so the author knows the layer
+      // didn't grow but doesn't have to rollback the form.
+      if (form.linkedLayerId) {
+        try {
+          await syncPairedLayerColumns(
+            form.linkedLayerId,
+            form.linkedLayerKey ?? 'submissions',
+            form.questions,
+          );
+          // Refresh the cached layer schema so the "matched / new
+          // column" badges flip green without a page reload.
+          const fresh = await fetchLayerSchema(
+            form.linkedLayerId,
+            form.linkedLayerKey,
+          );
+          setLayerSchema(fresh);
+        } catch (err) {
+          setError(
+            `Form saved, but couldn't update the linked layer's columns: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
       setSavedAt(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed.');
@@ -5647,6 +5680,183 @@ export async function fetchLayerSchema(
     related,
     attachmentsEnabled: Boolean(picked?.attachmentsEnabled),
   };
+}
+
+/**
+ * Path-1 schema sync (#293 / #281d): on form designer save, add a
+ * typed column to the linked layer for every question whose type
+ * maps cleanly to a FeatureField. Pure-additive: never renames,
+ * drops, or changes a column's type. Idempotent: re-running with
+ * no new questions is a no-op.
+ *
+ * Question types that do NOT map to typed columns (multi-choice,
+ * matrix, ranking, attachments, identity composites, geometry-
+ * specific, layout-only) are left in the form's `properties` JSONB
+ * column on the data_layer. Per-attachment-table refactor lives in
+ * #292; richer multi-choice / repeating data lives in #281b's
+ * full mutation API.
+ */
+async function syncPairedLayerColumns(
+  layerItemId: string,
+  layerKey: string,
+  questions: Question[],
+): Promise<void> {
+  const item = await fetchItem(layerItemId);
+  if (!item) {
+    throw new Error('Linked layer item could not be loaded.');
+  }
+  const data = item.data ?? {};
+  const layers = Array.isArray(data.layers) ? data.layers : [];
+  const subIdx = layers.findIndex(
+    (l) => l.key === layerKey || l.id === layerKey,
+  );
+  if (subIdx < 0) {
+    throw new Error(
+      `Linked layer has no sublayer "${layerKey}" to sync columns into.`,
+    );
+  }
+  const sub = layers[subIdx]!;
+  const existing = (sub.fields ?? []) as RawFeatureField[];
+  const existingNames = new Set(existing.map((f) => f.name));
+
+  // Walk top-level questions plus non-repeat group children. Repeat
+  // groups are deliberately skipped here -- per the editing-and-
+  // collection design, they're a separate child related-table and
+  // need #281b's mutation API to materialize cleanly.
+  const candidates: RawFeatureField[] = [];
+  function walk(qs: Question[]) {
+    for (const q of qs) {
+      if (q.type === 'group') {
+        if (!q.repeat) walk(q.children);
+        continue;
+      }
+      const field = questionToFeatureField(q);
+      if (field) candidates.push(field);
+    }
+  }
+  walk(questions);
+
+  const toAdd = candidates.filter((c) => !existingNames.has(c.name));
+  if (toAdd.length === 0) return;
+
+  // Merge: keep every existing field as-is, append the new ones.
+  // Only touches the targeted sublayer; sibling sublayers (related
+  // child tables, the form_attachments table once #292 lands) are
+  // preserved untouched.
+  const mergedFields = [...existing, ...toAdd];
+  const nextLayers = layers.map((l, i) =>
+    i === subIdx ? { ...l, fields: mergedFields } : l,
+  );
+  const nextData = { ...data, layers: nextLayers };
+  const res = await fetch(`/api/portal/items/${layerItemId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ data: nextData }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Layer schema patch failed: ${res.status} ${await res.text().catch(() => '')}`,
+    );
+  }
+}
+
+/**
+ * Map a form question to a FeatureField shape that the v3 layer can
+ * provision as a typed column. Returns null when the question type
+ * doesn't have a clean column representation; those values continue
+ * to live in the layer's `properties` JSONB until a richer column
+ * model lands (#281b mutation API).
+ */
+function questionToFeatureField(q: Question): RawFeatureField | null {
+  // Layout / structural / non-data question types: no column at all.
+  if (
+    q.type === 'page' ||
+    q.type === 'note' ||
+    q.type === 'divider' ||
+    q.type === 'image-display' ||
+    q.type === 'group' ||
+    q.type === 'hidden' ||
+    q.type === 'acknowledge'
+  ) {
+    return null;
+  }
+  // Attachments still ride along in properties JSONB until #292
+  // refactors them into a child related-table.
+  if (
+    q.type === 'photo' ||
+    q.type === 'audio' ||
+    q.type === 'video' ||
+    q.type === 'file' ||
+    q.type === 'sketch' ||
+    q.type === 'signature'
+  ) {
+    return null;
+  }
+  // Composite / multi-value answers don't fit a single typed column
+  // cleanly. Stash them in properties JSONB for now.
+  if (
+    q.type === 'select-many' ||
+    q.type === 'name' ||
+    q.type === 'address' ||
+    q.type === 'ranking' ||
+    q.type === 'matrix-single' ||
+    q.type === 'matrix-multi' ||
+    q.type === 'matrix-dropdown' ||
+    q.type === 'matrix-rating' ||
+    q.type === 'image-choice' ||
+    q.type === 'image-hotspot' ||
+    q.type === 'pick-feature' ||
+    q.type === 'route' ||
+    q.type === 'area-buffer' ||
+    q.type === 'geopoint' ||
+    q.type === 'geotrace' ||
+    q.type === 'geoshape'
+  ) {
+    return null;
+  }
+  // Use the question id as the column name. The form runtime writes
+  // top-level keyed by question id (post-#288), so this name lines
+  // up with the value it'll receive.
+  const base: RawFeatureField = {
+    name: q.id,
+    label: q.label,
+  };
+  switch (q.type) {
+    case 'boolean':
+      return { ...base, type: 'boolean' };
+    case 'integer':
+    case 'number':
+    case 'rating':
+    case 'nps':
+    case 'slider':
+    case 'likert':
+      return { ...base, type: 'number' };
+    case 'date':
+    case 'datetime':
+      return { ...base, type: 'date' };
+    case 'select-one': {
+      const out: RawFeatureField = { ...base, type: 'string' };
+      // Inline coded-value domain (the form designer's per-question
+      // choice list). Pick-list-backed select-one keeps its
+      // pickListId and we resolve it server-side at render time;
+      // for the column-add path here we pin choices inline because
+      // FeatureField doesn't carry pickListItemId yet.
+      if (Array.isArray(q.choices) && q.choices.length > 0) {
+        out.domain = {
+          type: 'coded-value',
+          values: q.choices.map((c) => ({
+            code: String(c.value),
+            label: c.label,
+          })),
+        };
+      }
+      return out;
+    }
+    // Everything else (text / multiline / email / url / phone /
+    // regex / barcode / calculated / time) lands as string.
+    default:
+      return { ...base, type: 'string' };
+  }
 }
 
 /**
