@@ -16,7 +16,7 @@ import {
   readViewerData,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, hasSession, publicApiFetch } from '@/lib/api';
 import {
   buildEditorMapData,
   type ResolvedTarget,
@@ -139,9 +139,26 @@ function viewerToEditor(viewer: ViewerData): EditorData {
  * runtime; per-share grants flow through the API.
  */
 export default async function ViewerRuntimePage({ params }: Props) {
+  // #307: viewer/run is in the middleware allowlist, so anonymous
+  // visitors can land here. Branch the fetch path: signed-in users
+  // get full per-share visibility via /api/items/:id; anonymous
+  // users get the public-only surface at /api/public/items/:id,
+  // which returns 404 unless access='public'. The page renders
+  // identically downstream -- the runtime is read-only either
+  // way for viewers.
+  const isAnonymous = !(await hasSession());
+  const fetchItem = <T,>(path: string): Promise<T> =>
+    isAnonymous
+      ? publicApiFetch<T>(path.replace('/api/items/', '/api/public/items/'))
+      : apiFetch<T>(path);
+  const fetchItemList = <T,>(path: string): Promise<T> =>
+    isAnonymous
+      ? publicApiFetch<T>(path.replace('/api/items', '/api/public/items'))
+      : apiFetch<T>(path);
+
   let viewerItem: Item<unknown>;
   try {
-    viewerItem = await apiFetch<Item<unknown>>(`/api/items/${params.id}`);
+    viewerItem = await fetchItem<Item<unknown>>(`/api/items/${params.id}`);
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
     throw err;
@@ -159,17 +176,17 @@ export default async function ViewerRuntimePage({ params }: Props) {
   );
 
   const [basemapItems, referencedMap, targetItems] = await Promise.all([
-    apiFetch<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
+    fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
     ),
     editor.mapId
-      ? apiFetch<Item<MapData>>(`/api/items/${editor.mapId}`).catch(
+      ? fetchItem<Item<MapData>>(`/api/items/${editor.mapId}`).catch(
           () => null,
         )
       : Promise.resolve(null),
     Promise.all(
       uniqueDataLayerIds.map((id) =>
-        apiFetch<Item<DataLayerData>>(`/api/items/${id}`).catch(() => null),
+        fetchItem<Item<DataLayerData>>(`/api/items/${id}`).catch(() => null),
       ),
     ),
   ]);
@@ -218,7 +235,7 @@ export default async function ViewerRuntimePage({ params }: Props) {
   }
   const pickListItems = await Promise.all(
     Array.from(pickListItemIds).map((id) =>
-      apiFetch<Item<PickListData>>(`/api/items/${id}`).catch(() => null),
+      fetchItem<Item<PickListData>>(`/api/items/${id}`).catch(() => null),
     ),
   );
   const pickLists: Record<string, PickListData> = {};

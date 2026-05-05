@@ -53,6 +53,35 @@ function isLongRunningIngestPath(suffix: string): boolean {
   );
 }
 
+/**
+ * Anonymous-fallback rewrites for #307. When the caller has no
+ * session, GETs to a small allowlist of paths get rewritten to
+ * the equivalent /api/public route and forwarded without an auth
+ * header. portal-api enforces access='public' on the public
+ * surface, so anonymous calls to these paths are safe; everything
+ * else still 401s.
+ *
+ * Allowlist:
+ *   - items/:id                        -> public/items/:id
+ *   - items/:id/layers/:layer/geojson  -> public/items/:id/layers/:layer/geojson
+ *   - items/:id/layers/:layer/features -> public/items/:id/layers/:layer/features
+ *
+ * Anything else (item lists, dependents lookups, write verbs)
+ * stays auth-gated. Lists are deliberately not in the allowlist
+ * because /api/public/items?type=basemap is a tiny custom surface
+ * and the ?type=basemap parameter pattern doesn't generalize to
+ * the rest of the items list contract.
+ */
+function publicRewriteForAnonymousGet(suffix: string): string | null {
+  if (/^items\/[^/]+$/.test(suffix)) {
+    return `public/${suffix}`;
+  }
+  if (/^items\/[^/]+\/layers\/[^/]+\/(geojson|features)$/.test(suffix)) {
+    return `public/${suffix}`;
+  }
+  return null;
+}
+
 async function forward(req: NextRequest, pathSegments: string[]) {
   // Per-hop timing log behind the BFF_TIMING flag. Lets us split a
   // slow page load into "cookie + getServerSession" vs "upstream
@@ -64,20 +93,35 @@ async function forward(req: NextRequest, pathSegments: string[]) {
 
   const session = (await getServerSession(authOptions)) as SessionWithToken | null;
   const tSession = trace ? Date.now() : 0;
-  if (!session?.accessToken) {
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-  }
 
   const suffix = pathSegments.join('/');
   const qs = req.nextUrl.search;
-  const target = `${API_BASE}/api/${suffix}${qs}`;
+
+  // #307: when an anonymous visitor opens a publicly-shared viewer,
+  // the runtime makes client-side fetches for layer features and
+  // map item metadata. Without a session we'd 401 here; instead,
+  // for a small allowlist of GET paths we rewrite to the public
+  // surface and forward without auth. portal-api enforces
+  // access='public' on those endpoints.
+  const publicRewrite =
+    !session?.accessToken && req.method === 'GET'
+      ? publicRewriteForAnonymousGet(suffix)
+      : null;
+
+  if (!session?.accessToken && !publicRewrite) {
+    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  }
+
+  const effectiveSuffix = publicRewrite ?? suffix;
+  const target = `${API_BASE}/api/${effectiveSuffix}${qs}`;
 
   // Preserve the full Content-Type header. Multipart uploads carry a
   // boundary in the value (e.g. `multipart/form-data; boundary=----x`)
   // and strip-to-"application/json" corrupts them.
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${session.accessToken}`,
-  };
+  const headers: Record<string, string> = {};
+  if (session?.accessToken) {
+    headers.authorization = `Bearer ${session.accessToken}`;
+  }
   const ct = req.headers.get('content-type');
   if (ct) headers['content-type'] = ct;
   // Editor runtime sends `x-editor-id` on every write so the API can

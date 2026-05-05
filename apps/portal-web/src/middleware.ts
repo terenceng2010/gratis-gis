@@ -46,6 +46,19 @@ export default withAuth(
         if (req.nextUrl.pathname === '/field/manifest.webmanifest') {
           return true;
         }
+        // #307 anonymous public access: a shared viewer link has the
+        // form /items/:id/viewer/run. Let it through without a token
+        // and let the page itself decide whether the item is
+        // public-shared (render) or private (redirect to sign-in).
+        // This is the AGOL model: the public link works for anyone
+        // when the admin marked the item public, and falls back to
+        // sign-in otherwise. The /editor/run path is left auth'd --
+        // public anonymous editing is not a thing.
+        if (
+          /^\/items\/[^/]+\/viewer\/run(?:\/|$)/.test(req.nextUrl.pathname)
+        ) {
+          return true;
+        }
         return !!token;
       },
     },

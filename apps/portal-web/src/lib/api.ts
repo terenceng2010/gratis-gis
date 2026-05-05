@@ -64,3 +64,48 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   return json;
 }
+
+/**
+ * Server-side fetch against portal-api WITHOUT an auth header
+ * (#307). Used by the viewer runtime when an anonymous visitor
+ * opens a public-share link. Targets portal-api's /api/public/...
+ * surface, which returns 404 on private items so existence never
+ * leaks. Throws the same structured error apiFetch does on
+ * non-2xx, with a `status` field callers can branch on.
+ */
+export async function publicApiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(init.headers ?? {}),
+    },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    const err = new Error(
+      `portal-api ${res.status}: ${body}`,
+    ) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  return (await res.json()) as T;
+}
+
+/**
+ * Detect whether the caller has an active session. Lets viewer
+ * pages decide between auth'd /api/items/:id (full visibility
+ * resolution) and anonymous /api/public/items/:id (public-only).
+ * Centralized here so the page doesn't have to know about the
+ * NextAuth surface directly.
+ */
+export async function hasSession(): Promise<boolean> {
+  const session = (await getServerSession(
+    authOptions,
+  )) as SessionWithToken | null;
+  return Boolean(session?.accessToken);
+}
