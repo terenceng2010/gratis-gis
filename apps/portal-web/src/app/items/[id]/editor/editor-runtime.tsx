@@ -1118,7 +1118,13 @@ export function EditorRuntime({
   // Select drops back to off. Other tools surface the coming-soon
   // toast until their slices ship.
   function onToolClick(tool: EditorTool) {
-    if (!canEdit) return;
+    // Read-side tools (select, measure) are available in viewer mode
+    // (canEdit=false) too. Write-side tools (add/edit/delete/snap/
+    // undo/redo) require canEdit. Bail early on the write-side ones
+    // when canEdit is false; the button's `disabled` styling already
+    // signals this, so a stray click is harmless.
+    const isReadOnlyTool = tool === 'select' || tool === 'measure';
+    if (!canEdit && !isReadOnlyTool) return;
     if (tool === 'add') {
       if (eligibleAddTargets.length === 0) {
         setToast(
@@ -1920,6 +1926,112 @@ export function EditorRuntime({
           ) : null}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted">
+          {/* Tool icons row in the header. Replaces the floating
+              top-left palette + top-right Print pill so all the
+              clickable controls share one row at a consistent size
+              and never overlap the SearchBar or MapLibre's stock
+              zoom controls. WAB-style: title left, tools right.
+              Filtered by editor.tools so authors trim what shows. */}
+          {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).length > 0 ? (
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-0.5">
+              {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).map(
+                (t) => {
+                  const isToggle = t.key === 'snap';
+                  const isActive = isToggle
+                    ? snappingEnabled
+                    : activeTool === t.key;
+                  const stackEmpty =
+                    (t.key === 'undo' && undoStack.length === 0) ||
+                    (t.key === 'redo' && redoStack.length === 0);
+                  const isStackButton =
+                    t.key === 'undo' || t.key === 'redo';
+                  const isReadOnlyTool =
+                    t.key === 'select' || t.key === 'measure';
+                  const disabled =
+                    (!canEdit && !isReadOnlyTool) ||
+                    (isStackButton && stackEmpty) ||
+                    (isStackButton && undoBusy);
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => onToolClick(t.key)}
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                        isActive
+                          ? isToggle
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-purple-100 text-purple-800'
+                          : ''
+                      }`}
+                      title={
+                        isToggle
+                          ? `${t.label}: ${snappingEnabled ? 'on' : 'off'}`
+                          : isStackButton
+                            ? `${t.label}${
+                                t.key === 'undo'
+                                  ? ` (${undoStack.length} available)`
+                                  : ` (${redoStack.length} available)`
+                              }`
+                            : t.label
+                      }
+                      aria-label={t.label}
+                      aria-pressed={isActive}
+                    >
+                      <t.Icon className="h-3.5 w-3.5" />
+                    </button>
+                  );
+                },
+              )}
+              {/* Print button lives in the same row when the runtime
+                  surfaces it. Today this is window.print() against
+                  a print-only stylesheet; #132 will swap in a Print
+                  Template chooser. */}
+              {printEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window === 'undefined') return;
+                    document.body.classList.add('print-runtime');
+                    window.dispatchEvent(new Event('resize'));
+                    setTimeout(() => {
+                      window.print();
+                      document.body.classList.remove('print-runtime');
+                      window.dispatchEvent(new Event('resize'));
+                    }, 50);
+                  }}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+                  title="Print the current view"
+                  aria-label="Print"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          ) : printEnabled ? (
+            // Viewer with no editor.tools but Print on: still render
+            // a single-button pill for Print so the user can reach it.
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window === 'undefined') return;
+                  document.body.classList.add('print-runtime');
+                  window.dispatchEvent(new Event('resize'));
+                  setTimeout(() => {
+                    window.print();
+                    document.body.classList.remove('print-runtime');
+                    window.dispatchEvent(new Event('resize'));
+                  }, 50);
+                }}
+                className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+                title="Print the current view"
+                aria-label="Print"
+              >
+                <Printer className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null}
           <label className="inline-flex items-center gap-1">
             <span className="font-medium uppercase tracking-wide">
               Basemap
@@ -2035,118 +2147,16 @@ export function EditorRuntime({
             />
           ) : null}
 
-          {/* Tool palette overlay. Top-left of the canvas. Renders
-              only the tools the author enabled in the editor's
-              config; disabled when canEdit is false. */}
-          <div className="pointer-events-auto absolute left-3 top-3 z-10 flex flex-col gap-1 rounded-md border border-border bg-surface-1 p-1 shadow-card">
-            {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).map((t) => {
-              // Snap is the only tool today that's a session toggle
-              // rather than an exclusive activeTool: you can have
-              // Snap on while drawing or geometry-editing. Its
-              // "active" state mirrors snappingEnabled so the user
-              // sees a clear on / off indicator.
-              const isToggle = t.key === 'snap';
-              const isActive = isToggle
-                ? snappingEnabled
-                : activeTool === t.key;
-              // Undo / redo are stateless trigger buttons: enabled
-              // only when the corresponding stack has entries
-              // (#123). canEdit gates them too; a view-only viewer
-              // can't undo something they couldn't have done.
-              const stackEmpty =
-                (t.key === 'undo' && undoStack.length === 0) ||
-                (t.key === 'redo' && redoStack.length === 0);
-              const isStackButton = t.key === 'undo' || t.key === 'redo';
-              // Read-side tools (select, measure) work in both editor
-              // and viewer modes — they don't write anything. Only
-              // gate the write-side tools on canEdit so the viewer
-              // runtime (#259) can still expose read-side
-              // affordances when canEdit=false.
-              const isReadOnlyTool = t.key === 'select' || t.key === 'measure';
-              const disabled =
-                (!canEdit && !isReadOnlyTool) ||
-                (isStackButton && stackEmpty) ||
-                (isStackButton && undoBusy);
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onToolClick(t.key)}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
-                    isActive
-                      ? isToggle
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-purple-100 text-purple-800'
-                      : ''
-                  }`}
-                  title={
-                    isToggle
-                      ? `${t.label}: ${snappingEnabled ? 'on' : 'off'}`
-                      : isStackButton
-                        ? `${t.label}${
-                            t.key === 'undo'
-                              ? ` (${undoStack.length} available)`
-                              : ` (${redoStack.length} available)`
-                          }`
-                        : t.label
-                  }
-                  aria-label={t.label}
-                  aria-pressed={isActive}
-                >
-                  <t.Icon className="h-4 w-4" />
-                </button>
-              );
-            })}
-          </div>
-
-          {/* #259 slice 4: Print button. Top-left of the canvas in
-              its own pill, stacked below the editor tool palette
-              (when present). Originally placed top-right but that
-              overlapped MapLibre's stock zoom controls, which also
-              live top-right. Today this just calls window.print()
-              against the print-only stylesheet (which hides the
-              runtime chrome and lets the canvas fill the page).
-              #132 (Print Template item type) will replace this
-              with a chooser that opens a real print-layout
-              renderer; for now the basic browser print is the
-              floor for AGOL parity. The runtime applies the
-              `print-runtime` class to the body during click so the
-              stylesheet only hides chrome on demand. */}
-          {printEnabled ? (
-            <div className="pointer-events-auto absolute right-3 top-28 z-10 flex flex-col gap-1 rounded-md border border-border bg-surface-1 p-1 shadow-card print:hidden">
-              <button
-                type="button"
-                onClick={() => {
-                  if (typeof window === 'undefined') return;
-                  // Force a resize so MapLibre redraws at the print
-                  // size. Without this the canvas keeps its on-
-                  // screen pixel dimensions and the printed output
-                  // crops to whatever the canvas had pre-print.
-                  document.body.classList.add('print-runtime');
-                  // Allow the next paint to settle before opening
-                  // the print dialog. setTimeout(0) is enough; the
-                  // resize event fires synchronously from CSS.
-                  window.dispatchEvent(new Event('resize'));
-                  setTimeout(() => {
-                    window.print();
-                    document.body.classList.remove('print-runtime');
-                    window.dispatchEvent(new Event('resize'));
-                  }, 50);
-                }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink-0"
-                title="Print the current view"
-                aria-label="Print"
-              >
-                <Printer className="h-4 w-4" />
-              </button>
-            </div>
-          ) : null}
-
           {/* Active-mode chip / banner overlay. Add shows a target
               dropdown; Edit shows a "click any feature" prompt;
               Delete shows the same in rose to telegraph the
-              destructive nature. */}
+              destructive nature.
+
+              The tool palette + Print button used to live here as
+              floating overlays at left-3 top-3 / right-3 top-28; both
+              moved into the runtime header so every clickable
+              control sits in one row at a consistent size, and the
+              SearchBar at top-left no longer overlaps. */}
           {activeTool === 'add' ? (
             <div className="pointer-events-auto absolute left-16 top-3 z-10 flex flex-col gap-1 rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs text-purple-900 shadow-card">
               <div className="flex items-center gap-2">
