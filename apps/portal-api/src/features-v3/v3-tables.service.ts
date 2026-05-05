@@ -327,7 +327,7 @@ export class V3TablesService {
 // helpers
 // ---------------------------------------------------------------------------
 
-function sanitizeIdentifier(raw: string): string {
+export function sanitizeIdentifier(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, '_')
@@ -360,7 +360,7 @@ function toPgGeomType(
   return 'MultiPolygon';
 }
 
-function toPgFieldType(
+export function toPgFieldType(
   t: 'string' | 'number' | 'boolean' | 'date',
 ): string {
   if (t === 'number') return 'NUMERIC';

@@ -3,7 +3,11 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { DerivedLayerCacheRefreshService } from '../derived-layers/cache-refresh.service.js';
-import { toV3TableName } from './v3-tables.service.js';
+import {
+  sanitizeIdentifier,
+  toPgFieldType,
+  toV3TableName,
+} from './v3-tables.service.js';
 
 /**
  * Per-layer feature CRUD for v3 data_layer items.
@@ -231,7 +235,15 @@ export class V3FeaturesService {
   }
 
   /** Bulk-insert features. Accepts optional client-generated globalId
-   *  so offline-authored features keep their identity post-sync. */
+   *  so offline-authored features keep their identity post-sync. Also
+   *  spreads matching property keys into typed columns whose names
+   *  appear in the layer's field list (#294): keeps `properties` as
+   *  the JSONB source of truth AND populates the typed columns the
+   *  layer schema declares, so attribute-table queries / SQL JOINs /
+   *  ORDER BYs work without parsing JSONB. The spread is purely
+   *  additive: properties without matching columns are ignored
+   *  (covered by JSONB), columns without a matching property write
+   *  NULL. */
   async insertFeatures(
     itemId: string,
     layerId: string,
@@ -243,13 +255,53 @@ export class V3FeaturesService {
     const tbl = toV3TableName(itemId, layerId);
     const now = new Date();
     let inserted = 0;
+    // Look up the layer's typed fields once. These are the columns
+    // whose names match the keys in the row's properties; we add a
+    // parameterised value per row per field. Wrong-named or missing
+    // properties just get NULL in their column.
+    const typedFields = await this.getTypedFields(itemId, layerId);
+    const typedCols = typedFields
+      .map((f) => `"${f.sqlName}"`)
+      .join(typedFields.length > 0 ? ', ' : '');
+    // Coerce a property value into the shape the column's PG type
+    // expects. JSONB stores numbers / booleans natively, but Postgres
+    // typed-column casts care about JS string vs number vs boolean
+    // input; this normalises the incoming value before it becomes a
+    // bound parameter.
+    const coerce = (val: unknown, type: 'string' | 'number' | 'boolean' | 'date'): unknown => {
+      if (val === undefined || val === null || val === '') return null;
+      if (type === 'number') {
+        const n = typeof val === 'number' ? val : Number(val);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (type === 'boolean') {
+        if (typeof val === 'boolean') return val;
+        if (val === 'true' || val === 1 || val === '1') return true;
+        if (val === 'false' || val === 0 || val === '0') return false;
+        return null;
+      }
+      if (type === 'date') {
+        // Accept Date, ISO string, or numeric epoch. Render to ISO so
+        // the timestamptz cast is unambiguous.
+        if (val instanceof Date) return val.toISOString();
+        if (typeof val === 'number') return new Date(val).toISOString();
+        if (typeof val === 'string') return val;
+        return null;
+      }
+      // string: stringify objects so things like {url, name} (legacy
+      // attachment shapes that haven't moved to #292's child table
+      // yet) at least survive the column cast.
+      if (typeof val === 'string') return val;
+      return JSON.stringify(val);
+    };
     // Batch multi-row VALUES inserts. The previous code did one
     // $executeRawUnsafe per feature, which on a county-scale shapefile
     // (869k features) means 869k roundtrips and pushes a single import
     // past the BFF timeout. 500 rows/batch keeps the param count well
-    // under PostgreSQL's per-statement cap (~32k) for both branches:
-    //   table:   4 params/row * 500 = 2,000
-    //   geom:    5 params/row * 500 = 2,500
+    // under PostgreSQL's per-statement cap (~32k):
+    //   table:   (4 + typedFields) params/row * 500
+    //   geom:    (5 + typedFields) params/row * 500
+    // Even with 50 typed fields, 500 rows * 55 = 27,500: under the cap.
     const BATCH = 500;
     if (opts.isTable) {
       // Table sublayers (no geom column) get a different INSERT shape:
@@ -268,16 +320,31 @@ export class V3FeaturesService {
             now,
             user.id,
           );
+          // Append a coerced value per typed field.
+          for (const tf of typedFields) {
+            params.push(coerce(f.properties?.[tf.name], tf.type));
+          }
+          // SQL placeholders for the typed-column tail. PG infers the
+          // type from the column on INSERT, so we don't need explicit
+          // ::type casts here -- letting node-postgres bind by JS type
+          // is enough now that coerce() normalised the value.
+          const typedPlaceholders = typedFields
+            .map((_, ti) => `$${base + 4 + ti}`)
+            .join(typedFields.length > 0 ? ', ' : '');
           valueRows.push(
             `(COALESCE($${base}::uuid, gen_random_uuid()), ` +
               `$${base + 1}::jsonb, $${base + 2}::timestamptz, ` +
-              `$${base + 3}::uuid, $${base + 3}::uuid)`,
+              `$${base + 3}::uuid, $${base + 3}::uuid` +
+              (typedPlaceholders ? `, ${typedPlaceholders}` : '') +
+              `)`,
           );
         }
+        const colList =
+          `(global_id, properties, valid_from, created_by, edited_by` +
+          (typedCols ? `, ${typedCols}` : '') +
+          `)`;
         await this.prisma.$executeRawUnsafe(
-          `INSERT INTO "${tbl}"
-             (global_id, properties, valid_from, created_by, edited_by)
-           VALUES ${valueRows.join(', ')}`,
+          `INSERT INTO "${tbl}" ${colList} VALUES ${valueRows.join(', ')}`,
           ...params,
         );
         inserted += batch.length;
@@ -296,18 +363,28 @@ export class V3FeaturesService {
             now,
             user.id,
           );
+          for (const tf of typedFields) {
+            params.push(coerce(f.properties?.[tf.name], tf.type));
+          }
+          const typedPlaceholders = typedFields
+            .map((_, ti) => `$${base + 5 + ti}`)
+            .join(typedFields.length > 0 ? ', ' : '');
           valueRows.push(
             `(COALESCE($${base}::uuid, gen_random_uuid()), ` +
               `CASE WHEN $${base + 1}::text IS NULL THEN NULL ` +
               `ELSE ST_Multi(ST_GeomFromGeoJSON($${base + 1})) END, ` +
               `$${base + 2}::jsonb, $${base + 3}::timestamptz, ` +
-              `$${base + 4}::uuid, $${base + 4}::uuid)`,
+              `$${base + 4}::uuid, $${base + 4}::uuid` +
+              (typedPlaceholders ? `, ${typedPlaceholders}` : '') +
+              `)`,
           );
         }
+        const colList =
+          `(global_id, geom, properties, valid_from, created_by, edited_by` +
+          (typedCols ? `, ${typedCols}` : '') +
+          `)`;
         await this.prisma.$executeRawUnsafe(
-          `INSERT INTO "${tbl}"
-             (global_id, geom, properties, valid_from, created_by, edited_by)
-           VALUES ${valueRows.join(', ')}`,
+          `INSERT INTO "${tbl}" ${colList} VALUES ${valueRows.join(', ')}`,
           ...params,
         );
         inserted += batch.length;
@@ -324,6 +401,82 @@ export class V3FeaturesService {
       inputs.map((f) => f.properties),
     );
     return { inserted };
+  }
+
+  /**
+   * Look up the typed fields declared on a v3 layer's sublayer (#294).
+   * Returns one entry per field with the JS-side property name (used
+   * to read out of the input row's properties), the sanitized SQL
+   * column name (used in the INSERT), and the FeatureField type the
+   * value should be coerced to. Tolerates legacy item shapes that
+   * stored fields under data.fields (v1/v2) or data.layers[].fields
+   * (v3); on missing / malformed shapes returns an empty list and the
+   * spread becomes a no-op.
+   */
+  private async getTypedFields(
+    itemId: string,
+    layerId: string,
+  ): Promise<Array<{
+    name: string;
+    sqlName: string;
+    type: 'string' | 'number' | 'boolean' | 'date';
+  }>> {
+    const item = await this.prisma.item.findUnique({
+      where: { id: itemId },
+      select: { data: true },
+    });
+    if (!item) return [];
+    const data = (item.data ?? {}) as {
+      version?: number;
+      layers?: Array<{ id?: string; key?: string; fields?: unknown[] }>;
+      fields?: unknown[];
+    };
+    let raw: unknown[] | undefined;
+    if (Array.isArray(data.layers)) {
+      const sub = data.layers.find(
+        (l) => l.id === layerId || l.key === layerId,
+      );
+      raw = sub?.fields;
+    } else {
+      raw = data.fields;
+    }
+    if (!Array.isArray(raw)) return [];
+    const out: Array<{
+      name: string;
+      sqlName: string;
+      type: 'string' | 'number' | 'boolean' | 'date';
+    }> = [];
+    for (const f of raw) {
+      if (!f || typeof f !== 'object') continue;
+      const ff = f as { name?: unknown; type?: unknown };
+      if (typeof ff.name !== 'string' || ff.name.length === 0) continue;
+      const sqlName = sanitizeIdentifier(ff.name);
+      if (!sqlName) continue;
+      // Only include declared FeatureFieldType values; the column
+      // provisioner skips anything else, so we shouldn't try to
+      // populate them either.
+      let type: 'string' | 'number' | 'boolean' | 'date';
+      switch (ff.type) {
+        case 'number':
+        case 'boolean':
+        case 'date':
+          type = ff.type;
+          break;
+        case 'string':
+        case undefined:
+          type = 'string';
+          break;
+        default:
+          continue;
+      }
+      // Validate that toPgFieldType doesn't disagree with our
+      // mapping. Defensive guard: if someone evolves field type
+      // semantics, the mismatch shows up at runtime instead of
+      // silently NULLing the column.
+      if (!toPgFieldType(type)) continue;
+      out.push({ name: ff.name, sqlName, type });
+    }
+    return out;
   }
 
   /** Update a feature by expiring the current row and inserting a new
