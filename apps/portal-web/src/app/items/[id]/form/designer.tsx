@@ -5792,18 +5792,15 @@ function questionToFeatureField(q: Question): RawFeatureField | null {
   ) {
     return null;
   }
-  // Composite / multi-value answers don't fit a single typed column
+  // Composite / nested-shape answers don't fit a single typed column
   // cleanly. Stash them in properties JSONB for now.
   if (
-    q.type === 'select-many' ||
     q.type === 'name' ||
     q.type === 'address' ||
-    q.type === 'ranking' ||
     q.type === 'matrix-single' ||
     q.type === 'matrix-multi' ||
     q.type === 'matrix-dropdown' ||
     q.type === 'matrix-rating' ||
-    q.type === 'image-choice' ||
     q.type === 'image-hotspot' ||
     q.type === 'pick-feature' ||
     q.type === 'route' ||
@@ -5851,6 +5848,50 @@ function questionToFeatureField(q: Question): RawFeatureField | null {
         };
       }
       return out;
+    }
+    // Multi-value answers land as a comma-separated string in a
+    // single text column (#295). Same convention as Survey123: shows
+    // up in the attribute table, round-trips to shapefile / CSV
+    // exports cleanly, and stays sort/filterable. v3-features's
+    // coerce() does the array -> "v1,v2" join at insert time.
+    // Choice domain still attaches so the values stay
+    // self-documenting in the schema panel.
+    case 'select-many': {
+      const out: RawFeatureField = { ...base, type: 'string' };
+      if (Array.isArray(q.choices) && q.choices.length > 0) {
+        out.domain = {
+          type: 'coded-value',
+          values: q.choices.map((c) => ({
+            code: String(c.value),
+            label: c.label,
+          })),
+        };
+      }
+      return out;
+    }
+    case 'ranking':
+      // Ordering is encoded by position in the comma-joined list;
+      // domain stays attached so the choices remain documented.
+      return (() => {
+        const out: RawFeatureField = { ...base, type: 'string' };
+        if (Array.isArray(q.choices) && q.choices.length > 0) {
+          out.domain = {
+            type: 'coded-value',
+            values: q.choices.map((c) => ({
+              code: String(c.value),
+              label: c.label,
+            })),
+          };
+        }
+        return out;
+      })();
+    case 'image-choice': {
+      // Image-choice can be single OR multi depending on the
+      // question's `multi` flag; the column is text either way.
+      // Single-mode lands a single value; multi-mode comma-joins
+      // on insert. Domain not attached because the choices aren't
+      // textual labels in this question type.
+      return { ...base, type: 'string' };
     }
     // Everything else (text / multiline / email / url / phone /
     // regex / barcode / calculated / time) lands as string.

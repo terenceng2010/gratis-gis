@@ -288,10 +288,30 @@ export class V3FeaturesService {
         if (typeof val === 'string') return val;
         return null;
       }
-      // string: stringify objects so things like {url, name} (legacy
-      // attachment shapes that haven't moved to #292's child table
-      // yet) at least survive the column cast.
+      // string: comma-join arrays of primitives (the Survey123 /
+      // ArcGIS convention for select-many, ranking, image-choice
+      // multi values, etc., #295). Choice codes are expected to
+      // not contain commas; if they do the value's still legible
+      // but the comma boundary becomes ambiguous. Object arrays
+      // (and bare objects) fall back to JSON.stringify so legacy
+      // attachment shapes that haven't moved to #292's child
+      // table yet survive the column cast.
       if (typeof val === 'string') return val;
+      if (Array.isArray(val)) {
+        const allPrimitive = val.every(
+          (item) =>
+            item === null ||
+            typeof item === 'string' ||
+            typeof item === 'number' ||
+            typeof item === 'boolean',
+        );
+        if (allPrimitive) {
+          return val
+            .filter((item) => item !== null && item !== undefined)
+            .map((item) => String(item))
+            .join(',');
+        }
+      }
       return JSON.stringify(val);
     };
     // Batch multi-row VALUES inserts. The previous code did one
