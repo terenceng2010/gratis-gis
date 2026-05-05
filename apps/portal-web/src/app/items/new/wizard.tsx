@@ -38,6 +38,7 @@ import type {
   Item,
   ItemAccess,
   ItemType,
+  ServiceData,
   WebAppData,
   WmsServiceData,
   WfsServiceData,
@@ -56,6 +57,7 @@ import {
   DEFAULT_EDITOR,
   DEFAULT_VIEWER,
   ITEM_TYPES,
+  serviceProtocolLabel,
 } from '@gratis-gis/shared-types';
 import { ImageUploader } from '@/components/image-uploader';
 import {
@@ -68,6 +70,10 @@ import {
   probeWfs,
   type OgcCapabilities,
 } from '@/lib/ogc-rest';
+import {
+  probeService as autoProbeService,
+  type ServiceProbeResult,
+} from '@/lib/service-probe';
 import { DataCollectionBuilder } from './data-collection-builder';
 import { DataLayerBuilder } from './data-layer-builder';
 import { DerivedLayerBuilder } from './derived-layer-builder';
@@ -114,16 +120,23 @@ const TYPE_GROUPS: TypeGroup[] = [
     label: 'Data',
     options: [
       {
-        value: 'arcgis_service',
-        label: 'ArcGIS service',
-        desc: 'Live pointer at a MapServer or FeatureServer.',
-        Icon: Plug,
-      },
-      {
         value: 'geo_boundary',
         label: 'Boundary',
         desc: 'A named region (polygon) reused across shares, maps, and filters.',
         Icon: MapIcon,
+      },
+      {
+        // #304: unified Connected Service replaces the four
+        // protocol-specific tiles (ArcGIS service, WMS service,
+        // WFS service, and the not-yet-shipped WMTS). One tile,
+        // auto-detect probe -- the wizard figures out the protocol
+        // from the URL response so the user doesn't have to know
+        // upfront whether they're pointing at a MapServer, a WMS,
+        // or a WMTS endpoint.
+        value: 'service',
+        label: 'Connected service',
+        desc: 'Live pointer at an external service. Paste a URL; we recognize ArcGIS REST, WMS, WFS, and WMTS.',
+        Icon: Plug,
       },
       {
         value: 'data_layer',
@@ -142,18 +155,6 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Pick list',
         desc: 'Shared list of codes + labels referenced by fields, forms, and filters.',
         Icon: ListChecks,
-      },
-      {
-        value: 'wfs_service',
-        label: 'WFS service',
-        desc: 'Live pointer at a WFS feature service.',
-        Icon: Plug,
-      },
-      {
-        value: 'wms_service',
-        label: 'WMS service',
-        desc: 'Live pointer at a WMS GetMap endpoint.',
-        Icon: Plug,
       },
     ],
   },
@@ -395,6 +396,21 @@ export function NewItemWizard() {
   // only fields matching the active kind are meaningful.
   const [basemapDraft, setBasemapDraft] = useState<BasemapData>(DEFAULT_BASEMAP);
 
+  // #304 slice 3: unified Connected Service probe state. Replaces
+  // the legacy per-protocol probe state for new items going
+  // forward (the legacy state below stays for the deprecation
+  // window in case a deep-link or migration script hits a legacy
+  // type). Auto-detect probe lives in lib/service-probe.ts; the
+  // wizard just stores the result and feeds it to submit() as a
+  // ServiceData payload.
+  const [serviceUrlDraft, setServiceUrlDraft] = useState<string>('');
+  const [serviceProbing, setServiceProbing] = useState(false);
+  const [serviceProbeError, setServiceProbeError] = useState<string | null>(null);
+  const [serviceProbeResult, setServiceProbeResult] =
+    useState<ServiceProbeResult | null>(null);
+  const [serviceSelectedLayerNames, setServiceSelectedLayerNames] =
+    useState<Set<string>>(new Set());
+
   // #297: WMS / WFS probe state. Mirrors the ArcGIS probe flow but
   // simpler -- no auth path yet (most public WMS / WFS endpoints are
   // anonymous) and the layer ids are strings, not numbers. The probe
@@ -505,6 +521,42 @@ export function NewItemWizard() {
       if (!controller.signal.aborted) setArcgisProbing(false);
     }
   }, [arcgisUrlDraft, applyProbeResult]);
+
+  /**
+   * #304 slice 3: unified Connected Service probe runner. Hits
+   * lib/service-probe.ts which auto-detects ArcGIS REST / WMS /
+   * WFS / WMTS, then stages the resulting ServiceData on
+   * serviceProbeResult so the rest of the wizard can render the
+   * picker + submit. Selects every probed layer by default so a
+   * "probe -> Create" flow yields a complete item without picker
+   * interaction; the user only touches the picker to curate.
+   */
+  const runServiceProbe = useCallback(async () => {
+    const raw = serviceUrlDraft.trim();
+    if (!raw) {
+      setServiceProbeError('Paste a service URL.');
+      return;
+    }
+    setServiceProbeError(null);
+    setServiceProbing(true);
+    try {
+      const result = await autoProbeService(raw);
+      setServiceProbeResult(result);
+      setServiceSelectedLayerNames(
+        new Set(result.data.layers.map((l) => l.name)),
+      );
+    } catch (err) {
+      setServiceProbeError(
+        err instanceof Error
+          ? err.message
+          : 'Could not identify that service. Check the URL and CORS config.',
+      );
+      setServiceProbeResult(null);
+      setServiceSelectedLayerNames(new Set());
+    } finally {
+      setServiceProbing(false);
+    }
+  }, [serviceUrlDraft]);
 
   /**
    * #297 OGC probe runner. Fires a GetCapabilities against the user-
@@ -897,6 +949,30 @@ export function NewItemWizard() {
         mapId: dataCollectionMapId,
       };
       data = dc;
+    } else if (type === 'service') {
+      // #304 slice 3: unified Connected Service probe-or-bail.
+      // The wizard requires a successful auto-detect probe so the
+      // new item lands fully configured (URL, protocol, layer
+      // list, default selection). Selection by name makes re-
+      // probe later resilient to layer reorderings.
+      if (!serviceProbeResult) {
+        setError('Probe the service URL before creating the item.');
+        return;
+      }
+      if (serviceSelectedLayerNames.size === 0) {
+        setError('Select at least one layer to include in this item.');
+        return;
+      }
+      const probedData = serviceProbeResult.data;
+      const ids: number[] = [];
+      probedData.layers.forEach((l, i) => {
+        if (serviceSelectedLayerNames.has(l.name)) ids.push(i);
+      });
+      const payload: ServiceData = {
+        ...probedData,
+        selectedLayerIds: ids,
+      };
+      data = payload;
     } else if (type === 'file') {
       // #296: the wizard already presigned + PUT the file when the
       // user picked it; we just have to require the upload finished
@@ -1387,6 +1463,24 @@ export function NewItemWizard() {
         <BasemapConfigSection value={basemapDraft} onChange={setBasemapDraft} />
       ) : null}
 
+      {type === 'service' ? (
+        <ServiceConfigSection
+          urlDraft={serviceUrlDraft}
+          onUrlChange={setServiceUrlDraft}
+          probing={serviceProbing}
+          probeError={serviceProbeError}
+          probeResult={serviceProbeResult}
+          selectedLayerNames={serviceSelectedLayerNames}
+          onSelectedLayerNamesChange={setServiceSelectedLayerNames}
+          onProbe={runServiceProbe}
+          onDiscardProbe={() => {
+            setServiceProbeResult(null);
+            setServiceSelectedLayerNames(new Set());
+            setServiceProbeError(null);
+          }}
+        />
+      ) : null}
+
       {type === 'wms_service' || type === 'wfs_service' ? (
         <OgcConfigSection
           kind={type === 'wms_service' ? 'wms' : 'wfs'}
@@ -1583,6 +1677,164 @@ function FileItemUploader({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Wizard pane for type='service' (#304 slice 3).
+ *
+ * Single entry point that replaces the four protocol-specific
+ * tiles (ArcGIS service, WMS service, WFS service, and the not-yet-
+ * shipped WMTS). Auto-detect probe figures out the protocol from
+ * the URL response so the user doesn't have to know upfront whether
+ * they're pointing at a MapServer, a WMS, or a WMTS endpoint.
+ *
+ * Two-stage layout: paste URL, click Probe; on success the
+ * detected protocol + service title surface in a summary line
+ * and the layer picker shows up with all layers checked by
+ * default. The user can uncheck individual layers to curate.
+ */
+function ServiceConfigSection({
+  urlDraft,
+  onUrlChange,
+  probing,
+  probeError,
+  probeResult,
+  selectedLayerNames,
+  onSelectedLayerNamesChange,
+  onProbe,
+  onDiscardProbe,
+}: {
+  urlDraft: string;
+  onUrlChange: (v: string) => void;
+  probing: boolean;
+  probeError: string | null;
+  probeResult: ServiceProbeResult | null;
+  selectedLayerNames: Set<string>;
+  onSelectedLayerNamesChange: (next: Set<string>) => void;
+  onProbe: () => void;
+  onDiscardProbe: () => void;
+}) {
+  const data = probeResult?.data;
+  return (
+    <section className="rounded-lg border border-border bg-surface-1 p-4">
+      <h2 className="mb-1 text-sm font-medium text-ink-0">
+        Connected service
+      </h2>
+      <p className="mb-3 text-xs text-muted">
+        Paste the service URL. We&rsquo;ll detect whether it&rsquo;s ArcGIS
+        REST, WMS, WFS, or WMTS and load the layer list from the server.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="url"
+          inputMode="url"
+          value={urlDraft}
+          disabled={probing || !!probeResult}
+          onChange={(e) => onUrlChange(e.target.value)}
+          placeholder="https://example.org/arcgis/rest/services/.../MapServer"
+          className="h-9 min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-2 text-sm font-mono"
+        />
+        {probeResult ? (
+          <button
+            type="button"
+            onClick={onDiscardProbe}
+            className="h-9 rounded-md border border-border bg-surface-1 px-3 text-xs text-ink-1 hover:bg-surface-2"
+          >
+            Try a different URL
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onProbe}
+            disabled={probing}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+          >
+            {probing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
+            {probing ? 'Probing...' : 'Probe'}
+          </button>
+        )}
+      </div>
+      {probeError ? (
+        <p className="mt-2 text-xs text-danger" role="alert">
+          {probeError}
+        </p>
+      ) : null}
+      {probeResult && data ? (
+        <div className="mt-4 rounded-md border border-border bg-surface-2 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+            <div className="text-muted">
+              <span className="mr-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+                {serviceProtocolLabel(data.protocol)}
+              </span>
+              {data.serviceTitle ? (
+                <>
+                  <span className="font-medium text-ink-0">{data.serviceTitle}</span>
+                  {' · '}
+                </>
+              ) : null}
+              {data.layers.length} layer{data.layers.length === 1 ? '' : 's'}
+            </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onSelectedLayerNamesChange(
+                    new Set(data.layers.map((l) => l.name)),
+                  )
+                }
+                className="h-6 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectedLayerNamesChange(new Set())}
+                className="h-6 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          {data.layers.length === 0 ? (
+            <p className="text-xs text-muted">
+              The server didn&rsquo;t advertise any named layers.
+              Double-check the URL points at the GetCapabilities
+              endpoint (or the ArcGIS REST service root).
+            </p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto rounded border border-border bg-surface-1 text-xs">
+              {data.layers.map((l) => {
+                const checked = selectedLayerNames.has(l.name);
+                return (
+                  <li
+                    key={l.name}
+                    className="flex items-center gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = new Set(selectedLayerNames);
+                        if (checked) next.delete(l.name);
+                        else next.add(l.name);
+                        onSelectedLayerNamesChange(next);
+                      }}
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium text-ink-0">{l.title}</span>
+                      {l.title !== l.name ? (
+                        <span className="ml-2 font-mono text-muted">{l.name}</span>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
