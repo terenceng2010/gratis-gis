@@ -28,3 +28,4 @@ export * from './viewer';
 export * from './web-app';
 export * from './data-collection';
 export * from './file';
+export * from './service';

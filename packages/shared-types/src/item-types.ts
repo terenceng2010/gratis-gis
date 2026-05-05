@@ -28,6 +28,13 @@ export const ITEM_TYPES = [
   'basemap',
   'wms_service',
   'wfs_service',
+  // #304: unified Connected Service item type. Replaces the four
+  // protocol-specific types (arcgis_service, wms_service, wfs_service,
+  // and the not-yet-shipped wmts) under a single shape with a
+  // `protocol` discriminator on data_json. The legacy types stay in
+  // this list for the deprecation window so existing rows keep
+  // dispatching to their detail pages until the migration runs.
+  'service',
   'folder',
   'editor',
   'data_collection',

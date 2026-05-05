@@ -152,6 +152,12 @@ enum ItemType {
   folder
   editor
   data_collection            @map("data-collection")
+  /// #304: unified Connected Service item type. Replaces the four
+  /// protocol-specific types (arcgis_service, wms_service, wfs_service,
+  /// and the not-yet-shipped wmts) under a single shape with a
+  /// `protocol` discriminator on data_json. Legacy types stay in this
+  /// enum for the deprecation window.
+  service
 }
 
 // ---------- Tables ----------
