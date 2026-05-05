@@ -82,7 +82,24 @@ export function isEditorItem(item: {
   if (item.type === 'editor') return true;
   if (item.type !== 'web_app') return false;
   const d = item.data as WebAppData | null | undefined;
-  return d?.template === 'editor';
+  if (d?.template === 'editor') return true;
+  // Tolerance branch: a web_app item whose data is an unwrapped
+  // EditorData (the legacy detail-page save before the WebAppData
+  // wrapper preservation fix) has no `template` field but DOES have
+  // EditorData's structural markers. Treat it as an editor item so
+  // the runtime + dispatch keep working pre-migration. The data
+  // migration in 20260505030000_rewrap_webapp_data fixes the stored
+  // shape on next portal-api boot.
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    'targets' in d &&
+    'snapping' in d
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -105,19 +122,31 @@ export function readEditorData(item: {
   }
   if (item.type !== 'web_app') return null;
   const d = item.data as WebAppData | null | undefined;
-  if (d?.template !== 'editor') return null;
-  // The migrated shape stores EditorData under config.editor; defend
-  // against an older partial migration that put it under config
-  // directly.
-  const cfg = d.config as
-    | { template: 'editor'; editor?: EditorData }
-    | null
-    | undefined;
-  if (cfg?.template === 'editor' && cfg.editor) return cfg.editor;
-  // Fallback: data.config IS the EditorData (shouldn't happen if
-  // migration ran correctly, but tolerate).
-  if (cfg && typeof cfg === 'object' && 'targets' in cfg) {
-    return cfg as unknown as EditorData;
+  if (d?.template === 'editor') {
+    // Canonical wrapped shape.
+    const cfg = d.config as
+      | { template: 'editor'; editor?: EditorData }
+      | null
+      | undefined;
+    if (cfg?.template === 'editor' && cfg.editor) return cfg.editor;
+    // Older partial-migration tolerance: config IS the EditorData.
+    if (cfg && typeof cfg === 'object' && 'targets' in cfg) {
+      return cfg as unknown as EditorData;
+    }
+    return null;
+  }
+  // Tolerance branch: web_app item whose data is unwrapped EditorData
+  // (pre-fix detail-page save). Detected by EditorData's structural
+  // markers (`targets` + `snapping`); ViewerData lacks `snapping` so
+  // it's distinguishable from the viewer fallback in readViewerData.
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    'targets' in d &&
+    'snapping' in d
+  ) {
+    return d as unknown as EditorData;
   }
   return null;
 }
@@ -136,7 +165,23 @@ export function isViewerItem(item: {
 }): boolean {
   if (item.type !== 'web_app') return false;
   const d = item.data as WebAppData | null | undefined;
-  return d?.template === 'viewer';
+  if (d?.template === 'viewer') return true;
+  // Tolerance branch: web_app item whose data is unwrapped ViewerData
+  // (pre-fix detail-page save stripped the WebAppData wrapper). The
+  // 20260505030000 migration rewraps these on next portal-api boot.
+  // ViewerData has `targets` + `tools` but no `snapping`, which is
+  // how we distinguish it from an unwrapped EditorData.
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    'targets' in d &&
+    'tools' in d &&
+    !('snapping' in d)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -150,16 +195,30 @@ export function readViewerData(item: {
 }): ViewerData | null {
   if (item.type !== 'web_app') return null;
   const d = item.data as WebAppData | null | undefined;
-  if (d?.template !== 'viewer') return null;
-  const cfg = d.config as
-    | { template: 'viewer'; viewer?: ViewerData }
-    | null
-    | undefined;
-  if (cfg?.template === 'viewer' && cfg.viewer) return cfg.viewer;
-  // Fallback: data.config IS the ViewerData (defensive — shouldn't
-  // happen if create / migration paths follow the canonical shape).
-  if (cfg && typeof cfg === 'object' && 'targets' in cfg) {
-    return cfg as unknown as ViewerData;
+  if (d?.template === 'viewer') {
+    // Canonical wrapped shape.
+    const cfg = d.config as
+      | { template: 'viewer'; viewer?: ViewerData }
+      | null
+      | undefined;
+    if (cfg?.template === 'viewer' && cfg.viewer) return cfg.viewer;
+    // Older partial-migration tolerance: config IS the ViewerData.
+    if (cfg && typeof cfg === 'object' && 'targets' in cfg) {
+      return cfg as unknown as ViewerData;
+    }
+    return null;
+  }
+  // Tolerance branch: web_app item whose data is unwrapped ViewerData
+  // (matches the same shape detection isViewerItem uses).
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    'targets' in d &&
+    'tools' in d &&
+    !('snapping' in d)
+  ) {
+    return d as unknown as ViewerData;
   }
   return null;
 }

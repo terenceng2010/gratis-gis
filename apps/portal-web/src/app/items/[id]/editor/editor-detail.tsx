@@ -24,6 +24,7 @@ import type {
   EditorTarget,
   EditorTool,
   Item,
+  WebAppData,
 } from '@gratis-gis/shared-types';
 import { DEFAULT_EDITOR_TOOLS } from '@gratis-gis/shared-types';
 import { AddTargetDialog } from './add-target-dialog';
@@ -343,10 +344,21 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
     setError(null);
     setSaving(true);
     try {
+      // Wrap in the canonical WebAppData shape. The API replaces
+      // data_json wholesale, so sending raw EditorData would strip
+      // the `template` + `config` keys that isEditorItem /
+      // readEditorData rely on -- subsequent loads would route to
+      // the generic ComingSoon stub instead of the editor surface.
+      // Pre-existing #258 bug; same fix as the viewer detail save.
+      const payload: WebAppData = {
+        version: 1,
+        template: 'editor',
+        config: { template: 'editor', editor },
+      };
       const res = await fetch(`/api/portal/items/${itemId}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: editor }),
+        body: JSON.stringify({ data: payload }),
       });
       if (!res.ok) {
         setError(`Save failed: ${res.status} ${await res.text()}`);

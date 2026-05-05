@@ -22,6 +22,7 @@ import type {
   ViewerData,
   ViewerTarget,
   ViewerTool,
+  WebAppData,
 } from '@gratis-gis/shared-types';
 import { DEFAULT_VIEWER_TOOLS } from '@gratis-gis/shared-types';
 import { AddTargetDialog } from '../editor/add-target-dialog';
@@ -245,10 +246,21 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
     setError(null);
     setSaving(true);
     try {
+      // Wrap in the canonical WebAppData shape before PATCHing. The
+      // API replaces data_json wholesale, so sending the raw
+      // ViewerData would strip the `template` + `config` keys that
+      // isViewerItem / readViewerData rely on; the next runtime load
+      // would 404 because the type guard no longer recognizes the
+      // item as a viewer. See packages/shared-types/src/web-app.ts.
+      const payload: WebAppData = {
+        version: 1,
+        template: 'viewer',
+        config: { template: 'viewer', viewer },
+      };
       const res = await fetch(`/api/portal/items/${itemId}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: viewer }),
+        body: JSON.stringify({ data: payload }),
       });
       if (!res.ok) {
         setError(`Save failed: ${res.status} ${await res.text()}`);
