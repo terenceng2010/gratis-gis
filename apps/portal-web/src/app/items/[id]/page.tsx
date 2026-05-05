@@ -27,6 +27,7 @@ import type {
   GeoBoundaryData,
   PickListData,
   MapData,
+  ServiceData,
   WfsServiceData,
   WmsServiceData,
 } from '@gratis-gis/shared-types';
@@ -118,6 +119,7 @@ import { FormDesigner } from './form/designer';
 import { DataCollectionDetail } from './data-collection/data-collection-detail';
 import { FileDetail } from './file/file-detail';
 import { OgcServiceEditor } from './ogc-service/editor';
+import { ServiceEditor } from './service/editor';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -696,6 +698,29 @@ export default async function ItemDetailPage({ params }: Props) {
             }
             canEdit={canManage}
           />
+        </section>
+      ) : item.type === 'service' ? (
+        <section className="mb-6">
+          {/* #304 slice 4: unified Connected Service detail page.
+              Branches on data.protocol internally so all six
+              protocol variants share one editor. Falls through to
+              ComingSoon if data is missing or malformed; in
+              practice the wizard always writes a complete
+              ServiceData payload (the probe-or-bail submit guard
+              in slice 3). */}
+          {(() => {
+            const sd = item.data as ServiceData | null;
+            if (!sd || typeof sd !== 'object' || !('protocol' in sd)) {
+              return <ComingSoon type={item.type} data={item.data} />;
+            }
+            return (
+              <ServiceEditor
+                itemId={item.id}
+                initial={sd}
+                canEdit={canManage}
+              />
+            );
+          })()}
         </section>
       ) : item.type === 'file' ? (
         <section className="mb-6">
