@@ -65,13 +65,28 @@ RUN pnpm deploy --filter=@gratis-gis/portal-api /out
 FROM base AS runtime
 WORKDIR /app
 # Runtime deps for GDAL, the Prisma engine, and TLS. No build chain.
+#
+# postgresql-client-16 is required by BackupService.runPgDump (#277):
+# the nightly cron shells out to `pg_dump` against the prod Postgres 16
+# server, so the binary needs to be on PATH inside this image AND match
+# the server's major version (pg_dump refuses to dump a newer server).
+# Debian bookworm only ships postgresql-client (15), so we pull 16 from
+# the official PGDG apt repo. gnupg is needed to dearmor the repo key.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libgdal-dev \
       gdal-bin \
       openssl \
       ca-certificates \
       curl \
+      gnupg \
       tini \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsS https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 
 # Drop privileges. Postgres connections, file uploads, and GDAL all
