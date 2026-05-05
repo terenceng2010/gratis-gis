@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
@@ -2017,34 +2017,129 @@ function BasemapConfigSection({
   value: BasemapData;
   onChange: (next: BasemapData) => void;
 }) {
-  const setKind = (kind: 'tile-url' | 'style-url' | 'wms') => {
+  // #304 slice 6 / #302: a fourth "source" affordance that picks
+  // an existing Connected Service item (or a legacy wms_service /
+  // arcgis_service) and resolves it to the right basemap kind +
+  // URL automatically. The selected mode here is UI-only -- the
+  // saved BasemapData still uses one of the three concrete kinds
+  // (tile-url, wms, style-url) so the renderer doesn't need to
+  // grow a new branch.
+  type SourceMode = 'tile-url' | 'wms' | 'style-url' | 'from-service';
+  // Phase 1 doesn't author `composed-map` basemaps from the
+  // wizard, so we never start in that mode; if a stale value
+  // somehow comes in with kind=composed-map we fall back to
+  // tile-url so the user can pick a fresh path.
+  const [sourceMode, setSourceMode] = useState<SourceMode>(
+    value.kind === 'composed-map' ? 'tile-url' : (value.kind as SourceMode),
+  );
+  const [serviceItems, setServiceItems] = useState<Item[] | null>(null);
+  const [serviceLoading, setServiceLoading] = useState(false);
+  const [serviceError, setServiceError] = useState<string | null>(null);
+
+  // Lazy-load the picker list the first time the user clicks
+  // "From an existing service item". Filters to the types that can
+  // realistically back a basemap: WMS (kind=wms), ArcGIS Map (cached
+  // tile or dynamic export), and the unified `service` items that
+  // route through one of those protocols. WFS / non-cached services
+  // aren't basemap-shaped, so they're filtered out at pick time
+  // rather than removed from the list.
+  useEffect(() => {
+    if (sourceMode !== 'from-service' || serviceItems !== null) return;
+    let cancelled = false;
+    setServiceLoading(true);
+    setServiceError(null);
+    void (async () => {
+      try {
+        const res = await fetch(
+          '/api/portal/items?type=service,arcgis_service,wms_service&lite=1',
+        );
+        if (!res.ok) {
+          if (!cancelled) {
+            setServiceError(`Could not load services (HTTP ${res.status}).`);
+          }
+          return;
+        }
+        const items = (await res.json()) as Item[];
+        if (!cancelled) setServiceItems(items);
+      } catch (err) {
+        if (!cancelled) {
+          setServiceError(
+            err instanceof Error ? err.message : 'Could not load services.',
+          );
+        }
+      } finally {
+        if (!cancelled) setServiceLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceMode, serviceItems]);
+
+  const setKind = (mode: SourceMode) => {
+    setSourceMode(mode);
+    if (mode === 'from-service') {
+      // Don't touch `value` yet -- the actual BasemapData comes from
+      // the picked item's data when the user chooses one below.
+      return;
+    }
     // Reset fields that don't apply to the new kind so we don't
     // leave stale URLs floating in data_json. attribution +
     // thumbnailUrl are kind-agnostic so they survive.
     const base: BasemapData = {
       version: 1,
-      kind,
+      kind: mode,
     };
     if (value.attribution) base.attribution = value.attribution;
     if (value.thumbnailUrl) base.thumbnailUrl = value.thumbnailUrl;
-    if (kind === 'wms') base.wmsConfig = { layers: '' };
+    if (mode === 'wms') base.wmsConfig = { layers: '' };
     onChange(base);
   };
+
+  // Hydrate the picked service item and resolve to a BasemapData
+  // payload. Only protocols that map cleanly to a renderable
+  // basemap source are accepted; others surface a clear error so
+  // the user knows why their pick didn't take.
+  async function pickServiceItem(itemId: string) {
+    setServiceError(null);
+    try {
+      const res = await fetch(`/api/portal/items/${itemId}`);
+      if (!res.ok) {
+        setServiceError(`Could not load service (HTTP ${res.status}).`);
+        return;
+      }
+      const item = (await res.json()) as Item;
+      const next = serviceItemToBasemapData(item, value);
+      if (!next) {
+        setServiceError(
+          'That service can\'t back a basemap yet (only WMS and cached ArcGIS Map services work today).',
+        );
+        return;
+      }
+      onChange(next);
+    } catch (err) {
+      setServiceError(
+        err instanceof Error ? err.message : 'Could not load service.',
+      );
+    }
+  }
+
   return (
     <section className="rounded-lg border border-border bg-surface-1 p-4">
       <h2 className="mb-1 text-sm font-medium text-ink-0">Basemap source</h2>
       <p className="mb-3 text-xs text-muted">
-        Pick how this basemap is served and paste the URL. Maps that
-        reference this basemap pull straight from the source you
-        configure here.
+        Pick how this basemap is served. Maps that reference this
+        basemap pull from the source you configure here. You can paste
+        a URL directly or pick an existing Connected Service item.
       </p>
       <div className="mb-3 flex flex-wrap gap-2 text-xs">
         {([
+          { k: 'from-service', label: 'From a service item' },
           { k: 'tile-url', label: 'XYZ tiles' },
           { k: 'wms', label: 'WMS' },
           { k: 'style-url', label: 'Style URL' },
         ] as const).map((opt) => {
-          const active = value.kind === opt.k;
+          const active = sourceMode === opt.k;
           return (
             <button
               key={opt.k}
@@ -2062,6 +2157,80 @@ function BasemapConfigSection({
           );
         })}
       </div>
+      {sourceMode === 'from-service' ? (
+        <div className="space-y-2">
+          {serviceLoading ? (
+            <div className="rounded-md border border-border bg-surface-2 p-3 text-xs text-muted">
+              Loading services...
+            </div>
+          ) : serviceItems && serviceItems.length === 0 ? (
+            <div className="rounded-md border border-border bg-surface-2 p-3 text-xs text-muted">
+              No service items yet. Create a Connected service first, then come back here.
+            </div>
+          ) : serviceItems ? (
+            <ul className="max-h-60 overflow-y-auto rounded-md border border-border bg-surface-2 text-xs">
+              {serviceItems.map((it) => {
+                const protocol = (it.data as { protocol?: string } | null)
+                  ?.protocol;
+                const protocolLabel =
+                  it.type === 'wms_service'
+                    ? 'WMS'
+                    : it.type === 'arcgis_service'
+                      ? 'ArcGIS'
+                      : protocol === 'wms'
+                        ? 'WMS'
+                        : protocol === 'arcgis_map'
+                          ? 'ArcGIS Map'
+                          : protocol === 'arcgis_feature'
+                            ? 'ArcGIS Feature'
+                            : protocol ?? 'Service';
+                return (
+                  <li
+                    key={it.id}
+                    className="flex items-center gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => pickServiceItem(it.id)}
+                      className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-surface-1"
+                    >
+                      <span className="rounded border border-accent/40 bg-accent/10 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+                        {protocolLabel}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-medium text-ink-0">
+                        {it.title}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {serviceError ? (
+            <p className="text-xs text-danger" role="alert">
+              {serviceError}
+            </p>
+          ) : null}
+          {/* Once a service is picked we render the resolved
+              BasemapData below using the same per-kind input boxes
+              the direct-URL flow uses, so the user can tweak it
+              before hitting Create. */}
+          {value.kind === 'wms' && value.wmsUrl ? (
+            <div className="rounded-md border border-accent/40 bg-accent/5 p-3 text-xs">
+              <p className="text-ink-0">
+                Resolved as WMS. URL + layer pre-filled below.
+              </p>
+            </div>
+          ) : null}
+          {value.kind === 'tile-url' && value.tileUrl ? (
+            <div className="rounded-md border border-accent/40 bg-accent/5 p-3 text-xs">
+              <p className="text-ink-0">
+                Resolved as XYZ tile template. URL pre-filled below.
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {value.kind === 'tile-url' ? (
         <label className="block text-xs">
           <span className="text-muted">XYZ tile template</span>
@@ -2187,6 +2356,93 @@ function BasemapConfigSection({
       </label>
     </section>
   );
+}
+
+/**
+ * Resolve a picked service item (Connected Service, legacy
+ * arcgis_service, or legacy wms_service) into a BasemapData payload
+ * the renderer can consume (#304 slice 6 / #302). Returns null if
+ * the protocol can't reasonably back a basemap (WFS, WMTS pending
+ * #305, ArcGIS Feature, etc.).
+ *
+ * Mapping rules:
+ *   - WMS (unified or legacy): kind=wms with wmsUrl + comma-joined
+ *     selected layer names.
+ *   - ArcGIS Map Service (cached MapServer): kind=tile-url with the
+ *     `${url}/tile/{z}/{y}/{x}` template ArcGIS publishes for cached
+ *     services. Dynamic-only services would need GetMap-style
+ *     export URLs we don't compose today.
+ *
+ * The previously-typed attribution / thumbnail on `prev` survive
+ * because they're kind-agnostic.
+ */
+function serviceItemToBasemapData(
+  item: Item,
+  prev: BasemapData,
+): BasemapData | null {
+  const data = (item.data ?? {}) as Record<string, unknown>;
+  const url = typeof data.url === 'string' ? data.url : '';
+  if (!url) return null;
+  // Identify protocol either from the unified `service` data
+  // (`protocol` field) or from the legacy item.type wrapper.
+  const protocol =
+    item.type === 'service'
+      ? typeof data.protocol === 'string'
+        ? data.protocol
+        : ''
+      : item.type === 'wms_service'
+        ? 'wms'
+        : item.type === 'arcgis_service'
+          ? // serviceType on legacy ArcGIS items is 'MapServer' or
+            // 'FeatureServer'; only MapServer maps cleanly to a
+            // basemap. The Feature path returns null below.
+            (data as { serviceType?: string }).serviceType === 'FeatureServer'
+            ? 'arcgis_feature'
+            : 'arcgis_map'
+          : '';
+  if (protocol === 'wms') {
+    const layersArr = Array.isArray(data.layers)
+      ? (data.layers as Array<{ name?: string }>)
+      : [];
+    const selectedIds = Array.isArray(data.selectedLayerIds)
+      ? (data.selectedLayerIds as Array<number | string>).map((i) => Number(i))
+      : layersArr.map((_, i) => i);
+    const names = selectedIds
+      .map((i) => layersArr[i]?.name)
+      .filter((n): n is string => typeof n === 'string' && n.length > 0);
+    const next: BasemapData = {
+      version: 1,
+      kind: 'wms',
+      wmsUrl: url,
+      wmsConfig: {
+        layers: names.join(','),
+        format: 'image/png',
+        transparent: true,
+        version: '1.3.0',
+        crs: 'EPSG:3857',
+      },
+    };
+    if (prev.attribution) next.attribution = prev.attribution;
+    if (prev.thumbnailUrl) next.thumbnailUrl = prev.thumbnailUrl;
+    return next;
+  }
+  if (protocol === 'arcgis_map') {
+    // Cached ArcGIS MapServers publish at /tile/{level}/{row}/{col}.
+    // We rewrite to MapLibre's {z}/{y}/{x} placeholders since
+    // Esri's URL ordering is z/y/x (rows-then-cols), not z/x/y.
+    const cleaned = url.replace(/\/+$/, '');
+    const tileUrl = `${cleaned}/tile/{z}/{y}/{x}`;
+    const next: BasemapData = {
+      version: 1,
+      kind: 'tile-url',
+      tileUrl,
+    };
+    if (prev.attribution) next.attribution = prev.attribution;
+    if (prev.thumbnailUrl) next.thumbnailUrl = prev.thumbnailUrl;
+    return next;
+  }
+  // arcgis_feature, wfs, wmts, image: no basemap mapping today.
+  return null;
 }
 
 /** Human-friendly size string for the file metadata row. */
