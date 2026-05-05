@@ -1046,6 +1046,26 @@ export interface FormSchema {
    */
   linkedLayerId?: string;
   linkedLayerKey?: string;
+  /**
+   * Submission notification config (#190). When a new submission
+   * lands, the backend renders a receipt of the answers and emails
+   * it to the form owner (default) and any extra recipients listed
+   * here. Phase 1 covers the ~80 percent "thanks for submitting"
+   * pattern that AGO + Survey123 only solves with Make / webhooks
+   * today; Phase 2 (blocked on report_template) will attach a PDF.
+   */
+  notify?: {
+    /** Additional email addresses that get a copy of every new
+     *  submission's rendered receipt. The list is plain RFC-5322
+     *  addresses; the backend de-duplicates against the owner's own
+     *  address before queueing so the owner never gets two copies. */
+    extraRecipients?: string[];
+    /** When false, the form owner does not get a submission email.
+     *  Useful when the owner is just curating responses for a team
+     *  list and the team list is in `extraRecipients`. Defaults to
+     *  true. */
+    notifyOwner?: boolean;
+  };
   /** Designer metadata (palette state, last-edit timestamps) the
    *  runtime ignores. */
   meta?: Record<string, unknown>;

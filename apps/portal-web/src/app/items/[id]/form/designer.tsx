@@ -1584,6 +1584,11 @@ function Properties({
             Link to a data layer
           </button>
         ) : null}
+        <NotifySettings
+          form={form}
+          canEdit={canEdit}
+          onUpdateForm={onUpdateForm}
+        />
         <p className="mt-1 text-[11px] text-muted">
           Select a question on the left to edit it.
         </p>
@@ -5427,6 +5432,91 @@ function LinkedLayerSummary({
           Unlink
         </button>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Submission-notification settings (#190). Sits in the form-level
+ * Properties panel. Lets the form author toggle owner-receipt off and
+ * add extra recipient email addresses (the "Make + webhooks" niche
+ * AGO + Survey123 force you into). The receipt itself is rendered
+ * server-side from the form schema + response so all the toggle does
+ * here is gate the email and edit the address list.
+ */
+function NotifySettings({
+  form,
+  canEdit,
+  onUpdateForm,
+}: {
+  form: FormSchema;
+  canEdit: boolean;
+  onUpdateForm: (patch: Partial<FormSchema>) => void;
+}) {
+  const cfg = form.notify ?? {};
+  const notifyOwner = cfg.notifyOwner !== false;
+  // Stored as a string[] but edited in a single textarea so authors
+  // can paste a list. We split on commas, semicolons, or newlines.
+  const extras = Array.isArray(cfg.extraRecipients) ? cfg.extraRecipients : [];
+  const [draft, setDraft] = useState<string>(extras.join('\n'));
+  // Re-sync when the form is reloaded from disk.
+  useEffect(() => {
+    setDraft(extras.join('\n'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extras.join('|')]);
+
+  const commit = (next: string) => {
+    const list = next
+      .split(/[\n,;]+/g)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    const dedup = Array.from(new Set(list));
+    // Always emit a `notify` object (possibly empty) to keep the patch
+    // shape compatible with exactOptionalPropertyTypes. An empty object
+    // is harmless server-side: notifyOwner defaults to true and
+    // extraRecipients is treated as []. The shape doesn't bloat the
+    // form data JSON appreciably.
+    const built: { notifyOwner?: boolean; extraRecipients?: string[] } = {};
+    if (!notifyOwner) built.notifyOwner = false;
+    if (dedup.length > 0) built.extraRecipients = dedup;
+    onUpdateForm({ notify: built });
+  };
+
+  return (
+    <div className="mb-3 rounded-md border border-border bg-surface-1 p-2 text-xs">
+      <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+        Submission emails
+      </p>
+      <label className="mb-2 flex items-start gap-2 text-[12px] text-ink-1">
+        <input
+          type="checkbox"
+          checked={notifyOwner}
+          disabled={!canEdit}
+          onChange={(e) => {
+            const next = e.target.checked;
+            const built: { notifyOwner?: boolean; extraRecipients?: string[] } = {};
+            if (!next) built.notifyOwner = false;
+            if (extras.length > 0) built.extraRecipients = extras;
+            onUpdateForm({ notify: built });
+          }}
+          className="mt-0.5"
+        />
+        <span>Email me a receipt for each new submission</span>
+      </label>
+      <Field
+        label="Also email"
+        hint="Extra addresses, one per line. They get the same rendered receipt."
+      >
+        <textarea
+          rows={2}
+          value={draft}
+          disabled={!canEdit}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => commit(draft)}
+          placeholder="team@example.com"
+          className={inputCls}
+        />
+      </Field>
     </div>
   );
 }

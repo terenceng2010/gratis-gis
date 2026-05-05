@@ -127,6 +127,15 @@ export interface FormSubmissionReceivedPayload {
   submittedByName: string;
   /** Best-effort summary from the first answered question. */
   summary: string;
+  /**
+   * Rendered receipt: every answered question on the form, in
+   * presentation order, as `{ label, value }` pairs (#190). Empty /
+   * unanswered questions are dropped server-side so the email body
+   * is just the things the responder actually filled in. The renderer
+   * formats the list as an HTML table. Optional so older queued rows
+   * (pre-#190) still render cleanly with just `summary`.
+   */
+  answers?: Array<{ label: string; value: string }>;
 }
 
 /** Payload shape for user_invited. The recipient is the invitee, not
@@ -499,16 +508,44 @@ const renderers: { [K in NotificationType]?: Renderer<unknown> } = {
     const submissionUrl =
       `${ctx.baseUrl}/items/${payload.formItemId}/submissions/${payload.submissionId}`;
     const subject = `New submission on "${payload.formTitle}": ${payload.summary}`;
+    // Phase 1 receipt body (#190). When the trigger captured a list
+    // of `{ label, value }` answers, render them as a plain table so
+    // the recipient sees the whole submission inline; otherwise fall
+    // back to the one-line summary used pre-#190. Both shapes ship
+    // simultaneously so a queued payload from an older worker still
+    // renders cleanly.
+    const answers = Array.isArray(payload.answers) ? payload.answers : [];
+    const answersText = answers.length
+      ? answers.map((a) => `  ${a.label}: ${a.value}`).join('\n')
+      : `Summary: ${payload.summary}`;
     const text =
       `${payload.submittedByName} submitted a response to "${payload.formTitle}".\n\n` +
-      `Summary: ${payload.summary}\n\n` +
+      `${answersText}\n\n` +
       `View submission: ${submissionUrl}\n` +
       `Form: ${formUrl}\n`;
+    const answersHtml = answers.length
+      ? `<table cellpadding="6" cellspacing="0" border="0" ` +
+        `style="border-collapse:collapse;margin:8px 0;font-size:14px;">` +
+        answers
+          .map(
+            (a) =>
+              `<tr>` +
+              `<td style="border-bottom:1px solid #e5e7eb;color:#374151;` +
+              `font-weight:600;vertical-align:top;padding-right:12px;">` +
+              `${escapeHtml(a.label)}</td>` +
+              `<td style="border-bottom:1px solid #e5e7eb;color:#111827;` +
+              `vertical-align:top;white-space:pre-wrap;">` +
+              `${escapeHtml(a.value)}</td>` +
+              `</tr>`,
+          )
+          .join('') +
+        `</table>`
+      : `<ul><li>Summary: ${escapeHtml(payload.summary)}</li></ul>`;
     const html =
       `<p><strong>${escapeHtml(payload.submittedByName)}</strong> submitted a response ` +
       `to <strong>${escapeHtml(payload.formTitle)}</strong>.</p>` +
-      `<ul><li>Summary: ${escapeHtml(payload.summary)}</li></ul>` +
-      `<p><a href="${escapeAttr(submissionUrl)}">View submission</a> · ` +
+      answersHtml +
+      `<p><a href="${escapeAttr(submissionUrl)}">View submission</a> &middot; ` +
       `<a href="${escapeAttr(formUrl)}">open the form</a></p>`;
     return { subject, text, html };
   }) as Renderer<unknown>,

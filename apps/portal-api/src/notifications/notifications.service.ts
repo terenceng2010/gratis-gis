@@ -159,6 +159,61 @@ export class NotificationsService {
       await this.notify(id, type, payload);
     }
   }
+
+  /**
+   * Enqueue a notification to an arbitrary email address (#190).
+   * Used for non-user recipients like form-submission CC lists,
+   * where the recipient may not have a portal account at all.
+   *
+   * Differences from notify():
+   *
+   *   - Skips the per-user preference + org-default lookup. The
+   *     address came from a form-author config, not from the
+   *     recipient's own preferences; respecting a notification_-
+   *     preference row keyed on `actingUserId` would be wrong (that
+   *     row is the OWNER's preference for their own inbox, not for
+   *     the people they're CC-ing).
+   *   - Pins userId to `actingUserId` (the form owner) for FK +
+   *     audit purposes. Notification.userId is required by schema;
+   *     using the owner's id keeps "show me everything we sent on
+   *     behalf of user X" queries working.
+   *   - The address arg is what the worker uses; the row's
+   *     resolveAddress() lookup is bypassed.
+   *
+   * Errors are swallowed and logged, like notify().
+   */
+  async notifyAddress(
+    actingUserId: string,
+    type: NotificationType,
+    payload: Prisma.InputJsonValue,
+    address: string,
+  ): Promise<void> {
+    if (!this.enabled) return;
+    if (!address || !address.includes('@')) {
+      this.log.warn(
+        `notifyAddress: invalid address "${address}" for ${type}; skipping`,
+      );
+      return;
+    }
+    try {
+      await this.prisma.notification.create({
+        data: {
+          userId: actingUserId,
+          type,
+          payload,
+          channel: 'email',
+          address,
+          status: NotificationStatus.queued,
+        },
+      });
+    } catch (err) {
+      this.log.error(
+        `notifyAddress(${actingUserId}, ${type}, ${address}) failed: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+  }
 }
 
 /**

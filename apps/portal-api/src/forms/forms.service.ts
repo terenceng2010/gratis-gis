@@ -124,6 +124,7 @@ export class FormsService {
         formId: form.id,
         formTitle: form.title ?? 'Form',
         formOwnerId: form.ownerId,
+        formData: form.data,
         submissionId: result.id,
         submitter: user,
         response: dto.response,
@@ -263,16 +264,30 @@ export class FormsService {
   }
 
   /**
-   * Helper for the form_submission_received notification (#229).
-   * Resolves the submitter's display name + a best-effort summary
-   * (first non-empty answered question) and notifies the form item's
-   * owner. Errors are swallowed: a queued notification failing must
-   * never roll back the submission the user just made.
+   * Helper for the form_submission_received notification (#229, #190).
+   *
+   * Resolves the submitter's display name, builds a rendered receipt
+   * (every answered question on the form, in presentation order) from
+   * the form schema + response, and fans out the email to:
+   *
+   *   - The form owner, when `notify.notifyOwner` is unset or true
+   *     (default).
+   *   - Every address in `notify.extraRecipients` (#190 Phase 1).
+   *
+   * Owner fan-out goes through `notify()` so per-user preferences
+   * still apply (the owner can mute the type from their settings).
+   * Extra recipients go through `notifyAddress()` which bypasses
+   * preferences -- they're addresses chosen by the form author, not
+   * users with their own opt-in.
+   *
+   * Errors are swallowed: a queued notification failing must never
+   * roll back the submission the user just made.
    */
   private async notifyFormSubmissionReceived(args: {
     formId: string;
     formTitle: string;
     formOwnerId: string;
+    formData: Prisma.JsonValue;
     submissionId: string;
     submitter: AuthUser;
     response: Record<string, unknown>;
@@ -285,17 +300,66 @@ export class FormsService {
       const submittedByName =
         submitterRow?.fullName || submitterRow?.username || 'Someone';
       const summary = pickResponseSummary(args.response);
-      await this.notifications.notify(
-        args.formOwnerId,
-        'form_submission_received',
-        {
-          formItemId: args.formId,
-          formTitle: args.formTitle,
-          submissionId: args.submissionId,
-          submittedByName,
-          summary,
-        },
-      );
+      const answers = renderAnswers(args.formData, args.response);
+      const payload: Prisma.InputJsonValue = {
+        formItemId: args.formId,
+        formTitle: args.formTitle,
+        submissionId: args.submissionId,
+        submittedByName,
+        summary,
+        answers,
+      };
+
+      // notify.notifyOwner defaults to true. Read it off the form's
+      // data JSON (the FormSchema). Any non-object data shape (legacy
+      // forms, malformed) falls back to the default behavior.
+      const notifyCfg =
+        args.formData &&
+        typeof args.formData === 'object' &&
+        !Array.isArray(args.formData)
+          ? ((args.formData as { notify?: unknown }).notify as
+              | { notifyOwner?: unknown; extraRecipients?: unknown }
+              | undefined)
+          : undefined;
+      const notifyOwner = notifyCfg?.notifyOwner !== false;
+      const extras = Array.isArray(notifyCfg?.extraRecipients)
+        ? (notifyCfg!.extraRecipients as unknown[])
+            .filter((e): e is string => typeof e === 'string')
+            .map((e) => e.trim())
+            .filter((e) => e.length > 0 && e.includes('@'))
+        : [];
+
+      // Resolve the owner's email up front so we can de-dup against
+      // extras: an author who lists themselves in extraRecipients
+      // shouldn't get two copies. Lower-case for case-insensitive
+      // compare; the worker still sends to the canonical-cased address
+      // we capture on the row.
+      const ownerRow = notifyOwner
+        ? await this.prisma.user.findUnique({
+            where: { id: args.formOwnerId },
+            select: { email: true },
+          })
+        : null;
+      const ownerEmailLower = (ownerRow?.email ?? '').toLowerCase();
+
+      if (notifyOwner) {
+        await this.notifications.notify(
+          args.formOwnerId,
+          'form_submission_received',
+          payload,
+        );
+      }
+      for (const addr of extras) {
+        if (ownerEmailLower && addr.toLowerCase() === ownerEmailLower) {
+          continue;
+        }
+        await this.notifications.notifyAddress(
+          args.formOwnerId,
+          'form_submission_received',
+          payload,
+          addr,
+        );
+      }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -484,4 +548,182 @@ function stripAttachments(
     return node;
   };
   return clone(response) as Record<string, unknown>;
+}
+
+/**
+ * Build the rendered-receipt list for a submission email (#190).
+ *
+ * Walks the form schema in presentation order and emits one
+ * `{ label, value }` row per answered question. The walk:
+ *
+ *   - Skips layout-only types (note, page) -- they capture nothing.
+ *   - Recurses into non-repeat groups, since their children write
+ *     at the TOP LEVEL of the response (per #288). That keeps the
+ *     receipt flat and matches the runtime's read/write model.
+ *   - Treats repeat groups as a single row labeled with the count
+ *     ("Inspections: 3 entries"); the per-instance details land in
+ *     a related child layer (#246 pattern), so the email points to
+ *     the count and the deep link rather than inlining nested rows.
+ *   - Resolves select-one / select-many choice VALUES to their LABELS
+ *     when the schema carries them inline. Pick-list-sourced choices
+ *     fall back to the value (resolving them needs a DB hit; not
+ *     worth it for an email line).
+ *   - Renders attachment-array values as a compact count
+ *     ("Photo: 2 files") rather than dumping signed URLs.
+ *
+ * Returns an empty array if the form schema isn't parseable; the
+ * renderer falls back to `summary` in that case.
+ */
+function renderAnswers(
+  formData: Prisma.JsonValue,
+  response: Record<string, unknown> | undefined,
+): Array<{ label: string; value: string }> {
+  if (!response || !formData || typeof formData !== 'object' || Array.isArray(formData)) {
+    return [];
+  }
+  const data = formData as { questions?: unknown };
+  const questions = Array.isArray(data.questions) ? data.questions : null;
+  if (!questions) return [];
+  const out: Array<{ label: string; value: string }> = [];
+  for (const q of questions) {
+    walkQuestionForAnswer(q, response, out);
+  }
+  return out;
+}
+
+function walkQuestionForAnswer(
+  q: unknown,
+  response: Record<string, unknown>,
+  out: Array<{ label: string; value: string }>,
+): void {
+  if (!q || typeof q !== 'object') return;
+  const qq = q as {
+    id?: unknown;
+    type?: unknown;
+    label?: unknown;
+    repeat?: unknown;
+    children?: unknown;
+    choices?: unknown;
+  };
+  const type = typeof qq.type === 'string' ? qq.type : '';
+  const id = typeof qq.id === 'string' ? qq.id : '';
+  if (!id || !type) return;
+
+  // Layout-only: nothing to render in the receipt.
+  if (type === 'note' || type === 'page') return;
+
+  if (type === 'group') {
+    const children = Array.isArray(qq.children) ? qq.children : [];
+    if (qq.repeat && typeof qq.repeat === 'object') {
+      // Repeating group -- show count as a single row.
+      const raw = response[id];
+      const count = Array.isArray(raw) ? raw.length : 0;
+      if (count > 0) {
+        const label = labelOf(qq, id);
+        out.push({
+          label,
+          value: count === 1 ? '1 entry' : `${count} entries`,
+        });
+      }
+      return;
+    }
+    // Non-repeat group: descend; children write at top level.
+    for (const child of children) walkQuestionForAnswer(child, response, out);
+    return;
+  }
+
+  const raw = response[id];
+  if (raw === null || raw === undefined || raw === '') return;
+
+  const label = labelOf(qq, id);
+  const formatted = formatAnswerValue(raw, type, qq.choices);
+  if (formatted === null) return;
+  out.push({ label, value: formatted });
+}
+
+function labelOf(
+  q: { id?: unknown; label?: unknown },
+  fallback: string,
+): string {
+  const lbl = typeof q.label === 'string' && q.label.trim().length > 0
+    ? q.label.trim()
+    : fallback;
+  // Trim runaway labels so a malicious / verbose author can't blow up
+  // the email body width.
+  return lbl.length > 120 ? `${lbl.slice(0, 117)}...` : lbl;
+}
+
+function formatAnswerValue(
+  value: unknown,
+  type: string,
+  choicesRaw: unknown,
+): string | null {
+  // Attachment arrays render as a compact count.
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null;
+    if (value.every((v) => isAttachmentDescriptor(v))) {
+      return value.length === 1 ? '1 file' : `${value.length} files`;
+    }
+    // Multi-choice / ranking / multi-image-choice (#295): array of
+    // primitive choice values. Resolve through inline `choices` to
+    // labels when possible, comma-join.
+    if (
+      value.every(
+        (v) =>
+          v === null ||
+          typeof v === 'string' ||
+          typeof v === 'number' ||
+          typeof v === 'boolean',
+      )
+    ) {
+      const lookup = buildChoiceLookup(choicesRaw);
+      const parts = value
+        .filter((v) => v !== null && v !== '')
+        .map((v) => lookup.get(String(v)) ?? String(v));
+      if (parts.length === 0) return null;
+      return parts.join(', ');
+    }
+    // Heterogeneous / nested array (matrix-multi etc.) -- fall back
+    // to a JSON snippet so the receipt at least carries something.
+    try {
+      const json = JSON.stringify(value);
+      return json.length > 200 ? `${json.slice(0, 197)}...` : json;
+    } catch {
+      return null;
+    }
+  }
+
+  // Object value (matrix, signature object, etc.) -- compact JSON.
+  if (value && typeof value === 'object') {
+    try {
+      const json = JSON.stringify(value);
+      return json.length > 200 ? `${json.slice(0, 197)}...` : json;
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+
+  // select-one: resolve value to label when inline choices exist.
+  if (type === 'select-one' && typeof value === 'string') {
+    const lookup = buildChoiceLookup(choicesRaw);
+    return lookup.get(value) ?? value;
+  }
+
+  const s = String(value);
+  return s.length > 500 ? `${s.slice(0, 497)}...` : s;
+}
+
+function buildChoiceLookup(choicesRaw: unknown): Map<string, string> {
+  const lookup = new Map<string, string>();
+  if (!Array.isArray(choicesRaw)) return lookup;
+  for (const c of choicesRaw) {
+    if (!c || typeof c !== 'object') continue;
+    const cc = c as { value?: unknown; label?: unknown };
+    if (typeof cc.value === 'string' && typeof cc.label === 'string') {
+      lookup.set(cc.value, cc.label);
+    }
+  }
+  return lookup;
 }

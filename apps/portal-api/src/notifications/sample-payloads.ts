@@ -85,6 +85,14 @@ export const SAMPLE_PAYLOADS: { [K in NotificationType]?: unknown } = {
     submissionId: '00000000-0000-4000-8000-000000000060',
     submittedByName: 'Visitor',
     summary: 'jane@example.com',
+    // #190: rendered receipt of every answered question. The admin
+    // preview shows the same table the real recipient would see.
+    answers: [
+      { label: 'Email', value: 'jane@example.com' },
+      { label: 'Full name', value: 'Jane Doe' },
+      { label: 'Available days', value: 'Saturday, Sunday' },
+      { label: 'Notes', value: 'Happy to help with cleanup.' },
+    ],
   } satisfies FormSubmissionReceivedPayload,
   data_collection_schema_break: {
     dataCollectionId: '00000000-0000-4000-8000-000000000030',
