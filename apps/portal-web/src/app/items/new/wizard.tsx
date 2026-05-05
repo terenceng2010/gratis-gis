@@ -129,12 +129,6 @@ const TYPE_GROUPS: TypeGroup[] = [
         Icon: FileText,
       },
       {
-        value: 'form',
-        label: 'Form',
-        desc: 'A collection form for fieldwork or survey data.',
-        Icon: FileText,
-      },
-      {
         value: 'pick_list',
         label: 'Pick list',
         desc: 'Shared list of codes + labels referenced by fields, forms, and filters.',
@@ -191,6 +185,12 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Viewer',
         desc: 'Read-only app for zooming, querying, and printing. No editing tools; layers are presented as-is.',
         Icon: Eye,
+      },
+      {
+        value: 'form',
+        label: 'Form',
+        desc: 'A collection form for fieldwork or survey data. Submissions land in a paired data layer.',
+        Icon: FileText,
       },
       {
         value: 'data_collection',

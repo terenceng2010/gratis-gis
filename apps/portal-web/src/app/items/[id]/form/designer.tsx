@@ -2589,18 +2589,39 @@ interface FieldRef {
   label: string;
   type: QuestionType;
   parentPath: string; // empty for top-level questions
+  /**
+   * Choice values for select-one / select-many questions whose
+   * choices live inline on the question (#290). Used by the
+   * expression builder's value picker so authors don't have to
+   * type the value verbatim. Empty / undefined for questions whose
+   * choices come from a shared pick_list (those get a free-text
+   * input until we resolve the pick_list at design time, which is
+   * a follow-up).
+   */
+  choices?: Array<{ value: string; label: string }>;
 }
 
 function collectFieldRefs(form: FormSchema): FieldRef[] {
   const out: FieldRef[] = [];
   function walk(qs: Question[], path: string[]) {
     for (const q of qs) {
-      out.push({
+      const ref: FieldRef = {
         id: q.id,
         label: q.label,
         type: q.type,
         parentPath: path.join(' / '),
-      });
+      };
+      if (
+        (q.type === 'select-one' || q.type === 'select-many') &&
+        Array.isArray(q.choices) &&
+        q.choices.length > 0
+      ) {
+        ref.choices = q.choices.map((c) => ({
+          value: String(c.value),
+          label: c.label,
+        }));
+      }
+      out.push(ref);
       if (q.type === 'group') {
         walk(q.children, [...path, q.label || q.id]);
       }
@@ -3777,6 +3798,108 @@ function ConditionRowEditor({
   const opMeta =
     COMPARISON_OPERATORS.find((o) => o.op === row.op) ??
     COMPARISON_OPERATORS[0]!;
+  // Pick the matching field once so the value editor can specialize on
+  // its question type (#290). Boolean questions get true / false;
+  // select-one / select-many with inline choices get a dropdown of
+  // those choices. Other types fall back to a free-text input.
+  const refField = row.ref ? allFields.find((f) => f.id === row.ref) : null;
+  // Helper that renders the right-hand-side value editor based on
+  // the field's type. Falls back to the original text input when the
+  // type doesn't have a constrained value set.
+  const renderValueEditor = () => {
+    if (!refField) {
+      return (
+        <input
+          type="text"
+          value={row.value}
+          placeholder="value"
+          disabled={disabled || !row.ref}
+          onChange={(e) => onChange({ ...row, value: e.target.value })}
+          className={inputCls}
+        />
+      );
+    }
+    if (refField.type === 'boolean') {
+      return (
+        <select
+          value={row.value}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...row, value: e.target.value })}
+          className={inputCls}
+        >
+          <option value="">--</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      );
+    }
+    if (
+      (refField.type === 'select-one' || refField.type === 'select-many') &&
+      refField.choices &&
+      refField.choices.length > 0
+    ) {
+      return (
+        <select
+          value={row.value}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...row, value: e.target.value })}
+          className={inputCls}
+        >
+          <option value="">--</option>
+          {refField.choices.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (refField.type === 'date') {
+      return (
+        <input
+          type="date"
+          value={row.value}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...row, value: e.target.value })}
+          className={inputCls}
+        />
+      );
+    }
+    if (refField.type === 'datetime') {
+      return (
+        <input
+          type="datetime-local"
+          value={row.value}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...row, value: e.target.value })}
+          className={inputCls}
+        />
+      );
+    }
+    if (refField.type === 'integer' || refField.type === 'number') {
+      return (
+        <input
+          type="number"
+          step={refField.type === 'integer' ? '1' : 'any'}
+          value={row.value}
+          placeholder="value"
+          disabled={disabled}
+          onChange={(e) => onChange({ ...row, value: e.target.value })}
+          className={inputCls}
+        />
+      );
+    }
+    return (
+      <input
+        type="text"
+        value={row.value}
+        placeholder="value"
+        disabled={disabled || !row.ref}
+        onChange={(e) => onChange({ ...row, value: e.target.value })}
+        className={inputCls}
+      />
+    );
+  };
   return (
     <div className="grid grid-cols-[1fr_auto] gap-1">
       <div className="space-y-1">
@@ -3821,14 +3944,7 @@ function ConditionRowEditor({
               />
             </div>
           ) : (
-            <input
-              type="text"
-              value={row.value}
-              placeholder="value"
-              disabled={disabled || !row.ref}
-              onChange={(e) => onChange({ ...row, value: e.target.value })}
-              className={inputCls}
-            />
+            renderValueEditor()
           )}
         </div>
       </div>
@@ -4156,9 +4272,44 @@ function ExpressionBuilderModal({
             </nav>
             <div className="min-h-0 flex-1 overflow-auto p-3 text-xs">
               {tab === 'fields' ? (
-                <FieldsReferencePanel allFields={allFields} />
+                <FieldsReferencePanel
+                  allFields={allFields}
+                  onPick={(fieldId) =>
+                    setTree((cur) => ({
+                      combinator: cur.combinator,
+                      rules: [
+                        ...cur.rules,
+                        {
+                          kind: 'row',
+                          row: {
+                            ...DEFAULT_ROW(),
+                            ref: fieldId,
+                            op: 'eq',
+                          },
+                        },
+                      ],
+                    }))
+                  }
+                />
               ) : tab === 'operators' ? (
-                <OperatorsReferencePanel />
+                <OperatorsReferencePanel
+                  onPick={(op) =>
+                    setTree((cur) => ({
+                      combinator: cur.combinator,
+                      rules: [
+                        ...cur.rules,
+                        {
+                          kind: 'row',
+                          row: {
+                            ...DEFAULT_ROW(),
+                            ref: allFields[0]?.id ?? '',
+                            op,
+                          },
+                        },
+                      ],
+                    }))
+                  }
+                />
               ) : (
                 <FunctionsReferencePanel />
               )}
@@ -4330,7 +4481,15 @@ function RuleTreeEditor({
  * is still useful: authors looking for a field can scan here without
  * scrolling the row's dropdown.
  */
-function FieldsReferencePanel({ allFields }: { allFields: FieldRef[] }) {
+function FieldsReferencePanel({
+  allFields,
+  onPick,
+}: {
+  allFields: FieldRef[];
+  /** Click-to-insert handler. Adds a fresh equals-row referencing
+   *  the picked field at the end of the top-level rule list. (#291) */
+  onPick: (fieldId: string) => void;
+}) {
   const [q, setQ] = useState('');
   const filtered = q
     ? allFields.filter(
@@ -4345,30 +4504,36 @@ function FieldsReferencePanel({ allFields }: { allFields: FieldRef[] }) {
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search fields…"
+        placeholder="Search fields..."
         className={inputCls}
       />
+      <p className="mt-1 text-[10px] text-muted">
+        Click a field to insert a new condition referencing it.
+      </p>
       <ul className="mt-2 space-y-1">
         {filtered.length === 0 ? (
           <li className="px-2 py-1 text-[11px] text-muted">No fields match.</li>
         ) : (
           filtered.map((f) => (
-            <li
-              key={f.id}
-              className="rounded border border-border bg-surface-0 px-2 py-1"
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="rounded bg-surface-2 px-1 py-px font-mono text-[9px] uppercase text-muted">
-                  {f.type}
-                </span>
-                <span className="truncate text-[12px] text-ink-0">
-                  {f.label || '(unlabeled)'}
-                </span>
-              </div>
-              <p className="mt-0.5 truncate font-mono text-[10px] text-muted">
-                {f.id}
-                {f.parentPath ? ` · ${f.parentPath}` : ''}
-              </p>
+            <li key={f.id}>
+              <button
+                type="button"
+                onClick={() => onPick(f.id)}
+                className="w-full rounded border border-border bg-surface-0 px-2 py-1 text-left hover:border-accent hover:bg-accent/5 focus:border-accent focus:bg-accent/5 focus:outline-none"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="rounded bg-surface-2 px-1 py-px font-mono text-[9px] uppercase text-muted">
+                    {f.type}
+                  </span>
+                  <span className="truncate text-[12px] text-ink-0">
+                    {f.label || '(unlabeled)'}
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate font-mono text-[10px] text-muted">
+                  {f.id}
+                  {f.parentPath ? ` - ${f.parentPath}` : ''}
+                </p>
+              </button>
             </li>
           ))
         )}
@@ -4379,47 +4544,73 @@ function FieldsReferencePanel({ allFields }: { allFields: FieldRef[] }) {
 
 /** Operators reference panel: pure list, informational. Slice 4 turns
  *  this into click-to-wrap-current-rule. */
-function OperatorsReferencePanel() {
-  const groups: Array<{ heading: string; ops: Array<[string, string]> }> = [
-    {
-      heading: 'Comparison',
-      ops: [
-        ['equals', 'value matches another'],
-        ['does not equal', 'value differs'],
-        ['greater than / >=', 'numeric / date comparison'],
-        ['less than / <=', 'numeric / date comparison'],
-        ['contains', 'string or list contains a value'],
-        ['between', 'value falls in a range'],
-      ],
-    },
-    {
-      heading: 'Logical',
-      ops: [
-        ['all match (and)', 'every condition must hold'],
-        ['any match (or)', 'at least one condition holds'],
-      ],
-    },
+function OperatorsReferencePanel({
+  onPick,
+}: {
+  /** Insert a new row using this op (and the first available
+   *  field). Comparison ops map directly; logical ops are tree
+   *  combinators rather than row ops, so they're click-disabled
+   *  and remain informational. (#291) */
+  onPick: (op: ComparisonOp) => void;
+}) {
+  const comparison: Array<{ op: ComparisonOp; label: string; hint: string }> = [
+    { op: 'eq', label: 'equals', hint: 'value matches another' },
+    { op: 'neq', label: 'does not equal', hint: 'value differs' },
+    { op: 'gt', label: 'greater than', hint: 'numeric / date comparison' },
+    { op: 'gte', label: 'greater than or equal', hint: 'numeric / date comparison' },
+    { op: 'lt', label: 'less than', hint: 'numeric / date comparison' },
+    { op: 'lte', label: 'less than or equal', hint: 'numeric / date comparison' },
+    { op: 'in', label: 'contains', hint: 'string or list contains a value' },
+    { op: 'between', label: 'between', hint: 'value falls in a range' },
+    { op: 'matches', label: 'matches pattern', hint: 'regex match' },
+  ];
+  const logical: Array<[string, string]> = [
+    ['all match (and)', 'every condition must hold'],
+    ['any match (or)', 'at least one condition holds'],
   ];
   return (
     <div className="space-y-3">
-      {groups.map((g) => (
-        <div key={g.heading}>
-          <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">
-            {g.heading}
-          </p>
-          <ul className="space-y-1">
-            {g.ops.map(([name, hint]) => (
-              <li
-                key={name}
-                className="rounded border border-border bg-surface-0 px-2 py-1"
+      <div>
+        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">
+          Comparison
+        </p>
+        <p className="mb-1 text-[10px] text-muted">
+          Click to insert a new condition using this operator.
+        </p>
+        <ul className="space-y-1">
+          {comparison.map((o) => (
+            <li key={o.op}>
+              <button
+                type="button"
+                onClick={() => onPick(o.op)}
+                className="w-full rounded border border-border bg-surface-0 px-2 py-1 text-left hover:border-accent hover:bg-accent/5 focus:border-accent focus:bg-accent/5 focus:outline-none"
               >
-                <p className="text-[12px] text-ink-0">{name}</p>
-                <p className="text-[10px] text-muted">{hint}</p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+                <p className="text-[12px] text-ink-0">{o.label}</p>
+                <p className="text-[10px] text-muted">{o.hint}</p>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">
+          Logical
+        </p>
+        <p className="mb-1 text-[10px] text-muted">
+          Reference only. Set the combinator on the rule list above.
+        </p>
+        <ul className="space-y-1">
+          {logical.map(([name, hint]) => (
+            <li
+              key={name}
+              className="rounded border border-border bg-surface-0 px-2 py-1"
+            >
+              <p className="text-[12px] text-ink-0">{name}</p>
+              <p className="text-[10px] text-muted">{hint}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -4488,8 +4679,10 @@ function FunctionsReferencePanel() {
   return (
     <div className="space-y-3">
       <p className="text-[10px] text-muted">
-        Reference. The runtime evaluator supports each of these on
-        both browser and server.
+        Reference for the calculate / default editor. Click a signature
+        to copy it to the clipboard. The row-based editor on the left
+        works in field-op-value form, so functions can't be inserted
+        into rules directly.
       </p>
       {groups.map((g) => (
         <div key={g.heading}>
@@ -4498,12 +4691,19 @@ function FunctionsReferencePanel() {
           </p>
           <ul className="space-y-1">
             {g.fns.map((f) => (
-              <li
-                key={f.sig}
-                className="rounded border border-border bg-surface-0 px-2 py-1"
-              >
-                <p className="font-mono text-[11px] text-ink-0">{f.sig}</p>
-                <p className="text-[10px] text-muted">{f.hint}</p>
+              <li key={f.sig}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                      void navigator.clipboard.writeText(f.sig);
+                    }
+                  }}
+                  className="w-full rounded border border-border bg-surface-0 px-2 py-1 text-left hover:border-accent hover:bg-accent/5 focus:border-accent focus:bg-accent/5 focus:outline-none"
+                >
+                  <p className="font-mono text-[11px] text-ink-0">{f.sig}</p>
+                  <p className="text-[10px] text-muted">{f.hint}</p>
+                </button>
               </li>
             ))}
           </ul>
