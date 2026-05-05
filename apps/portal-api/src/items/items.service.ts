@@ -679,22 +679,68 @@ export class ItemsService {
       )) as Prisma.InputJsonValue;
     }
 
+    // For form items (#281c), auto-materialize a paired data_layer
+    // unless the form already declares a linkedLayerId. This is the
+    // load-bearing decision from #281: every form gets a durable,
+    // typed home for its submissions from creation time. The form's
+    // data records the layer id + sublayer key so the runtime, the
+    // designer, and any future schema-mutation pipeline all know
+    // where submissions go.
+    //
+    // Created-then-cleanup pattern (not a Prisma transaction)
+    // because v3Tables.reconcile fires raw DDL outside the user
+    // transaction. If the form persist fails after the layer was
+    // created, we delete the orphan layer.
+    let pairedLayerId: string | null = null;
+    if (input.type === 'form') {
+      const formData = (resolvedData ?? {}) as Record<string, unknown>;
+      const alreadyLinked =
+        typeof formData.linkedLayerId === 'string'
+          && formData.linkedLayerId.length > 0;
+      if (!alreadyLinked) {
+        const paired = await this.createPairedDataLayerForForm(
+          user,
+          input.title,
+        );
+        pairedLayerId = paired.layerItemId;
+        resolvedData = {
+          ...formData,
+          linkedLayerId: paired.layerItemId,
+          linkedLayerKey: paired.layerKey,
+        } as Prisma.InputJsonValue;
+      }
+    }
+
     const bbox = itemBbox(input.type, resolvedData);
-    const row = await this.prisma.item.create({
-      data: {
-        orgId: user.orgId,
-        ownerId: user.id,
-        type: input.type,
-        title: input.title,
-        description: input.description ?? '',
-        tags: input.tags ?? [],
-        data: resolvedData,
-        access: input.access ?? 'private',
-        bbox: bbox ?? [],
-        ...(input.thumbnailUrl ? { thumbnailUrl: input.thumbnailUrl } : {}),
-        ...(input.license !== undefined && input.license !== null ? { license: input.license } : {}),
-      },
-    });
+    let row;
+    try {
+      row = await this.prisma.item.create({
+        data: {
+          orgId: user.orgId,
+          ownerId: user.id,
+          type: input.type,
+          title: input.title,
+          description: input.description ?? '',
+          tags: input.tags ?? [],
+          data: resolvedData,
+          access: input.access ?? 'private',
+          bbox: bbox ?? [],
+          ...(input.thumbnailUrl ? { thumbnailUrl: input.thumbnailUrl } : {}),
+          ...(input.license !== undefined && input.license !== null ? { license: input.license } : {}),
+        },
+      });
+    } catch (err) {
+      // Roll back any paired data_layer created above so a failed
+      // form persist doesn't leave an orphan layer (#281c).
+      if (pairedLayerId) {
+        await this.prisma.item
+          .delete({ where: { id: pairedLayerId } })
+          .catch(() => {
+            /* best-effort cleanup */
+          });
+      }
+      throw err;
+    }
     // v3 feature-service items: provision a PostGIS table per layer
     // defined in the builder. Safe to run inline because each
     // $executeRawUnsafe is idempotent; if the item has no layers yet
@@ -723,6 +769,112 @@ export class ItemsService {
       }
     }
     return row;
+  }
+
+  /**
+   * Auto-materialize a paired data_layer for a freshly-created form
+   * item (#281c). Every form gets a durable home for its submissions
+   * from creation time so the form-versioning + schema-evolution
+   * pipeline (see docs/forms-schema-mutation.md) has a stable target
+   * to mutate against.
+   *
+   * Default schema: a single attribute-only sublayer "submissions"
+   * with bookkeeping columns (submitted_at, submitted_by,
+   * schema_version). geometryType=null until the form designer adds
+   * a geometry question; #281d adds the geom column lazily through
+   * the schema mutation API.
+   *
+   * The layer is created as a sibling item, not a child. Both are
+   * owned by the same user, share the same access default, and live
+   * in the same org. Caller is responsible for cleanup if the form
+   * persist later fails.
+   */
+  private async createPairedDataLayerForForm(
+    user: AuthUser,
+    formTitle: string,
+  ): Promise<{ layerItemId: string; layerKey: string }> {
+    const layerKey = 'submissions';
+    const layerData = {
+      version: 3,
+      storageType: 'postgis',
+      layers: [
+        {
+          id: layerKey,
+          label: 'Submissions',
+          name: layerKey,
+          // null until the form picks up a geometry question; that
+          // event triggers an addColumn-with-geom mutation.
+          geometryType: null,
+          fields: [
+            {
+              name: 'submitted_at',
+              type: 'date',
+              label: 'Submitted at',
+              nullable: false,
+            },
+            {
+              name: 'submitted_by',
+              type: 'string',
+              label: 'Submitted by',
+              nullable: true,
+            },
+            {
+              name: 'schema_version',
+              type: 'number',
+              label: 'Schema version',
+              nullable: false,
+              storage: { numberKind: 'integer' as const },
+            },
+          ],
+          editingEnabled: false,
+          attachmentsEnabled: false,
+        },
+      ],
+    } as Prisma.InputJsonValue;
+    const titlePrefix = formTitle.trim() || 'Form';
+    const layerRow = await this.prisma.item.create({
+      data: {
+        orgId: user.orgId,
+        ownerId: user.id,
+        type: 'data_layer' as ItemType,
+        title: `${titlePrefix} - Submissions`,
+        description:
+          'Auto-created by the form item this layer is paired with. ' +
+          'Form-version-aware submissions land here.',
+        tags: ['form-paired'],
+        data: layerData,
+        access: 'private',
+        bbox: [],
+      },
+    });
+    // Provision the PostGIS table for the submissions sublayer.
+    // null geometry => attribute-only "table" sublayer; reconcile
+    // handles that case (see V3TablesService.provisionLayer).
+    try {
+      await this.v3Tables.reconcile(layerRow.id, [], [
+        {
+          id: layerKey,
+          geometryType: null,
+          fields: [
+            { name: 'submitted_at', type: 'date' },
+            { name: 'submitted_by', type: 'string' },
+            { name: 'schema_version', type: 'number' },
+          ],
+        },
+      ]);
+    } catch (err) {
+      await this.prisma.item
+        .delete({ where: { id: layerRow.id } })
+        .catch(() => {
+          /* best-effort */
+        });
+      throw new BadRequestException(
+        `Could not provision paired submissions layer: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return { layerItemId: layerRow.id, layerKey };
   }
 
   /**
