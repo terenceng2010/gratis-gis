@@ -1,8 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { V3FeaturesService } from '../features-v3/v3-features.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 
 /**
@@ -22,13 +23,17 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
  */
 @Injectable()
 export class FormsService {
+  private readonly log = new Logger(FormsService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly v3Features: V3FeaturesService,
   ) {}
 
   /** Fetch the form item, gating by visibility for the caller. Used
-   *  to look up the orgId we'll stamp on the submission. */
+   *  to look up the orgId we'll stamp on the submission. Selects
+   *  `data` so submit() can read linkedLayerId / linkedLayerKey for
+   *  the paired-data_layer mirror write (#281e). */
   private async getVisibleForm(formId: string, user: AuthUser) {
     const item = await this.prisma.item.findUnique({
       where: { id: formId },
@@ -39,6 +44,7 @@ export class FormsService {
         ownerId: true,
         access: true,
         title: true,
+        data: true,
       },
     });
     if (!item || item.type !== 'form') {
@@ -120,8 +126,98 @@ export class FormsService {
         submitter: user,
         response: dto.response,
       });
+      // Mirror the submission into the paired data_layer (#281e).
+      // V1 stores everything under `properties` on the layer's
+      // submissions sublayer (one row per submission). This gives
+      // the form a real, queryable, map-friendly home immediately;
+      // the schema-mutation API in #281b will later split the
+      // properties JSONB into typed columns per question.
+      //
+      // Only on first-write so an offline re-drain doesn't duplicate
+      // the layer row. Failures are non-fatal: form_submission is
+      // the durable source of truth; a missed mirror just means the
+      // layer is out of date until a backfill pass.
+      void this.mirrorToPairedLayer({
+        form,
+        clientId: dto.clientId,
+        submissionId: result.id,
+        schemaVersion: dto.schemaVersion,
+        response: dto.response,
+        submittedBy: user.id,
+        capturedAt: captured,
+        user,
+      }).catch((err) => {
+        this.log.warn(
+          `mirrorToPairedLayer failed for submission ${result.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      });
     }
     return { id: result.id, created: justCreated };
+  }
+
+  /**
+   * Insert a row into the form's paired data_layer (#281e). The
+   * form's `data.linkedLayerId` (set at create time by #283) points
+   * at the layer; `data.linkedLayerKey` names the sublayer to
+   * write into. If either is absent, this is a no-op: the form
+   * pre-dates the auto-paired-layer feature, or the linkage has
+   * been deliberately removed.
+   *
+   * V1 wire shape: globalId = the form_submission row id (so the
+   * layer row and the JSONB row can be joined later); properties =
+   * { ...response, _submitted_at, _submitted_by, _client_id,
+   * _schema_version }. The leading-underscore keys mirror the
+   * v3 feature-tracking convention (#39 / #118) and stay distinct
+   * from any user-defined question name.
+   */
+  private async mirrorToPairedLayer(args: {
+    form: { id: string; data: Prisma.JsonValue };
+    clientId: string;
+    submissionId: string;
+    schemaVersion: number;
+    response: Record<string, unknown>;
+    submittedBy: string;
+    capturedAt: Date;
+    user: AuthUser;
+  }): Promise<void> {
+    const data = args.form.data as
+      | { linkedLayerId?: unknown; linkedLayerKey?: unknown }
+      | null;
+    const layerId =
+      data && typeof data.linkedLayerId === 'string'
+        ? data.linkedLayerId
+        : null;
+    const layerKey =
+      data && typeof data.linkedLayerKey === 'string'
+        ? data.linkedLayerKey
+        : 'submissions';
+    if (!layerId) return;
+    const properties: Record<string, unknown> = {
+      ...args.response,
+      _submission_id: args.submissionId,
+      _client_id: args.clientId,
+      _schema_version: args.schemaVersion,
+      _submitted_at: args.capturedAt.toISOString(),
+      _submitted_by: args.submittedBy,
+    };
+    await this.v3Features.insertFeatures(
+      layerId,
+      layerKey,
+      [
+        {
+          globalId: args.submissionId,
+          properties,
+        },
+      ],
+      args.user,
+      // The default paired layer has geometryType=null (table
+      // sublayer), so insertFeatures must skip the geom column
+      // (#192). Future slices that wire a geometry question into
+      // the layer will set this dynamically.
+      { isTable: true },
+    );
   }
 
   /**
