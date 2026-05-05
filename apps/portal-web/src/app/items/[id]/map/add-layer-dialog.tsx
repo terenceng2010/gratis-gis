@@ -186,7 +186,16 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
       try {
         const q = portalQ.trim();
         const qs = new URLSearchParams({
-          type: 'data_layer,derived_layer,arcgis_service',
+          // #304 slice 5 / #301: include the unified `service` type
+          // (Connected Service items, the new way) plus the legacy
+          // wms_service / wfs_service item types so existing rows
+          // surface in the picker too. ArcGIS protocols on `service`
+          // route through the existing arcgis-rest source kind for
+          // free; WMS / WFS / WMTS surface in the list with a
+          // "rendering coming up" indicator until the canvas
+          // renderer for those source kinds lands (#305).
+          type:
+            'data_layer,derived_layer,arcgis_service,service,wms_service,wfs_service',
           lite: '1',
         });
         if (q) qs.set('q', q);
@@ -300,7 +309,11 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
     const handle = setTimeout(async () => {
       try {
         const qs = new URLSearchParams({
-          type: 'data_layer,arcgis_service',
+          // Same expansion as the items-view filter: include the
+          // unified `service` type and the legacy OGC types
+          // (#304 slice 5).
+          type:
+            'data_layer,arcgis_service,service,wms_service,wfs_service',
           lite: '1',
           sharedWithGroupId: selectedGroup.id,
         });
@@ -550,6 +563,24 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
    * just `itemId` to the layer source) so they skip the hydrate.
    */
   async function submitPortalItem(item: Item) {
+    // #304 slice 5: unified Connected Service items branch on the
+    // `protocol` discriminator inside data_json. ArcGIS variants
+    // (arcgis_map / arcgis_feature) reuse the arcgis-rest path
+    // since the source kind + URL conventions are identical;
+    // WMS / WFS / WMTS surface a clear "renderer coming up"
+    // message until #305 ships the canvas support for those source
+    // kinds. We also fold the legacy wms_service / wfs_service
+    // items into the same not-yet-renderable bucket so the user
+    // gets one consistent message regardless of how the item was
+    // authored.
+    if (
+      item.type === 'service' ||
+      item.type === 'wms_service' ||
+      item.type === 'wfs_service'
+    ) {
+      await submitServicePortalItem(item);
+      return;
+    }
     if (item.type !== 'arcgis_service') {
       // v3 data_layers carry one or more sublayers (each mapped to
       // its own PostGIS table). The lite-mode list response attaches
@@ -627,6 +658,185 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
       'flat',
       new Set(ordered.map((l) => l.id)),
     );
+  }
+
+  /**
+   * Click handler for unified `service` items (#304 slice 5) and
+   * for legacy wms_service / wfs_service items that haven't been
+   * migrated yet. Routes ArcGIS protocols (the bulk of the value)
+   * through the existing arcgis-rest source kind for free; non-
+   * ArcGIS protocols surface a clear "rendering coming up" toast
+   * pointing at #305.
+   */
+  async function submitServicePortalItem(item: Item) {
+    const hydrated = await hydratePortalItem(item);
+    if (hydrated === null) return;
+    const d = (hydrated.data ?? {}) as {
+      protocol?: string;
+      url?: string;
+      layers?: Array<{
+        name?: string;
+        title?: string;
+        geometryType?: string;
+      }>;
+      selectedLayerIds?: number[];
+      defaultLayerIndex?: number;
+      requiresAuth?: boolean;
+    };
+    // Legacy wms_service / wfs_service items: protocol is implied
+    // by item.type. Fold both into one decision branch.
+    const protocol =
+      hydrated.type === 'service'
+        ? d.protocol ?? ''
+        : hydrated.type === 'wms_service'
+          ? 'wms'
+          : 'wfs';
+    if (protocol !== 'arcgis_map' && protocol !== 'arcgis_feature') {
+      setError(
+        `Map rendering for ${protocol.toUpperCase().replace('_', ' ')} services is coming in the next slice. The item appears in the picker for visibility, but can't be added to a map yet (track #305).`,
+      );
+      return;
+    }
+    if (!d.url) {
+      setError(`${hydrated.title} has no service URL yet. Open it and paste one.`);
+      return;
+    }
+    const allLayers = d.layers ?? [];
+    if (allLayers.length === 0) {
+      setError(
+        `${hydrated.title} has no layers captured yet. Open it and Re-probe.`,
+      );
+      return;
+    }
+    // selectedLayerIds in the unified shape is indices into layers[].
+    const selectedIndices =
+      d.selectedLayerIds && d.selectedLayerIds.length > 0
+        ? d.selectedLayerIds
+        : allLayers.map((_, i) => i);
+    if (selectedIndices.length === 0) {
+      setError(
+        `${hydrated.title} has no layers selected for web-map use. Open the item and pick at least one layer.`,
+      );
+      return;
+    }
+    // The Connected Service shape stringifies the integer sublayer
+    // id into `name` at probe time (see lib/service-probe.ts
+    // arcgisToServiceData). Reconstruct {id, name} pairs for the
+    // sublayer modal + the arcgis-rest source kind.
+    const serviceType: 'MapServer' | 'FeatureServer' =
+      protocol === 'arcgis_feature' ? 'FeatureServer' : 'MapServer';
+    const orderedSubs: Array<{
+      id: number;
+      name?: string;
+      geometryType?: string;
+    }> = [];
+    const defaultIdx =
+      typeof d.defaultLayerIndex === 'number' ? d.defaultLayerIndex : -1;
+    const indexOrder = [
+      ...selectedIndices.filter((i) => i === defaultIdx),
+      ...selectedIndices.filter((i) => i !== defaultIdx),
+    ];
+    for (const i of indexOrder) {
+      const l = allLayers[i];
+      if (!l) continue;
+      const id = Number(l.name);
+      if (!Number.isFinite(id)) continue;
+      const out: { id: number; name?: string; geometryType?: string } = {
+        id,
+      };
+      if (l.title) out.name = l.title;
+      if (l.geometryType) out.geometryType = l.geometryType;
+      orderedSubs.push(out);
+    }
+    if (orderedSubs.length === 0) {
+      setError(
+        `${hydrated.title} doesn't have ArcGIS-shaped layer ids. Open it and Re-probe.`,
+      );
+      return;
+    }
+    if (orderedSubs.length > 1) {
+      setPendingSublayerChoice({
+        item: hydrated,
+        sublayers: orderedSubs,
+        onConfirm: (mode, ids) =>
+          addArcgisServiceShapedItem(
+            hydrated,
+            d.url!,
+            serviceType,
+            allLayers,
+            ids as Set<number>,
+            mode,
+            d.requiresAuth ?? false,
+          ),
+      });
+      return;
+    }
+    addArcgisServiceShapedItem(
+      hydrated,
+      d.url,
+      serviceType,
+      allLayers,
+      new Set(orderedSubs.map((l) => l.id)),
+      'flat',
+      d.requiresAuth ?? false,
+    );
+  }
+
+  /**
+   * Commit an arcgis-shaped subset (from a unified `service` item
+   * with arcgis_map / arcgis_feature protocol) to the layer panel.
+   * Mirrors addArcgisPortalItem but pulls the metadata out of the
+   * unified ServiceData shape (layers[] indexed by string `name`,
+   * not by integer `id`). Routes through the per-item proxy for the
+   * same usage-tracking + CORS reasons.
+   */
+  function addArcgisServiceShapedItem(
+    item: Item,
+    url: string,
+    serviceType: 'MapServer' | 'FeatureServer',
+    allLayers: Array<{
+      name?: string;
+      title?: string;
+      geometryType?: string;
+    }>,
+    selectedIds: Set<number>,
+    mode: 'group' | 'flat',
+    _requiresAuth: boolean,
+  ) {
+    if (selectedIds.size === 0) return;
+    const proxyUrl = `/api/portal/items/${item.id}/proxy`;
+    const picked = allLayers.filter((sub) => {
+      const id = Number(sub?.name);
+      return Number.isFinite(id) && selectedIds.has(id);
+    });
+    if (picked.length === 0) {
+      reset();
+      onClose();
+      return;
+    }
+    let groupId: string | undefined;
+    if (mode === 'group' && picked.length > 1) {
+      const header = makeLayer(item.title, { kind: 'group' });
+      groupId = header.id;
+      onAdd(header);
+    }
+    for (const sub of picked) {
+      const id = Number(sub.name);
+      const layerTitle =
+        picked.length === 1 ? item.title : sub.title || `Layer ${id}`;
+      const child = makeLayer(layerTitle, {
+        kind: 'arcgis-rest',
+        url,
+        layerId: id,
+        serviceType,
+        sourceItemId: item.id,
+        proxyUrl,
+      });
+      if (groupId) child.groupId = groupId;
+      onAdd(child);
+    }
+    reset();
+    onClose();
   }
 
   /**
@@ -1202,7 +1412,10 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                             </button>
                           </li>
                         ) : item.type === 'data_layer' ||
-                          item.type === 'arcgis_service' ? (
+                          item.type === 'arcgis_service' ||
+                          item.type === 'service' ||
+                          item.type === 'wms_service' ||
+                          item.type === 'wfs_service' ? (
                           <PortalItemRow
                             key={item.id}
                             item={item}
@@ -1262,7 +1475,18 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                     // `data`-derived count if a non-lite caller ever
                     // re-uses this same list component.
                     let sublayerCount = 0;
-                    if (item.type === 'arcgis_service') {
+                    if (
+                      item.type === 'arcgis_service' ||
+                      item.type === 'service' ||
+                      item.type === 'wms_service' ||
+                      item.type === 'wfs_service'
+                    ) {
+                      // arcgis_service rows get a server-derived
+                      // _subLayerCount (#52). The unified `service`
+                      // and legacy OGC types haven't been wired into
+                      // that derivation yet; until they are, fall
+                      // through to the data-derived count when
+                      // present (non-lite callers) or zero.
                       const fromLite = (item as Item & {
                         _subLayerCount?: number;
                       })._subLayerCount;
@@ -1279,6 +1503,44 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                             ? d.layers.length
                             : 0;
                       }
+                    }
+                    // #304 slice 5: pretty type label for the badge.
+                    // Connected Service items pull the protocol from
+                    // data.protocol when present (lite mode strips
+                    // data, so most rows show "Service"); legacy
+                    // wms_service / wfs_service keep their existing
+                    // shorthand labels.
+                    let typeLabel: string;
+                    let typeClasses: string;
+                    if (item.type === 'arcgis_service') {
+                      typeLabel = 'ArcGIS';
+                      typeClasses = 'bg-cyan-100 text-cyan-800';
+                    } else if (item.type === 'derived_layer') {
+                      typeLabel = 'Derived';
+                      typeClasses = 'bg-blue-100 text-blue-800';
+                    } else if (item.type === 'service') {
+                      const protocol = (item.data as { protocol?: string } | null)
+                        ?.protocol;
+                      typeLabel =
+                        protocol === 'arcgis_map' || protocol === 'arcgis_feature'
+                          ? 'ArcGIS'
+                          : protocol === 'wms'
+                            ? 'WMS'
+                            : protocol === 'wfs'
+                              ? 'WFS'
+                              : protocol === 'wmts'
+                                ? 'WMTS'
+                                : 'Service';
+                      typeClasses = 'bg-cyan-100 text-cyan-800';
+                    } else if (item.type === 'wms_service') {
+                      typeLabel = 'WMS';
+                      typeClasses = 'bg-cyan-100 text-cyan-800';
+                    } else if (item.type === 'wfs_service') {
+                      typeLabel = 'WFS';
+                      typeClasses = 'bg-cyan-100 text-cyan-800';
+                    } else {
+                      typeLabel = 'Feature';
+                      typeClasses = 'bg-sky-100 text-sky-800';
                     }
                     return (
                     <li key={item.id}>
@@ -1300,19 +1562,9 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
                             </span>
                           ) : null}
                           <span
-                            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                              item.type === 'arcgis_service'
-                                ? 'bg-cyan-100 text-cyan-800'
-                                : item.type === 'derived_layer'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : 'bg-sky-100 text-sky-800'
-                            }`}
+                            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${typeClasses}`}
                           >
-                            {item.type === 'arcgis_service'
-                              ? 'ArcGIS'
-                              : item.type === 'derived_layer'
-                                ? 'Derived'
-                                : 'Feature'}
+                            {typeLabel}
                           </span>
                         </div>
                         {item.description ? (
@@ -1869,7 +2121,12 @@ function PortalItemRow({
   // for arcgis_service rows. Fall back to the legacy `data`-derived
   // count if a non-lite caller ever re-uses this same component.
   let sublayerCount = 0;
-  if (item.type === 'arcgis_service') {
+  if (
+    item.type === 'arcgis_service' ||
+    item.type === 'service' ||
+    item.type === 'wms_service' ||
+    item.type === 'wfs_service'
+  ) {
     const fromLite = (item as Item & { _subLayerCount?: number })
       ._subLayerCount;
     if (typeof fromLite === 'number') {
@@ -1885,6 +2142,32 @@ function PortalItemRow({
           ? d.layers.length
           : 0;
     }
+  }
+  // #304 slice 5: type-aware label + classes. Connected Service items
+  // surface the protocol when present; legacy types map directly.
+  let typeLabel: string;
+  let typeClasses = 'bg-cyan-100 text-cyan-800';
+  if (item.type === 'arcgis_service') {
+    typeLabel = 'ArcGIS';
+  } else if (item.type === 'service') {
+    const protocol = (item.data as { protocol?: string } | null)?.protocol;
+    typeLabel =
+      protocol === 'arcgis_map' || protocol === 'arcgis_feature'
+        ? 'ArcGIS'
+        : protocol === 'wms'
+          ? 'WMS'
+          : protocol === 'wfs'
+            ? 'WFS'
+            : protocol === 'wmts'
+              ? 'WMTS'
+              : 'Service';
+  } else if (item.type === 'wms_service') {
+    typeLabel = 'WMS';
+  } else if (item.type === 'wfs_service') {
+    typeLabel = 'WFS';
+  } else {
+    typeLabel = 'Feature';
+    typeClasses = 'bg-sky-100 text-sky-800';
   }
   return (
     <li>
@@ -1906,13 +2189,9 @@ function PortalItemRow({
             </span>
           ) : null}
           <span
-            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-              item.type === 'arcgis_service'
-                ? 'bg-cyan-100 text-cyan-800'
-                : 'bg-sky-100 text-sky-800'
-            }`}
+            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${typeClasses}`}
           >
-            {item.type === 'arcgis_service' ? 'ArcGIS' : 'Feature'}
+            {typeLabel}
           </span>
         </div>
         {item.description ? (
