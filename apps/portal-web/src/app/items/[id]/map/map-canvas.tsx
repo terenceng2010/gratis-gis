@@ -2010,6 +2010,30 @@ function syncOverlays(
       m.addLayer(symbolLayer);
     }
   }
+
+  // Force every operational gg: layer to the top of the stack (#279).
+  // We add layers without a `beforeId`, which normally puts them at
+  // the end of the layer list (= visually on top). But during a
+  // basemap swap, two useEffects can race: this function may run
+  // before MapLibre has finished applying the new basemap's style,
+  // so the basemap's own raster/vector layers can land *above* our
+  // overlays, hiding them entirely. moveLayer(id) with no beforeId
+  // re-asserts the gg: layer at the very end of the stack, which is
+  // idempotent and survives whatever order the basemap swap finished
+  // in. The cost is negligible: a few moveLayer calls per render.
+  const finalStyle = m.getStyle();
+  if (finalStyle?.layers) {
+    for (const l of finalStyle.layers) {
+      if (l.id.startsWith('gg:')) {
+        try {
+          m.moveLayer(l.id);
+        } catch {
+          // Ignore: a layer may have been removed by a concurrent
+          // sync; the next render will fix it.
+        }
+      }
+    }
+  }
 }
 
 /**
