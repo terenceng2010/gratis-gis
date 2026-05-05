@@ -627,7 +627,7 @@ export default async function ItemDetailPage({ params }: Props) {
             }
             canEdit={canManage}
           />
-          <div className="mt-3 flex items-center gap-2 text-xs text-muted">
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
             <span>
               Respondent link:{' '}
               <Link
@@ -637,6 +637,31 @@ export default async function ItemDetailPage({ params }: Props) {
                 /forms/{item.id}/respond
               </Link>
             </span>
+            {(() => {
+              // #281f: every form has a paired data_layer where
+              // submissions land (#283 / #284). Surface a link to it
+              // so authors can browse responses on the existing
+              // data_layer attribute-table UI without us building
+              // a separate submissions page from scratch.
+              const linkedLayerId =
+                item.data &&
+                typeof item.data === 'object' &&
+                'linkedLayerId' in (item.data as object)
+                  ? ((item.data as { linkedLayerId?: unknown })
+                      .linkedLayerId)
+                  : undefined;
+              if (typeof linkedLayerId !== 'string' || !linkedLayerId) {
+                return null;
+              }
+              return (
+                <Link
+                  href={`/items/${linkedLayerId}`}
+                  className="text-accent hover:underline"
+                >
+                  View submissions data layer
+                </Link>
+              );
+            })()}
           </div>
         </section>
       ) : (
