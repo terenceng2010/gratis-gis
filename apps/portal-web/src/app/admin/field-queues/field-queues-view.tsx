@@ -1,8 +1,15 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { AlertTriangle, ChevronRight, Smartphone } from 'lucide-react';
+import {
+  AlertTriangle,
+  ChevronRight,
+  Loader2,
+  Smartphone,
+  Trash2,
+} from 'lucide-react';
 
 import { formatBytes } from '@/lib/offline-store';
 
@@ -53,17 +60,91 @@ export interface FieldQueueRow {
  * mutates state remotely; the unit of recovery is "ask Alice to open
  * her iPad").
  */
+/** #275: same 7-day cutoff the API's bulk-forget endpoint uses.
+ *  A manifest is "stale" when it has no queued records anywhere
+ *  AND the last beacon was more than 7 days ago. Stale rows are
+ *  hidden by default; the toggle reveals them. */
+const STALE_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
+
+function isStale(row: FieldQueueRow): boolean {
+  if (countQueued(row) > 0) return false;
+  const reportedMs = Date.now() - new Date(row.reportedAt).getTime();
+  return reportedMs > STALE_CUTOFF_MS;
+}
+
 export function FieldQueuesView({ rows }: { rows: FieldQueueRow[] }) {
-  const sorted = useMemo(() => {
+  const router = useRouter();
+  const [showStale, setShowStale] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null); // row id being forgotten or 'bulk'
+  const [error, setError] = useState<string | null>(null);
+
+  const visibleRows = useMemo(() => {
+    const filtered = showStale ? rows : rows.filter((r) => !isStale(r));
     // Stuck records first (urgent), then oldest report (silent
     // device, possibly worker hasn't opened the app in a while).
-    return [...rows].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       const aStuck = countQueued(a);
       const bStuck = countQueued(b);
       if (aStuck !== bStuck) return bStuck - aStuck;
       return a.reportedAt.localeCompare(b.reportedAt);
     });
-  }, [rows]);
+  }, [rows, showStale]);
+
+  const staleCount = useMemo(
+    () => rows.filter(isStale).length,
+    [rows],
+  );
+
+  const forgetOne = async (id: string) => {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/portal/admin/field-queues/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to forget device',
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const forgetAllStale = async () => {
+    if (staleCount === 0) return;
+    if (
+      !confirm(
+        `Forget ${staleCount} manifest${
+          staleCount === 1 ? '' : 's'
+        } with empty queues last seen 7+ days ago? Each device will re-register if it's still in use.`,
+      )
+    ) {
+      return;
+    }
+    setBusy('bulk');
+    setError(null);
+    try {
+      const res = await fetch(
+        '/api/portal/admin/field-queues/forget-stale',
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to forget stale',
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
 
   if (rows.length === 0) {
     return (
@@ -76,15 +157,79 @@ export function FieldQueuesView({ rows }: { rows: FieldQueueRow[] }) {
   }
 
   return (
-    <ul className="space-y-3">
-      {sorted.map((row) => (
-        <DeviceRow key={row.id} row={row} />
-      ))}
-    </ul>
+    <>
+      {/* #275: filter + bulk-forget controls. The default view hides
+          rows whose queue is empty AND last reported >7 days ago,
+          which is almost always "device that has since cleared its
+          cache or stopped being used." Toggle reveals them; bulk
+          button drops them all. */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-surface-1 px-4 py-2">
+        <label className="inline-flex items-center gap-2 text-xs text-ink-1">
+          <input
+            type="checkbox"
+            checked={showStale}
+            onChange={(e) => setShowStale(e.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          Show stale rows ({staleCount} hidden)
+        </label>
+        {staleCount > 0 ? (
+          <button
+            type="button"
+            onClick={forgetAllStale}
+            disabled={busy !== null}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-0 px-2.5 py-1 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            {busy === 'bulk' ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+            Forget all stale
+          </button>
+        ) : null}
+      </div>
+
+      {error ? (
+        <div className="mb-3 rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+          {error}
+        </div>
+      ) : null}
+
+      {visibleRows.length === 0 ? (
+        <div className="rounded-lg border border-border bg-surface-1 px-4 py-10 text-center text-sm text-muted">
+          {showStale
+            ? 'No devices to show.'
+            : 'No active devices. Toggle "Show stale rows" to see manifests last beaconed >7 days ago.'}
+        </div>
+      ) : (
+        <ul className="space-y-3">
+          {visibleRows.map((row) => (
+            <DeviceRow
+              key={row.id}
+              row={row}
+              onForget={() => void forgetOne(row.id)}
+              forgetting={busy === row.id}
+              disabled={busy !== null && busy !== row.id}
+            />
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 
-function DeviceRow({ row }: { row: FieldQueueRow }) {
+function DeviceRow({
+  row,
+  onForget,
+  forgetting,
+  disabled,
+}: {
+  row: FieldQueueRow;
+  onForget: () => void;
+  forgetting: boolean;
+  disabled: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const stuck = countQueued(row);
   const failed = countFailed(row);
@@ -99,10 +244,11 @@ function DeviceRow({ row }: { row: FieldQueueRow }) {
 
   return (
     <li className="rounded-lg border border-border bg-surface-1">
+      <div className="flex items-stretch">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-stretch gap-3 px-4 py-3 text-left hover:bg-surface-2"
+        className="flex flex-1 items-stretch gap-3 px-4 py-3 text-left hover:bg-surface-2"
       >
         <span
           aria-hidden="true"
@@ -168,6 +314,37 @@ function DeviceRow({ row }: { row: FieldQueueRow }) {
           }`}
         />
       </button>
+      {/* #275: per-row Forget. Pure metadata wipe -- record
+          payloads live on the device, the row is just the beacon
+          mirror. Next sync from that device re-creates the row. */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (
+            !confirm(
+              `Forget device ${row.deviceFingerprint.slice(
+                0,
+                8,
+              )} for ${row.fullName || row.username}?\n\nThis only removes the admin-side beacon record. The data on the device (${stuck} queued) is unaffected. The row will return on the next sync if the device is still in use.`,
+            )
+          ) {
+            return;
+          }
+          onForget();
+        }}
+        disabled={disabled || forgetting}
+        title="Forget this device manifest"
+        aria-label="Forget device"
+        className="flex shrink-0 items-center justify-center px-3 text-muted hover:bg-surface-2 hover:text-danger disabled:opacity-50"
+      >
+        {forgetting ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Trash2 className="h-4 w-4" />
+        )}
+      </button>
+      </div>
 
       {expanded ? (
         <div className="border-t border-border px-4 py-3">

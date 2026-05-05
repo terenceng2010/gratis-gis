@@ -1,4 +1,12 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from '../admin/admin.guard.js';
@@ -83,5 +91,70 @@ export class FieldQueueAdminController {
         manifest: enriched,
       };
     });
+  }
+
+  /**
+   * #275: Forget a single manifest row. Pure metadata wipe -- the
+   * record payloads live on the device, not here. The next beacon
+   * from that device re-creates the row if it's still in use.
+   *
+   * Scoped to the admin's own org (a row from another tenant 404s
+   * rather than disclosing existence). Uses the unique row id so
+   * the admin's UI can target a specific (user, device) pair
+   * without having to repeat the fingerprint hash.
+   */
+  @Delete(':id')
+  async forget(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    // Verify the row belongs to a user in the admin's org before
+    // deleting. The User -> orgId join keeps tenant isolation
+    // honest even though FieldQueueManifest doesn't carry orgId
+    // directly.
+    const row = await this.prisma.fieldQueueManifest.findUnique({
+      where: { id },
+      select: { id: true, user: { select: { orgId: true } } },
+    });
+    if (!row || row.user.orgId !== user.orgId) {
+      throw new NotFoundException('Manifest not found');
+    }
+    await this.prisma.fieldQueueManifest.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  /**
+   * #275: Bulk Forget all stale manifests in this org. "Stale"
+   * means: the manifest is empty (no queued records anywhere)
+   * AND the last beacon was more than 7 days ago. Returns the
+   * count deleted so the UI can confirm.
+   *
+   * The 7-day cutoff matches the default-filter threshold the
+   * UI uses to hide rows; both are kept aligned so the bulk
+   * action wipes exactly what the default view hides.
+   */
+  @Post('forget-stale')
+  async forgetStale(@CurrentUser() user: AuthUser) {
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    // Pull candidates first so we can apply the JSON-shape predicate
+    // (manifest is jsonb, the queuedRecords array on each entry has
+    // to be empty for the row to count as stale). Doing this in
+    // application code is straightforward; a SQL-side jsonb filter
+    // would work too but the row count is small (one per device).
+    const rows = await this.prisma.fieldQueueManifest.findMany({
+      where: {
+        user: { orgId: user.orgId },
+        reportedAt: { lt: cutoff },
+      },
+      select: { id: true, manifest: true },
+    });
+    const stale = rows.filter((r) => {
+      const m = (r.manifest as ManifestEntry[] | null) ?? [];
+      return m.every((entry) => (entry.queuedRecords?.length ?? 0) === 0);
+    });
+    if (stale.length === 0) {
+      return { ok: true, deleted: 0 };
+    }
+    const result = await this.prisma.fieldQueueManifest.deleteMany({
+      where: { id: { in: stale.map((r) => r.id) } },
+    });
+    return { ok: true, deleted: result.count };
   }
 }
