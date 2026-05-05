@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { V3FeaturesService } from '../features-v3/v3-features.service.js';
+import { V3AttachmentsService } from '../features-v3/v3-attachments.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 
 /**
@@ -28,6 +29,7 @@ export class FormsService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly v3Features: V3FeaturesService,
+    private readonly v3Attachments: V3AttachmentsService,
   ) {}
 
   /** Fetch the form item, gating by visibility for the caller. Used
@@ -194,8 +196,19 @@ export class FormsService {
         ? data.linkedLayerKey
         : 'submissions';
     if (!layerId) return;
+
+    // Split attachment-shaped values out of the response BEFORE we
+    // dump the rest into properties JSONB (#292). Form attachments
+    // shouldn't sit inline on the parent row -- they belong in the
+    // standard v3 feature_attachment table the same way every other
+    // data_layer attaches files. The form runtime stores each
+    // attachment as { name, mimeType, sizeBytes, url, key } per
+    // upload (see #280); we detect that shape here.
+    const attachments = extractAttachments(args.response);
+    const responseSansAttachments = stripAttachments(args.response);
+
     const properties: Record<string, unknown> = {
-      ...args.response,
+      ...responseSansAttachments,
       _submission_id: args.submissionId,
       _client_id: args.clientId,
       _schema_version: args.schemaVersion,
@@ -218,6 +231,35 @@ export class FormsService {
       // the layer will set this dynamically.
       { isTable: true },
     );
+
+    // Register each attachment in the v3 feature_attachment table
+    // keyed on (layerId=submissions, featureId=submissionId). Errors
+    // are logged but don't fail the submission: the JSONB form_
+    // submission row is the authoritative copy and the attachment
+    // file already lives in MinIO.
+    for (const att of attachments) {
+      try {
+        await this.v3Attachments.register(
+          layerId,
+          layerKey,
+          args.submissionId,
+          {
+            fileName: att.name,
+            mime: att.mimeType,
+            sizeBytes: att.sizeBytes,
+            storageKey: att.key,
+            storageUrl: att.url,
+          },
+          args.submittedBy,
+        );
+      } catch (err) {
+        this.log.warn(
+          `attachment register failed for submission ${args.submissionId}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
   }
 
   /**
@@ -342,4 +384,104 @@ function pickResponseSummary(
     return s.length > 80 ? `${s.slice(0, 77)}...` : s;
   }
   return '(no answers)';
+}
+
+/**
+ * Form attachment shape produced by the form-runtime upload helper
+ * (apps/portal-web/src/lib/form-attachment-upload.ts) once #280's
+ * direct-to-MinIO upload completes. The same shape lives in the form
+ * response for photo / audio / video / file / sketch / signature
+ * questions: each question's value is an array of these descriptors.
+ */
+interface AttachmentDescriptor {
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
+  key: string;
+}
+
+function isAttachmentDescriptor(v: unknown): v is AttachmentDescriptor {
+  if (!v || typeof v !== 'object') return false;
+  const a = v as Record<string, unknown>;
+  return (
+    typeof a.url === 'string' &&
+    typeof a.key === 'string' &&
+    typeof a.name === 'string' &&
+    typeof a.mimeType === 'string' &&
+    typeof a.sizeBytes === 'number'
+  );
+}
+
+/**
+ * Walk a form response and collect every uploaded attachment
+ * descriptor. Photo / audio / video / file question values are
+ * arrays of descriptors; the walk is recursive so attachments
+ * inside repeating-group instances (response[groupId][i].photo)
+ * also get picked up.
+ *
+ * Pending offline-queued attachments (objects with `dataUrl` but no
+ * `url`) shouldn't reach here -- the form-runtime drain step
+ * (#280) uploads them and replaces them with the uploaded shape
+ * before POSTing. If one slips through anyway, isAttachmentDescriptor
+ * rejects it and the value stays in properties JSONB; the form
+ * still works, the attachment just doesn't register in
+ * feature_attachment until a manual re-upload.
+ */
+function extractAttachments(
+  response: Record<string, unknown>,
+): AttachmentDescriptor[] {
+  const out: AttachmentDescriptor[] = [];
+  function walk(node: unknown): void {
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        if (isAttachmentDescriptor(item)) {
+          out.push(item);
+        } else {
+          walk(item);
+        }
+      }
+      return;
+    }
+    if (node && typeof node === 'object') {
+      for (const v of Object.values(node)) walk(v);
+    }
+  }
+  walk(response);
+  return out;
+}
+
+/**
+ * Return a deep copy of the response with every attachment array
+ * stripped (replaced with an empty array, so question keys still
+ * resolve to a defined value). Avoids storing 5+ MB of attachment
+ * descriptors in the parent row's properties JSONB when those
+ * descriptors live more naturally in feature_attachment.
+ *
+ * Non-attachment data inside repeat groups is preserved; only the
+ * attachment-shaped sub-arrays are replaced with [].
+ */
+function stripAttachments(
+  response: Record<string, unknown>,
+): Record<string, unknown> {
+  const clone = (node: unknown): unknown => {
+    if (Array.isArray(node)) {
+      // An array purely of attachment descriptors -> empty array.
+      // Mixed arrays (shouldn't happen with current question types
+      // but defensive) keep their non-attachment items.
+      const filtered = node
+        .map((item) =>
+          isAttachmentDescriptor(item) ? null : clone(item),
+        )
+        .filter((item) => item !== null);
+      return filtered;
+    }
+    if (node && typeof node === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(node)) out[k] = clone(v);
+      return out;
+    }
+    return node;
+  };
+  return clone(response) as Record<string, unknown>;
 }

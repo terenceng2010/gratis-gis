@@ -827,7 +827,11 @@ export class ItemsService {
             },
           ],
           editingEnabled: false,
-          attachmentsEnabled: false,
+          // Form attachment questions (#292) split out into the v3
+          // feature_attachment table on submit, so the layer needs
+          // attachments enabled for the attachment list / thumbnail
+          // surfaces to light up in the data_layer detail page.
+          attachmentsEnabled: true,
         },
       ],
     } as Prisma.InputJsonValue;
