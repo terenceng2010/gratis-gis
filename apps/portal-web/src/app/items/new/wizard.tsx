@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import type {
   ArcgisServiceData,
+  BasemapData,
   DataCollectionData,
   DataLayerDataV3,
   DerivedLayerData,
@@ -388,6 +389,12 @@ export function NewItemWizard() {
   // and the upload completes; submit() blocks on it.
   const [fileItemUpload, setFileItemUpload] = useState<FileData | null>(null);
 
+  // #298: basemap draft state. Captured up front so the wizard
+  // writes a fully-configured item (kind + URL + WMS layer list)
+  // instead of an empty placeholder. The shape mirrors BasemapData;
+  // only fields matching the active kind are meaningful.
+  const [basemapDraft, setBasemapDraft] = useState<BasemapData>(DEFAULT_BASEMAP);
+
   // #297: WMS / WFS probe state. Mirrors the ArcGIS probe flow but
   // simpler -- no auth path yet (most public WMS / WFS endpoints are
   // anonymous) and the layer ids are strings, not numbers. The probe
@@ -740,10 +747,34 @@ export function NewItemWizard() {
       // draw, upload, or paste the geometry.
       data = DEFAULT_GEO_BOUNDARY;
     } else if (type === 'basemap') {
-      // Start with the empty basemap scaffold (kind=tile-url, no URL).
-      // The detail-page editor (shipped separately) lets the user pick
-      // a style-url / tile-url / wms source and paste the URL.
-      data = DEFAULT_BASEMAP;
+      // #298: source-aware basemap authoring. The wizard collects the
+      // source kind + the URL / WMS config the renderer needs so the
+      // item lands fully configured. Empty kind/URL falls back to the
+      // empty scaffold so a user can still create a placeholder and
+      // fill it in on the detail page.
+      if (basemapDraft && basemapDraft.kind) {
+        if (basemapDraft.kind === 'tile-url' && !basemapDraft.tileUrl?.trim()) {
+          setError('Tile URL is required (XYZ template like https://.../{z}/{x}/{y}.png).');
+          return;
+        }
+        if (basemapDraft.kind === 'style-url' && !basemapDraft.styleUrl?.trim()) {
+          setError('Style URL is required (a hosted style.json).');
+          return;
+        }
+        if (basemapDraft.kind === 'wms') {
+          if (!basemapDraft.wmsUrl?.trim()) {
+            setError('WMS GetMap URL is required.');
+            return;
+          }
+          if (!basemapDraft.wmsConfig?.layers?.trim()) {
+            setError('At least one WMS layer name is required.');
+            return;
+          }
+        }
+        data = basemapDraft;
+      } else {
+        data = DEFAULT_BASEMAP;
+      }
     } else if (type === 'wms_service' || type === 'wfs_service') {
       // #297: WMS / WFS items now ship with a probe-or-bail wizard
       // step. The picker writes a fully-configured item (URL, layer
@@ -1352,6 +1383,10 @@ export function NewItemWizard() {
         <FileItemUploader value={fileItemUpload} onChange={setFileItemUpload} />
       ) : null}
 
+      {type === 'basemap' ? (
+        <BasemapConfigSection value={basemapDraft} onChange={setBasemapDraft} />
+      ) : null}
+
       {type === 'wms_service' || type === 'wfs_service' ? (
         <OgcConfigSection
           kind={type === 'wms_service' ? 'wms' : 'wfs'}
@@ -1711,6 +1746,193 @@ function OgcConfigSection({
           )}
         </div>
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * Basemap authoring pane (#298). Source-aware: the user picks one
+ * of three concrete kinds (tile XYZ, MapLibre style URL, WMS) and
+ * fills in the URL / config the renderer needs. Phase 1 keeps the
+ * fields direct -- no "pick from existing item" yet -- so the
+ * authoring flow ships before we build cross-item references for
+ * basemaps.
+ */
+function BasemapConfigSection({
+  value,
+  onChange,
+}: {
+  value: BasemapData;
+  onChange: (next: BasemapData) => void;
+}) {
+  const setKind = (kind: 'tile-url' | 'style-url' | 'wms') => {
+    // Reset fields that don't apply to the new kind so we don't
+    // leave stale URLs floating in data_json. attribution +
+    // thumbnailUrl are kind-agnostic so they survive.
+    const base: BasemapData = {
+      version: 1,
+      kind,
+    };
+    if (value.attribution) base.attribution = value.attribution;
+    if (value.thumbnailUrl) base.thumbnailUrl = value.thumbnailUrl;
+    if (kind === 'wms') base.wmsConfig = { layers: '' };
+    onChange(base);
+  };
+  return (
+    <section className="rounded-lg border border-border bg-surface-1 p-4">
+      <h2 className="mb-1 text-sm font-medium text-ink-0">Basemap source</h2>
+      <p className="mb-3 text-xs text-muted">
+        Pick how this basemap is served and paste the URL. Maps that
+        reference this basemap pull straight from the source you
+        configure here.
+      </p>
+      <div className="mb-3 flex flex-wrap gap-2 text-xs">
+        {([
+          { k: 'tile-url', label: 'XYZ tiles' },
+          { k: 'wms', label: 'WMS' },
+          { k: 'style-url', label: 'Style URL' },
+        ] as const).map((opt) => {
+          const active = value.kind === opt.k;
+          return (
+            <button
+              key={opt.k}
+              type="button"
+              onClick={() => setKind(opt.k)}
+              className={
+                'h-8 rounded-md border px-3 ' +
+                (active
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2')
+              }
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      {value.kind === 'tile-url' ? (
+        <label className="block text-xs">
+          <span className="text-muted">XYZ tile template</span>
+          <input
+            type="url"
+            inputMode="url"
+            value={value.tileUrl ?? ''}
+            onChange={(e) => onChange({ ...value, tileUrl: e.target.value })}
+            placeholder="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2 font-mono text-sm"
+          />
+          <span className="mt-1 block text-[11px] text-muted">
+            Use <span className="font-mono">{'{z}/{x}/{y}'}</span> placeholders.
+            Works with any standard XYZ raster tile server (OpenStreetMap,
+            ArcGIS cached MapServer&rsquo;s <span className="font-mono">/tile/</span>{' '}
+            endpoint, custom rasters, etc.).
+          </span>
+        </label>
+      ) : null}
+      {value.kind === 'style-url' ? (
+        <label className="block text-xs">
+          <span className="text-muted">Style JSON URL</span>
+          <input
+            type="url"
+            inputMode="url"
+            value={value.styleUrl ?? ''}
+            onChange={(e) => onChange({ ...value, styleUrl: e.target.value })}
+            placeholder="https://demotiles.maplibre.org/style.json"
+            className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2 font-mono text-sm"
+          />
+          <span className="mt-1 block text-[11px] text-muted">
+            A hosted MapLibre style.json. Works with MapTiler, Stadia,
+            self-hosted tilesets, etc.
+          </span>
+        </label>
+      ) : null}
+      {value.kind === 'wms' ? (
+        <div className="space-y-2">
+          <label className="block text-xs">
+            <span className="text-muted">WMS GetMap URL</span>
+            <input
+              type="url"
+              inputMode="url"
+              value={value.wmsUrl ?? ''}
+              onChange={(e) => onChange({ ...value, wmsUrl: e.target.value })}
+              placeholder="https://example.org/geoserver/wms"
+              className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2 font-mono text-sm"
+            />
+          </label>
+          <label className="block text-xs">
+            <span className="text-muted">Layer name(s)</span>
+            <input
+              type="text"
+              value={value.wmsConfig?.layers ?? ''}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  wmsConfig: {
+                    ...(value.wmsConfig ?? { layers: '' }),
+                    layers: e.target.value,
+                  },
+                })
+              }
+              placeholder="topp:states"
+              className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2 font-mono text-sm"
+            />
+            <span className="mt-1 block text-[11px] text-muted">
+              Comma-separated WMS layer names. Match what the server
+              advertises in GetCapabilities.
+            </span>
+          </label>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <label className="block">
+              <span className="text-muted">Format</span>
+              <select
+                value={value.wmsConfig?.format ?? 'image/png'}
+                onChange={(e) =>
+                  onChange({
+                    ...value,
+                    wmsConfig: {
+                      ...(value.wmsConfig ?? { layers: '' }),
+                      format: e.target.value,
+                    },
+                  })
+                }
+                className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2"
+              >
+                <option value="image/png">image/png</option>
+                <option value="image/jpeg">image/jpeg</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-muted">Version</span>
+              <select
+                value={value.wmsConfig?.version ?? '1.3.0'}
+                onChange={(e) =>
+                  onChange({
+                    ...value,
+                    wmsConfig: {
+                      ...(value.wmsConfig ?? { layers: '' }),
+                      version: e.target.value,
+                    },
+                  })
+                }
+                className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2"
+              >
+                <option value="1.3.0">1.3.0</option>
+                <option value="1.1.1">1.1.1</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      ) : null}
+      <label className="mt-3 block text-xs">
+        <span className="text-muted">Attribution (optional)</span>
+        <input
+          type="text"
+          value={value.attribution ?? ''}
+          onChange={(e) => onChange({ ...value, attribution: e.target.value })}
+          placeholder='&copy; OpenStreetMap contributors'
+          className="mt-0.5 h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-sm"
+        />
+      </label>
     </section>
   );
 }
