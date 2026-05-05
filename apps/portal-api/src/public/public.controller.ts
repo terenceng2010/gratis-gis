@@ -1,9 +1,17 @@
-import { Controller, Get, NotFoundException, Query, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+  Req,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 
 import { Public } from '../auth/public.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { V3FeaturesService } from '../features-v3/v3-features.service.js';
 
 /**
  * Unauthenticated surface area for the portal. Anything here is
@@ -19,7 +27,10 @@ import { PrismaService } from '../prisma/prisma.service.js';
 @ApiTags('public')
 @Controller('public')
 export class PublicController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly v3: V3FeaturesService,
+  ) {}
 
   /**
    * Landing page payload for unauthenticated visitors. Returns:
@@ -143,6 +154,128 @@ export class PublicController {
         theme: [it.type],
       })),
     };
+  }
+
+  /**
+   * Anonymous fetch of a single item by id (#307). Returns the
+   * full item only when access='public' and the item isn't trashed;
+   * otherwise 404 (deliberately indistinguishable from "no such id"
+   * so the existence of a private item never leaks).
+   *
+   * The shape mirrors authenticated /api/items/:id so the viewer
+   * runtime page can swap one for the other based on session
+   * presence. Lean projection: shares list is stripped (anonymous
+   * callers must not see a roster of who else has access).
+   *
+   * Anonymous viewer access composes: a publicly shared viewer
+   * pulls the map item via this endpoint, then each layer item,
+   * then the basemap item. Each must be access='public'
+   * independently; we do not transitively grant access. This is
+   * the same model AGOL uses (you must publicly share each
+   * dependency for an anonymous link to render fully).
+   */
+  @Public()
+  @Get('items/:id')
+  async item(@Param('id') id: string) {
+    const item = await this.prisma.item.findFirst({
+      where: { id, access: 'public', deletedAt: null },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+    if (!item) throw new NotFoundException('Item not found');
+    return item;
+  }
+
+  /**
+   * Anonymous list of items, intended for the viewer runtime to
+   * pull a list of public basemaps without a session. Limited to
+   * type=basemap today; callers asking for any other type get an
+   * empty list rather than the full public catalog (the dedicated
+   * landing / catalog feeds are the right surface for that).
+   */
+  @Public()
+  @Get('items')
+  async items(@Query('type') type?: string) {
+    if (type !== 'basemap') return [];
+    return this.prisma.item.findMany({
+      where: { type: 'basemap', access: 'public', deletedAt: null },
+      include: {
+        owner: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            avatarUrl: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  /**
+   * Anonymous feature collection for a layer of a public
+   * data_layer item (#307). Mirrors the auth'd
+   * /api/items/:id/layers/:layerId/features endpoint but gated to
+   * `access='public'` items. Used by the viewer runtime when no
+   * session is present.
+   *
+   * Supports the same bbox / at filters the auth'd path supports.
+   * Per-share geographic restrictions (geoLimit) and rowScope are
+   * not in play here -- those concepts only exist for authenticated
+   * shares. Layer-level boundary clip would be a future addition
+   * if a public-shared map needs it.
+   */
+  @Public()
+  @Get('items/:id/layers/:layerId/features')
+  async layerFeatures(
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('bbox') bbox?: string,
+    @Query('at') at?: string,
+  ) {
+    const item = await this.prisma.item.findFirst({
+      where: {
+        id: itemId,
+        type: 'data_layer',
+        access: 'public',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!item) throw new NotFoundException('Item not found');
+    const opts: { bbox?: [number, number, number, number]; at?: string } = {};
+    if (bbox) {
+      const parts = bbox.split(',').map(Number);
+      if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+        const [w, s, e, n] = parts as [number, number, number, number];
+        opts.bbox = [w, s, e, n];
+      }
+    }
+    if (at) opts.at = at;
+    return this.v3.listFeatures(itemId, layerId, opts);
+  }
+
+  /** Alias of /features under the same naming the auth'd v3
+   *  controller exposes. Some callers ask for /geojson, others for
+   *  /features; both return the same FeatureCollection. */
+  @Public()
+  @Get('items/:id/layers/:layerId/geojson')
+  async layerGeojson(
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('bbox') bbox?: string,
+    @Query('at') at?: string,
+  ) {
+    return this.layerFeatures(itemId, layerId, bbox, at);
   }
 
   /**
