@@ -68,6 +68,17 @@ export interface ExternalLayerSelection {
   >;
 }
 
+/**
+ * @deprecated #304 slice 7+8: superseded by the unified `ServiceData`
+ * shape (see ./service.ts) with `protocol: 'arcgis_map' |
+ * 'arcgis_feature' | 'arcgis_image'`. The migration in
+ * 20260505020000_migrate_legacy_services rewrites every
+ * `arcgis_service` item to the unified shape on next portal-api
+ * boot, and the wizard creates new items as `service` since slice 3.
+ * The interface stays exported so legacy detail-page editors and
+ * any in-flight code keep compiling during the deprecation window;
+ * remove once no `arcgis_service` rows remain.
+ */
 export interface ArcgisServiceData extends ExternalLayerSelection {
   version: 1;
   /** Root service URL, without a trailing /<layerId> segment. */

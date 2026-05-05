@@ -534,14 +534,34 @@ export default async function ItemDetailPage({ params }: Props) {
         </>
       ) : item.type === 'arcgis_service' ? (
         <section className="mb-6">
-          <ArcgisServiceEditor
-            itemId={item.id}
-            initial={{
-              ...DEFAULT_ARCGIS_SERVICE,
-              ...((item.data ?? {}) as Partial<ArcgisServiceData>),
-            }}
-            canEdit={canManage}
-          />
+          {/* #304 slice 8: defensive route. If the row already carries
+              the unified `protocol` discriminator (e.g. it was written
+              through the new wizard before its type field was rewritten,
+              or the migration partially landed), prefer the unified
+              ServiceEditor over the legacy ArcgisServiceEditor so the
+              user sees one consistent surface. */}
+          {(() => {
+            const sd = item.data as ServiceData | null;
+            if (sd && typeof sd === 'object' && 'protocol' in sd) {
+              return (
+                <ServiceEditor
+                  itemId={item.id}
+                  initial={sd}
+                  canEdit={canManage}
+                />
+              );
+            }
+            return (
+              <ArcgisServiceEditor
+                itemId={item.id}
+                initial={{
+                  ...DEFAULT_ARCGIS_SERVICE,
+                  ...((item.data ?? {}) as Partial<ArcgisServiceData>),
+                }}
+                canEdit={canManage}
+              />
+            );
+          })()}
         </section>
       ) : item.type === 'derived_layer' ? (
         <DerivedLayerDetail
@@ -690,14 +710,34 @@ export default async function ItemDetailPage({ params }: Props) {
         </section>
       ) : item.type === 'wms_service' || item.type === 'wfs_service' ? (
         <section className="mb-6">
-          <OgcServiceEditor
-            itemId={item.id}
-            kind={item.type === 'wms_service' ? 'wms' : 'wfs'}
-            initial={
-              (item.data ?? {}) as WmsServiceData | WfsServiceData
+          {/* #304 slice 8: same defensive-route check as the
+              arcgis_service branch above. After the migration runs,
+              new items land here as type='service' so this branch only
+              executes for legacy rows: but if any happen to already
+              carry the unified `protocol` discriminator (partial-
+              migration edge case), prefer the unified ServiceEditor. */}
+          {(() => {
+            const sd = item.data as ServiceData | null;
+            if (sd && typeof sd === 'object' && 'protocol' in sd) {
+              return (
+                <ServiceEditor
+                  itemId={item.id}
+                  initial={sd}
+                  canEdit={canManage}
+                />
+              );
             }
-            canEdit={canManage}
-          />
+            return (
+              <OgcServiceEditor
+                itemId={item.id}
+                kind={item.type === 'wms_service' ? 'wms' : 'wfs'}
+                initial={
+                  (item.data ?? {}) as WmsServiceData | WfsServiceData
+                }
+                canEdit={canManage}
+              />
+            );
+          })()}
         </section>
       ) : item.type === 'service' ? (
         <section className="mb-6">

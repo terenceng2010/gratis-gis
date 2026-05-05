@@ -34,6 +34,16 @@ export interface WfsLayerSnapshot {
   bbox?: [number, number, number, number];
 }
 
+/**
+ * @deprecated #304 slice 7+8: superseded by the unified `ServiceData`
+ * shape (see ./service.ts) with `protocol: 'wms'`. The migration in
+ * 20260505020000_migrate_legacy_services rewrites every `wms_service`
+ * item to the unified shape on next portal-api boot, and the wizard
+ * creates new items as `service` since slice 3. The interface stays
+ * exported so legacy detail-page editors and any in-flight code keep
+ * compiling during the deprecation window; remove once no
+ * `wms_service` rows remain.
+ */
 export interface WmsServiceData extends ExternalLayerSelection {
   version: 1;
   /** GetCapabilities base URL (without query string). */
@@ -53,6 +63,16 @@ export interface WmsServiceData extends ExternalLayerSelection {
   probedAt?: ISODateString;
 }
 
+/**
+ * @deprecated #304 slice 7+8: superseded by the unified `ServiceData`
+ * shape (see ./service.ts) with `protocol: 'wfs'`. The migration in
+ * 20260505020000_migrate_legacy_services rewrites every `wfs_service`
+ * item to the unified shape on next portal-api boot, and the wizard
+ * creates new items as `service` since slice 3. The interface stays
+ * exported so legacy detail-page editors and any in-flight code keep
+ * compiling during the deprecation window; remove once no
+ * `wfs_service` rows remain.
+ */
 export interface WfsServiceData extends ExternalLayerSelection {
   version: 1;
   /** GetCapabilities base URL (without query string). */
