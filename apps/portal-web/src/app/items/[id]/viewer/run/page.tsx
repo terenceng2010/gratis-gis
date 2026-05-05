@@ -225,6 +225,11 @@ export default async function ViewerRuntimePage({ params }: Props) {
       targetLayerIds={targetLayerIds}
       basemaps={basemaps}
       canEdit={false}
+      // #259 slice 4: surface the Print toolbar entry when the
+      // viewer's tools list opted into it. Today this is a basic
+      // window.print() call; #132 (Print Template item type) will
+      // upgrade it to a layout chooser.
+      printEnabled={viewer.tools.includes('print')}
     />
   );
 }

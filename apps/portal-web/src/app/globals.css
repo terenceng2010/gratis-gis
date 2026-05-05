@@ -271,3 +271,47 @@
 .gg-dual-range__now--out::after {
   border-top-color: hsl(var(--danger));
 }
+
+/* #259 slice 4: print mode for the Editor / Viewer runtime. The Print
+   button on the runtime adds the `print-runtime` class to <body> just
+   before invoking window.print() and removes it after. While the
+   class is present (and `@media print` is active) we hide everything
+   that's not the map canvas: the page header, the runtime header
+   strip, the layer panel, the attribute table, the search bar, the
+   tool palette overlays, and the Print button itself. The remaining
+   canvas surface fills the page so the print preview shows the map.
+
+   Future Print Template work (#132) will replace this with a
+   selected layout (header / legend / scale-bar baked into the
+   printable surface). For now the floor is "print what you see"
+   without the chrome. */
+@media print {
+  body.print-runtime header,
+  body.print-runtime nav,
+  body.print-runtime [data-print-hide],
+  body.print-runtime .maplibregl-ctrl-attrib,
+  body.print-runtime .maplibregl-ctrl-bottom-right,
+  body.print-runtime .maplibregl-ctrl-top-right,
+  body.print-runtime .maplibregl-ctrl-top-left {
+    display: none !important;
+  }
+  body.print-runtime,
+  body.print-runtime main,
+  body.print-runtime [data-runtime-canvas],
+  body.print-runtime .maplibregl-map {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+  /* Print page should size to landscape Letter by default; the
+     user can override in the print dialog if their workflow wants
+     portrait. */
+  @page {
+    size: landscape;
+    margin: 0.5cm;
+  }
+}

@@ -8,6 +8,7 @@ import {
   MousePointer2,
   PencilRuler,
   Plus,
+  Printer,
   Redo2,
   Ruler,
   Trash2,
@@ -81,6 +82,19 @@ interface Props {
   /** Whether the caller has edit rights on the Editor item. Drives
    *  whether tool buttons are enabled at all. */
   canEdit: boolean;
+  /**
+   * Render the Print toolbar entry (#259 slice 4). Read-side affordance
+   * that triggers `window.print()` against a print-only stylesheet
+   * which expands the canvas to fill the page and hides the chrome
+   * (toolbars, layer panel, attribute table). The viewer runtime sets
+   * this from `viewer.tools.includes('print')`; the editor runtime
+   * leaves it false today (a future slice can wire `editor.tools` to
+   * include 'print' too if Matt wants editors to print as well).
+   *
+   * Eventually (#132) the click will open a Print Template chooser
+   * instead of going straight to the browser print dialog.
+   */
+  printEnabled?: boolean;
 }
 
 /**
@@ -135,6 +149,7 @@ export function EditorRuntime({
   targetLayerIds,
   basemaps,
   canEdit,
+  printEnabled = false,
 }: Props) {
   const [mapData, setMapData] = useState<MapData>(initialMapData);
   // Track the camera's current zoom so LayerPanel can render the
@@ -2078,6 +2093,47 @@ export function EditorRuntime({
               );
             })}
           </div>
+
+          {/* #259 slice 4: Print button. Top-right of the canvas, in
+              its own pill so it doesn't crowd the editing tool
+              palette on the left. Today this just calls
+              window.print() against the print-only stylesheet (which
+              hides the runtime chrome and lets the canvas fill the
+              page). #132 (Print Template item type) will replace
+              this with a chooser that opens a real print-layout
+              renderer; for now the basic browser print is the floor
+              for AGOL parity. The runtime applies the
+              `print-runtime` class to the body during click so the
+              stylesheet only hides chrome on demand. */}
+          {printEnabled ? (
+            <div className="pointer-events-auto absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-md border border-border bg-surface-1 p-1 shadow-card print:hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window === 'undefined') return;
+                  // Force a resize so MapLibre redraws at the print
+                  // size. Without this the canvas keeps its on-
+                  // screen pixel dimensions and the printed output
+                  // crops to whatever the canvas had pre-print.
+                  document.body.classList.add('print-runtime');
+                  // Allow the next paint to settle before opening
+                  // the print dialog. setTimeout(0) is enough; the
+                  // resize event fires synchronously from CSS.
+                  window.dispatchEvent(new Event('resize'));
+                  setTimeout(() => {
+                    window.print();
+                    document.body.classList.remove('print-runtime');
+                    window.dispatchEvent(new Event('resize'));
+                  }, 50);
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink-0"
+                title="Print the current view"
+                aria-label="Print"
+              >
+                <Printer className="h-4 w-4" />
+              </button>
+            </div>
+          ) : null}
 
           {/* Active-mode chip / banner overlay. Add shows a target
               dropdown; Edit shows a "click any feature" prompt;
