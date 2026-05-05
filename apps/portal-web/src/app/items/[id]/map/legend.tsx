@@ -263,6 +263,27 @@ function PolygonMark({
   stroke: string;
   fillOpacity: number;
 }) {
+  // #264: when the polygon's fill is effectively transparent
+  // (e.g. Riverside Parcels: fillColor=blue but fillOpacity=0
+  // and strokeColor=green) the canvas paints invisible fill +
+  // colored stroke. Reflect that in the legend so the user sees
+  // the same outline-only mark instead of a fake-blue square.
+  // Threshold matches the field-runtime LayerSwatch (#264, e91b8e8)
+  // so the two surfaces stay consistent.
+  const hollow = fillOpacity < 0.15;
+  if (hollow) {
+    return (
+      <span
+        aria-hidden="true"
+        className="inline-block h-4 w-4 shrink-0 rounded-sm"
+        style={{
+          backgroundColor: 'transparent',
+          // 2px so the color reads at 16px on hi-DPI screens.
+          border: `2px solid ${stroke}`,
+        }}
+      />
+    );
+  }
   return (
     <span
       aria-hidden="true"
