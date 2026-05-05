@@ -103,12 +103,25 @@ function viewerToEditor(viewer: ViewerData): EditorData {
     rowScope: 'all',
     templates: [],
   }));
+  // The viewer's tool list overlaps with EditorTool for the read-side
+  // affordances ('select', 'measure'). Pipe those through to the
+  // synthesized EditorData so the existing top-left palette in the
+  // runtime renders them. Viewer-specific tools that aren't in
+  // EditorTool ('query', 'attribute-table', 'legend', 'print') stay
+  // out of this list:
+  //   - print is handled by `printEnabled` (#259 slice 4)
+  //   - attribute-table / legend are always-on chrome today; a
+  //     follow-up slice can gate them on the toggle
+  //   - query is not implemented yet (Phase 2)
+  const passthrough: Array<'select' | 'measure'> = [];
+  if (viewer.tools.includes('select')) passthrough.push('select');
+  if (viewer.tools.includes('measure')) passthrough.push('measure');
   // exactOptionalPropertyTypes: only set mapId when defined; the
   // editor type's `mapId` is string-or-absent, not string-or-undefined.
   const out: EditorData = {
     version: 1,
     targets,
-    tools: [],
+    tools: passthrough,
     snapping: { enabled: false, selfSnap: false, tolerancePx: 10 },
   };
   if (viewer.mapId) out.mapId = viewer.mapId;

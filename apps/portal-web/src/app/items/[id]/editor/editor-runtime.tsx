@@ -2057,8 +2057,14 @@ export function EditorRuntime({
                 (t.key === 'undo' && undoStack.length === 0) ||
                 (t.key === 'redo' && redoStack.length === 0);
               const isStackButton = t.key === 'undo' || t.key === 'redo';
+              // Read-side tools (select, measure) work in both editor
+              // and viewer modes — they don't write anything. Only
+              // gate the write-side tools on canEdit so the viewer
+              // runtime (#259) can still expose read-side
+              // affordances when canEdit=false.
+              const isReadOnlyTool = t.key === 'select' || t.key === 'measure';
               const disabled =
-                !canEdit ||
+                (!canEdit && !isReadOnlyTool) ||
                 (isStackButton && stackEmpty) ||
                 (isStackButton && undoBusy);
               return (
@@ -2094,19 +2100,21 @@ export function EditorRuntime({
             })}
           </div>
 
-          {/* #259 slice 4: Print button. Top-right of the canvas, in
-              its own pill so it doesn't crowd the editing tool
-              palette on the left. Today this just calls
-              window.print() against the print-only stylesheet (which
-              hides the runtime chrome and lets the canvas fill the
-              page). #132 (Print Template item type) will replace
-              this with a chooser that opens a real print-layout
-              renderer; for now the basic browser print is the floor
-              for AGOL parity. The runtime applies the
+          {/* #259 slice 4: Print button. Top-left of the canvas in
+              its own pill, stacked below the editor tool palette
+              (when present). Originally placed top-right but that
+              overlapped MapLibre's stock zoom controls, which also
+              live top-right. Today this just calls window.print()
+              against the print-only stylesheet (which hides the
+              runtime chrome and lets the canvas fill the page).
+              #132 (Print Template item type) will replace this
+              with a chooser that opens a real print-layout
+              renderer; for now the basic browser print is the
+              floor for AGOL parity. The runtime applies the
               `print-runtime` class to the body during click so the
               stylesheet only hides chrome on demand. */}
           {printEnabled ? (
-            <div className="pointer-events-auto absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-md border border-border bg-surface-1 p-1 shadow-card print:hidden">
+            <div className="pointer-events-auto absolute right-3 top-28 z-10 flex flex-col gap-1 rounded-md border border-border bg-surface-1 p-1 shadow-card print:hidden">
               <button
                 type="button"
                 onClick={() => {
