@@ -67,8 +67,18 @@ export function AppShellChrome({
   // Field-runtime path: render bare. Same predicate as the
   // server-side check used to use; kept here so a future widening
   // (e.g. a different full-screen surface) is one regex tweak.
+  //
+  // Viewer / editor runtimes get the same treatment (#307). They
+  // already render their own WAB-style header (title, toolbar,
+  // basemap selector); the portal sidebar layered on top of that
+  // makes a public-share link look cluttered and breaks AGOL parity.
+  // Rendering bare lets a shared link open the runtime as the
+  // entire viewport, just like AGOL Web App Builder.
   const isFieldRuntime = /^\/items\/[^/]+\/field(?:\/|$)/.test(pathname);
-  if (isFieldRuntime) {
+  const isAppRuntime = /^\/items\/[^/]+\/(?:viewer|editor)\/run(?:\/|$)/.test(
+    pathname,
+  );
+  if (isFieldRuntime || isAppRuntime) {
     return (
       <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
     );
