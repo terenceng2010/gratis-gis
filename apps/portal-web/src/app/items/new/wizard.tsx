@@ -38,6 +38,8 @@ import type {
   ItemAccess,
   ItemType,
   WebAppData,
+  WmsServiceData,
+  WfsServiceData,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
@@ -60,6 +62,11 @@ import {
   probeService,
   type ArcgisServiceDescription,
 } from '@/lib/arcgis-rest';
+import {
+  probeWms,
+  probeWfs,
+  type OgcCapabilities,
+} from '@/lib/ogc-rest';
 import { DataCollectionBuilder } from './data-collection-builder';
 import { DataLayerBuilder } from './data-layer-builder';
 import { DerivedLayerBuilder } from './derived-layer-builder';
@@ -381,6 +388,21 @@ export function NewItemWizard() {
   // and the upload completes; submit() blocks on it.
   const [fileItemUpload, setFileItemUpload] = useState<FileData | null>(null);
 
+  // #297: WMS / WFS probe state. Mirrors the ArcGIS probe flow but
+  // simpler -- no auth path yet (most public WMS / WFS endpoints are
+  // anonymous) and the layer ids are strings, not numbers. The probe
+  // result is shaped as OgcCapabilities so the same branch handles
+  // both protocols; submit() reads the kind off the result.
+  const [ogcUrlDraft, setOgcUrlDraft] = useState<string>('');
+  const [ogcProbing, setOgcProbing] = useState(false);
+  const [ogcProbeError, setOgcProbeError] = useState<string | null>(null);
+  const [ogcProbeResult, setOgcProbeResult] = useState<OgcCapabilities | null>(
+    null,
+  );
+  const [ogcSelectedLayerNames, setOgcSelectedLayerNames] = useState<Set<string>>(
+    new Set(),
+  );
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
@@ -476,6 +498,43 @@ export function NewItemWizard() {
       if (!controller.signal.aborted) setArcgisProbing(false);
     }
   }, [arcgisUrlDraft, applyProbeResult]);
+
+  /**
+   * #297 OGC probe runner. Fires a GetCapabilities against the user-
+   * supplied URL, parses the response, and lights up the layer picker.
+   * Selects all layers by default so a "Probe -> Create" flow yields
+   * a complete item without extra clicks. Selection is per-protocol
+   * (WMS layer Name / WFS typeName) and stored as a string set.
+   */
+  const runOgcProbe = useCallback(async () => {
+    const raw = ogcUrlDraft.trim();
+    if (!raw) {
+      setOgcProbeError(
+        type === 'wfs_service'
+          ? 'Paste a WFS endpoint URL (the GetCapabilities base, no query string).'
+          : 'Paste a WMS endpoint URL (the GetCapabilities base, no query string).',
+      );
+      return;
+    }
+    setOgcProbeError(null);
+    setOgcProbing(true);
+    try {
+      const result =
+        type === 'wfs_service' ? await probeWfs(raw) : await probeWms(raw);
+      setOgcProbeResult(result);
+      setOgcSelectedLayerNames(new Set(result.layers.map((l) => l.name)));
+    } catch (err) {
+      setOgcProbeError(
+        err instanceof Error
+          ? err.message
+          : 'Could not read that service. Check the URL and CORS config.',
+      );
+      setOgcProbeResult(null);
+      setOgcSelectedLayerNames(new Set());
+    } finally {
+      setOgcProbing(false);
+    }
+  }, [ogcUrlDraft, type]);
 
   /**
    * Probe with a user-supplied credential via the server-side
@@ -685,13 +744,75 @@ export function NewItemWizard() {
       // The detail-page editor (shipped separately) lets the user pick
       // a style-url / tile-url / wms source and paste the URL.
       data = DEFAULT_BASEMAP;
-    } else if (type === 'wms_service') {
-      // Start with the empty WMS scaffold; URL + protocol version
-      // get filled in on the detail page (#35 v1 ships the type
-      // structurally; the inline probe / capabilities flow follows).
-      data = DEFAULT_WMS_SERVICE;
-    } else if (type === 'wfs_service') {
-      data = DEFAULT_WFS_SERVICE;
+    } else if (type === 'wms_service' || type === 'wfs_service') {
+      // #297: WMS / WFS items now ship with a probe-or-bail wizard
+      // step. The picker writes a fully-configured item (URL, layer
+      // list, selectedLayerIds defaulting to "all") so the detail
+      // page lands ready-to-render. Same shape pattern as
+      // arcgis_service.
+      if (
+        !ogcProbeResult ||
+        ogcProbeResult.kind !== (type === 'wms_service' ? 'wms' : 'wfs')
+      ) {
+        setError(
+          type === 'wfs_service'
+            ? 'Probe the WFS service URL before creating the item.'
+            : 'Probe the WMS service URL before creating the item.',
+        );
+        return;
+      }
+      if (ogcSelectedLayerNames.size === 0) {
+        setError('Select at least one layer to include in this item.');
+        return;
+      }
+      // selectedLayerIds is typed as number[] (predates the OGC
+      // types). For OGC services we use the layer's index in the
+      // probed list; the canonical name lives on layers[i].name.
+      const ids: number[] = [];
+      ogcProbeResult.layers.forEach((l, i) => {
+        if (ogcSelectedLayerNames.has(l.name)) ids.push(i);
+      });
+      if (type === 'wms_service' && ogcProbeResult.kind === 'wms') {
+        const wms: WmsServiceData = {
+          version: 1,
+          url: ogcProbeResult.url,
+          protocolVersion: ogcProbeResult.protocolVersion,
+          format: 'image/png',
+          transparent: true,
+          crs: 'EPSG:3857',
+          layers: ogcProbeResult.layers.map((l) => {
+            const out: WmsServiceData['layers'][number] = {
+              name: l.name,
+              title: l.title,
+            };
+            if (l.bbox) out.bbox = l.bbox;
+            return out;
+          }),
+          selectedLayerIds: ids,
+          ...(ogcProbeResult.bbox ? { bbox: ogcProbeResult.bbox } : {}),
+          probedAt: new Date().toISOString() as ISODateString,
+        };
+        data = wms;
+      } else if (type === 'wfs_service' && ogcProbeResult.kind === 'wfs') {
+        const wfs: WfsServiceData = {
+          version: 1,
+          url: ogcProbeResult.url,
+          protocolVersion: ogcProbeResult.protocolVersion,
+          outputFormat: 'application/json',
+          layers: ogcProbeResult.layers.map((l) => {
+            const out: WfsServiceData['layers'][number] = {
+              name: l.name,
+              title: l.title,
+            };
+            if (l.bbox) out.bbox = l.bbox;
+            return out;
+          }),
+          selectedLayerIds: ids,
+          ...(ogcProbeResult.bbox ? { bbox: ogcProbeResult.bbox } : {}),
+          probedAt: new Date().toISOString() as ISODateString,
+        };
+        data = wfs;
+      }
     } else if (type === 'folder') {
       // Empty folder; the detail page handles adding children via the
       // "Add to folder" multi-select and drag-drop in Phase 1b.
@@ -1231,6 +1352,25 @@ export function NewItemWizard() {
         <FileItemUploader value={fileItemUpload} onChange={setFileItemUpload} />
       ) : null}
 
+      {type === 'wms_service' || type === 'wfs_service' ? (
+        <OgcConfigSection
+          kind={type === 'wms_service' ? 'wms' : 'wfs'}
+          urlDraft={ogcUrlDraft}
+          onUrlChange={setOgcUrlDraft}
+          probing={ogcProbing}
+          probeError={ogcProbeError}
+          probeResult={ogcProbeResult}
+          selectedLayerNames={ogcSelectedLayerNames}
+          onSelectedLayerNamesChange={setOgcSelectedLayerNames}
+          onProbe={runOgcProbe}
+          onDiscardProbe={() => {
+            setOgcProbeResult(null);
+            setOgcSelectedLayerNames(new Set());
+            setOgcProbeError(null);
+          }}
+        />
+      ) : null}
+
       {error ? (
         <div
           className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
@@ -1408,6 +1548,170 @@ function FileItemUploader({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Wizard pane for type='wms_service' / 'wfs_service' (#297).
+ *
+ * Mirrors the ArcGIS probe section but simpler: no auth flow yet
+ * (most public WMS / WFS endpoints are anonymous), and the layer ids
+ * are strings (Name / typeName), not the integer ids ArcGIS uses.
+ *
+ * Two-stage layout: paste a URL, click Probe; on success the layer
+ * picker appears with all layers checked by default. The user can
+ * uncheck individual layers to curate which appear in the item.
+ */
+function OgcConfigSection({
+  kind,
+  urlDraft,
+  onUrlChange,
+  probing,
+  probeError,
+  probeResult,
+  selectedLayerNames,
+  onSelectedLayerNamesChange,
+  onProbe,
+  onDiscardProbe,
+}: {
+  kind: 'wms' | 'wfs';
+  urlDraft: string;
+  onUrlChange: (v: string) => void;
+  probing: boolean;
+  probeError: string | null;
+  probeResult: OgcCapabilities | null;
+  selectedLayerNames: Set<string>;
+  onSelectedLayerNamesChange: (next: Set<string>) => void;
+  onProbe: () => void;
+  onDiscardProbe: () => void;
+}) {
+  const protocolLabel = kind === 'wms' ? 'WMS' : 'WFS';
+  const layerWord = kind === 'wms' ? 'layer' : 'feature type';
+  return (
+    <section className="rounded-lg border border-border bg-surface-1 p-4">
+      <h2 className="mb-1 text-sm font-medium text-ink-0">
+        {protocolLabel} service
+      </h2>
+      <p className="mb-3 text-xs text-muted">
+        Paste the GetCapabilities base URL (no query string). Probe to
+        load the {layerWord} list from the server.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="url"
+          inputMode="url"
+          value={urlDraft}
+          disabled={probing || !!probeResult}
+          onChange={(e) => onUrlChange(e.target.value)}
+          placeholder={
+            kind === 'wms'
+              ? 'https://example.org/geoserver/wms'
+              : 'https://example.org/geoserver/wfs'
+          }
+          className="h-9 min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-2 text-sm font-mono"
+        />
+        {probeResult ? (
+          <button
+            type="button"
+            onClick={onDiscardProbe}
+            className="h-9 rounded-md border border-border bg-surface-1 px-3 text-xs text-ink-1 hover:bg-surface-2"
+          >
+            Try a different URL
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onProbe}
+            disabled={probing}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+          >
+            {probing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plug className="h-3.5 w-3.5" />}
+            {probing ? 'Probing...' : 'Probe'}
+          </button>
+        )}
+      </div>
+      {probeError ? (
+        <p className="mt-2 text-xs text-danger" role="alert">
+          {probeError}
+        </p>
+      ) : null}
+      {probeResult ? (
+        <div className="mt-4 rounded-md border border-border bg-surface-2 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+            <div className="text-muted">
+              {probeResult.title ? (
+                <>
+                  <span className="font-medium text-ink-0">{probeResult.title}</span>
+                  {' · '}
+                </>
+              ) : null}
+              {protocolLabel} {probeResult.protocolVersion} · {probeResult.layers.length}{' '}
+              {layerWord}
+              {probeResult.layers.length === 1 ? '' : 's'}
+            </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onSelectedLayerNamesChange(
+                    new Set(probeResult.layers.map((l) => l.name)),
+                  )
+                }
+                className="h-6 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectedLayerNamesChange(new Set())}
+                className="h-6 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          {probeResult.layers.length === 0 ? (
+            <p className="text-xs text-muted">
+              The server didn&rsquo;t advertise any named {layerWord}s. Double-check
+              the URL points at the GetCapabilities endpoint.
+            </p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto rounded border border-border bg-surface-1 text-xs">
+              {probeResult.layers.map((l) => {
+                const checked = selectedLayerNames.has(l.name);
+                return (
+                  <li
+                    key={l.name}
+                    className="flex items-center gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = new Set(selectedLayerNames);
+                        if (checked) next.delete(l.name);
+                        else next.add(l.name);
+                        onSelectedLayerNamesChange(next);
+                      }}
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium text-ink-0">{l.title}</span>
+                      {l.title !== l.name ? (
+                        <span className="ml-2 text-muted">
+                          <span className="font-mono">{l.name}</span>
+                        </span>
+                      ) : (
+                        <span className="ml-2 font-mono text-muted">{l.name}</span>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
