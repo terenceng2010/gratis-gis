@@ -1170,7 +1170,13 @@ export function EditorRuntime({
       return;
     }
     if (tool === 'select') {
-      setActiveTool('off');
+      // Toggle: clicking Select again drops back to off (default
+      // pan + click-to-popup). When 'select' is active, MapCanvas's
+      // selectTool='click' mode kicks in: clicks pick features into
+      // the selection set without opening popups, mirroring AGOL's
+      // Select tool. The button's `isActive` highlight reflects
+      // activeTool === 'select'.
+      setActiveTool((prev) => (prev === 'select' ? 'off' : 'select'));
       setActiveTargetKey(null);
       return;
     }
@@ -2113,7 +2119,28 @@ export function EditorRuntime({
               if (typeof next.zoom === 'number') setCurrentZoom(next.zoom);
             }}
             selection={selection}
-            selectTool="off"
+            // Wire the Select tool to MapCanvas's click-to-select
+            // mode (`'click'`): each click picks a feature into the
+            // selection set and the click-to-popup path is bypassed
+            // automatically. Default 'off' keeps the popup behavior
+            // intact when no tool is active. The other selectTool
+            // modes (rectangle / polygon / lasso) aren't surfaced as
+            // EditorTool buttons today; a follow-up can add a
+            // dropdown for box / polygon select.
+            selectTool={activeTool === 'select' ? 'click' : 'off'}
+            // Suppress the canvas's default click-to-popup behavior
+            // while a tool that owns clicks is active. Measure uses
+            // terra-draw to place vertices and the popup was firing
+            // alongside the vertex placement; add / edit / delete
+            // similarly need the click for their own purposes.
+            // Without this, every measure tap or feature-edit click
+            // also opened an inspect popup.
+            suppressPopup={
+              activeTool === 'measure' ||
+              activeTool === 'add' ||
+              activeTool === 'edit' ||
+              activeTool === 'delete'
+            }
             onSelectionChange={setSelection}
             onMapReady={(m) => setMapInstance(m)}
           />
