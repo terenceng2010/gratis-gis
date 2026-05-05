@@ -302,12 +302,21 @@ function QuestionField({
   error,
   readOnly,
   onChange,
+  setValue,
 }: {
   q: Question;
   response: Response;
   error: string | null;
   readOnly: boolean;
   onChange: (v: unknown) => void;
+  /**
+   * Top-level setter from the form root. Non-repeating groups use it
+   * directly so their child questions write at the top level of the
+   * response (matching pruneHidden's expectation), instead of nesting
+   * under the group's id. Repeat groups don't need it: each instance
+   * is its own response object passed in.
+   */
+  setValue?: (id: string, v: unknown) => void;
 }) {
   if (!isVisible(q, response)) return null;
 
@@ -327,7 +336,16 @@ function QuestionField({
     return <Input q={q} value={null} readOnly={readOnly} onChange={onChange} />;
   }
   if (q.type === 'group') {
-    return <GroupField q={q} response={response} error={error} readOnly={readOnly} onChange={onChange} />;
+    return (
+      <GroupField
+        q={q}
+        response={response}
+        error={error}
+        readOnly={readOnly}
+        onChange={onChange}
+        {...(setValue ? { setValue } : {})}
+      />
+    );
   }
 
   const value = response[q.id];
@@ -373,20 +391,46 @@ function GroupField({
   response,
   readOnly,
   onChange,
+  setValue,
 }: {
   q: Extract<Question, { type: 'group' }>;
   response: Response;
   error: string | null;
   readOnly: boolean;
   onChange: (v: unknown) => void;
+  setValue?: (id: string, v: unknown) => void;
 }) {
-  // Repeating group: stored as an array of Response objects.
-  // Non-repeating group: child responses live nested under the
-  // group's id, mirroring the repeat-group shape so onSet can build
-  // the next value with a simple object spread. (An older comment
-  // here claimed children lived at the top level; that didn't match
-  // the write path, so the read had to be patched to follow suit.)
+  // Non-repeating group is purely a visual container. Children's
+  // responses live at the TOP LEVEL of `response`, keyed by their
+  // question id (matching pruneHidden + walkQuestions which only
+  // know about top-level keys). The group's own id is never a key
+  // in the response. Falls back to the legacy nested model if no
+  // top-level setValue was threaded down (defensive; shouldn't
+  // happen in practice).
+  //
+  // Repeat groups are different: each instance is its own response
+  // object stored in an array under response[q.id], and child
+  // questions write into the instance via the inner closure.
   if (!q.repeat) {
+    if (setValue) {
+      return (
+        <fieldset className="rounded-md border border-border bg-surface-2/30 p-3">
+          <legend className="px-2 text-sm font-medium text-ink-0">
+            {q.label}
+          </legend>
+          <PackedRows
+            questions={q.children}
+            response={response}
+            readOnly={readOnly}
+            onSet={setValue}
+          />
+        </fieldset>
+      );
+    }
+    // Legacy path: no setValue threaded down. Keep nesting so the
+    // group at least round-trips its own state, even if pruneHidden
+    // will drop the children. Should be unreachable now that the
+    // root PackedRows passes setValue.
     const inner = (response[q.id] as Response | undefined) ?? ({} as Response);
     return (
       <fieldset className="rounded-md border border-border bg-surface-2/30 p-3">
@@ -397,12 +441,7 @@ function GroupField({
           questions={q.children}
           response={inner}
           readOnly={readOnly}
-          onSet={(id, v) =>
-            onChange({
-              ...inner,
-              [id]: v,
-            })
-          }
+          onSet={(id, v) => onChange({ ...inner, [id]: v })}
         />
       </fieldset>
     );
@@ -499,6 +538,7 @@ function PackedRows({
                 error={errorByQuestion?.get(q.id) ?? null}
                 readOnly={readOnly || isReadOnly(q, response)}
                 onChange={(v) => onSet(q.id, v)}
+                setValue={onSet}
               />
             </div>
           ))}
