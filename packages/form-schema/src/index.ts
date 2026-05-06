@@ -2111,19 +2111,48 @@ export function applyCalculations(
  */
 export function pruneHidden(form: FormSchema, response: Response): Response {
   const out: Response = {};
-  for (const q of walkQuestions(form)) {
-    if (
-      q.type === 'page' ||
-      q.type === 'note' ||
-      q.type === 'group' ||
-      q.type === 'divider' ||
-      q.type === 'image-display'
-    ) {
-      continue;
+  // Walk the tree manually instead of via walkQuestions so we can
+  // tell repeat groups (which carry their full instance array at
+  // response[group.id]) apart from non-repeat groups (whose children
+  // write to top-level keys per #288). The previous flat walk
+  // skipped EVERY group and so dropped repeat-group answers entirely
+  // (#344) -- a 2-instance "Inspections" submission would arrive at
+  // the server with no group_inspection key at all, the form
+  // mirror's per-instance loop never had anything to mirror, and
+  // every related-sublayer row + per-instance attachment failed to
+  // land. Treating the repeat group as a leaf-with-array fixes that
+  // cleanly without changing how non-repeat groups + their children
+  // round-trip.
+  function walk(qs: Question[]) {
+    for (const q of qs) {
+      if (
+        q.type === 'page' ||
+        q.type === 'note' ||
+        q.type === 'divider' ||
+        q.type === 'image-display'
+      ) {
+        continue;
+      }
+      if (q.type === 'group') {
+        if (q.repeat) {
+          // Repeat group: response[q.id] is an array of instance
+          // objects. Keep it as-is. We deliberately do NOT recurse
+          // into children -- their values live inside instances,
+          // not at top-level keys.
+          if (!isVisible(q, response)) continue;
+          if (q.id in response) out[q.id] = response[q.id];
+          continue;
+        }
+        // Non-repeat group: children write to top-level (#288),
+        // so recurse and let them be picked up individually.
+        walk(q.children);
+        continue;
+      }
+      if (!isVisible(q, response)) continue;
+      if (q.id in response) out[q.id] = response[q.id];
     }
-    if (!isVisible(q, response)) continue;
-    if (q.id in response) out[q.id] = response[q.id];
   }
+  walk(form.questions);
   return out;
 }
 

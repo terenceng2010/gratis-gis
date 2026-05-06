@@ -5714,6 +5714,10 @@ interface RawSublayer {
   attachmentsEnabled?: boolean;
   childLayerIds?: string[];
   parentLayerId?: string;
+  /** Column on this sublayer's table that holds the parent's
+   *  global_id. Mirrors data_layer.ts's parentFkColumn so the
+   *  designer's PATCH preserves it round-trip. */
+  parentFkColumn?: string;
   /** Legacy shape: schema.columns pre-v3. Tolerated for safety. */
   schema?: { columns?: LayerColumn[] };
 }
@@ -6061,6 +6065,10 @@ async function syncPairedLayerColumns(
   nextLayers[subIdx] = parentMerged;
   // (2) related
   let relatedAdds = 0;
+  // #344: collect every related sublayer's id (whether newly added
+  // or already present) so we can update the parent submissions
+  // sublayer's `childLayerIds` array in step (3).
+  const knownChildIds = new Set<string>();
   for (const dr of desiredRelated) {
     const idx = nextLayers.findIndex(
       (l) => l.id === dr.id || l.key === dr.id,
@@ -6072,8 +6080,17 @@ async function syncPairedLayerColumns(
         label: dr.label,
         geometryType: dr.geometryType,
         fields: dr.fields,
+        // #344: surface the parent/child relationship in the
+        // sublayer schema so the data_layer detail page's
+        // "Related to" picker knows this is a child of submissions
+        // and the FK column. Without these the sublayer renders as
+        // "(standalone table)" and downstream consumers can't tell
+        // the rows belong to a parent submission.
+        parentLayerId: layerKey,
+        parentFkColumn: 'parent_submission_id',
       });
       relatedAdds += 1;
+      knownChildIds.add(dr.id);
     } else {
       const cur = nextLayers[idx]!;
       const existRel = (cur.fields ?? []) as RawFeatureField[];
@@ -6090,15 +6107,53 @@ async function syncPairedLayerColumns(
       const wantPromote =
         (cur.geometryType === null || cur.geometryType === undefined) &&
         dr.geometryType !== null;
-      if (merged.length !== existRel.length || wantPromote) {
+      // #344: backfill parentLayerId / parentFkColumn on
+      // sublayers that were created by older versions of the
+      // designer before this metadata was emitted. Idempotent: a
+      // re-save lights up the relationship picker on the data_layer
+      // detail page for previously-orphaned sublayers without
+      // needing a manual edit.
+      const wantRelMeta =
+        cur.parentLayerId !== layerKey ||
+        cur.parentFkColumn !== 'parent_submission_id';
+      if (merged.length !== existRel.length || wantPromote || wantRelMeta) {
         nextLayers[idx] = {
           ...cur,
           fields: merged,
           ...(wantPromote ? { geometryType: dr.geometryType } : {}),
+          ...(wantRelMeta
+            ? {
+                parentLayerId: layerKey,
+                parentFkColumn: 'parent_submission_id',
+              }
+            : {}),
         };
         relatedAdds += 1;
       }
+      knownChildIds.add(dr.id);
     }
+  }
+
+  // (3) parent's childLayerIds: union of existing + every related
+  // sublayer we just touched. Never shrinks (a related sublayer
+  // that's been removed from the form schema by hand is left in
+  // place; the existing v3 reconcile path drops the table when
+  // the sublayer disappears from `layers`, but the metadata
+  // pointer is harmless either way and not our place to prune).
+  const parentIdx = subIdx;
+  const parentCur = nextLayers[parentIdx]!;
+  const existingChildren = Array.isArray(parentCur.childLayerIds)
+    ? parentCur.childLayerIds
+    : [];
+  const mergedChildren = Array.from(
+    new Set([...existingChildren, ...knownChildIds]),
+  );
+  if (mergedChildren.length !== existingChildren.length) {
+    nextLayers[parentIdx] = {
+      ...parentCur,
+      childLayerIds: mergedChildren,
+    } as RawSublayer;
+    relatedAdds += 1;
   }
 
   // Defensive log so an author can open devtools and see what the
