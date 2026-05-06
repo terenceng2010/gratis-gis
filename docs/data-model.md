@@ -24,7 +24,7 @@ Authoritative user record, synced from Keycloak on first login.
 | field | type | notes |
 | --- | --- | --- |
 | id | uuid (PK) | matches Keycloak `sub` claim |
-| org\_id | uuid â†’ Organization | |
+| org\_id | uuid → Organization | |
 | username | text unique | |
 | email | text | |
 | full\_name | text | |
@@ -36,19 +36,19 @@ Authoritative user record, synced from Keycloak on first login.
 | field | type | notes |
 | --- | --- | --- |
 | id | uuid (PK) | |
-| org\_id | uuid â†’ Organization | |
+| org\_id | uuid → Organization | |
 | title | text | |
 | description | text | |
 | access | enum | `private` \| `org` \| `public` |
-| owner\_id | uuid â†’ User | |
+| owner\_id | uuid → User | |
 | created\_at | timestamptz | |
 
 ### GroupMember
 
 | field | type | notes |
 | --- | --- | --- |
-| group\_id | uuid â†’ Group | PK part |
-| user\_id | uuid â†’ User | PK part |
+| group\_id | uuid → Group | PK part |
+| user\_id | uuid → User | PK part |
 | role | enum | `member` \| `admin` |
 | joined\_at | timestamptz | |
 
@@ -61,8 +61,8 @@ table, etc.).
 | field | type | notes |
 | --- | --- | --- |
 | id | uuid (PK) | |
-| org\_id | uuid â†’ Organization | |
-| owner\_id | uuid â†’ User | |
+| org\_id | uuid → Organization | |
+| owner\_id | uuid → User | |
 | type | enum `ItemType` | see below |
 | title | text | |
 | description | text | |
@@ -91,7 +91,7 @@ feature-service, see the `feature-view` pattern in
 
 | field | type | notes |
 | --- | --- | --- |
-| item\_id | uuid â†’ Item | PK part |
+| item\_id | uuid → Item | PK part |
 | principal\_type | enum | `user` \| `group`. PK part |
 | principal\_id | uuid | references `user.id` or `group.id` per type. PK part |
 | permission | enum | `view` \| `edit` \| `admin` |

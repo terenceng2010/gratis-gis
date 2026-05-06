@@ -30,7 +30,7 @@ each user's request is filtered in-flight.
 | Dimension | Layer-views (AGOL-style) | Attached policies (our choice) |
 | --- | --- | --- |
 | **Schema evolution** | Every view must be edited when the base table gains/loses a column. Risk of accidental leak if a new column gets surfaced. | One schema. New columns are invisible by default (configurable); policies explicitly opt a column in. |
-| **App count** | Different audiences need different layers â†’ different apps, or app logic to pick the right view per user. | One app, one layer URL. The server does the right thing based on who is asking. |
+| **App count** | Different audiences need different layers → different apps, or app logic to pick the right view per user. | One app, one layer URL. The server does the right thing based on who is asking. |
 | **Tile caching** | Each view has its own tiles. Duplicated compute and storage. | One tile source. Per-request column masking happens on the API path; row filtering compiles into the tile query. |
 | **Audit** | "Who can see column X?" means inspecting every view. | "Who can see column X?" is a query against the policy table. |
 | **Composition** | Views of views are awkward; permissions drift. | Policies stack naturally; permission checks compose as SQL `AND`/`OR`. |
@@ -40,7 +40,7 @@ each user's request is filtered in-flight.
 ```
 FieldPolicy (one row per policy):
   id              uuid PK
-  itemId          uuid â†’ Item (must be feature-service)
+  itemId          uuid → Item (must be feature-service)
   name            text         : admin-facing label
   principalMatch  jsonb        : who this applies to
   visibleColumns  text[]       : columns this audience can see
@@ -50,7 +50,7 @@ FieldPolicy (one row per policy):
 
 RowPolicy (one row per policy):
   id              uuid PK
-  itemId          uuid â†’ Item
+  itemId          uuid → Item
   name            text
   principalMatch  jsonb
   filter          jsonb        : safe-expression AST (see below)

@@ -325,7 +325,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // ref is enough: we don't need this in React state.
   const appliedSelectionRef = useRef<Record<string, Set<number>>>({});
 
-  // Sync shared selection state â†’ MapLibre feature-state. Diffs against
+  // Sync shared selection state → MapLibre feature-state. Diffs against
   // the previously-applied map so we only touch what changed rather
   // than walking every feature on every render.
   useEffect(() => {
@@ -496,7 +496,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       // Vector style.json URL: MapLibre fetches it. We can't tag the
       // style object directly, so fall back to marking after it loads.
       // eslint-disable-next-line no-console
-      console.debug('[basemap] setStyle URL â†’', desiredTag);
+      console.debug('[basemap] setStyle URL →', desiredTag);
       m.setStyle(resolved);
       m.once('styledata', () => {
         // Best-effort tag so the `current !== desired` check above
@@ -512,7 +512,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         metadata: { ...(resolved.metadata ?? {}), basemapTag: desiredTag },
       };
       // eslint-disable-next-line no-console
-      console.debug('[basemap] setStyle â†’', desiredTag);
+      console.debug('[basemap] setStyle →', desiredTag);
       m.setStyle(style);
     }
 
@@ -870,7 +870,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         // edit, where the parent owns the click).
       }
 
-      // tool === 'off' â†’ popup behaviour, unless the parent told
+      // tool === 'off' → popup behaviour, unless the parent told
       // us to skip (field-runtime opens its own form modal on tap).
       if (suppressPopup) {
         popupRef.current?.remove();
@@ -1297,8 +1297,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 /**
  * Load an SVG string onto a canvas and return the raw pixels. Used to
  * turn the bundled icon library into images MapLibre can register via
- * addImage(). We render at 2x physical pixels (96 Ã- 96 pixels for a
- * 48 Ã- 48 icon) so high-DPI displays stay crisp.
+ * addImage(). We render at 2x physical pixels (96 × 96 pixels for a
+ * 48 × 48 icon) so high-DPI displays stay crisp.
  */
 async function rasterizeSvg(svg: string, size: number): Promise<ImageData> {
   const scale = 2;
@@ -2171,8 +2171,8 @@ function combineFilter(
 
 /**
  * Build a MapLibre paint color for a given style slot, honoring the
- * layer's renderer. Simple renderer â†’ raw hex. Unique-values renderer
- * â†’ a `match` expression against the field, defaulting to the simple
+ * layer's renderer. Simple renderer → raw hex. Unique-values renderer
+ * → a `match` expression against the field, defaulting to the simple
  * color for anything unlisted.
  *
  * Returns `any` because MapLibre paint values are typed as massive
@@ -2408,13 +2408,13 @@ function formatPopupDate(value: unknown): string {
 /**
  * Handlebars-lite interpolation.
  *
- *   {{field}}               â†’ raw value
- *   {{field | upper}}       â†’ uppercased
- *   {{field | lower}}       â†’ lowercased
- *   {{price | number}}      â†’ locale-formatted number
- *   {{price | currency}}    â†’ locale currency (user's default)
- *   {{date | date}}         â†’ locale-formatted date/time
- *   {{date | date:short}}   â†’ short date
+ *   {{field}}               → raw value
+ *   {{field | upper}}       → uppercased
+ *   {{field | lower}}       → lowercased
+ *   {{price | number}}      → locale-formatted number
+ *   {{price | currency}}    → locale currency (user's default)
+ *   {{date | date}}         → locale-formatted date/time
+ *   {{date | date:short}}   → short date
  *
  * Template literals are rendered as HTML so authors can use small
  * markup (`<br>`, `<strong>`). Values are always HTML-escaped, so a

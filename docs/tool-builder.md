@@ -96,7 +96,7 @@ A tool can be published as a widget. The widget manifest declares:
 
 - Which graph inputs are user-facing (e.g. a layer picker, a number input)
 - Which outputs render as UI (map layer, chart, list)
-- A React Flow â†’ runtime binding that lives in `apps/app-builder`
+- A React Flow → runtime binding that lives in `apps/app-builder`
 
 This means every tool is dual-use: run-as-analysis or drag-and-drop widget.
 

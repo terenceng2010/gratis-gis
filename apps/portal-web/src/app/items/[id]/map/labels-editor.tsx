@@ -220,7 +220,7 @@ export function LabelsEditor({ value, metadata, onChange }: Props) {
                 onChange={(n) => patch({ offsetX: n })}
               />
               <Slider
-                label="Y (â†“ is positive)"
+                label="Y (↓ is positive)"
                 min={-4}
                 max={4}
                 step={0.1}

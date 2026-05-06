@@ -59,10 +59,10 @@ export type FieldDomain =
  * to shapefile / File GDB or doing client-side validation. The
  * backend applies them when provisioning the PostGIS table:
  *
- *   - `maxLength` on a string field â†’ `VARCHAR(maxLength)` instead of `TEXT`.
- *   - `numberKind: 'integer'`        â†’ `INTEGER` instead of `NUMERIC`.
+ *   - `maxLength` on a string field → `VARCHAR(maxLength)` instead of `TEXT`.
+ *   - `numberKind: 'integer'`        → `INTEGER` instead of `NUMERIC`.
  *   - `numberKind: 'decimal'` + both precision/scale set
- *                                    â†’ `NUMERIC(precision, scale)`.
+ *                                    → `NUMERIC(precision, scale)`.
  */
 export interface FeatureFieldStorage {
   /** Cap on string length in characters. Leave unset for unlimited. */
@@ -314,7 +314,7 @@ export interface UpdateFeatureInput {
  * Registered relationship between two feature-service items.
  * Stored in the parent item's data.relationships array.
  *
- * Example: nest points (parent) â†’ annual_inspections (child).
+ * Example: nest points (parent) → annual_inspections (child).
  * The child table has a `parent_global_id` UUID column (indexed) that
  * references the parent feature's global_id.
  */

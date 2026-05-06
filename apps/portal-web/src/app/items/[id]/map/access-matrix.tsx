@@ -343,7 +343,7 @@ export function AccessMatrix({
             />
           </label>
           <div className="text-xs text-muted">
-            {filtered.length} layer{filtered.length === 1 ? '' : 's'} Ã-{' '}
+            {filtered.length} layer{filtered.length === 1 ? '' : 's'} ×{' '}
             {principals.length} principal
             {principals.length === 1 ? '' : 's'}
           </div>
@@ -794,7 +794,7 @@ function PopoverRow({
 }
 
 /**
- * Helper the map-editor uses to resolve shares â†’ named principals.
+ * Helper the map-editor uses to resolve shares → named principals.
  * Falls back to a short id when the name lookup hasn't come back
  * yet so the matrix can render during fetch.
  */

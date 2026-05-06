@@ -33,9 +33,9 @@ Clients:
 | claim | meaning |
 | --- | --- |
 | `sub` | Keycloak user id: becomes `user.id` |
-| `preferred_username` | â†’ `user.username` |
-| `email` | â†’ `user.email` |
-| `name` | â†’ `user.full_name` |
+| `preferred_username` | → `user.username` |
+| `email` | → `user.email` |
+| `name` | → `user.full_name` |
 | `org` (custom) | Organization slug: mapped to `user.org_id` at first login |
 | `org_role` (custom) | `viewer` \| `contributor` \| `admin` |
 

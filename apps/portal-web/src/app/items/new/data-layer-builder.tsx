@@ -1085,7 +1085,7 @@ interface DomainEditorProps {
  * Dispatches to either the inline coded-value editor or the shared
  * pick-list picker based on the current domain variant. Offers a
  * toggle so authors can switch between the two without losing state
- * that doesn't overlap: switching from inline â†’ shared just drops
+ * that doesn't overlap: switching from inline → shared just drops
  * the inline values; switching the other way leaves the user with an
  * empty inline list to populate.
  */

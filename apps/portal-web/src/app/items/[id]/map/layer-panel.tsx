@@ -1582,7 +1582,7 @@ function ZoomRange({
 }
 
 /**
- * Rough zoom â†’ scale denominator conversion. Web Mercator ~1:500M at
+ * Rough zoom → scale denominator conversion. Web Mercator ~1:500M at
  * zoom 0, halving per zoom level. Just a hint so users familiar with
  * scale-denominator thinking can orient: not a precise projection.
  */

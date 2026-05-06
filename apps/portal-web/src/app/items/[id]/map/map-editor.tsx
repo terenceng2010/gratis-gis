@@ -143,7 +143,7 @@ export function MapEditor({
       };
 
       // Migrate filter: v2.1 single-clause { field, op, value }
-      // â†’ v2.2 { combinator: 'all', clauses: [...] }.
+      // → v2.2 { combinator: 'all', clauses: [...] }.
       let filter: MapLayer['filter'] = null;
       if (l.filter && typeof l.filter === 'object') {
         const f = l.filter as unknown as Record<string, unknown>;
@@ -300,7 +300,7 @@ export function MapEditor({
     Record<string, string[]>
   >({});
 
-  // Maps layer id â†’ backing item id (null for geojson-url / inline).
+  // Maps layer id → backing item id (null for geojson-url / inline).
   // Matrix uses this to know which layers can have item-level gaps.
   //
   // For arcgis-rest sources we NOW carry an optional `sourceItemId`

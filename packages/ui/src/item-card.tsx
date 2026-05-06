@@ -14,7 +14,7 @@ export interface ItemCardProps {
   href?: string;
   /**
    * Optional per-type icon rendered on the thumbnail tile when the item
-   * has no custom thumbnailUrl. Callers supply this from a type-â†’icon
+   * has no custom thumbnailUrl. Callers supply this from a type-→icon
    * registry they own (keeps this package lucide-free). If omitted, the
    * card falls back to the legacy colored-initials EntityBadge tile.
    */

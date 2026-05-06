@@ -33,7 +33,7 @@ interface Props {
  *     AbortController when the query changes so a slow network can't
  *     clobber the latest results.
  *
- * Keyboard support follows the WAI-ARIA combobox pattern: â†‘ / â†“ move
+ * Keyboard support follows the WAI-ARIA combobox pattern: ↑ / ↓ move
  * the highlight, Enter picks, Escape closes.
  */
 export function SearchBar({
