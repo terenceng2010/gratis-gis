@@ -302,6 +302,8 @@ export default async function FormResponsesPage({ params }: Props) {
       canEdit={false}
       formViewSchema={formViewSchema}
       surveyTargetLayerId={surveyTargetLayerId}
+      surveyAttachmentsLayerItemId={dataLayerItem.id}
+      surveyAttachmentsLayerKey={layerKey}
       tableOpenDefault
     />
   );

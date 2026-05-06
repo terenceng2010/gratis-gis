@@ -351,6 +351,8 @@ export default async function SurveyRuntimePage({ params }: Props) {
       printEnabled={survey.tools.includes('print')}
       formViewSchema={formViewSchema}
       surveyTargetLayerId={surveyTargetLayerId}
+      surveyAttachmentsLayerItemId={dataLayerItem.id}
+      surveyAttachmentsLayerKey={layerKey}
     />
   );
 }

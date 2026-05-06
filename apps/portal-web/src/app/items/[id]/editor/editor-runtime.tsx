@@ -133,6 +133,18 @@ interface Props {
    * immediately. Defaults false.
    */
   tableOpenDefault?: boolean;
+  /**
+   * v3 data_layer item id whose feature_attachment rows the Form
+   * View should look up for the active submission (#351). When
+   * set alongside surveyTargetLayerKey, the Form View renders an
+   * Attachments section with thumbnails. Survey runtimes pass this
+   * through; Editor / Viewer leave it unset so they don't pay the
+   * fetch cost.
+   */
+  surveyAttachmentsLayerItemId?: string | null;
+  /** Sublayer key (e.g. 'submissions') paired with
+   *  surveyAttachmentsLayerItemId. */
+  surveyAttachmentsLayerKey?: string | null;
 }
 
 /**
@@ -191,6 +203,8 @@ export function EditorRuntime({
   formViewSchema = null,
   surveyTargetLayerId = null,
   tableOpenDefault = false,
+  surveyAttachmentsLayerItemId = null,
+  surveyAttachmentsLayerKey = null,
 }: Props) {
   const [mapData, setMapData] = useState<MapData>(initialMapData);
   // Track the camera's current zoom so LayerPanel can render the
@@ -2541,6 +2555,8 @@ export function EditorRuntime({
                 formViewIndex,
                 Math.max(0, surveyKeys.length - 1),
               )}
+              attachmentsLayerItemId={surveyAttachmentsLayerItemId}
+              attachmentsLayerKey={surveyAttachmentsLayerKey}
               onPrev={() =>
                 setFormViewIndex((i) => {
                   const n = surveyKeys.length;

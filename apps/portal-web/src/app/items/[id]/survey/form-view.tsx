@@ -5,11 +5,30 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  FileIcon,
+  ImageIcon,
   Loader2,
+  Paperclip,
   X,
 } from 'lucide-react';
 import type { FormSchema, Question } from '@gratis-gis/form-schema';
 import type { MapLayer, PickListData } from '@gratis-gis/shared-types';
+
+/**
+ * Lean attachment shape returned by /v3/attachments. Mirrors the
+ * v3-attachments.service.ts SELECT projection so the form view can
+ * render thumbnails + download links for the active feature
+ * without bringing in the full Prisma model.
+ */
+interface AttachmentRow {
+  id: string;
+  fileName: string;
+  mime: string;
+  sizeBytes: number;
+  storageUrl: string | null;
+  createdAt: string;
+  createdBy: string;
+}
 
 interface Props {
   open: boolean;
@@ -34,6 +53,13 @@ interface Props {
   /** 0-based index of the currently-displayed feature in the
    *  selection set. */
   activeIndex: number;
+  /** v3 data_layer item id whose feature_attachment rows hold the
+   *  photos / files for the active submission (#351). Survey
+   *  runtimes pass this in; when null the Attachments section is
+   *  skipped entirely (Editor / Viewer don't pay the fetch cost). */
+  attachmentsLayerItemId?: string | null;
+  /** Sublayer key paired with attachmentsLayerItemId, e.g. 'submissions'. */
+  attachmentsLayerKey?: string | null;
   onPrev: () => void;
   onNext: () => void;
   onClose: () => void;
@@ -65,6 +91,8 @@ export function FormView({
   activeProperties,
   selectedCount,
   activeIndex,
+  attachmentsLayerItemId = null,
+  attachmentsLayerKey = null,
   onPrev,
   onNext,
   onClose,
@@ -125,6 +153,42 @@ export function FormView({
       abort = true;
     };
   }, [submittedBy, userNames]);
+
+  // #351: pull feature_attachment rows for the active submission.
+  // The mirror writes attachments flat under the parent's
+  // _global_id (#292), not per repeat-instance, so a single fetch
+  // per active feature gets every photo/file the user attached.
+  // Reset to null while fetching so the section's Loading state
+  // shows instead of stale data from the previous submission.
+  const activeGlobalId =
+    (activeProperties?.['_global_id'] as string | undefined) ?? null;
+  const [attachments, setAttachments] = useState<AttachmentRow[] | null>(null);
+  useEffect(() => {
+    if (!attachmentsLayerItemId || !attachmentsLayerKey || !activeGlobalId) {
+      setAttachments(null);
+      return;
+    }
+    let abort = false;
+    setAttachments(null);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/portal/items/${attachmentsLayerItemId}/layers/${attachmentsLayerKey}/features/${activeGlobalId}/attachments`,
+        );
+        if (!res.ok) {
+          if (!abort) setAttachments([]);
+          return;
+        }
+        const rows = (await res.json()) as AttachmentRow[];
+        if (!abort) setAttachments(rows);
+      } catch {
+        if (!abort) setAttachments([]);
+      }
+    })();
+    return () => {
+      abort = true;
+    };
+  }, [attachmentsLayerItemId, attachmentsLayerKey, activeGlobalId]);
 
   if (!open) return null;
 
@@ -226,10 +290,110 @@ export function FormView({
                 />
               ))}
             </div>
+
+            {/* #351: Attachments section. Pinned at the bottom rather
+                than inline next to each photo question because the
+                form mirror today registers attachments flat under
+                the parent's _global_id (not per repeat-instance), so
+                splitting them by question would lie. A future slice
+                that keys attachments by instance can revisit. */}
+            {attachmentsLayerItemId && attachmentsLayerKey ? (
+              <AttachmentsSection attachments={attachments} />
+            ) : null}
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Attachments section pinned at the bottom of the Form View. Renders
+ * thumbnails for image MIME types and a labeled file row for
+ * everything else; clicking either opens the file in a new tab via
+ * the storage URL the form runtime already wrote at upload time
+ * (#280 direct-to-MinIO path).
+ */
+function AttachmentsSection({
+  attachments,
+}: {
+  attachments: AttachmentRow[] | null;
+}) {
+  return (
+    <section className="mt-4 border-t border-border pt-3">
+      <h3 className="mb-2 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+        <Paperclip className="h-3.5 w-3.5" />
+        Attachments
+        {attachments && attachments.length > 0 ? (
+          <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal text-violet-800">
+            {attachments.length}
+          </span>
+        ) : null}
+      </h3>
+      {attachments === null ? (
+        <p className="inline-flex items-center gap-1 text-xs italic text-muted">
+          <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+        </p>
+      ) : attachments.length === 0 ? (
+        <p className="text-xs italic text-muted">No attachments</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          {attachments.map((a) => (
+            <AttachmentTile key={a.id} attachment={a} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AttachmentTile({ attachment }: { attachment: AttachmentRow }) {
+  const isImage = attachment.mime.startsWith('image/');
+  const url = attachment.storageUrl ?? null;
+  if (isImage && url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        title={attachment.fileName}
+        className="group block overflow-hidden rounded-md border border-border bg-surface-2 hover:border-accent/40"
+      >
+        <img
+          src={url}
+          alt={attachment.fileName}
+          className="h-28 w-full object-cover"
+          loading="lazy"
+        />
+        <div className="truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-ink-1">
+          {attachment.fileName}
+        </div>
+      </a>
+    );
+  }
+  return (
+    <a
+      href={url ?? '#'}
+      target="_blank"
+      rel="noreferrer"
+      title={attachment.fileName}
+      className="flex flex-col items-stretch gap-1 rounded-md border border-border bg-surface-2 p-2 hover:border-accent/40"
+    >
+      <div className="flex h-12 items-center justify-center rounded bg-surface-1">
+        {isImage ? (
+          <ImageIcon className="h-6 w-6 text-muted" />
+        ) : (
+          <FileIcon className="h-6 w-6 text-muted" />
+        )}
+      </div>
+      <div className="truncate text-[10px] text-ink-1" title={attachment.fileName}>
+        {attachment.fileName}
+      </div>
+      <div className="text-[9px] text-muted">
+        {Math.max(1, Math.round(attachment.sizeBytes / 1024))} KB ·{' '}
+        {attachment.mime}
+      </div>
+    </a>
   );
 }
 
