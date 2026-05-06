@@ -252,6 +252,74 @@ function QuestionAnswer({
       'children' in question && Array.isArray(question.children)
         ? (question.children as Question[])
         : [];
+    const repeat =
+      question.type === 'group' &&
+      'repeat' in question &&
+      question.repeat
+        ? question.repeat
+        : null;
+    if (repeat) {
+      // #332: repeat-group answers live as an array of instance
+      // objects under values[question.id]; the runtime stores them
+      // that way (see form-runtime.tsx). Render one card per
+      // instance, recursing into each instance's child questions
+      // so they read THEIR values from that instance's bag instead
+      // of the outer parent's.
+      //
+      // Attachment-flavored repeat groups have their attachment
+      // children stripped out of properties at submit time (#292)
+      // and split into the v3 feature_attachment table; #327
+      // covers fetching those back out for display. Until that
+      // ships, attachments inside a repeat group render as "No
+      // answer" -- accurate, since the JSONB doesn't have them.
+      const rawInstances = values[question.id];
+      const instances: Array<Record<string, unknown>> = Array.isArray(
+        rawInstances,
+      )
+        ? (rawInstances as Array<Record<string, unknown>>).filter(
+            (i) => i && typeof i === 'object',
+          )
+        : [];
+      return (
+        <section className="space-y-2 border-l-2 border-violet-200 pl-3">
+          {question.label && (
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+              {question.label}{' '}
+              <span className="ml-1 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal text-violet-800">
+                {instances.length}{' '}
+                {instances.length === 1 ? 'entry' : 'entries'}
+              </span>
+            </h3>
+          )}
+          {instances.length === 0 ? (
+            <p className="text-xs italic text-muted">No entries</p>
+          ) : (
+            <div className="space-y-3">
+              {instances.map((inst, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-md border border-border bg-surface-2/50 p-2"
+                >
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Entry {idx + 1}
+                  </div>
+                  <div className="space-y-2">
+                    {children.map((c) => (
+                      <QuestionAnswer
+                        key={c.id}
+                        question={c}
+                        values={inst}
+                        pickLists={pickLists}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      );
+    }
     return (
       <section className="space-y-2 border-l-2 border-violet-200 pl-3">
         {question.label && (
