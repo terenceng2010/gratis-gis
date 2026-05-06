@@ -326,15 +326,19 @@ export class PublicController {
     });
     if (featuredIds.length === 0) return all;
 
-    // Featured-first ordering: respect the admin's author order for
-    // the featured set, then everything else newest-first. Items no
-    // longer public that were in featuredIds are silently dropped.
+    // Featured = strict filter (matches AGOL's "featured group" UX):
+    // when the admin curates a list, the landing shows ONLY those
+    // items, in the admin's chosen order. Items no longer public
+    // (or moved to trash) drop out silently. If the admin wants the
+    // full public catalog they leave the featured list empty, which
+    // falls through to the "all public items, newest first" branch
+    // above. Previously this method appended the non-featured public
+    // items after the featured set, which made the curated list
+    // feel like a sort instead of a filter.
     const byId = new Map(all.map((i) => [i.id, i]));
-    const featured = featuredIds
+    return featuredIds
       .map((id) => byId.get(id))
       .filter((i): i is NonNullable<typeof i> => !!i);
-    const rest = all.filter((i) => !featuredIds.includes(i.id));
-    return [...featured, ...rest];
   }
 }
 
