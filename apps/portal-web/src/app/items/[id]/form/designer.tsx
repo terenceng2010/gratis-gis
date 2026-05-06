@@ -5891,7 +5891,7 @@ async function syncPairedLayerColumns(
   // Walk top-level questions plus non-repeat group children. Repeat
   // groups are deliberately skipped here -- per the editing-and-
   // collection design, they're a separate child related-table and
-  // need #281b's mutation API to materialize cleanly.
+  // need #281b's mutation API to materialize cleanly (#326).
   const candidates: RawFeatureField[] = [];
   function walk(qs: Question[]) {
     for (const q of qs) {
@@ -5905,16 +5905,56 @@ async function syncPairedLayerColumns(
   }
   walk(questions);
 
-  const toAdd = candidates.filter((c) => !existingNames.has(c.name));
-  if (toAdd.length === 0) return;
+  // #325: promote the sublayer's geometryType when the form has a
+  // geo question and the layer is still attribute-only. The paired
+  // data_layer is created with geometryType=null at form-create time
+  // (#283) so the question wasn't present yet; this is the moment
+  // it becomes spatial. Only applies when CURRENT geometryType is
+  // null -- we never downgrade or change an existing geometryType
+  // here, that's a destructive op handled elsewhere. First geo
+  // question on a top-level / non-repeat-group walk wins.
+  let nextGeometryType: 'point' | 'line' | 'polygon' | null | undefined;
+  if (sub.geometryType === null || sub.geometryType === undefined) {
+    function findFirstGeoType(
+      qs: Question[],
+    ): 'point' | 'line' | 'polygon' | null {
+      for (const q of qs) {
+        if (q.type === 'group') {
+          if (!q.repeat) {
+            const inner = findFirstGeoType(q.children);
+            if (inner) return inner;
+          }
+          continue;
+        }
+        if (q.type === 'geopoint') return 'point';
+        if (q.type === 'geotrace') return 'line';
+        if (q.type === 'geoshape') return 'polygon';
+      }
+      return null;
+    }
+    const found = findFirstGeoType(questions);
+    if (found) nextGeometryType = found;
+  }
 
-  // Merge: keep every existing field as-is, append the new ones.
-  // Only touches the targeted sublayer; sibling sublayers (related
-  // child tables, the form_attachments table once #292 lands) are
+  const toAdd = candidates.filter((c) => !existingNames.has(c.name));
+  if (toAdd.length === 0 && nextGeometryType === undefined) return;
+
+  // Merge: keep every existing field as-is, append the new ones, and
+  // (when promoting) flip geometryType from null to the matching
+  // value. Only touches the targeted sublayer; sibling sublayers
+  // (related child tables, the form_attachments table per #292) are
   // preserved untouched.
   const mergedFields = [...existing, ...toAdd];
   const nextLayers = layers.map((l, i) =>
-    i === subIdx ? { ...l, fields: mergedFields } : l,
+    i === subIdx
+      ? {
+          ...l,
+          fields: mergedFields,
+          ...(nextGeometryType !== undefined
+            ? { geometryType: nextGeometryType }
+            : {}),
+        }
+      : l,
   );
   const nextData = { ...data, layers: nextLayers };
   const res = await fetch(`/api/portal/items/${layerItemId}`, {

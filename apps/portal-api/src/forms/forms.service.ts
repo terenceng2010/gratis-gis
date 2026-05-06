@@ -216,6 +216,33 @@ export class FormsService {
       _submitted_at: args.capturedAt.toISOString(),
       _submitted_by: args.submittedBy,
     };
+
+    // #323: extract the geometry value from the response when the
+    // form has a geo-question binding. The paired-layer-upgrade
+    // path in items.service.ts already promoted the layer's
+    // geometryType when the form was last saved; we look up the
+    // current geometryType off the layer here so we know whether to
+    // pass isTable (no geom column) or pack a real GeoJSON geometry.
+    const layerRow = await this.prisma.item.findUnique({
+      where: { id: layerId },
+      select: { data: true },
+    });
+    const sublayerGeomType = readSublayerGeometryType(
+      layerRow?.data,
+      layerKey,
+    );
+    const isTable = sublayerGeomType === null;
+    let geometry: unknown = undefined;
+    if (!isTable) {
+      const binding = pickFormGeometryBinding(args.form.data);
+      if (binding) {
+        geometry = responseValueToGeoJson(
+          (args.response as Record<string, unknown>)[binding.questionId],
+          binding.geometryType,
+        );
+      }
+    }
+
     await this.v3Features.insertFeatures(
       layerId,
       layerKey,
@@ -223,14 +250,14 @@ export class FormsService {
         {
           globalId: args.submissionId,
           properties,
+          ...(geometry !== undefined ? { geometry } : {}),
         },
       ],
       args.user,
-      // The default paired layer has geometryType=null (table
-      // sublayer), so insertFeatures must skip the geom column
-      // (#192). Future slices that wire a geometry question into
-      // the layer will set this dynamically.
-      { isTable: true },
+      // Table sublayer (geometryType=null) skips the geom column
+      // entirely (#192). Geo sublayers go through the spatial
+      // INSERT branch and pick up the geom from feature.geometry.
+      { isTable },
     );
 
     // Register each attachment in the v3 feature_attachment table
@@ -548,6 +575,132 @@ function stripAttachments(
     return node;
   };
   return clone(response) as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// #325 geometry-binding helpers for the form-mirror submit path.
+//
+// These read the paired data_layer's logical schema + the form's
+// FormSchema and pull the geo answer out of the response so the v3
+// insert can ride the spatial INSERT branch with a real GeoJSON
+// geometry. Without this, a form with a geopoint question would land
+// the lat/lng pair in the properties JSONB but never populate the
+// geom column, leaving the row invisible to map runtimes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the geometryType for a specific sublayer off a data_layer
+ * item's `data` blob. Returns 'point' / 'line' / 'polygon' for a
+ * spatial sublayer, null for a non-spatial table sublayer, and null
+ * when the blob doesn't look like v3 layer data (defensive default,
+ * since the caller treats null as "no geom column" which is also
+ * the correct fallback for a malformed schema).
+ */
+function readSublayerGeometryType(
+  data: Prisma.JsonValue | null | undefined,
+  layerKey: string,
+): 'point' | 'line' | 'polygon' | null {
+  if (!data || typeof data !== 'object') return null;
+  const layers = (data as { layers?: unknown }).layers;
+  if (!Array.isArray(layers)) return null;
+  for (const l of layers) {
+    if (!l || typeof l !== 'object') continue;
+    const id = (l as { id?: unknown }).id;
+    if (id !== layerKey) continue;
+    const g = (l as { geometryType?: unknown }).geometryType;
+    if (g === 'point' || g === 'line' || g === 'polygon') return g;
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Find the form's geometry-binding question. Walks top-level
+ * questions and (recursively) non-repeat group children -- repeat
+ * groups carry their own per-instance geometry on the related child
+ * layer, not on the parent submission. Returns the first geo question
+ * encountered; multiple geo questions on one form would each need
+ * their own column and we don't support that yet.
+ *
+ * This mirrors the walk in syncPairedLayerColumns (see
+ * apps/portal-web/.../form/designer.tsx) so promotion + submit pick
+ * the same question.
+ */
+function pickFormGeometryBinding(
+  formData: Prisma.JsonValue | null | undefined,
+):
+  | { questionId: string; geometryType: 'point' | 'line' | 'polygon' }
+  | null {
+  if (!formData || typeof formData !== 'object') return null;
+  const questions = (formData as { questions?: unknown }).questions;
+  if (!Array.isArray(questions)) return null;
+
+  function walk(
+    qs: unknown[],
+  ):
+    | { questionId: string; geometryType: 'point' | 'line' | 'polygon' }
+    | null {
+    for (const qRaw of qs) {
+      if (!qRaw || typeof qRaw !== 'object') continue;
+      const q = qRaw as {
+        type?: unknown;
+        id?: unknown;
+        repeat?: unknown;
+        children?: unknown;
+      };
+      if (q.type === 'group') {
+        if (!q.repeat && Array.isArray(q.children)) {
+          const inner = walk(q.children);
+          if (inner) return inner;
+        }
+        continue;
+      }
+      if (typeof q.id !== 'string') continue;
+      if (q.type === 'geopoint') {
+        return { questionId: q.id, geometryType: 'point' };
+      }
+      if (q.type === 'geotrace') {
+        return { questionId: q.id, geometryType: 'line' };
+      }
+      if (q.type === 'geoshape') {
+        return { questionId: q.id, geometryType: 'polygon' };
+      }
+    }
+    return null;
+  }
+  return walk(questions);
+}
+
+/**
+ * Convert a form-runtime geo answer into a GeoJSON geometry suitable
+ * for the v3 insert path. The form runtime's geopoint question stores
+ * `{ lat, lng, accuracy? }`; geotrace / geoshape land as arrays of
+ * those pairs. Anything we don't recognize returns undefined so the
+ * insert path falls back to the existing "no geometry on this row"
+ * behavior rather than throwing -- a malformed answer should never
+ * fail the whole submission.
+ */
+function responseValueToGeoJson(
+  value: unknown,
+  geometryType: 'point' | 'line' | 'polygon',
+): unknown | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (geometryType === 'point') {
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as { lat?: unknown }).lat === 'number' &&
+      typeof (value as { lng?: unknown }).lng === 'number'
+    ) {
+      const v = value as { lat: number; lng: number };
+      return { type: 'Point', coordinates: [v.lng, v.lat] };
+    }
+    return undefined;
+  }
+  // Line / polygon: form runtime hasn't shipped a tracer / shape
+  // capture UI yet (designer-only previews). Once it does, expand
+  // here with the same shape contract.
+  return undefined;
 }
 
 /**

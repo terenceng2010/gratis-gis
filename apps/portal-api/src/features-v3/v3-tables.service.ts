@@ -171,13 +171,26 @@ export class V3TablesService {
       )
     `);
     if (!isTable) {
-      // Self-heal pre-#240 layer tables that were provisioned with
-      // single-geometry columns (Polygon / LineString / Point) before
-      // we discovered that real shapefiles mix single + multi inside
-      // one layer. ST_Multi() is idempotent for already-multi
-      // geometries, so the rewrite is a no-op for empty tables and
-      // a one-time migration for populated ones. Skipped when the
-      // column is already Multi-*.
+      // Two cases to handle here, both reached via this branch:
+      //
+      //   a) The table was provisioned with a geom column already
+      //      (the ordinary single-pass create), but with a single-
+      //      geometry type from before #240. Rewrite to Multi-*
+      //      because real shapefiles mix single + multi inside one
+      //      layer; ST_Multi() is idempotent for already-multi
+      //      geometries, so this is a no-op for empty tables and a
+      //      one-time migration for populated ones.
+      //
+      //   b) The table was provisioned earlier as geometryType=null
+      //      (e.g. a form's paired data_layer at create time, before
+      //      the form designer added a geo question) and is now
+      //      being re-provisioned to a real geometry type. The
+      //      CREATE TABLE IF NOT EXISTS above is a no-op when the
+      //      table already exists, so the geom column is missing
+      //      and we have to ALTER TABLE ADD COLUMN. Without this,
+      //      flipping a form from non-spatial to spatial would never
+      //      land a geom column on the underlying PG table even if
+      //      the layer's logical schema said geometryType='point'.
       const desired = toPgGeomType(geomType);
       const current = await this.prisma.$queryRawUnsafe<
         Array<{ ftype: string }>
@@ -188,10 +201,19 @@ export class V3TablesService {
           AND attname = 'geom'
       `);
       const ftype = current[0]?.ftype ?? '';
-      if (
-        ftype.length > 0 &&
-        !ftype.toLowerCase().includes(desired.toLowerCase())
-      ) {
+      if (ftype.length === 0) {
+        // Case (b): no geom column yet. Add one with the desired
+        // multi-geom type. This is the path #325 needs for the
+        // form-paired layer geometryType promotion.
+        await this.prisma.$executeRawUnsafe(`
+          ALTER TABLE "${tbl}"
+          ADD COLUMN IF NOT EXISTS geom GEOMETRY(${desired}, 4326)
+        `);
+        this.log.log(
+          `Added geom column to ${tbl} as GEOMETRY(${desired}, 4326)`,
+        );
+      } else if (!ftype.toLowerCase().includes(desired.toLowerCase())) {
+        // Case (a): geom column exists with the wrong type. Migrate.
         await this.prisma.$executeRawUnsafe(`
           ALTER TABLE "${tbl}"
           ALTER COLUMN geom TYPE GEOMETRY(${desired}, 4326)
