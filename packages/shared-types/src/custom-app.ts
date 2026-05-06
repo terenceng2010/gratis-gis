@@ -137,6 +137,14 @@ export interface CustomLayout {
  *     attribution, and call-out boxes.
  *   - 'chart': a single-series bar / line / pie chart over a layer's
  *     attributes. Phase 2; ships after the runtime exists.
+ *   - 'search': address geocoder + per-target attribute search bar
+ *     bound to a map widget. Picking a result pans + highlights.
+ *   - 'print': single-button print panel that triggers the bound
+ *     map's print stylesheet (#132 once it lands).
+ *   - 'select': panel of select-mode buttons (click / rectangle /
+ *     polygon / lasso) that drive the bound map's select tool.
+ *   - 'basemap-gallery': tile grid of the org's basemap items;
+ *     clicking a tile swaps the bound map's basemap.
  */
 export type CustomWidgetKind =
   | 'map'
@@ -144,7 +152,11 @@ export type CustomWidgetKind =
   | 'layer-list'
   | 'attribute-table'
   | 'text'
-  | 'chart';
+  | 'chart'
+  | 'search'
+  | 'print'
+  | 'select'
+  | 'basemap-gallery';
 
 /**
  * Discriminated union of every widget kind's config shape. The
@@ -156,7 +168,11 @@ export type CustomWidgetConfig =
   | LayerListWidgetConfig
   | AttributeTableWidgetConfig
   | TextWidgetConfig
-  | ChartWidgetConfig;
+  | ChartWidgetConfig
+  | SearchWidgetConfig
+  | PrintWidgetConfig
+  | SelectWidgetConfig
+  | BasemapGalleryWidgetConfig;
 
 export interface MapWidgetConfig {
   kind: 'map';
@@ -236,6 +252,48 @@ export interface ChartWidgetConfig {
   aggregate?: 'count' | 'sum' | 'avg' | 'min' | 'max';
   /** Numeric field for non-count aggregates. */
   valueField?: string;
+}
+
+export interface SearchWidgetConfig {
+  kind: 'search';
+  /** id of the map widget the search results pan + highlight on.
+   *  Required: a search bar with no map target has nowhere to fly. */
+  mapWidgetId: string;
+  /** Whether to enable Nominatim address geocoding alongside per-
+   *  target attribute search. Default true; turning off removes
+   *  the address half and leaves a layer-attribute search bar. */
+  geocodingEnabled?: boolean;
+}
+
+export interface PrintWidgetConfig {
+  kind: 'print';
+  /** id of the map widget to print. Phase 1 just calls the bound
+   *  map's print stylesheet (window.print scoped via CSS); Phase 2
+   *  hooks #132's report_template item once it lands. */
+  mapWidgetId: string;
+}
+
+export interface SelectWidgetConfig {
+  kind: 'select';
+  /** id of the map widget the select tool drives. */
+  mapWidgetId: string;
+  /** Subset of select modes exposed in the panel. Defaults to all
+   *  four when omitted. The runtime button order matches this
+   *  array order, so authors can promote their preferred mode. */
+  modes?: Array<'click' | 'rectangle' | 'polygon' | 'lasso'>;
+}
+
+export interface BasemapGalleryWidgetConfig {
+  kind: 'basemap-gallery';
+  /** id of the map widget whose basemap this gallery swaps. */
+  mapWidgetId: string;
+  /**
+   * Optional allowlist of basemap item ids to surface. When
+   * undefined, the gallery shows every basemap visible to the
+   * caller in the org. Useful for "we want users to choose from
+   * these three branded basemaps" scenarios.
+   */
+  basemapIds?: string[];
 }
 
 /**

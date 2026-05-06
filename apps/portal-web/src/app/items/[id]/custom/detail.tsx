@@ -14,12 +14,16 @@ import {
   BarChart3,
   ExternalLink,
   Eye,
+  Image as ImageIcon,
   Layers as LayersIcon,
   ListTree,
   Loader2,
   Map as MapIcon,
   MoreVertical,
+  MousePointer2,
   Plus,
+  Printer,
+  Search,
   Settings,
   Sparkles,
   Square,
@@ -339,6 +343,30 @@ const PALETTE_TILES: Array<{
     label: 'Legend',
     Icon: ListTree,
     hint: 'Symbology of visible layers',
+  },
+  {
+    kind: 'basemap-gallery',
+    label: 'Basemaps',
+    Icon: ImageIcon,
+    hint: 'Tile grid to switch basemaps on a map',
+  },
+  {
+    kind: 'search',
+    label: 'Search',
+    Icon: Search,
+    hint: 'Address + attribute search bar',
+  },
+  {
+    kind: 'select',
+    label: 'Select',
+    Icon: MousePointer2,
+    hint: 'Selection-mode buttons (click / box / lasso)',
+  },
+  {
+    kind: 'print',
+    label: 'Print',
+    Icon: Printer,
+    hint: 'Print the bound map',
   },
   {
     kind: 'attribute-table',
@@ -698,9 +726,7 @@ function WidgetCard({
         )}
       </div>
       <div className="flex flex-1 items-center justify-center p-2 text-[11px] italic text-muted">
-        {widget.kind === 'map'
-          ? 'Map preview lands in #343'
-          : `${label} content`}
+        {widgetPlaceholderText(widget.kind, label)}
       </div>
       {/* Resize handles -- only visible when the widget is selected
           AND the user can edit. Three handles cover the common cases
@@ -743,6 +769,32 @@ function WidgetCard({
   );
 }
 
+/**
+ * Mid-card preview text for each widget kind. Just a hint so the
+ * canvas doesn't render a wall of "X content" -- real renders are
+ * in the runtime (#341) and (for Map) the in-designer preview
+ * (#343). This is purely cosmetic.
+ */
+function widgetPlaceholderText(
+  kind: CustomWidgetKind,
+  label: string,
+): string {
+  switch (kind) {
+    case 'map':
+      return 'Map preview lands in #343';
+    case 'search':
+      return 'Address + attribute search';
+    case 'print':
+      return 'Click to print';
+    case 'select':
+      return 'Click / box / polygon / lasso';
+    case 'basemap-gallery':
+      return 'Tiles of available basemaps';
+    default:
+      return `${label} content`;
+  }
+}
+
 function summarizeWidget(w: CustomWidget): string {
   switch (w.config.kind) {
     case 'map':
@@ -751,6 +803,10 @@ function summarizeWidget(w: CustomWidget): string {
         : 'no map bound';
     case 'legend':
     case 'layer-list':
+    case 'search':
+    case 'print':
+    case 'select':
+    case 'basemap-gallery':
       return w.config.mapWidgetId
         ? `→ ${w.config.mapWidgetId.slice(0, 6)}`
         : 'pick a map widget';
@@ -1092,6 +1148,16 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 12, rowSpan: 1 };
     case 'chart':
       return { col: 1, row: 1, colSpan: 6, rowSpan: 6 };
+    case 'search':
+      // Compact search bar -- typically dropped at the top of the
+      // canvas. Wide enough to hold a placeholder + result list.
+      return { col: 1, row: 1, colSpan: 6, rowSpan: 1 };
+    case 'print':
+      return { col: 1, row: 1, colSpan: 2, rowSpan: 1 };
+    case 'select':
+      return { col: 1, row: 1, colSpan: 4, rowSpan: 1 };
+    case 'basemap-gallery':
+      return { col: 1, row: 1, colSpan: 4, rowSpan: 4 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
@@ -1144,6 +1210,34 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           chartType: 'bar',
           aggregate: 'count',
         },
+      };
+    case 'search':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'search', mapWidgetId: '', geocodingEnabled: true },
+      };
+    case 'print':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'print', mapWidgetId: '' },
+      };
+    case 'select':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'select', mapWidgetId: '' },
+      };
+    case 'basemap-gallery':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'basemap-gallery', mapWidgetId: '' },
       };
     default: {
       const _exhaustive: never = kind;
