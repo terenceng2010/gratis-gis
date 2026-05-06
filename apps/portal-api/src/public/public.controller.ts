@@ -321,6 +321,15 @@ export class PublicController {
         thumbnailUrl: true,
         updatedAt: true,
         tags: true,
+        // Include the data payload so the landing tile can route a
+        // templated web_app (editor / viewer) straight to its
+        // runtime URL. Without `data`, getItemHref / isViewerItem
+        // can't read the `template` discriminator and falls through
+        // to /items/:id, which middleware then redirects to sign-in
+        // for anonymous visitors. The payload is already public-by-
+        // construction (we only emit access='public' rows) and the
+        // data shape across the supported types is small.
+        data: true,
       },
       orderBy: { updatedAt: 'desc' },
     });

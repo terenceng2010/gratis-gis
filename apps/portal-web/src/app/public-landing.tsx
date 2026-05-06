@@ -57,6 +57,10 @@ interface LandingData {
     thumbnailUrl: string | null;
     updatedAt: string;
     tags: string[];
+    // Item data payload (added by the public/landing API). Only
+    // used by getItemHref / hasRuntime to route templated web_apps
+    // to their runtime URL; otherwise unread by the landing.
+    data?: unknown;
   }>;
 }
 
