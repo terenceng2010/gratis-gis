@@ -55,6 +55,7 @@ import {
   DEFAULT_WFS_SERVICE,
   DEFAULT_FOLDER,
   DEFAULT_EDITOR,
+  DEFAULT_SURVEY,
   DEFAULT_VIEWER,
   ITEM_TYPES,
   serviceProtocolLabel,
@@ -99,7 +100,7 @@ interface TypeOption {
    * web_app + a template tag at submit time so the storage model
    * stays collapsed while the picker keeps Esri-friendly names.
    */
-  value: ItemType | 'viewer';
+  value: ItemType | 'viewer' | 'survey';
   label: string;
   desc: string;
   Icon: LucideIcon;
@@ -195,6 +196,12 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Viewer',
         desc: 'Read-only app for zooming, querying, and printing. No editing tools; layers are presented as-is.',
         Icon: Eye,
+      },
+      {
+        value: 'survey',
+        label: 'Survey responses',
+        desc: 'Browse a form’s submissions on a map, with click-through to a form-shaped receipt.',
+        Icon: ClipboardList,
       },
       {
         value: 'form',
@@ -303,7 +310,7 @@ export function NewItemWizard() {
   // template='viewer' at submit time. It isn't a persisted ItemType
   // (the picker stays an Esri-friendly noun while the storage stays
   // collapsed under web_app templates).
-  const [type, setType] = useState<ItemType | 'viewer' | null>(queryType);
+  const [type, setType] = useState<ItemType | 'viewer' | 'survey' | null>(queryType);
 
   // Metadata persists across back/forward between steps so the user
   // doesn't lose typed input when they pop back to change type.
@@ -430,7 +437,7 @@ export function NewItemWizard() {
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const pickType = useCallback((t: ItemType | 'viewer') => {
+  const pickType = useCallback((t: ItemType | 'viewer' | 'survey') => {
     setType(t);
     setStep('details');
     setError(null);
@@ -932,6 +939,16 @@ export function NewItemWizard() {
         config: { template: 'viewer', viewer: DEFAULT_VIEWER },
       };
       data = webApp;
+    } else if (type === 'survey') {
+      // #260: survey response viewer. Empty defaults; the detail page
+      // gates Open until the author binds a form. Same WebAppData
+      // wrapper pattern as editor/viewer.
+      const webApp: WebAppData = {
+        version: 1,
+        template: 'survey',
+        config: { template: 'survey', survey: DEFAULT_SURVEY },
+      };
+      data = webApp;
     } else if (type === 'data_collection') {
       // mapId is structural: a data_collection without a map has
       // nothing for collectors to tap on. Block create until the
@@ -1016,7 +1033,9 @@ export function NewItemWizard() {
     // payload-build boundary. Keeps the user-facing word stable
     // while we collapse the storage model.
     const payloadType: ItemType =
-      type === 'editor' || type === 'viewer' ? 'web_app' : type;
+      type === 'editor' || type === 'viewer' || type === 'survey'
+        ? 'web_app'
+        : type;
 
     const payload = {
       type: payloadType,

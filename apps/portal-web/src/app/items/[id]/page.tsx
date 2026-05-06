@@ -28,6 +28,7 @@ import type {
   PickListData,
   MapData,
   ServiceData,
+  SurveyData,
   ViewerData,
   WfsServiceData,
   WmsServiceData,
@@ -40,10 +41,13 @@ import {
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
+  DEFAULT_SURVEY,
   DEFAULT_VIEWER,
   isEditorItem,
+  isSurveyItem,
   isViewerItem,
   readEditorData,
+  readSurveyData,
   readViewerData,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
@@ -123,6 +127,7 @@ import { FileDetail } from './file/file-detail';
 import { OgcServiceEditor } from './ogc-service/editor';
 import { ServiceEditor } from './service/editor';
 import { ViewerDetail } from './viewer/detail';
+import { SurveyDetail } from './survey/detail';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -628,6 +633,22 @@ export default async function ItemDetailPage({ params }: Props) {
             initial={{
               ...DEFAULT_VIEWER,
               ...((readViewerData(item) ?? {}) as Partial<ViewerData>),
+            }}
+            canEdit={canManage}
+          />
+        </section>
+      ) : isSurveyItem(item) ? (
+        <section className="mb-6">
+          {/* #260: Survey Response Viewer config. Author binds a
+              form (required), optionally picks a reference map,
+              and trims the read-side toolbar. The runtime is
+              still a placeholder; the configuration plumbing is
+              live so authors can prep surveys ahead of the runtime. */}
+          <SurveyDetail
+            itemId={item.id}
+            initial={{
+              ...DEFAULT_SURVEY,
+              ...((readSurveyData(item) ?? {}) as Partial<SurveyData>),
             }}
             canEdit={canManage}
           />

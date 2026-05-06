@@ -21,7 +21,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
-import { isEditorItem, isViewerItem } from '@gratis-gis/shared-types';
+import {
+  isEditorItem,
+  isSurveyItem,
+  isViewerItem,
+} from '@gratis-gis/shared-types';
 
 /**
  * Per-item-type icon mapping. Kept in portal-web (not @gratis-gis/ui)
@@ -192,6 +196,10 @@ export function getItemHref(item: {
   // #259: viewer template is web_app + data.template='viewer'. Deep
   // link to the viewer runtime route.
   if (isViewerItem(item)) return `/items/${item.id}/viewer/run`;
+  // #260: survey template lands at its own runtime which renders
+  // the paired data_layer's submissions as map features with
+  // form-shaped popups.
+  if (isSurveyItem(item)) return `/items/${item.id}/survey/run`;
   // data_collection items go straight to field-mode runtime (#193).
   // The config / sharing surface is still reachable via the back
   // button or the Edit link from inside the runtime.
@@ -217,6 +225,7 @@ export function hasRuntime(item: {
 }): boolean {
   if (isEditorItem(item)) return true;
   if (isViewerItem(item)) return true;
+  if (isSurveyItem(item)) return true;
   if (item.type === 'data_collection') return true;
   return false;
 }
