@@ -286,11 +286,57 @@ export class FormsService {
       { isTable },
     );
 
+    // #326: write per-instance child rows for each top-level repeat
+    // group into its related sublayer. The designer materialized
+    // those sublayers on save (syncPairedLayerColumns) with a
+    // parent_submission_id field that we populate here from the
+    // parent's _global_id. Properties JSONB on the parent row STILL
+    // carries the full nested response (so the Form View's
+    // properties-driven render keeps working without a join); this
+    // is a parallel projection useful for queries / exports.
+    //
+    // Errors are non-fatal per the same rationale as attachments:
+    // the parent row + JSONB are authoritative; a child-row write
+    // failure shouldn't 500 the submission.
+    try {
+      await this.mirrorRepeatGroupsToChildSublayers({
+        formData: args.form.data,
+        layerId,
+        response: responseSansAttachments,
+        parentGlobalId: args.submissionId,
+        clientId: args.clientId,
+        schemaVersion: args.schemaVersion,
+        capturedAt: args.capturedAt,
+        submittedBy: args.submittedBy,
+        user: args.user,
+      });
+    } catch (err) {
+      this.log.warn(
+        `repeat-group mirror failed for submission ${args.submissionId}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+
     // Register each attachment in the v3 feature_attachment table
     // keyed on (layerId=submissions, featureId=submissionId). Errors
     // are logged but don't fail the submission: the JSONB form_
     // submission row is the authoritative copy and the attachment
     // file already lives in MinIO.
+    //
+    // #327: log attachment counts so an operator can grep
+    // `attachment register` to confirm the path actually fires for
+    // a given submission. Common silent-failure mode is a form whose
+    // runtime didn't upload the attachment (#280) and so the
+    // descriptor isn't in the response shape extractAttachments
+    // recognizes; the count==0 log line surfaces that case
+    // unambiguously.
+    if (attachments.length > 0) {
+      this.log.log(
+        `submission ${args.submissionId}: registering ${attachments.length} attachment(s) on layer ${layerId}/${layerKey}`,
+      );
+    }
+    let attachmentsOk = 0;
     for (const att of attachments) {
       try {
         await this.v3Attachments.register(
@@ -306,9 +352,165 @@ export class FormsService {
           },
           args.submittedBy,
         );
+        attachmentsOk += 1;
       } catch (err) {
         this.log.warn(
           `attachment register failed for submission ${args.submissionId}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+    if (attachments.length > 0) {
+      this.log.log(
+        `submission ${args.submissionId}: ${attachmentsOk}/${attachments.length} attachment(s) registered`,
+      );
+    }
+  }
+
+  /**
+   * #326 -- mirror top-level repeat-group answers into per-instance
+   * rows on related sublayers of the paired data_layer.
+   *
+   * The form designer materializes a related sublayer for every
+   * repeat group with column-mapped children when the form is
+   * saved (see syncPairedLayerColumns in designer.tsx). At submit
+   * time this method walks the same set, iterates each group's
+   * instance array on the response, and calls v3Features.insertFeatures
+   * once per instance against the matching sublayer with
+   * parent_submission_id pre-stamped on the row.
+   *
+   * Idempotency: instance global_ids are derived deterministically
+   * from `${parentGlobalId}:${groupId}:${index}` so a re-drained
+   * offline submission queue reinserts the SAME global_id and the
+   * v3 unique index treats the second write as a no-op (or, with
+   * temporal versioning, as the latest valid_to range -- both
+   * outcomes safe).
+   *
+   * Skipped groups:
+   *   - groups whose related sublayer the designer didn't create
+   *     (attachment-only, or no column-mapped children). Their
+   *     answers stay in the parent row's properties JSONB only.
+   *   - groups whose response value isn't an array (the form
+   *     runtime always writes an array; defensive against partial
+   *     drafts).
+   *   - empty arrays. No-op insert.
+   *
+   * Attachment-flavored children inside a repeat group still go
+   * through the parent's feature_attachment registration (#292 +
+   * extractAttachments), not per-instance. Future #327 follow-up
+   * can re-key those by instance once the runtime tags them.
+   */
+  private async mirrorRepeatGroupsToChildSublayers(args: {
+    formData: Prisma.JsonValue;
+    layerId: string;
+    response: Record<string, unknown>;
+    parentGlobalId: string;
+    clientId: string;
+    schemaVersion: number;
+    capturedAt: Date;
+    submittedBy: string;
+    user: AuthUser;
+  }): Promise<void> {
+    const formData = args.formData;
+    if (!formData || typeof formData !== 'object') return;
+    const questions = (formData as { questions?: unknown }).questions;
+    if (!Array.isArray(questions)) return;
+
+    // Snapshot the current paired-layer schema so we can confirm a
+    // related sublayer actually exists before trying to insert into
+    // it. The designer materializes them on save, but a form whose
+    // data is hand-edited via API could drift.
+    const layerRow = await this.prisma.item.findUnique({
+      where: { id: args.layerId },
+      select: { data: true },
+    });
+    const layerData = (layerRow?.data ?? {}) as {
+      layers?: Array<{ id?: unknown; key?: unknown }>;
+    };
+    const sublayerKeys = new Set<string>();
+    if (Array.isArray(layerData.layers)) {
+      for (const l of layerData.layers) {
+        if (!l || typeof l !== 'object') continue;
+        const id = (l as { id?: unknown }).id;
+        if (typeof id === 'string') sublayerKeys.add(id);
+      }
+    }
+
+    const stableInstanceUuid = (
+      parentGlobalId: string,
+      groupId: string,
+      index: number,
+    ): string => {
+      // We don't need RFC-strict v5; we need stable across retries.
+      // 32-hex blob from sha-1, sliced into v4-shaped 8-4-4-4-12.
+      // crypto.createHash is the lightest of the always-available
+      // node hashers and sha-1 is plenty for namespacing.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { createHash } = require('node:crypto') as typeof import('node:crypto');
+      const h = createHash('sha1')
+        .update(`${parentGlobalId}:${groupId}:${index}`)
+        .digest('hex');
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+    };
+
+    for (const qRaw of questions) {
+      if (!qRaw || typeof qRaw !== 'object') continue;
+      const q = qRaw as {
+        type?: unknown;
+        id?: unknown;
+        repeat?: unknown;
+      };
+      if (q.type !== 'group' || !q.repeat) continue;
+      if (typeof q.id !== 'string') continue;
+      if (!sublayerKeys.has(q.id)) continue;
+      const instances = args.response[q.id];
+      if (!Array.isArray(instances) || instances.length === 0) continue;
+
+      const inserts = instances
+        .map((inst, i) => {
+          if (!inst || typeof inst !== 'object') return null;
+          // Each child row carries the same bookkeeping the parent
+          // does (so the attribute table renders Submitted at /
+          // Submitted by per row), plus the FK to the parent. The
+          // bookkeeping fields appear in BOTH naming conventions
+          // for the same #329 reason as the parent path.
+          const properties: Record<string, unknown> = {
+            ...(inst as Record<string, unknown>),
+            parent_submission_id: args.parentGlobalId,
+            _parent_submission_id: args.parentGlobalId,
+            _submission_id: args.parentGlobalId,
+            _client_id: args.clientId,
+            _schema_version: args.schemaVersion,
+            _submitted_at: args.capturedAt.toISOString(),
+            _submitted_by: args.submittedBy,
+            submitted_at: args.capturedAt.toISOString(),
+            submitted_by: args.submittedBy,
+            schema_version: args.schemaVersion,
+          };
+          return {
+            globalId: stableInstanceUuid(args.parentGlobalId, q.id as string, i),
+            properties,
+          };
+        })
+        .filter((row): row is { globalId: string; properties: Record<string, unknown> } => row !== null);
+
+      if (inserts.length === 0) continue;
+
+      try {
+        await this.v3Features.insertFeatures(
+          args.layerId,
+          q.id,
+          inserts,
+          args.user,
+          // Related sublayers for repeat groups are non-spatial
+          // today (no per-instance geo question support yet); the
+          // table sublayer branch in v3-features is the right one.
+          { isTable: true },
+        );
+      } catch (err) {
+        this.log.warn(
+          `repeat-group child-row insert failed (group=${q.id}, count=${inserts.length}): ${
             err instanceof Error ? err.message : err
           }`,
         );

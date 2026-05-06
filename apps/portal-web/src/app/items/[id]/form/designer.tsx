@@ -5908,9 +5908,8 @@ async function syncPairedLayerColumns(
   const existingNames = new Set(existing.map((f) => f.name));
 
   // Walk top-level questions plus non-repeat group children. Repeat
-  // groups are deliberately skipped here -- per the editing-and-
-  // collection design, they're a separate child related-table and
-  // need #281b's mutation API to materialize cleanly (#326).
+  // groups are NOT traversed for parent-layer columns; they get their
+  // own related sublayer (#326 -- handled below).
   const candidates: RawFeatureField[] = [];
   function walk(qs: Question[]) {
     for (const q of qs) {
@@ -5955,12 +5954,112 @@ async function syncPairedLayerColumns(
     if (found) nextGeometryType = found;
   }
 
+  // #326: compute related sublayers for top-level repeat groups.
+  // Each repeat group whose children include at least one column-
+  // mapped question gets its own sublayer in the paired data_layer,
+  // FK'd back to the parent submission's _global_id via the typed
+  // `parent_submission_id` field. Per-instance child rows then
+  // insert into that sublayer at submit time (forms.service.ts).
+  //
+  // Skipped:
+  //   - attachment-only repeat groups (every child is photo / file /
+  //     audio / video / sketch / signature). Those write into the
+  //     v3 feature_attachment table per #292 and don't need a
+  //     parallel related sublayer to hold "no columns".
+  //   - groups with no column-mapped children (every child got
+  //     filtered out by questionToFeatureField). Same reasoning.
+  //
+  // Results in `desiredRelated`: a map of layerId -> desired field
+  // list. Below, we merge each desired layer into the existing
+  // layers array (additive: new layers added, existing related
+  // sublayers gain new fields, never lose any).
+  type DesiredRelated = { id: string; label: string; fields: RawFeatureField[] };
+  const desiredRelated: DesiredRelated[] = [];
+  for (const q of questions) {
+    if (q.type !== 'group' || !q.repeat) continue;
+    const children = (q.children ?? []) as Question[];
+    if (children.length === 0) continue;
+    const childFields: RawFeatureField[] = [];
+    function walkChildren(qs: Question[]) {
+      for (const c of qs) {
+        if (c.type === 'group') {
+          if (!c.repeat) walkChildren(c.children);
+          // Repeat-inside-repeat is blocked by the designer itself;
+          // if it slipped through anyway we don't model it as
+          // its own grandchild sublayer here -- one level deep
+          // covers every form the designer can build today.
+          continue;
+        }
+        const field = questionToFeatureField(c);
+        if (field) childFields.push(field);
+      }
+    }
+    walkChildren(children);
+    if (childFields.length === 0) continue;
+    // FK back to the parent submission. We ride the field-name
+    // contract instead of parentFkColumn so the existing
+    // getTypedFields path populates it from properties on insert
+    // without a new code branch in v3-features.
+    const fkField: RawFeatureField = {
+      name: 'parent_submission_id',
+      type: 'string',
+      label: 'Parent submission',
+    };
+    desiredRelated.push({
+      id: q.id,
+      label: q.label || q.id,
+      fields: [fkField, ...childFields],
+    });
+  }
+
   const toAdd = candidates.filter((c) => !existingNames.has(c.name));
+
+  // Build the next layers list by:
+  //   1. Patching the parent submissions sublayer (toAdd + geo promotion)
+  //   2. For each desiredRelated, either creating a new sublayer or
+  //      additively merging fields into an existing one.
+  //   3. Preserving every other sublayer untouched.
+  const nextLayers = [...layers] as RawSublayer[];
+  // (1) parent
+  const parentMerged: RawSublayer = {
+    ...nextLayers[subIdx]!,
+    fields: [...existing, ...toAdd],
+    ...(nextGeometryType !== undefined
+      ? { geometryType: nextGeometryType }
+      : {}),
+  };
+  nextLayers[subIdx] = parentMerged;
+  // (2) related
+  let relatedAdds = 0;
+  for (const dr of desiredRelated) {
+    const idx = nextLayers.findIndex(
+      (l) => l.id === dr.id || l.key === dr.id,
+    );
+    if (idx < 0) {
+      nextLayers.push({
+        id: dr.id,
+        name: dr.id,
+        label: dr.label,
+        geometryType: null,
+        fields: dr.fields,
+      });
+      relatedAdds += 1;
+    } else {
+      const existRel = (nextLayers[idx]!.fields ?? []) as RawFeatureField[];
+      const existRelNames = new Set(existRel.map((f) => f.name));
+      const merged = [
+        ...existRel,
+        ...dr.fields.filter((f) => !existRelNames.has(f.name)),
+      ];
+      if (merged.length !== existRel.length) {
+        nextLayers[idx] = { ...nextLayers[idx]!, fields: merged };
+        relatedAdds += 1;
+      }
+    }
+  }
+
   // Defensive log so an author can open devtools and see what the
   // form save thinks is happening to the paired layer (#329 follow-up).
-  // If the layer should promote to spatial but the log says
-  // nextGeometryType=undefined, we have a walk bug; if it says 'point'
-  // but the layer's data_json stays null, the API rejected the PATCH.
   // eslint-disable-next-line no-console
   console.info('[gratisgis] syncPairedLayerColumns', {
     layerItemId,
@@ -5969,26 +6068,19 @@ async function syncPairedLayerColumns(
     nextGeometryType: nextGeometryType ?? null,
     toAddCount: toAdd.length,
     toAddNames: toAdd.map((f) => f.name),
+    relatedDesired: desiredRelated.map((r) => r.id),
+    relatedAdds,
   });
-  if (toAdd.length === 0 && nextGeometryType === undefined) return;
 
-  // Merge: keep every existing field as-is, append the new ones, and
-  // (when promoting) flip geometryType from null to the matching
-  // value. Only touches the targeted sublayer; sibling sublayers
-  // (related child tables, the form_attachments table per #292) are
-  // preserved untouched.
-  const mergedFields = [...existing, ...toAdd];
-  const nextLayers = layers.map((l, i) =>
-    i === subIdx
-      ? {
-          ...l,
-          fields: mergedFields,
-          ...(nextGeometryType !== undefined
-            ? { geometryType: nextGeometryType }
-            : {}),
-        }
-      : l,
-  );
+  // Skip the PATCH entirely when nothing actually changed.
+  if (
+    toAdd.length === 0 &&
+    nextGeometryType === undefined &&
+    relatedAdds === 0
+  ) {
+    return;
+  }
+
   const nextData = { ...data, layers: nextLayers };
   const res = await fetch(`/api/portal/items/${layerItemId}`, {
     method: 'PATCH',
