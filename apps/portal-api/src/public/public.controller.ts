@@ -177,6 +177,15 @@ export class PublicController {
   @Public()
   @Get('items/:id')
   async item(@Param('id') id: string) {
+    // Anonymous endpoint: malformed input must produce 404, not
+    // a 500 leaked from Prisma's UUID parser. Prisma's
+    // findFirst({ where: { id } }) throws PrismaClientKnownRequestError
+    // when id isn't a valid UUID, which would expose the parser's
+    // error message to anonymous callers. UUID-shape gate up front
+    // returns the same NotFoundException as a UUID-valid miss so
+    // existence (and even input validity) is uniform from the
+    // attacker's perspective.
+    if (!isUuidShape(id)) throw new NotFoundException('Item not found');
     const item = await this.prisma.item.findFirst({
       where: { id, access: 'public', deletedAt: null },
       include: {
@@ -242,6 +251,7 @@ export class PublicController {
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
   ) {
+    if (!isUuidShape(itemId)) throw new NotFoundException('Item not found');
     const item = await this.prisma.item.findFirst({
       where: {
         id: itemId,
@@ -326,4 +336,20 @@ export class PublicController {
     const rest = all.filter((i) => !featuredIds.includes(i.id));
     return [...featured, ...rest];
   }
+}
+
+/**
+ * Cheap UUID-shape gate for anonymous endpoints. Returns true if
+ * the input matches the canonical 8-4-4-4-12 hex pattern (any
+ * version). We don't validate the version bits because Prisma
+ * will accept anything that parses as a UUID; this gate is a
+ * 500-to-404 safety net, not a correctness check. Used by
+ * PublicController and PublicProxyController so a stray
+ * non-UUID path segment from a crawler or typo returns a clean
+ * 404 instead of leaking Prisma's parser error message.
+ */
+export function isUuidShape(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    id,
+  );
 }

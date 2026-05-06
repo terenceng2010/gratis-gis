@@ -25,6 +25,7 @@ import {
   isArcgisRest,
   maskCredential,
 } from '../items/item-proxy.controller.js';
+import { isUuidShape } from './public.controller.js';
 
 /**
  * Anonymous twin of ItemProxyController for #307. Proxies upstream
@@ -71,6 +72,12 @@ export class PublicProxyController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
+    // Same 500-to-404 gate the rest of the public surface uses:
+    // a malformed UUID would otherwise surface Prisma's parser
+    // error to anonymous callers.
+    if (!isUuidShape(itemId)) {
+      throw new NotFoundException('Item not found');
+    }
     // Public-only gate: existence is hidden behind the same 404
     // private items see, so the anonymous endpoint never reveals
     // whether a private id exists.
