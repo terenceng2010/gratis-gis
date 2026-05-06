@@ -21,7 +21,7 @@ import type {
   MapLayerFilter,
 } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
-import { getCachedUserName } from '@/lib/user-name-cache';
+import { getCachedUserName, prefetchUserNames } from '@/lib/user-name-cache';
 
 interface Props {
   open: boolean;
@@ -359,6 +359,31 @@ export function AttributeTable({
       : [];
   const activeFeatures =
     (activeLayer ? featuresByLayer[activeLayer.id] : null)?.features ?? [];
+
+  // #355: prefetch display names for every UUID-shaped value in the
+  // user-id columns, then nudge a re-render once the cache is warm.
+  // The metadata probe (#discoverLayerMetadata) already prefetches
+  // names for popups, but it only walks _created_by / _edited_by --
+  // form-mirrored rows also carry _submitted_by / submitted_by /
+  // created_by / edited_by, so we cast a wider net here. The single
+  // 250ms tick covers the cache fill window (50ms debounce + a
+  // round-trip) without polling forever.
+  const [, setNameTick] = useState(0);
+  useEffect(() => {
+    if (activeFeatures.length === 0) return;
+    const ids: string[] = [];
+    for (const f of activeFeatures) {
+      const props = (f?.properties ?? {}) as Record<string, unknown>;
+      for (const key of USER_ID_FIELDS) {
+        const v = props[key];
+        if (typeof v === 'string' && UUID_RE.test(v)) ids.push(v);
+      }
+    }
+    if (ids.length === 0) return;
+    prefetchUserNames(ids);
+    const t = window.setTimeout(() => setNameTick((n) => n + 1), 250);
+    return () => window.clearTimeout(t);
+  }, [activeFeatures]);
 
   // Apply query + sort. Indexes into `activeFeatures`, not flattened,
   // so selection indices always line up with the source array.
@@ -914,7 +939,7 @@ export function AttributeTable({
                               className="w-full rounded border border-accent bg-surface-1 px-2 py-0.5 text-xs text-ink-1 focus:outline-none focus:ring-1 focus:ring-accent/40"
                             />
                           ) : (
-                            formatCell(v)
+                            formatCell(v, field)
                           )}
                         </td>
                       );
@@ -1196,11 +1221,38 @@ function compareValues(a: unknown, b: unknown): number {
   return String(a).localeCompare(String(b), undefined, { numeric: true });
 }
 
-function formatCell(v: unknown): string {
+function formatCell(v: unknown, fieldName?: string): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'object') return JSON.stringify(v);
+  // #355: route user-id-shaped fields through the cached name
+  // resolver. Any field whose name matches the known
+  // user-tracking columns (#39 / #329) and whose value is a
+  // UUID-looking string gets a display name where possible. Falls
+  // back to the truncated UUID prefix that getCachedUserName
+  // returns until the prefetch flight lands -- the table picks
+  // up the resolved name on the next render after that.
+  if (
+    typeof v === 'string' &&
+    fieldName &&
+    USER_ID_FIELDS.has(fieldName) &&
+    UUID_RE.test(v)
+  ) {
+    return getCachedUserName(v);
+  }
   return String(v);
 }
+
+const USER_ID_FIELDS = new Set([
+  '_created_by',
+  '_edited_by',
+  '_submitted_by',
+  'submitted_by',
+  'created_by',
+  'edited_by',
+]);
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Optional columns rendered when the user toggles "Track edits".
