@@ -4,8 +4,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import {
   AlertTriangle,
@@ -271,6 +273,7 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
           canEdit={canEdit}
           onSelect={setSelectedWidgetId}
           onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
+          onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
         />
 
         {/* RIGHT: properties panel */}
@@ -413,19 +416,51 @@ function PaletteTile({
 const ROW_HEIGHT_PX = 48;
 const GRID_COLS = 12;
 
+/**
+ * Active drag-or-resize gesture state. The canvas owns one of these
+ * at a time (or null) -- one global gesture is enough since both
+ * resize and reposition live on the same selected widget.
+ *
+ *   - kind 'move': the widget body is being dragged. mousemove
+ *     updates col + row on the snap grid; mouseup commits the
+ *     final layout.
+ *   - kind 'resize-br' / 'resize-r' / 'resize-b': the user
+ *     mouse-downed on a corner / edge handle. The corresponding
+ *     dimension(s) update on mousemove.
+ *
+ * Drag threshold: gesture has to move >= 4px before we mutate
+ * layout. That keeps a plain click from accidentally bumping
+ * a widget by 0,0 (which still triggers a save dirty bit and
+ * looks confusing in the UI).
+ */
+interface ActiveGesture {
+  kind: 'move' | 'resize-br' | 'resize-r' | 'resize-b';
+  widgetId: string;
+  startX: number;
+  startY: number;
+  startLayout: CustomLayout;
+}
+
+const DRAG_THRESHOLD_PX = 4;
+
 function Canvas({
   widgets,
   selectedId,
   canEdit,
   onSelect,
   onCanvasDrop,
+  onWidgetLayout,
 }: {
   widgets: CustomWidget[];
   selectedId: string | null;
   canEdit: boolean;
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
+  onWidgetLayout: (id: string, layout: CustomLayout) => void;
 }) {
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [gesture, setGesture] = useState<ActiveGesture | null>(null);
+
   // Compute the canvas's grid extent from the widgets' bottom-most
   // row so dropping a widget below the current content extends the
   // canvas naturally. Always at least 12 rows so a fresh app has
@@ -459,9 +494,92 @@ function Canvas({
     onCanvasDrop(kind as CustomWidgetKind, col, row);
   }
 
+  // Begin a gesture. Called from WidgetCard's mousedown handler
+  // (move) and from the resize handles (resize-*). We capture the
+  // start point + the widget's starting layout so mousemove can
+  // compute deltas without re-reading state.
+  const beginGesture = useCallback(
+    (
+      kind: ActiveGesture['kind'],
+      widget: CustomWidget,
+      e: ReactMouseEvent<HTMLElement>,
+    ) => {
+      if (!canEdit) return;
+      e.stopPropagation();
+      setGesture({
+        kind,
+        widgetId: widget.id,
+        startX: e.clientX,
+        startY: e.clientY,
+        startLayout: widget.layout,
+      });
+    },
+    [canEdit],
+  );
+
+  // Window-level mousemove + mouseup while a gesture is active.
+  // We attach to window so the gesture survives the cursor leaving
+  // the widget bounds (a normal pattern for drag UX -- letting
+  // the cursor jump out of the widget shouldn't cancel the drag).
+  useEffect(() => {
+    if (!gesture) return;
+    // Bind a local non-null alias so TS narrows cleanly inside the
+    // closures below; the effect body's null guard above is what
+    // actually keeps us safe at runtime.
+    const g = gesture;
+    function pxPerCol(): number {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      // 6px gap is included in the grid layout; the column width
+      // is approximately (rect.width - 11*6) / 12 but the small
+      // gap error rounds out at the snap-to-cell step.
+      return rect ? rect.width / GRID_COLS : 100;
+    }
+    function onMove(e: MouseEvent) {
+      const dx = e.clientX - g.startX;
+      const dy = e.clientY - g.startY;
+      if (
+        Math.abs(dx) < DRAG_THRESHOLD_PX &&
+        Math.abs(dy) < DRAG_THRESHOLD_PX
+      ) {
+        return;
+      }
+      const colDelta = Math.round(dx / pxPerCol());
+      const rowDelta = Math.round(dy / ROW_HEIGHT_PX);
+      const start = g.startLayout;
+      const next: CustomLayout = { ...start };
+      if (g.kind === 'move') {
+        next.col = clampCol(start.col + colDelta);
+        next.row = Math.max(1, start.row + rowDelta);
+        // Clamp colSpan when the move pushed the right edge past
+        // the grid -- otherwise the widget would overflow the
+        // canvas after a rightward drag.
+        next.colSpan = Math.min(start.colSpan, GRID_COLS - next.col + 1);
+      } else if (g.kind === 'resize-r' || g.kind === 'resize-br') {
+        next.colSpan = Math.max(
+          1,
+          Math.min(GRID_COLS - start.col + 1, start.colSpan + colDelta),
+        );
+      }
+      if (g.kind === 'resize-b' || g.kind === 'resize-br') {
+        next.rowSpan = Math.max(1, start.rowSpan + rowDelta);
+      }
+      onWidgetLayout(g.widgetId, next);
+    }
+    function onUp() {
+      setGesture(null);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [gesture, onWidgetLayout]);
+
   return (
     <div className="relative flex flex-1 overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
       <div
+        ref={canvasRef}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onClick={() => onSelect(null)}
@@ -484,10 +602,24 @@ function Canvas({
               key={w.id}
               widget={w}
               selected={w.id === selectedId}
+              canEdit={canEdit}
+              gesturing={Boolean(gesture && gesture.widgetId === w.id)}
               onClick={(e) => {
                 e.stopPropagation();
                 onSelect(w.id);
               }}
+              onMoveStart={(e) => beginGesture('move', w, e)}
+              onResizeStart={(handle, e) =>
+                beginGesture(
+                  handle === 'br'
+                    ? 'resize-br'
+                    : handle === 'r'
+                      ? 'resize-r'
+                      : 'resize-b',
+                  w,
+                  e,
+                )
+              }
             />
           ))}
           {widgets.length === 0 && (
@@ -513,11 +645,22 @@ function Canvas({
 function WidgetCard({
   widget,
   selected,
+  canEdit,
+  gesturing,
   onClick,
+  onMoveStart,
+  onResizeStart,
 }: {
   widget: CustomWidget;
   selected: boolean;
+  canEdit: boolean;
+  gesturing: boolean;
   onClick: (e: React.MouseEvent) => void;
+  onMoveStart: (e: ReactMouseEvent<HTMLElement>) => void;
+  onResizeStart: (
+    handle: 'br' | 'r' | 'b',
+    e: ReactMouseEvent<HTMLElement>,
+  ) => void;
 }) {
   const tile = PALETTE_TILES.find((t) => t.kind === widget.kind);
   const Icon = tile?.Icon ?? Square;
@@ -525,18 +668,25 @@ function WidgetCard({
   const summary = summarizeWidget(widget);
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      // mousedown on the body starts a move gesture. The Canvas
+      // tracks deltas globally; until the cursor moves past the
+      // drag threshold, the click handler still fires for a plain
+      // selection. (#338)
+      onMouseDown={canEdit ? onMoveStart : undefined}
       style={{
         gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
         gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
+        cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
       }}
       className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md border-2 bg-surface-1 text-left transition-colors ${
         selected
           ? 'border-accent bg-accent/5 ring-1 ring-accent/40'
           : 'border-border hover:border-accent/40'
-      }`}
+      } ${gesturing ? 'opacity-90 shadow-overlay' : ''}`}
     >
       <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface-2/40 px-2 py-1 text-[11px]">
         <Icon className="h-3.5 w-3.5 text-accent" />
@@ -552,7 +702,44 @@ function WidgetCard({
           ? 'Map preview lands in #343'
           : `${label} content`}
       </div>
-    </button>
+      {/* Resize handles -- only visible when the widget is selected
+          AND the user can edit. Three handles cover the common cases
+          (right edge for width, bottom edge for height, bottom-right
+          corner for both). 8-handle resize can come if anyone
+          actually misses it. Each handle stops propagation so the
+          mousedown doesn't fall through to the body's move gesture. */}
+      {selected && canEdit && (
+        <>
+          <button
+            type="button"
+            aria-label="Resize right"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              onResizeStart('r', e);
+            }}
+            className="absolute right-0 top-1/2 h-8 w-1.5 -translate-y-1/2 cursor-ew-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
+          />
+          <button
+            type="button"
+            aria-label="Resize bottom"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              onResizeStart('b', e);
+            }}
+            className="absolute bottom-0 left-1/2 h-1.5 w-8 -translate-x-1/2 cursor-ns-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
+          />
+          <button
+            type="button"
+            aria-label="Resize"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              onResizeStart('br', e);
+            }}
+            className="absolute bottom-0 right-0 h-3 w-3 cursor-nwse-resize rounded-tl-sm bg-accent opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
+          />
+        </>
+      )}
+    </div>
   );
 }
 
