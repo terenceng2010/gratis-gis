@@ -5,14 +5,20 @@ import Link from 'next/link';
 import type maplibregl from 'maplibre-gl';
 import {
   ArrowLeft,
+  ChevronDown,
+  Hand,
   Layers as LayersIcon,
+  Map as MapBaseIcon,
   MousePointer2,
   PencilRuler,
+  Pentagon,
   Plus,
   Printer,
   Redo2,
   Ruler,
   Sparkles,
+  Spline,
+  Square,
   Table as TableIcon,
   Trash2,
   Undo2,
@@ -168,6 +174,47 @@ export function EditorRuntime({
   // whether any of this is enabled.
   const [activeTool, setActiveTool] = useState<EditorTool | 'off'>('off');
   const [activeTargetKey, setActiveTargetKey] = useState<string | null>(null);
+
+  // Select-mode picker (#312). When activeTool === 'select', this
+  // drives the canvas's selectTool prop: click | rectangle | polygon
+  // | lasso. The toolbar's Select button is split: main button toggles
+  // select on/off in the current mode; chevron opens a dropdown to
+  // change the mode.
+  const [selectMode, setSelectMode] = useState<
+    'click' | 'rectangle' | 'polygon' | 'lasso'
+  >('click');
+  const [selectMenuOpen, setSelectMenuOpen] = useState(false);
+  const selectMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Basemap popover (#313). AGOL-style: icon button in the header
+  // opens a popover listing the org's basemaps; cleaner than a wide
+  // inline <select>.
+  const [basemapMenuOpen, setBasemapMenuOpen] = useState(false);
+  const basemapMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Click-outside dismissal for both menus.
+  useEffect(() => {
+    if (!selectMenuOpen && !basemapMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (
+        selectMenuOpen &&
+        selectMenuRef.current &&
+        !selectMenuRef.current.contains(t)
+      ) {
+        setSelectMenuOpen(false);
+      }
+      if (
+        basemapMenuOpen &&
+        basemapMenuRef.current &&
+        !basemapMenuRef.current.contains(t)
+      ) {
+        setBasemapMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [selectMenuOpen, basemapMenuOpen]);
 
   // Pending feature waiting for attribute submission. For Add (mode
   // 'create'), set by terra-draw 'finish'; for Edit ('update'), set
@@ -1963,7 +2010,7 @@ export function EditorRuntime({
               zoom controls. WAB-style: title left, tools right.
               Filtered by editor.tools so authors trim what shows. */}
           {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).length > 0 ? (
-            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-0.5">
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
               {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).map(
                 (t) => {
                   const isToggle = t.key === 'snap';
@@ -1981,13 +2028,117 @@ export function EditorRuntime({
                     (!canEdit && !isReadOnlyTool) ||
                     (isStackButton && stackEmpty) ||
                     (isStackButton && undoBusy);
+                  // #312: Select gets a split-button treatment so users
+                  // can pick rectangle / polygon / lasso modes. The
+                  // chevron opens a small dropdown anchored to the
+                  // button group.
+                  if (t.key === 'select') {
+                    const ModeIcon =
+                      selectMode === 'click'
+                        ? MousePointer2
+                        : selectMode === 'rectangle'
+                          ? Square
+                          : selectMode === 'polygon'
+                            ? Pentagon
+                            : Spline;
+                    return (
+                      <div
+                        key={t.key}
+                        ref={selectMenuRef}
+                        className="relative flex items-stretch"
+                      >
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => onToolClick(t.key)}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-l text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                            isActive
+                              ? 'bg-purple-100 text-purple-800'
+                              : ''
+                          }`}
+                          title={`Select (${selectMode})`}
+                          aria-label={`Select (${selectMode})`}
+                          aria-pressed={isActive}
+                        >
+                          <ModeIcon className="h-5 w-5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => setSelectMenuOpen((v) => !v)}
+                          className={`inline-flex h-9 w-5 items-center justify-center rounded-r text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                            isActive
+                              ? 'bg-purple-100 text-purple-800'
+                              : ''
+                          }`}
+                          aria-label="Select mode"
+                          aria-haspopup="menu"
+                          aria-expanded={selectMenuOpen}
+                          title="Select mode"
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </button>
+                        {selectMenuOpen ? (
+                          <div
+                            role="menu"
+                            className="absolute left-0 top-11 z-30 w-44 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                          >
+                            <SelectModeItem
+                              Icon={MousePointer2}
+                              label="Click"
+                              active={selectMode === 'click'}
+                              onClick={() => {
+                                setSelectMode('click');
+                                setSelectMenuOpen(false);
+                                if (activeTool !== 'select')
+                                  onToolClick('select');
+                              }}
+                            />
+                            <SelectModeItem
+                              Icon={Square}
+                              label="Rectangle"
+                              active={selectMode === 'rectangle'}
+                              onClick={() => {
+                                setSelectMode('rectangle');
+                                setSelectMenuOpen(false);
+                                if (activeTool !== 'select')
+                                  onToolClick('select');
+                              }}
+                            />
+                            <SelectModeItem
+                              Icon={Pentagon}
+                              label="Polygon"
+                              active={selectMode === 'polygon'}
+                              onClick={() => {
+                                setSelectMode('polygon');
+                                setSelectMenuOpen(false);
+                                if (activeTool !== 'select')
+                                  onToolClick('select');
+                              }}
+                            />
+                            <SelectModeItem
+                              Icon={Spline}
+                              label="Lasso"
+                              active={selectMode === 'lasso'}
+                              onClick={() => {
+                                setSelectMode('lasso');
+                                setSelectMenuOpen(false);
+                                if (activeTool !== 'select')
+                                  onToolClick('select');
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }
                   return (
                     <button
                       key={t.key}
                       type="button"
                       disabled={disabled}
                       onClick={() => onToolClick(t.key)}
-                      className={`inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
                         isActive
                           ? isToggle
                             ? 'bg-emerald-100 text-emerald-800'
@@ -2008,7 +2159,7 @@ export function EditorRuntime({
                       aria-label={t.label}
                       aria-pressed={isActive}
                     >
-                      <t.Icon className="h-3.5 w-3.5" />
+                      <t.Icon className="h-5 w-5" />
                     </button>
                   );
                 },
@@ -2030,18 +2181,18 @@ export function EditorRuntime({
                       window.dispatchEvent(new Event('resize'));
                     }, 50);
                   }}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
                   title="Print the current view"
                   aria-label="Print"
                 >
-                  <Printer className="h-3.5 w-3.5" />
+                  <Printer className="h-5 w-5" />
                 </button>
               ) : null}
             </div>
           ) : printEnabled ? (
             // Viewer with no editor.tools but Print on: still render
             // a single-button pill for Print so the user can reach it.
-            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-0.5">
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
               <button
                 type="button"
                 onClick={() => {
@@ -2054,11 +2205,11 @@ export function EditorRuntime({
                     window.dispatchEvent(new Event('resize'));
                   }, 50);
                 }}
-                className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+                className="inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
                 title="Print the current view"
                 aria-label="Print"
               >
-                <Printer className="h-3.5 w-3.5" />
+                <Printer className="h-5 w-5" />
               </button>
             </div>
           ) : null}
@@ -2069,18 +2220,18 @@ export function EditorRuntime({
               from header icons rather than living as a permanent
               left rail. Active panel is highlighted in purple to
               match the active-tool styling. */}
-          <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-0.5">
+          <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
             <button
               type="button"
               onClick={() => setLayersOpen((v) => !v)}
-              className={`inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+              className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
                 layersOpen ? 'bg-purple-100 text-purple-800' : ''
               }`}
               title="Layers"
               aria-label="Layers"
               aria-pressed={layersOpen}
             >
-              <LayersIcon className="h-3.5 w-3.5" />
+              <LayersIcon className="h-5 w-5" />
             </button>
             <button
               type="button"
@@ -2088,35 +2239,80 @@ export function EditorRuntime({
                 setTableOpen((v) => !v);
                 if (!tableOpen) setTableFocusLayerId(null);
               }}
-              className={`inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+              className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
                 tableOpen ? 'bg-purple-100 text-purple-800' : ''
               }`}
               title="Attribute table"
               aria-label="Attribute table"
               aria-pressed={tableOpen}
             >
-              <TableIcon className="h-3.5 w-3.5" />
+              <TableIcon className="h-5 w-5" />
             </button>
-          </div>
-          <label className="inline-flex items-center gap-1">
-            <span className="font-medium uppercase tracking-wide">
-              Basemap
-            </span>
-            <select
-              value={mapData.basemap || ''}
-              onChange={(e) => onBasemapChange(e.target.value)}
-              className="h-7 rounded-md border border-border bg-surface-1 px-2 text-xs text-ink-1 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-            >
-              {basemaps.length === 0 ? (
-                <option value="">No basemaps</option>
+            {/* #313: Basemap switcher collapsed to an icon + popover.
+                AGOL-style; cleaner than the inline <select>. The
+                popover lists the org's basemaps with a check on the
+                active one and switches on click. */}
+            <div ref={basemapMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setBasemapMenuOpen((v) => !v)}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                  basemapMenuOpen ? 'bg-purple-100 text-purple-800' : ''
+                }`}
+                title="Basemap"
+                aria-label="Basemap"
+                aria-haspopup="menu"
+                aria-expanded={basemapMenuOpen}
+              >
+                <MapBaseIcon className="h-5 w-5" />
+              </button>
+              {basemapMenuOpen ? (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                >
+                  <div className="border-b border-border bg-surface-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Basemap
+                  </div>
+                  {basemaps.length === 0 ? (
+                    <div className="px-3 py-2 italic text-muted">
+                      No basemaps available
+                    </div>
+                  ) : (
+                    <ul className="max-h-72 overflow-auto py-1">
+                      {basemaps.map((b) => {
+                        const active = (mapData.basemap || '') === b.id;
+                        return (
+                          <li key={b.id}>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                onBasemapChange(b.id);
+                                setBasemapMenuOpen(false);
+                              }}
+                              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
+                                active
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'text-ink-1'
+                              }`}
+                            >
+                              <span className="truncate">{b.label}</span>
+                              {active ? (
+                                <span className="ml-auto text-[10px] uppercase tracking-wide">
+                                  active
+                                </span>
+                              ) : null}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
               ) : null}
-              {basemaps.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
-          </label>
+            </div>
+          </div>
           {/* Editable-layers count is meaningless in the read-only
               viewer (always 0) and clutters the public-share header.
               Only show for editors. */}
@@ -2209,15 +2405,14 @@ export function EditorRuntime({
               if (typeof next.zoom === 'number') setCurrentZoom(next.zoom);
             }}
             selection={selection}
-            // Wire the Select tool to MapCanvas's click-to-select
-            // mode (`'click'`): each click picks a feature into the
-            // selection set and the click-to-popup path is bypassed
-            // automatically. Default 'off' keeps the popup behavior
-            // intact when no tool is active. The other selectTool
-            // modes (rectangle / polygon / lasso) aren't surfaced as
-            // EditorTool buttons today; a follow-up can add a
-            // dropdown for box / polygon select.
-            selectTool={activeTool === 'select' ? 'click' : 'off'}
+            // #312: the Select tool now supports four modes (click,
+            // rectangle, polygon, lasso). The toolbar's Select button
+            // is a split control: tap to toggle on/off in the current
+            // mode; chevron opens a dropdown to switch modes. We
+            // pass selectMode through whenever activeTool === 'select';
+            // otherwise 'off' so the canvas falls back to its normal
+            // pan / popup behavior.
+            selectTool={activeTool === 'select' ? selectMode : 'off'}
             // Suppress the canvas's default click-to-popup behavior
             // only while a tool that fully owns the click is active.
             // Measure uses terra-draw to place vertices, and add /
@@ -2747,3 +2942,37 @@ const ALL_TOOLS: Array<{
   { key: 'undo', label: 'Undo', Icon: Undo2 },
   { key: 'redo', label: 'Redo', Icon: Redo2 },
 ];
+
+/**
+ * Single row of the Select-mode dropdown (#312). Mirrors the
+ * MenuItem pattern used in the LayerPanel kebab. Highlights the
+ * active mode in purple and dispatches the change up.
+ */
+function SelectModeItem({
+  Icon,
+  label,
+  active,
+  onClick,
+}: {
+  Icon: typeof MousePointer2;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-2 ${
+        active ? 'bg-purple-100 text-purple-800' : 'text-ink-1'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      <span className="flex-1">{label}</span>
+      {active ? (
+        <span className="text-[10px] uppercase tracking-wide">active</span>
+      ) : null}
+    </button>
+  );
+}
