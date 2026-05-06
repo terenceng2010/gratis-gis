@@ -44,6 +44,7 @@ import { PopupEditor } from './popup-editor';
 import { LabelsEditor } from './labels-editor';
 import { makeEmptyGroupLayer, uniqueGroupTitle } from './group-factory';
 import { isTableLayer, type LayerMetadata } from './layer-metadata';
+import { LayerSwatch } from './layer-swatch';
 
 interface Props {
   layers: MapLayer[];
@@ -805,6 +806,30 @@ function LayerRow({
           )}
         </button>
 
+        {/* Symbology swatch (#311). Mirrors what MapCanvas paints
+            on the map so users can scan the panel and know what
+            color / shape each layer is at a glance. Hidden for
+            tables since they have no rendered symbology. We pick
+            the first geometry the metadata reports; categorical /
+            class-break renderers handle their own multi-band visual
+            inside LayerSwatch. */}
+        {!isTable ? (
+          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+            <LayerSwatch
+              layer={layer}
+              dimmed={!layer.visible}
+              geometryType={
+                metadata.geometryTypes && metadata.geometryTypes.size > 0
+                  ? (Array.from(metadata.geometryTypes)[0] as
+                      | 'point'
+                      | 'line'
+                      | 'polygon')
+                  : undefined
+              }
+            />
+          </span>
+        ) : null}
+
         {editingTitle && canEdit ? (
           <input
             autoFocus
@@ -844,77 +869,84 @@ function LayerRow({
           </div>
         )}
 
-        {canEdit ? (
-          <div ref={menuRef} className="relative">
-            <button
-              type="button"
-              onClick={() => {
-                setMenuOpen((o) => !o);
-                setMoveSubOpen(false);
-              }}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              aria-label="Layer actions"
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-1"
+        <div ref={menuRef} className="relative">
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen((o) => !o);
+              setMoveSubOpen(false);
+            }}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="Layer actions"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-1"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+          {menuOpen ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-7 z-30 w-56 overflow-visible rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
             >
-              <MoreVertical className="h-3.5 w-3.5" />
-            </button>
-            {menuOpen ? (
-              <div
-                role="menu"
-                className="absolute right-0 top-7 z-30 w-56 overflow-visible rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
-              >
-                <MenuItem
-                  Icon={Pencil}
-                  label="Rename"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setTitleDraft(layer.title);
-                    setEditingTitle(true);
-                  }}
-                />
-                <MenuItem
-                  Icon={TableIcon}
-                  label="Open attribute table"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onOpenAttributeTable();
-                  }}
-                />
-                {/* Labels and zoom-to-extent are geometry-bound:
-                    suppress them on table layers since they would
-                    have no effect. (#73) */}
-                {!isTable ? (
-                  <>
-                    <MenuItem
-                      Icon={Tag}
-                      label={
-                        layer.labels.enabled ? 'Hide labels' : 'Show labels'
-                      }
-                      onClick={() => {
-                        setMenuOpen(false);
-                        onPatch({
-                          labels: {
-                            ...layer.labels,
-                            enabled: !layer.labels.enabled,
-                          },
-                        });
-                      }}
-                    />
-                    <MenuItem
-                      Icon={Focus}
-                      label="Zoom to layer extent"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        onZoomToExtent();
-                      }}
-                      disabled={
-                        !metadata.featureCollection ||
-                        metadata.featureCollection.features.length === 0
-                      }
-                    />
-                  </>
-                ) : null}
+              {/* Read-side actions: available to viewers AND
+                  authors. (#311) */}
+              <MenuItem
+                Icon={TableIcon}
+                label="Open attribute table"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenAttributeTable();
+                }}
+              />
+              {/* Labels and zoom-to-extent are geometry-bound:
+                  suppress them on table layers since they would
+                  have no effect. (#73) */}
+              {!isTable ? (
+                <>
+                  <MenuItem
+                    Icon={Tag}
+                    label={
+                      layer.labels.enabled ? 'Hide labels' : 'Show labels'
+                    }
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onPatch({
+                        labels: {
+                          ...layer.labels,
+                          enabled: !layer.labels.enabled,
+                        },
+                      });
+                    }}
+                  />
+                  <MenuItem
+                    Icon={Focus}
+                    label="Zoom to layer extent"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onZoomToExtent();
+                    }}
+                    disabled={
+                      !metadata.featureCollection ||
+                      metadata.featureCollection.features.length === 0
+                    }
+                  />
+                </>
+              ) : null}
+              {/* Author-only actions: rename, move-to-group, remove.
+                  Hidden for viewers since they can't persist
+                  changes anyway. (#311) */}
+              {canEdit ? (
+                <>
+                  <div className="border-t border-border" />
+                  <MenuItem
+                    Icon={Pencil}
+                    label="Rename"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setTitleDraft(layer.title);
+                      setEditingTitle(true);
+                    }}
+                  />
                 {/* Move to group: nested submenu, opened inline so
                     we don't need a floating-element library. List
                     the layer's existing parent at the top so the
@@ -1009,10 +1041,11 @@ function LayerRow({
                     onRemove();
                   }}
                 />
+                </>
+              ) : null}
               </div>
             ) : null}
           </div>
-        ) : null}
       </div>
 
       {expanded ? (
