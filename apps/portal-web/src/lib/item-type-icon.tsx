@@ -1,6 +1,7 @@
 import {
   Box,
   ClipboardList,
+  Eye,
   FileText,
   File as FileIcon,
   FlaskConical,
@@ -163,6 +164,49 @@ const ITEM_TYPE_TILE: Record<ItemType, string> = {
 
 export function getItemTypeIcon(type: ItemType): LucideIcon {
   return ITEM_TYPE_ICONS[type] ?? FileIcon;
+}
+
+/**
+ * Template-aware label + icon helpers for web_app items. The bare
+ * type-based helpers above show every templated web_app as the
+ * generic "Web app" / Sparkles, which loses information for users
+ * scanning a list. These helpers narrow first on the WebApp template
+ * (Editor / Viewer / Survey / Custom) and fall back to the type-based
+ * Record otherwise.
+ *
+ * Both helpers accept the broader `Item`-shaped object so callers
+ * can pass list rows directly. `data` is optional; missing data
+ * degrades gracefully to the type-based label.
+ */
+export function getItemDisplayLabel(item: {
+  type: ItemType | string;
+  data?: unknown;
+}): string {
+  if (item.type === 'web_app') {
+    if (isEditorItem(item)) return 'Editor';
+    if (isViewerItem(item)) return 'Viewer';
+    if (isSurveyItem(item)) return 'Survey';
+    if (isCustomAppItem(item)) return 'Custom web app';
+  }
+  if ((ITEM_TYPE_LABELS as Record<string, string>)[item.type]) {
+    return (ITEM_TYPE_LABELS as Record<string, string>)[item.type] as string;
+  }
+  return String(item.type);
+}
+
+export function getItemDisplayIcon(item: {
+  type: ItemType | string;
+  data?: unknown;
+}): LucideIcon {
+  if (item.type === 'web_app') {
+    if (isEditorItem(item)) return PencilRuler;
+    if (isViewerItem(item)) return Eye;
+    if (isSurveyItem(item)) return ClipboardList;
+    if (isCustomAppItem(item)) return Sparkles;
+  }
+  return (
+    (ITEM_TYPE_ICONS as Record<string, LucideIcon>)[item.type] ?? FileIcon
+  );
 }
 
 /**

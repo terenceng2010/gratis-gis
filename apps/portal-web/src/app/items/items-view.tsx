@@ -34,6 +34,8 @@ import { isItemType } from '@gratis-gis/shared-types';
 import {
   getItemHref,
   getItemTypeAccent,
+  getItemDisplayIcon,
+  getItemDisplayLabel,
   getItemTypeIcon,
   getItemTypeLabel,
 } from '@/lib/item-type-icon';
@@ -1916,7 +1918,9 @@ function ItemGrid({
         {items.map((item) => {
           const canManage =
             currentUser.id === item.ownerId || currentUser.orgRole === 'admin';
-          const Icon = getItemTypeIcon(item.type);
+          // Template-aware so Editor / Viewer / Survey / Custom each
+          // get their own icon instead of generic Sparkles.
+          const Icon = getItemDisplayIcon(item);
           return (
             <div
               key={item.id}
@@ -2042,7 +2046,10 @@ function ItemGrid({
       {items.map((item) => {
         const canManage =
           currentUser.id === item.ownerId || currentUser.orgRole === 'admin';
-        const Icon = getItemTypeIcon(item.type);
+        // Use the template-aware helpers so a web_app's template
+        // (Editor / Viewer / Survey / Custom) gets its own icon
+        // and label rather than the generic Sparkles + "Web app".
+        const Icon = getItemDisplayIcon(item);
         const accent = getItemTypeAccent(item.type);
         // Prefer the lean owner projection joined by the API. Fall
         // back to a truncated id for pre-existing rows that somehow
@@ -2103,7 +2110,7 @@ function ItemGrid({
                   ) : null}
                 </div>
                 <p className="hidden truncate text-[11px] text-muted sm:block">
-                  {getItemTypeLabel(item.type)}
+                  {getItemDisplayLabel(item)}
                 </p>
                 <p
                   className="hidden truncate text-[11px] text-muted sm:block"
