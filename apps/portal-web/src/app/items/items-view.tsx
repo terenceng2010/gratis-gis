@@ -38,6 +38,7 @@ import {
   getItemDisplayLabel,
   getItemTypeIcon,
   getItemTypeLabel,
+  hasRuntime,
 } from '@/lib/item-type-icon';
 import { FilterPopover } from './filter-popover';
 import { ItemSharingIndicator } from '@/components/item-sharing-indicator';
@@ -1988,6 +1989,10 @@ function ItemGrid({
               <ItemCard
                 item={item}
                 href={getItemHref(item)}
+                // Runnable items (Editor / Viewer / Survey / Custom
+                // / data_collection) open in a new tab so the user
+                // keeps the portal tab as a back-nav anchor (#314).
+                openInNewTab={hasRuntime(item)}
                 fallbackIcon={<Icon />}
                 headerExtra={
                   <ItemSharingIndicator
@@ -2095,6 +2100,14 @@ function ItemGrid({
               )}
               <Link
                 href={getItemHref(item)}
+                // #314: runnable items (Editor / Viewer / Survey /
+                // Custom / data_collection) open in a new tab so the
+                // user keeps the portal tab as their back-nav
+                // anchor; non-runnable types stay in the same tab
+                // since their detail page IS the portal-shaped view.
+                {...(hasRuntime(item)
+                  ? { target: '_blank', rel: 'noopener noreferrer' }
+                  : {})}
                 className="contents"
                 aria-label={item.title}
               >

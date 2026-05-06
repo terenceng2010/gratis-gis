@@ -13,6 +13,14 @@ export interface ItemCardProps {
    */
   href?: string;
   /**
+   * Open in a new tab. Used by runnable items (web_app templates,
+   * data_collection) so users keep their portal tab as a back-nav
+   * anchor when they jump into the runtime. Pre-#314 the runtime
+   * replaced the portal in the same tab; users had to use the
+   * "Back to items" link in the runtime header to get back.
+   */
+  openInNewTab?: boolean;
+  /**
    * Optional per-type icon rendered on the thumbnail tile when the item
    * has no custom thumbnailUrl. Callers supply this from a type-→icon
    * registry they own (keeps this package lucide-free). If omitted, the
@@ -102,6 +110,7 @@ const typeLabel: Record<string, string> = {
 export function ItemCard({
   item,
   href,
+  openInNewTab,
   fallbackIcon,
   headerExtra,
   className,
@@ -176,7 +185,13 @@ export function ItemCard({
 
   if (href) {
     return (
-      <a href={href} className={baseClass}>
+      <a
+        href={href}
+        className={baseClass}
+        {...(openInNewTab
+          ? { target: '_blank', rel: 'noopener noreferrer' }
+          : {})}
+      >
         {content}
       </a>
     );
