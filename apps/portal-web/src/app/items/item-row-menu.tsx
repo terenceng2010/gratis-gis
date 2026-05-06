@@ -130,38 +130,48 @@ export function ItemRowMenu({
           {/* Open targets the runtime / "end product" for runnable
               types -- the editor / viewer / field PWA -- and opens
               in a new tab so the runtime gets the full viewport
-              and the items list stays available behind it. Plain
-              content types open the detail page in the same tab
-              since there's nothing to launch. */}
-          <a
-            role="menuitem"
-            href={openHref}
-            {...(isRunnable
-              ? { target: '_blank', rel: 'noopener noreferrer' }
-              : {})}
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-            }}
-            className="flex items-center gap-2 px-3 py-2 text-ink-1 hover:bg-surface-2"
-          >
-            <ExternalLink className="h-3.5 w-3.5 text-muted" />
-            <span className="flex-1">Open</span>
-          </a>
+              and the items list stays available behind it. Only
+              renders for items that HAVE a runtime; plain content
+              types skip Open entirely and use Configure as the
+              single entry, since "Open" otherwise just means
+              "navigate to the detail page" (which is exactly what
+              Configure does), and dual-labeling the same action
+              breaks the verb's promise. */}
           {isRunnable ? (
             <a
               role="menuitem"
-              href={configureHref}
+              href={openHref}
+              target="_blank"
+              rel="noopener noreferrer"
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
               }}
-              className="flex items-center gap-2 border-t border-border px-3 py-2 text-ink-1 hover:bg-surface-2"
+              className="flex items-center gap-2 px-3 py-2 text-ink-1 hover:bg-surface-2"
             >
-              <Settings className="h-3.5 w-3.5 text-muted" />
-              <span className="flex-1">Configure</span>
+              <ExternalLink className="h-3.5 w-3.5 text-muted" />
+              <span className="flex-1">Open</span>
             </a>
           ) : null}
+          {/* Configure goes to the detail page. The detail page is
+              the "settings" surface for every item type -- sharing,
+              metadata, schema / layer config, replace data, etc. --
+              and the user's role gates what's editable inside, so
+              the same label works for admins and viewers alike. */}
+          <a
+            role="menuitem"
+            href={configureHref}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            className={`flex items-center gap-2 px-3 py-2 text-ink-1 hover:bg-surface-2 ${
+              isRunnable ? 'border-t border-border' : ''
+            }`}
+          >
+            <Settings className="h-3.5 w-3.5 text-muted" />
+            <span className="flex-1">Configure</span>
+          </a>
           {previewable ? (
             <button
               type="button"
