@@ -216,6 +216,25 @@ export default async function SurveyRuntimePage({ params }: Props) {
     );
   }
 
+  // Forms without a geo question pair to a non-spatial table
+  // (geometryType=null). The Survey runtime renders submissions on a
+  // map, so a table-only paired layer has nothing to draw. Detect and
+  // route to an empty-state shell instead of letting MapCanvas /
+  // EditorRuntime trip on the missing geometry. A future slice can
+  // grow a map-less attribute-table-only mode for this case.
+  const matchedSublayer =
+    dlData && dlData.version === 3
+      ? dlData.layers.find((l) => l.id === layerKey) ?? null
+      : null;
+  if (matchedSublayer && !matchedSublayer.geometryType) {
+    return (
+      <UnboundShell
+        item={surveyItem}
+        message="bound form has no map question, so submissions can't be plotted"
+      />
+    );
+  }
+
   // Synthesize an EditorData with one read-only target = paired
   // data_layer. Tools list maps the survey's read-side affordances
   // onto EditorRuntime's overlapping options the same way Viewer
