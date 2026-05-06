@@ -5,12 +5,14 @@ import Link from 'next/link';
 import type maplibregl from 'maplibre-gl';
 import {
   ArrowLeft,
+  Layers as LayersIcon,
   MousePointer2,
   PencilRuler,
   Plus,
   Printer,
   Redo2,
   Ruler,
+  Table as TableIcon,
   Trash2,
   Undo2,
   Wand2,
@@ -402,6 +404,13 @@ export function EditorRuntime({
     null,
   );
   const [selection, setSelection] = useState<Record<string, Set<number>>>({});
+  // #306 WAB-style chrome: LayerPanel slides in from the right
+  // instead of taking a permanent left rail. Defaults open so the
+  // first-time viewer sees what's on the map; the user can close
+  // it from the X to gain canvas. The Layers button in the toolbar
+  // toggles it. Same right-slide pattern will house future Legend
+  // + Filter panels in follow-up slices.
+  const [layersOpen, setLayersOpen] = useState(true);
 
   // Index resolvedTargets by key so the picker / panel / submit
   // path can look up O(1).
@@ -2042,6 +2051,42 @@ export function EditorRuntime({
               </button>
             </div>
           ) : null}
+          {/* #306 panel toggles: Layers list + Attribute Table.
+              Separate pill from the editing tools so users can read
+              "what's on the map" controls vs "edit the map"
+              controls at a glance. WAB-style: panels open / close
+              from header icons rather than living as a permanent
+              left rail. Active panel is highlighted in purple to
+              match the active-tool styling. */}
+          <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-0.5">
+            <button
+              type="button"
+              onClick={() => setLayersOpen((v) => !v)}
+              className={`inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                layersOpen ? 'bg-purple-100 text-purple-800' : ''
+              }`}
+              title="Layers"
+              aria-label="Layers"
+              aria-pressed={layersOpen}
+            >
+              <LayersIcon className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTableOpen((v) => !v);
+                if (!tableOpen) setTableFocusLayerId(null);
+              }}
+              className={`inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                tableOpen ? 'bg-purple-100 text-purple-800' : ''
+              }`}
+              title="Attribute table"
+              aria-label="Attribute table"
+              aria-pressed={tableOpen}
+            >
+              <TableIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <label className="inline-flex items-center gap-1">
             <span className="font-medium uppercase tracking-wide">
               Basemap
@@ -2081,12 +2126,36 @@ export function EditorRuntime({
         </div>
       </header>
 
-      {/* Body: docked LayerPanel (left rail) + map canvas (right).
-          Same layout the map editor uses for parity. The editing
-          tool palette + active-mode chips + coming-soon toast all
-          float as overlays over the canvas. */}
-      <div className="flex flex-1 overflow-hidden">
-        <div className="w-72 shrink-0">
+      {/* #306 WAB-style chrome: full-bleed map canvas with the
+          LayerPanel sliding in from the RIGHT instead of taking a
+          permanent left rail. Toggleable from the Layers icon in
+          the header so users can dismiss the panel to gain canvas
+          and re-summon it without navigating away. The panel is
+          absolutely positioned over the canvas (not pushing it),
+          which keeps the map at full width when the panel is
+          closed and gives the visual sense of "summoning a
+          drawer" from the side rather than re-flowing the page. */}
+      <div className="relative flex flex-1 overflow-hidden">
+        <div
+          className={`absolute right-0 top-0 z-20 flex h-full w-80 shrink-0 transform flex-col border-l border-border bg-surface-1 shadow-overlay transition-transform duration-200 ${
+            layersOpen ? 'translate-x-0' : 'translate-x-full'
+          }`}
+          aria-hidden={!layersOpen}
+        >
+          <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-surface-1 px-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Layers
+            </span>
+            <button
+              type="button"
+              onClick={() => setLayersOpen(false)}
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+              aria-label="Close layers panel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">
           <LayerPanel
             layers={mapData.layers}
             metadata={metadata}
@@ -2116,6 +2185,7 @@ export function EditorRuntime({
             onChange={onLayersChange}
             showAddLayer={false}
           />
+          </div>
         </div>
 
         <div className="relative min-w-0 flex-1">
