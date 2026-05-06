@@ -615,9 +615,31 @@ function renderValue(
     case 'sketch':
     case 'signature':
     case 'file': {
-      // Phase 1: show a "captured" badge with a link if the value
-      // is a URL, else a plain marker. Real attachment thumbnails /
-      // playback land in a follow-up that hooks #267.
+      // #353: form runtime stores attachment-bearing answers as an
+      // array of descriptors { name, mimeType, sizeBytes, url, key }
+      // (#280). Render them inline as thumbnails-or-tiles right
+      // here so the user sees the photo at the question that
+      // captured it -- especially valuable inside repeat instances
+      // where the bottom Attachments section can't tell entry-1's
+      // photo from entry-2's.
+      if (Array.isArray(value)) {
+        const items = value.filter(
+          (d): d is {
+            name?: unknown;
+            mimeType?: unknown;
+            sizeBytes?: unknown;
+            url?: unknown;
+            key?: unknown;
+          } => Boolean(d) && typeof d === 'object',
+        );
+        if (items.length === 0) {
+          return <span className="italic text-muted">No answer</span>;
+        }
+        return <InlineAttachmentList items={items} />;
+      }
+      // Single-value legacy / non-array shape: keep the older
+      // behavior so existing rows that landed before #353 still
+      // render their URL as a link.
       const s = String(value);
       if (s.startsWith('http')) {
         return (
@@ -636,6 +658,79 @@ function renderValue(
     default:
       return <span className="whitespace-pre-wrap">{String(value)}</span>;
   }
+}
+
+/**
+ * Inline attachment renderer used by photo / audio / video / file /
+ * sketch / signature questions when the answer is an array of
+ * descriptor objects (#353). Mirrors the visual shape of the
+ * AttachmentTile component used by the bottom Attachments section
+ * + the AttributeTable drawer (#352) -- thumbnails for image MIME
+ * types, labeled tiles for everything else, all click-to-open in
+ * a new tab.
+ */
+function InlineAttachmentList({
+  items,
+}: {
+  items: Array<{
+    name?: unknown;
+    mimeType?: unknown;
+    sizeBytes?: unknown;
+    url?: unknown;
+    key?: unknown;
+  }>;
+}) {
+  return (
+    <div className="mt-1 grid grid-cols-2 gap-1.5">
+      {items.map((d, i) => {
+        const name = typeof d.name === 'string' ? d.name : `attachment ${i + 1}`;
+        const mime = typeof d.mimeType === 'string' ? d.mimeType : '';
+        const url = typeof d.url === 'string' ? d.url : null;
+        const sizeBytes = typeof d.sizeBytes === 'number' ? d.sizeBytes : null;
+        const isImage = mime.startsWith('image/');
+        if (isImage && url) {
+          return (
+            <a
+              key={i}
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              title={name}
+              className="group block overflow-hidden rounded-md border border-border bg-surface-2 hover:border-accent/40"
+            >
+              <img
+                src={url}
+                alt={name}
+                className="h-24 w-full object-cover"
+                loading="lazy"
+              />
+              <div className="truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-ink-1">
+                {name}
+              </div>
+            </a>
+          );
+        }
+        return (
+          <a
+            key={i}
+            href={url ?? '#'}
+            target="_blank"
+            rel="noreferrer"
+            title={name}
+            className="flex flex-col gap-0.5 rounded-md border border-border bg-surface-2 p-1.5 hover:border-accent/40"
+          >
+            <div className="truncate text-[11px] text-ink-1">{name}</div>
+            <div className="text-[10px] text-muted">
+              {sizeBytes !== null
+                ? `${Math.max(1, Math.round(sizeBytes / 1024))} KB · `
+                : ''}
+              {mime || 'file'}
+            </div>
+          </a>
+        );
+      })}
+    </div>
+  );
 }
 
 function labelForCode(

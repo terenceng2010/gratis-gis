@@ -297,11 +297,43 @@ export default async function SurveyRuntimePage({ params }: Props) {
     },
   ];
 
-  const { mapData, targetLayerIds } = buildEditorMapData({
+  const { mapData: builtMapData, targetLayerIds } = buildEditorMapData({
     editor,
     referencedMap,
     resolvedTargets,
   });
+
+  // #354: frame the map to the bbox of submissions on first open.
+  // Survey app is the power-user version of the Response Viewer,
+  // and the same "land where the data is" UX applies. Inherits
+  // referencedMap viewport when the sublayer has no bbox yet
+  // (zero submissions or extents pass hasn't fired).
+  const mapData: MapData = (() => {
+    const subBbox = layer?.bbox;
+    if (
+      !Array.isArray(subBbox) ||
+      subBbox.length !== 4 ||
+      !subBbox.every((n) => typeof n === 'number' && Number.isFinite(n))
+    ) {
+      return builtMapData;
+    }
+    const [minX, minY, maxX, maxY] = subBbox as [
+      number,
+      number,
+      number,
+      number,
+    ];
+    if (minX > maxX || minY > maxY) return builtMapData;
+    const center: [number, number] = [
+      (minX + maxX) / 2,
+      (minY + maxY) / 2,
+    ];
+    const lngSpan = Math.max(maxX - minX, 0.0001);
+    const latSpan = Math.max(maxY - minY, 0.0001);
+    const span = Math.max(lngSpan, latSpan);
+    const zoom = Math.max(1, Math.min(18, Math.log2(360 / span) - 0.5));
+    return { ...builtMapData, center, zoom };
+  })();
 
   // Pick lists referenced by the paired layer's columns. Same shape
   // the Viewer fetches; submissions ingested through the form mirror

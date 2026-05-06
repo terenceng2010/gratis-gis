@@ -198,18 +198,28 @@ export class FormsService {
         : 'submissions';
     if (!layerId) return;
 
-    // Split attachment-shaped values out of the response BEFORE we
-    // dump the rest into properties JSONB (#292). Form attachments
-    // shouldn't sit inline on the parent row -- they belong in the
-    // standard v3 feature_attachment table the same way every other
-    // data_layer attaches files. The form runtime stores each
-    // attachment as { name, mimeType, sizeBytes, url, key } per
-    // upload (see #280); we detect that shape here.
+    // Pull every attachment descriptor (#292) recursively so we can
+    // register them in the standard v3 feature_attachment table
+    // alongside the parent feature. Each descriptor is shaped
+    // { name, mimeType, sizeBytes, url, key } per the form runtime's
+    // direct-to-MinIO upload path (#280).
+    //
+    // #353: we used to ALSO strip these descriptors out of properties
+    // JSONB so the parent row carried no attachment payload. That
+    // turned out to break the Form View's inline rendering: without
+    // the descriptors in JSONB, the panel had no way to show "the
+    // photo for THIS instance" next to a repeat-group's photo
+    // question. Now we keep the descriptors in properties so the
+    // Form View can render thumbnails inline at their captured
+    // location, AND register them in feature_attachment so the
+    // standard v3 attachments UI (the Attachments column in every
+    // attribute table, #352) keeps working. Storage cost is small
+    // (~300 bytes per descriptor) and the duplication keeps both
+    // surfaces honest.
     const attachments = extractAttachments(args.response);
-    const responseSansAttachments = stripAttachments(args.response);
 
     const properties: Record<string, unknown> = {
-      ...responseSansAttachments,
+      ...args.response,
       // System bookkeeping carried in two parallel naming
       // conventions (#329):
       //
@@ -302,7 +312,11 @@ export class FormsService {
       await this.mirrorRepeatGroupsToChildSublayers({
         formData: args.form.data,
         layerId,
-        response: responseSansAttachments,
+        // #353: pass the full response (with attachment descriptors)
+        // so per-instance child rows on the related sublayer get the
+        // same inline-photo treatment the parent row does. The
+        // Form View's inline render walks the response at any depth.
+        response: args.response,
         parentGlobalId: args.submissionId,
         clientId: args.clientId,
         schemaVersion: args.schemaVersion,

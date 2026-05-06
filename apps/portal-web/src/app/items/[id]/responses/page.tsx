@@ -252,11 +252,52 @@ export default async function FormResponsesPage({ params }: Props) {
     },
   ];
 
-  const { mapData, targetLayerIds } = buildEditorMapData({
+  const { mapData: builtMapData, targetLayerIds } = buildEditorMapData({
     editor,
     referencedMap,
     resolvedTargets,
   });
+
+  // #354: frame the map to the extent of all submissions on first
+  // open. The paired sublayer's stored bbox is populated by the
+  // periodic Recompute extents pass (#93), so it tracks within a
+  // few minutes of the latest insert -- close enough that the user
+  // never sees a "world view" when they have submissions clustered
+  // somewhere. Fall back to the buildEditorMapData center/zoom
+  // (which inherits from the referenced map or DEFAULT_MAP) when
+  // no bbox is available yet -- e.g. a brand-new form with zero
+  // submissions, or an extents pass that hasn't fired yet.
+  const mapData: MapData = (() => {
+    const sub = layer;
+    const subBbox = sub?.bbox;
+    if (
+      !Array.isArray(subBbox) ||
+      subBbox.length !== 4 ||
+      !subBbox.every((n) => typeof n === 'number' && Number.isFinite(n))
+    ) {
+      return builtMapData;
+    }
+    const [minX, minY, maxX, maxY] = subBbox as [
+      number,
+      number,
+      number,
+      number,
+    ];
+    if (minX > maxX || minY > maxY) return builtMapData;
+    const center: [number, number] = [
+      (minX + maxX) / 2,
+      (minY + maxY) / 2,
+    ];
+    // Heuristic zoom from bbox span. log2(360 / span) - 0.5 gives a
+    // little headroom around the features so they aren't pinned to
+    // the viewport edges. Clamped to [1, 18] so a single-point
+    // submission doesn't try to zoom past street level.
+    const lngSpan = Math.max(maxX - minX, 0.0001);
+    const latSpan = Math.max(maxY - minY, 0.0001);
+    const span = Math.max(lngSpan, latSpan);
+    const zoom = Math.max(1, Math.min(18, Math.log2(360 / span) - 0.5));
+    return { ...builtMapData, center, zoom };
+  })();
 
   // Pick lists referenced by the paired layer's columns; same as
   // survey/run -- the form mirror writes coded VALUES, so the side
