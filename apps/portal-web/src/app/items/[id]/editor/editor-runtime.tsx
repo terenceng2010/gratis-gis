@@ -12,6 +12,7 @@ import {
   Printer,
   Redo2,
   Ruler,
+  Sparkles,
   Table as TableIcon,
   Trash2,
   Undo2,
@@ -1931,8 +1932,18 @@ export function EditorRuntime({
               <span className="text-muted">/</span>
             </>
           ) : null}
-          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-0">
-            <PencilRuler className="h-4 w-4 text-purple-600" />
+          {/* Title icon mirrors the item-type tile color from the
+              items list (purple for editor, orange for viewer)
+              so the user can recognize which template they're in
+              at a glance. PencilRuler reads as "edit"; Sparkles
+              matches the web_app accent we use in the items grid
+              for runnable viewer apps. */}
+          <span className="inline-flex items-center gap-1.5 text-base font-semibold text-ink-0">
+            {canEdit ? (
+              <PencilRuler className="h-4 w-4 text-purple-600" />
+            ) : (
+              <Sparkles className="h-4 w-4 text-orange-500" />
+            )}
             {editorTitle}
           </span>
           {referencedMapTitle && canEdit ? (
