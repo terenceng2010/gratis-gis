@@ -58,10 +58,13 @@ export default withAuth(
         // #260: /items/:id/survey/run is also a read-only runtime
         // (you "view responses, never edit a submission"), so it
         // shares the same anonymous-public allowlist behavior.
+        // #321: /items/:id/responses is the implicit per-form
+        // Response Viewer; same read-only public-share semantics.
         if (
           /^\/items\/[^/]+\/(?:viewer|survey)\/run(?:\/|$)/.test(
             req.nextUrl.pathname,
-          )
+          ) ||
+          /^\/items\/[^/]+\/responses(?:\/|$)/.test(req.nextUrl.pathname)
         ) {
           return true;
         }

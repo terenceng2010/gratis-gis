@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, AlertTriangle, FileText, Hammer } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, FileText } from 'lucide-react';
 import type {
   BasemapData,
   DataLayerData,
@@ -10,12 +10,6 @@ import type {
   Item,
   MapData,
   PickListData,
-  SurveyData,
-} from '@gratis-gis/shared-types';
-import {
-  DEFAULT_SURVEY,
-  isSurveyItem,
-  readSurveyData,
 } from '@gratis-gis/shared-types';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import type { CustomBasemap } from '@/lib/custom-basemap';
@@ -24,8 +18,8 @@ import {
   buildEditorMapData,
   editorTargetLayerId,
   type ResolvedTarget,
-} from '../../editor/build-map-data';
-import { EditorRuntime } from '../../editor/editor-runtime';
+} from '../../[id]/editor/build-map-data';
+import { EditorRuntime } from '../../[id]/editor/editor-runtime';
 
 interface Props {
   params: { id: string };
@@ -33,9 +27,8 @@ interface Props {
 
 /**
  * Map a basemap item into the CustomBasemap shape MapCanvas
- * consumes. Mirrors the helper in viewer/run/page.tsx; the third
- * caller (here) makes it worth extracting to a shared util in a
- * follow-up commit, but inlining for now to keep the slice small.
+ * consumes. Same helper that survey/run/page.tsx and viewer/run/page.tsx
+ * inline; extracting to a shared util when a fourth caller appears.
  */
 function basemapItemToCustomBasemap(
   it: Item<BasemapData>,
@@ -79,11 +72,10 @@ function basemapItemToCustomBasemap(
 }
 
 /**
- * Tiny structural shape we read off the bound form item. Avoids
- * pulling in the entire @gratis-gis/form-schema FormSchema type
- * just to dereference a couple of fields. Keep it loose; the form
- * type is a moving target and a runtime that breaks every time a
- * field is added is not the right blast radius.
+ * Loose shape we read off the form item. The form's `data` is a full
+ * FormSchema (questions, title, schemaVersion) plus the form-app
+ * specific fields layered on top. Keep this shape narrow so a future
+ * schema bump doesn't crash this page.
  */
 interface FormShape {
   /** v3 paired data_layer materialized for this form (#283). */
@@ -91,39 +83,35 @@ interface FormShape {
   /** When the paired layer has multiple sublayers, the specific
    *  layer this form maps onto. Single-layer pairs omit this. */
   linkedLayerKey?: string;
-  /** Schema fields used by the FormView side panel (#320). The form
-   *  item's `data` is a full FormSchema; we read the same fields back
-   *  out here without restating the entire question union locally. */
+  /** Schema fields used by the FormView side panel (#320). */
   schemaVersion?: number;
   questions?: FormSchema['questions'];
   title?: string;
 }
 
 /**
- * Survey Response Viewer runtime (#260).
+ * Implicit per-form Response Viewer (#321 / #320).
  *
- * Browses a paired form's submissions on a map. The detail page
- * binds a Survey app to a single form item; on every render we
- * resolve that form -> its `linkedLayerId` (the data_layer materialized
- * by #283) -> the EditorRuntime substrate we already use for Viewer
- * and Editor.
+ * Every Form item gets a built-in Response Viewer at
+ * `/items/<formId>/responses` -- no separate Survey web_app item to
+ * create, no extra configuration to bind. The form item's data has
+ * everything we need: a paired data_layer (#283), a FormSchema for
+ * the side panel (#320), and the linkedLayerKey when the pair is
+ * multi-layer.
  *
- * Today the runtime is read-only and renders the paired layer with
- * the toolbar opted into by the Survey config. Form-shaped popups,
- * date-range filter chips, and submitter hiding land in follow-up
- * slices on top of EditorRuntime; isolating them there means the
- * three template runtimes (editor / viewer / survey) keep sharing
- * one canvas and one render path.
+ * The runtime mounts EditorRuntime with the FormView side panel
+ * open by default (so the user lands on a recognizable response
+ * renderer rather than a bare map). The separate Survey app item
+ * (#260) still exists for power-users who want a saved, named,
+ * shareable configuration with a specific reference map / toolbar /
+ * default lookback window. This route is the zero-config default.
  *
- * Auth: ItemsService.get() on the API enforces visibility (404 on
- * not-found-or-not-allowed). canEdit is forced to false for surveys
- * by definition; "view responses, never edit a submission".
+ * Auth: ItemsService.get() on the API enforces visibility. Anonymous
+ * public-share visitors land here too -- branch the fetch path the
+ * same way Viewer / Survey do. Submissions are read-only by design,
+ * so canEdit is forced false regardless of the caller's permissions.
  */
-export default async function SurveyRuntimePage({ params }: Props) {
-  // #307 carry-over: anonymous public-share visitors land here too,
-  // so branch the fetch path the same way Viewer does. The middleware
-  // allowlist for /items/.../survey/run was added alongside the
-  // Survey scaffolding in the previous commit.
+export default async function FormResponsesPage({ params }: Props) {
   const isAnonymous = !(await hasSession());
   const fetchItem = <T,>(path: string): Promise<T> =>
     isAnonymous
@@ -134,53 +122,23 @@ export default async function SurveyRuntimePage({ params }: Props) {
       ? publicApiFetch<T>(path.replace('/api/items', '/api/public/items'))
       : apiFetch<T>(path);
 
-  let surveyItem: Item<unknown>;
+  let formItem: Item<FormShape>;
   try {
-    surveyItem = await fetchItem<Item<unknown>>(`/api/items/${params.id}`);
+    formItem = await fetchItem<Item<FormShape>>(`/api/items/${params.id}`);
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
     throw err;
   }
-  if (!isSurveyItem(surveyItem)) notFound();
+  if (formItem.type !== 'form') notFound();
 
-  const survey: SurveyData = {
-    ...DEFAULT_SURVEY,
-    ...((readSurveyData(surveyItem) ?? {}) as Partial<SurveyData>),
-  };
+  const formData = (formItem.data ?? {}) as FormShape;
 
   // ---- Empty states ------------------------------------------------
-  // Author hasn't bound a form yet: render a "go finish setup" panel
-  // pointing back at the configuration page. Reuses the same shell as
-  // the runtime so chrome stays consistent.
-  if (!survey.formId) {
-    return <UnboundShell item={surveyItem} message="no form bound yet" />;
-  }
-
-  // Resolve the form. A 404 here means the form was deleted or is
-  // unreadable; fall back to the unbound shell with a slightly
-  // different message so the author has a clue.
-  let formItem: Item<FormShape> | null = null;
-  try {
-    formItem = await fetchItem<Item<FormShape>>(
-      `/api/items/${survey.formId}`,
-    );
-  } catch (err) {
-    if (!(err instanceof Error && err.message.includes('404'))) throw err;
-  }
-  if (!formItem) {
-    return (
-      <UnboundShell
-        item={surveyItem}
-        message="bound form is missing or unreadable"
-      />
-    );
-  }
-  const formData = (formItem.data ?? {}) as FormShape;
   if (!formData.linkedLayerId) {
     return (
       <UnboundShell
-        item={surveyItem}
-        message="bound form has no paired data layer yet"
+        item={formItem}
+        message="no paired data layer yet (this should auto-materialize on form save)"
       />
     );
   }
@@ -197,7 +155,7 @@ export default async function SurveyRuntimePage({ params }: Props) {
     if (err instanceof Error && err.message.includes('404')) {
       return (
         <UnboundShell
-          item={surveyItem}
+          item={formItem}
           message="paired data layer is missing or unreadable"
         />
       );
@@ -209,7 +167,8 @@ export default async function SurveyRuntimePage({ params }: Props) {
   if (dlData && dlData.version === 3) {
     if (formData.linkedLayerKey) {
       layerKey =
-        dlData.layers.find((l) => l.id === formData.linkedLayerKey)?.id ?? null;
+        dlData.layers.find((l) => l.id === formData.linkedLayerKey)?.id ??
+        null;
     }
     if (!layerKey && dlData.layers.length > 0) {
       layerKey = dlData.layers[0]!.id;
@@ -218,18 +177,18 @@ export default async function SurveyRuntimePage({ params }: Props) {
   if (!layerKey) {
     return (
       <UnboundShell
-        item={surveyItem}
+        item={formItem}
         message="paired data layer has no readable sublayer"
       />
     );
   }
 
   // Forms without a geo question pair to a non-spatial table
-  // (geometryType=null). The Survey runtime renders submissions on a
-  // map, so a table-only paired layer has nothing to draw. Detect and
-  // route to an empty-state shell instead of letting MapCanvas /
-  // EditorRuntime trip on the missing geometry. A future slice can
-  // grow a map-less attribute-table-only mode for this case.
+  // (geometryType=null). Until the table-only mode lands (slice 2 of
+  // docs/survey-runtime.md), route to an unbound shell so the user
+  // gets a clear message instead of a broken map. The form-view
+  // side panel still works in that mode; the table layout is what's
+  // missing.
   const matchedSublayer =
     dlData && dlData.version === 3
       ? dlData.layers.find((l) => l.id === layerKey) ?? null
@@ -237,16 +196,13 @@ export default async function SurveyRuntimePage({ params }: Props) {
   if (matchedSublayer && !matchedSublayer.geometryType) {
     return (
       <UnboundShell
-        item={surveyItem}
-        message="bound form has no map question, so submissions can't be plotted"
+        item={formItem}
+        message="this form has no map question, so submissions can't be plotted (table-only response viewer is on the way)"
       />
     );
   }
 
-  // Synthesize an EditorData with one read-only target = paired
-  // data_layer. Tools list maps the survey's read-side affordances
-  // onto EditorRuntime's overlapping options the same way Viewer
-  // does. Print is a separate prop on EditorRuntime.
+  // Synthesize a read-only EditorData with one target = paired layer.
   const target: EditorTarget = {
     dataLayerId: dataLayerItem.id,
     layerKey,
@@ -258,26 +214,25 @@ export default async function SurveyRuntimePage({ params }: Props) {
     rowScope: 'all',
     templates: [],
   };
-  const passthrough: Array<'select' | 'measure'> = [];
-  if (survey.tools.includes('select')) passthrough.push('select');
-  if (survey.tools.includes('measure')) passthrough.push('measure');
   const editor: EditorData = {
     version: 1,
     targets: [target],
-    tools: passthrough,
+    // Implicit viewer ships the standard read-side toolbar: select
+    // (so the user can pick a row to render through the form view) +
+    // measure (handy on a response map). Print lands once #132 does.
+    tools: ['select', 'measure'],
     snapping: { enabled: false, selfSnap: false, tolerancePx: 10 },
   };
-  if (survey.mapId) editor.mapId = survey.mapId;
 
   const [basemapItems, referencedMap] = await Promise.all([
     fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
     ),
-    editor.mapId
-      ? fetchItem<Item<MapData>>(`/api/items/${editor.mapId}`).catch(
-          () => null,
-        )
-      : Promise.resolve(null),
+    // The implicit viewer doesn't carry a reference map of its own;
+    // the future per-form Response Viewer config (#260 power-user
+    // path) is what wires that up. Pass null here so EditorRuntime
+    // builds the map from just the paired layer.
+    Promise.resolve(null as Item<MapData> | null),
   ]);
 
   const basemaps: CustomBasemap[] = basemapItems
@@ -303,10 +258,9 @@ export default async function SurveyRuntimePage({ params }: Props) {
     resolvedTargets,
   });
 
-  // Pick lists referenced by the paired layer's columns. Same shape
-  // the Viewer fetches; submissions ingested through the form mirror
-  // already write picklist VALUES (not the labels), so the popup
-  // resolves them by looking up the pick_list item here.
+  // Pick lists referenced by the paired layer's columns; same as
+  // survey/run -- the form mirror writes coded VALUES, so the side
+  // panel resolves them back to labels here.
   const pickListItemIds = new Set<string>();
   if (layer) {
     for (const f of layer.fields) {
@@ -325,30 +279,27 @@ export default async function SurveyRuntimePage({ params }: Props) {
     if (it && it.data) pickLists[it.id] = it.data as PickListData;
   }
 
-  // #320: hand the FormView side panel a real schema + the synthesized
-  // target-layer id (the runtime has the layer under that id, not the
-  // raw paired data_layer id). Reading off formItem.data: the form
-  // item stores its full FormSchema there, so we can pass it through
-  // without an extra fetch.
+  // The form item's data IS a FormSchema (the designer writes the
+  // entire schema there). Pass it through to the FormView side panel
+  // so each selected feature renders as a proper form readout.
   const formViewSchema: FormSchema | null =
-    formItem && formItem.data && (formItem.data as { questions?: unknown }).questions
+    formData && formData.questions
       ? (formItem.data as unknown as FormSchema)
       : null;
   const surveyTargetLayerId = editorTargetLayerId(dataLayerItem.id, layerKey);
 
   return (
     <EditorRuntime
-      editorId={surveyItem.id}
-      editorTitle={surveyItem.title}
+      editorId={formItem.id}
+      editorTitle={formItem.title}
       editor={editor}
       resolvedTargets={resolvedTargets}
       pickLists={pickLists}
-      referencedMapTitle={referencedMap?.title ?? null}
+      referencedMapTitle={null}
       initialMapData={mapData}
       targetLayerIds={targetLayerIds}
       basemaps={basemaps}
       canEdit={false}
-      printEnabled={survey.tools.includes('print')}
       formViewSchema={formViewSchema}
       surveyTargetLayerId={surveyTargetLayerId}
     />
@@ -356,9 +307,10 @@ export default async function SurveyRuntimePage({ params }: Props) {
 }
 
 /**
- * Empty-state shell used when the survey is not fully configured.
- * Centralized so the three "no form / no paired layer / no sublayer"
- * branches all render identically.
+ * Empty-state shell used when the form is not fully configured.
+ * Centralized so the "no paired layer / no sublayer / non-spatial"
+ * branches all render identically and link back to the form's
+ * detail page so the author can finish setup.
  */
 function UnboundShell({
   item,
@@ -388,30 +340,26 @@ function UnboundShell({
           href={`/items/${item.id}`}
           className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-1 hover:bg-surface-2"
         >
-          Configure
+          Open form
         </Link>
       </header>
       <div className="flex flex-1 items-center justify-center p-10">
         <div className="max-w-md rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center shadow-card">
           <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-amber-50">
-            {message.includes('paired') ? (
-              <AlertTriangle className="h-5 w-5 text-amber-600" />
-            ) : (
-              <Hammer className="h-5 w-5 text-amber-600" />
-            )}
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
           </span>
           <h2 className="mt-3 text-base font-semibold text-ink-0">
-            Survey not ready to render
+            Responses not ready to render
           </h2>
           <p className="mt-2 text-sm text-muted">
-            This survey app has {message}. Head back to{' '}
+            This form has {message}. Open{' '}
             <Link
               href={`/items/${item.id}`}
               className="text-accent hover:underline"
             >
-              the configuration page
+              the form's page
             </Link>{' '}
-            to finish setup.
+            to finish setup or collect a first submission.
           </p>
         </div>
       </div>

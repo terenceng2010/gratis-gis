@@ -6,6 +6,7 @@ import type maplibregl from 'maplibre-gl';
 import {
   ArrowLeft,
   ChevronDown,
+  ClipboardList,
   Hand,
   Layers as LayersIcon,
   Map as MapBaseIcon,
@@ -39,6 +40,8 @@ import type {
   PickListData,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
+import type { FormSchema } from '@gratis-gis/form-schema';
+import { FormView } from '../survey/form-view';
 import { MapCanvas, type MapCanvasHandle } from '../map/map-canvas';
 import {
   EDITOR_TARGET_LAYER_PREFIX,
@@ -104,6 +107,24 @@ interface Props {
    * instead of going straight to the browser print dialog.
    */
   printEnabled?: boolean;
+  /**
+   * Survey-runtime-only: the bound form's schema. When set, a Form
+   * View toggle appears in the header next to the layers / attribute
+   * table pills, and clicking surfaces a side panel that renders the
+   * currently-selected feature's properties through the form's
+   * question structure (#320). When unset (the default for editor /
+   * viewer runtimes), the toggle is hidden.
+   */
+  formViewSchema?: FormSchema | null;
+  /**
+   * Layer id to read the active feature's properties off of. The
+   * survey runtime passes the paired data_layer's primary sublayer
+   * id; the form view reads `selection[surveyTargetLayerId]` and
+   * pulls properties from the matching feature in the cached
+   * collection. When unset, the form-view toggle is hidden even if
+   * formViewSchema is set.
+   */
+  surveyTargetLayerId?: string | null;
 }
 
 /**
@@ -159,6 +180,8 @@ export function EditorRuntime({
   basemaps,
   canEdit,
   printEnabled = false,
+  formViewSchema = null,
+  surveyTargetLayerId = null,
 }: Props) {
   const [mapData, setMapData] = useState<MapData>(initialMapData);
   // Track the camera's current zoom so LayerPanel can render the
@@ -464,6 +487,16 @@ export function EditorRuntime({
   // toggles it. Same right-slide pattern will house future Legend
   // + Filter panels in follow-up slices.
   const [layersOpen, setLayersOpen] = useState(true);
+  // #320: form-view side panel (Survey runtime). Defaults open when a
+  // schema is bound so users see the response renderer immediately
+  // without hunting for the toggle.
+  const [formViewOpen, setFormViewOpen] = useState(
+    Boolean(formViewSchema && surveyTargetLayerId),
+  );
+  // 0-based index into the active selection set for the survey
+  // runtime's prev/next navigation. Reset to 0 whenever the
+  // selection set changes.
+  const [formViewIndex, setFormViewIndex] = useState(0);
 
   // Index resolvedTargets by key so the picker / panel / submit
   // path can look up O(1).
@@ -1958,6 +1991,63 @@ export function EditorRuntime({
     return new Set(ed.editableFields);
   }, [pendingTarget, editor.targets]);
 
+  // #320: Survey-runtime form-view derived state. surveyKeys is the
+  // ordered list of selected feature keys on the survey target layer
+  // (number indexes for non-v3 sources, _global_id strings for v3
+  // data_layers thanks to the promoteId='_global_id' configuration in
+  // map-canvas, so the selection survives bbox-driven setData refresh
+  // on pan/zoom). activeFeature resolves the current key back to the
+  // feature in the cached collection so the FormView panel can render
+  // its properties through the form schema.
+  const surveySelectionSet =
+    surveyTargetLayerId ? selection[surveyTargetLayerId] : undefined;
+  const surveyKeys = useMemo<Array<number | string>>(() => {
+    if (!surveySelectionSet) return [];
+    return [...surveySelectionSet];
+  }, [surveySelectionSet]);
+
+  // Reset the prev/next index whenever the selection set changes so
+  // the user always lands on the first selected response after a new
+  // box-select / lasso / etc. We key the reset on the joined sorted
+  // keys; permutations within the same set don't bounce the user.
+  const surveyKeysJoined = surveyKeys
+    .map((k) => String(k))
+    .sort()
+    .join('|');
+  useEffect(() => {
+    setFormViewIndex(0);
+  }, [surveyKeysJoined]);
+
+  const surveyActiveFeature = useMemo<GeoJSON.Feature | null>(() => {
+    if (!surveyTargetLayerId) return null;
+    if (surveyKeys.length === 0) return null;
+    const idx = Math.min(formViewIndex, surveyKeys.length - 1);
+    const key = surveyKeys[idx];
+    const fc = featuresByLayer[surveyTargetLayerId];
+    if (!fc) return null;
+    if (typeof key === 'number') {
+      // Numeric index into the original collection. Used by non-v3
+      // sources whose features have no stable id we can promote.
+      return fc.features[key] ?? null;
+    }
+    // String key = _global_id; v3 collections always carry it on
+    // properties (the form mirror writes it when seeding the row).
+    const hit = fc.features.find(
+      (f) => (f.properties as Record<string, unknown> | null)?.['_global_id'] === key,
+    );
+    return hit ?? null;
+  }, [surveyTargetLayerId, surveyKeys, formViewIndex, featuresByLayer]);
+
+  const surveyActiveProperties = useMemo<Record<string, unknown> | null>(() => {
+    if (!surveyActiveFeature) return null;
+    return (surveyActiveFeature.properties ?? {}) as Record<string, unknown>;
+  }, [surveyActiveFeature]);
+
+  const surveyTargetLayer = useMemo(() => {
+    if (!surveyTargetLayerId) return null;
+    return mapData.layers.find((l) => l.id === surveyTargetLayerId) ?? null;
+  }, [surveyTargetLayerId, mapData.layers]);
+
   return (
     <div className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col bg-surface-0">
       {/* Top bar: back link + title + reference map breadcrumb.
@@ -2253,6 +2343,24 @@ export function EditorRuntime({
             >
               <TableIcon className="h-5 w-5" />
             </button>
+            {/* #320: Form view side panel toggle. Only renders for the
+                Survey runtime (formViewSchema + surveyTargetLayerId).
+                Editor / Viewer don't pass these props so the toggle
+                is hidden on those surfaces. */}
+            {formViewSchema && surveyTargetLayerId ? (
+              <button
+                type="button"
+                onClick={() => setFormViewOpen((v) => !v)}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                  formViewOpen ? 'bg-purple-100 text-purple-800' : ''
+                }`}
+                title="Form view"
+                aria-label="Form view"
+                aria-pressed={formViewOpen}
+              >
+                <ClipboardList className="h-5 w-5" />
+              </button>
+            ) : null}
             {/* #313: Basemap switcher collapsed to an icon + popover.
                 AGOL-style; cleaner than the inline <select>. The
                 popover lists the org's basemaps with a check on the
@@ -2399,6 +2507,49 @@ export function EditorRuntime({
           />
           </div>
         </div>
+
+        {/* #320: Survey runtime form-view side panel. Wider than the
+            Layers panel because the rendered form needs room for
+            labels + values + optional group nesting. Sits at z-30 so
+            it overlays the Layers panel when both are open (matches
+            the Esri Survey123 Data tab pattern: form-view takes
+            precedence visually). */}
+        {formViewSchema && surveyTargetLayerId ? (
+          <div
+            className={`absolute right-0 top-0 z-30 flex h-full w-96 shrink-0 transform flex-col border-l border-border bg-surface-1 shadow-overlay transition-transform duration-200 ${
+              formViewOpen ? 'translate-x-0' : 'translate-x-full'
+            }`}
+            aria-hidden={!formViewOpen}
+          >
+            <FormView
+              open={formViewOpen}
+              schema={formViewSchema}
+              pickLists={pickLists}
+              layer={surveyTargetLayer}
+              activeProperties={surveyActiveProperties}
+              selectedCount={surveyKeys.length}
+              activeIndex={Math.min(
+                formViewIndex,
+                Math.max(0, surveyKeys.length - 1),
+              )}
+              onPrev={() =>
+                setFormViewIndex((i) => {
+                  const n = surveyKeys.length;
+                  if (n <= 1) return 0;
+                  return (i - 1 + n) % n;
+                })
+              }
+              onNext={() =>
+                setFormViewIndex((i) => {
+                  const n = surveyKeys.length;
+                  if (n <= 1) return 0;
+                  return (i + 1) % n;
+                })
+              }
+              onClose={() => setFormViewOpen(false)}
+            />
+          </div>
+        ) : null}
 
         <div className="relative min-w-0 flex-1">
           <MapCanvas

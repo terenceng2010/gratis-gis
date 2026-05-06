@@ -710,6 +710,16 @@ export default async function ItemDetailPage({ params }: Props) {
                 /forms/{item.id}/respond
               </Link>
             </span>
+            {/* #321: every form gets a built-in Response Viewer at
+                /items/<id>/responses -- form-view side panel + map +
+                attribute table over the paired data_layer's
+                submissions. No separate Survey app to create. */}
+            <Link
+              href={`/items/${item.id}/responses`}
+              className="text-accent hover:underline"
+            >
+              View responses
+            </Link>
             {(() => {
               // #281f: every form has a paired data_layer where
               // submissions land (#283 / #284). Surface a link to it
