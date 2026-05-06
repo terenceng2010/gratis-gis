@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
+  ClipboardList,
   ExternalLink,
   Eye,
   FolderMinus,
@@ -151,6 +152,28 @@ export function ItemRowMenu({
             >
               <ExternalLink className="h-3.5 w-3.5 text-muted" />
               <span className="flex-1">Open</span>
+            </a>
+          ) : null}
+          {/* #328: forms get a second runnable entry alongside Open
+              -- "Responses" deep-links into the implicit Response
+              Viewer (#321). Open targets the respondent runtime
+              (someone fills out the form), Responses targets the
+              authoring runtime (someone reads what was submitted),
+              so they're complementary verbs, not redundant. */}
+          {itemType === 'form' ? (
+            <a
+              role="menuitem"
+              href={`/items/${itemId}/responses`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+              }}
+              className="flex items-center gap-2 px-3 py-2 text-ink-1 hover:bg-surface-2"
+            >
+              <ClipboardList className="h-3.5 w-3.5 text-muted" />
+              <span className="flex-1">Responses</span>
             </a>
           ) : null}
           {/* Configure goes to the detail page. The detail page is

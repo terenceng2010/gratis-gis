@@ -128,6 +128,7 @@ import { DerivedLayerDetail } from './derived-layer/detail';
 import { FolderDetail } from './folder/folder-detail';
 import { EditorDetail } from './editor/editor-detail';
 import { FormDesigner } from './form/designer';
+import { FormActionsRow } from './form/actions-row';
 import { DataCollectionDetail } from './data-collection/data-collection-detail';
 import { FileDetail } from './file/file-detail';
 import { OgcServiceEditor } from './ogc-service/editor';
@@ -724,6 +725,33 @@ export default async function ItemDetailPage({ params }: Props) {
         </section>
       ) : item.type === 'form' ? (
         <section className="mb-6">
+          {/* #328: pretty pill row of actions sits ABOVE the form
+              designer so it's reachable without scrolling past the
+              question canvas. Mirrors the page-header buttons (#323)
+              for users who land here scrolled down -- the canvas can
+              be tall enough that the header pushes offscreen, so
+              having the same affordances in two places is intentional
+              redundancy. The row also gains a Copy link button for
+              the "paste this somewhere" workflow that the inline
+              URL used to serve. */}
+          {(() => {
+            const linkedLayerId =
+              item.data &&
+              typeof item.data === 'object' &&
+              'linkedLayerId' in (item.data as object)
+                ? ((item.data as { linkedLayerId?: unknown }).linkedLayerId)
+                : undefined;
+            return (
+              <FormActionsRow
+                formId={item.id}
+                linkedLayerId={
+                  typeof linkedLayerId === 'string' && linkedLayerId
+                    ? linkedLayerId
+                    : null
+                }
+              />
+            );
+          })()}
           <FormDesigner
             itemId={item.id}
             initial={
@@ -733,49 +761,6 @@ export default async function ItemDetailPage({ params }: Props) {
             }
             canEdit={canManage}
           />
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-            {/* The big Open / Responses buttons in the page header
-                are the primary affordances (#323). The remaining
-                pill row is for "I want the URL to paste somewhere"
-                use-cases: the respondent link is what gets shared
-                externally, and the data_layer link drops the user
-                onto the layer's standard detail page (different
-                lens than the form-shaped Response Viewer). */}
-            <span>
-              Respondent link:{' '}
-              <Link
-                href={`/forms/${item.id}/respond`}
-                className="font-mono text-accent hover:underline"
-              >
-                /forms/{item.id}/respond
-              </Link>
-            </span>
-            {(() => {
-              // #281f: every form has a paired data_layer where
-              // submissions land (#283 / #284). Surface a link to it
-              // so authors can browse responses on the existing
-              // data_layer attribute-table UI without us building
-              // a separate submissions page from scratch.
-              const linkedLayerId =
-                item.data &&
-                typeof item.data === 'object' &&
-                'linkedLayerId' in (item.data as object)
-                  ? ((item.data as { linkedLayerId?: unknown })
-                      .linkedLayerId)
-                  : undefined;
-              if (typeof linkedLayerId !== 'string' || !linkedLayerId) {
-                return null;
-              }
-              return (
-                <Link
-                  href={`/items/${linkedLayerId}`}
-                  className="text-accent hover:underline"
-                >
-                  View submissions data layer
-                </Link>
-              );
-            })()}
-          </div>
         </section>
       ) : item.type === 'wms_service' || item.type === 'wfs_service' ? (
         <section className="mb-6">
