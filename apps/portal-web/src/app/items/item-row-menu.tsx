@@ -7,10 +7,13 @@ import {
   FolderMinus,
   FolderPlus,
   MoreVertical,
+  Settings,
   Trash2,
   Users as UsersIcon,
 } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
+
+import { getItemHref, hasRuntime } from '@/lib/item-type-icon';
 
 /**
  * Per-row kebab menu on the items list (#82). Surfaces the
@@ -32,6 +35,12 @@ const PREVIEWABLE_TYPES: ReadonlySet<ItemType> = new Set([
 interface Props {
   itemId: string;
   itemType: ItemType;
+  /** Item data payload, forwarded to getItemHref / hasRuntime so
+   *  templated web_apps (editor / viewer) deep-link to the right
+   *  runtime route. Optional because many list callers only have
+   *  the slim projection -- in that case Open falls back to the
+   *  detail page and the Configure entry doesn't render. */
+  itemData?: unknown;
   canManage: boolean;
   onPreview?: (() => void) | undefined;
   onShare?: (() => void) | undefined;
@@ -50,6 +59,7 @@ interface Props {
 export function ItemRowMenu({
   itemId,
   itemType,
+  itemData,
   canManage,
   onPreview,
   onShare,
@@ -84,6 +94,14 @@ export function ItemRowMenu({
   }, [open]);
 
   const previewable = PREVIEWABLE_TYPES.has(itemType) && onPreview;
+  // For runnable items (editor/viewer web_apps, data_collection),
+  // Open targets the runtime URL ("end product") and a separate
+  // Configure entry takes the user to the detail / config page.
+  // Plain content types (data_layer, basemap, service, etc.) keep
+  // a single Open that lands on the detail page.
+  const openHref = getItemHref({ id: itemId, type: itemType, data: itemData });
+  const isRunnable = hasRuntime({ type: itemType, data: itemData });
+  const configureHref = `/items/${itemId}`;
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -109,9 +127,18 @@ export function ItemRowMenu({
           className="absolute right-0 top-8 z-30 w-52 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
           onMouseDown={(e) => e.stopPropagation()}
         >
+          {/* Open targets the runtime / "end product" for runnable
+              types -- the editor / viewer / field PWA -- and opens
+              in a new tab so the runtime gets the full viewport
+              and the items list stays available behind it. Plain
+              content types open the detail page in the same tab
+              since there's nothing to launch. */}
           <a
             role="menuitem"
-            href={`/items/${itemId}`}
+            href={openHref}
+            {...(isRunnable
+              ? { target: '_blank', rel: 'noopener noreferrer' }
+              : {})}
             onClick={(e) => {
               e.stopPropagation();
               setOpen(false);
@@ -121,6 +148,20 @@ export function ItemRowMenu({
             <ExternalLink className="h-3.5 w-3.5 text-muted" />
             <span className="flex-1">Open</span>
           </a>
+          {isRunnable ? (
+            <a
+              role="menuitem"
+              href={configureHref}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+              }}
+              className="flex items-center gap-2 border-t border-border px-3 py-2 text-ink-1 hover:bg-surface-2"
+            >
+              <Settings className="h-3.5 w-3.5 text-muted" />
+              <span className="flex-1">Configure</span>
+            </a>
+          ) : null}
           {previewable ? (
             <button
               type="button"

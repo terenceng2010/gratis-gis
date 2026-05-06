@@ -199,6 +199,37 @@ export function getItemHref(item: {
   return `/items/${item.id}`;
 }
 
+/**
+ * Does this item have a distinct runtime (the "end product" the
+ * end user uses) separate from its configuration page? When true,
+ * the per-row kebab on the items list shows BOTH "Open" (runtime)
+ * and "Configure" (detail page); when false, there's only one
+ * landing place so the menu has a single Open entry.
+ *
+ * Currently true for the templated web_apps (editor/viewer) and
+ * data_collection (field PWA). Forms also have a runtime, but the
+ * runtime today opens through the paired data_layer (#284) so we
+ * leave forms with the single Open until the runtime URL settles.
+ */
+export function hasRuntime(item: {
+  type: ItemType;
+  data?: unknown;
+}): boolean {
+  if (isEditorItem(item)) return true;
+  if (isViewerItem(item)) return true;
+  if (item.type === 'data_collection') return true;
+  return false;
+}
+
+/**
+ * Configuration page href. Always the bare /items/:id detail page;
+ * never deep-links into a runtime. Pair with getItemHref to power
+ * the kebab's "Open" + "Configure" pair (#310 follow-up).
+ */
+export function getItemConfigureHref(item: { id: string }): string {
+  return `/items/${item.id}`;
+}
+
 export function getItemTypeAccent(type: ItemType): string {
   return ITEM_TYPE_ACCENT[type] ?? 'text-slate-600';
 }

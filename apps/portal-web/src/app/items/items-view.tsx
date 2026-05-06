@@ -1963,6 +1963,7 @@ function ItemGrid({
                 <ItemRowMenu
                   itemId={item.id}
                   itemType={item.type}
+                  itemData={item.data}
                   canManage={canManage}
                   onPreview={() => onPreview(item)}
                   onShare={canManage ? () => onRowShare(item) : undefined}
