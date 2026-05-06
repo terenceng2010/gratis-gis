@@ -1905,29 +1905,33 @@ export function EditorRuntime({
           link that takes them to the editor's detail/config page. */}
       <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
         <div className="flex min-w-0 items-center gap-3">
-          <Link
-            href="/items"
-            className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to items
-          </Link>
-          <span className="text-muted">/</span>
+          {/* "Back to items" only renders for editors. Viewers --
+              especially anonymous public-share visitors -- don't have
+              an items list to return to, and AGOL's shared viewer
+              link opens in a new tab without back-nav. Editors keep
+              the link as a quick escape to the items list. */}
+          {canEdit ? (
+            <>
+              <Link
+                href="/items"
+                className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back to items
+              </Link>
+              <span className="text-muted">/</span>
+            </>
+          ) : null}
           <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-0">
             <PencilRuler className="h-4 w-4 text-purple-600" />
             {editorTitle}
           </span>
-          {referencedMapTitle ? (
+          {referencedMapTitle && canEdit ? (
             <span className="hidden items-center gap-1 text-xs text-muted sm:inline-flex">
               <span>against</span>
               <span className="font-medium text-ink-1">
                 {referencedMapTitle}
               </span>
-            </span>
-          ) : null}
-          {!canEdit ? (
-            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted">
-              View only
             </span>
           ) : null}
         </div>
@@ -2057,9 +2061,14 @@ export function EditorRuntime({
               ))}
             </select>
           </label>
-          <span>
-            {targetCount} editable layer{targetCount === 1 ? '' : 's'}
-          </span>
+          {/* Editable-layers count is meaningless in the read-only
+              viewer (always 0) and clutters the public-share header.
+              Only show for editors. */}
+          {canEdit ? (
+            <span>
+              {targetCount} editable layer{targetCount === 1 ? '' : 's'}
+            </span>
+          ) : null}
           {canEdit ? (
             <Link
               href={`/items/${editorId}`}

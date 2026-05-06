@@ -79,6 +79,16 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   if (/^items\/[^/]+\/layers\/[^/]+\/(geojson|features)$/.test(suffix)) {
     return `public/${suffix}`;
   }
+  // Anonymous service-proxy passthrough: a public viewer that
+  // references an external service (ArcGIS / WMS / WFS / WMTS)
+  // hits /items/:id/proxy/<sub-path>?... at runtime to fetch
+  // tiles or features. The matching public endpoint is gated on
+  // access='public' and injects stored credentials server-side
+  // before forwarding upstream, so the credential never leaves
+  // the server. See public-proxy.controller.ts.
+  if (/^items\/[^/]+\/proxy(\/.*)?$/.test(suffix)) {
+    return `public/${suffix}`;
+  }
   return null;
 }
 

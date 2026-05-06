@@ -309,14 +309,22 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <Link
+          {/* Open in a new tab so the viewer fills the browser
+              window without portal chrome around it -- matches AGOL's
+              shared-viewer UX where the link launches a chromeless,
+              full-bleed map. The same href is what authors copy as
+              the public-share URL, so the public-share + author-test
+              experience are identical. */}
+          <a
             href={`/items/${itemId}/viewer/run`}
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            title="Open this viewer in workspace mode"
+            title="Open this viewer in a new tab"
           >
             <Play className="h-3.5 w-3.5" />
             Open viewer
-          </Link>
+          </a>
           {canEdit ? (
             <>
               <button

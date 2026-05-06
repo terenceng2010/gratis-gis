@@ -213,7 +213,7 @@ export class ItemProxyController {
 
 /** Pull everything after `/proxy/` from the request URL. Returns
  *  '' when the request hits exactly /proxy with no trailing path. */
-function extractSubPath(url: string): string {
+export function extractSubPath(url: string): string {
   const idx = url.indexOf('/proxy');
   if (idx < 0) return '';
   let after = url.slice(idx + '/proxy'.length);
@@ -226,7 +226,7 @@ function extractSubPath(url: string): string {
  *  credentials are appended as a query param here so they end up
  *  in the URL the upstream sees. Null credential = no token to
  *  inject (item doesn't require auth). */
-function composeUpstreamUrl(
+export function composeUpstreamUrl(
   base: string,
   subPath: string,
   credential: CredentialPayload | null,
@@ -258,7 +258,7 @@ function composeUpstreamUrl(
  *  and basic ride in Authorization; arcgis_token uses the URL
  *  query param branch above and contributes no header. Null
  *  credential produces just the accept header (anonymous request). */
-function composeUpstreamHeaders(
+export function composeUpstreamHeaders(
   credential: CredentialPayload | null,
 ): Record<string, string> {
   const headers: Record<string, string> = {
@@ -278,7 +278,7 @@ function composeUpstreamHeaders(
 
 /** Redact ?token= from a URL so logs don't leak the credential
  *  even when an upstream proxy fetch fails. */
-function maskCredential(url: string): string {
+export function maskCredential(url: string): string {
   return url.replace(/([?&]token=)[^&]+/gi, '$1***');
 }
 
@@ -286,7 +286,7 @@ function maskCredential(url: string): string {
  *  item's URL look like an ArcGIS REST endpoint that would need
  *  a token instead of HTTP Basic? Same rules so a credential that
  *  works in the wizard works through the proxy. (#76) */
-function isArcgisRest(url: string): boolean {
+export function isArcgisRest(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.hostname === 'arcgis.com' || u.hostname.endsWith('.arcgis.com')) {

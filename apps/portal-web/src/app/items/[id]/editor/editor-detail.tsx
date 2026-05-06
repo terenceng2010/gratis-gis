@@ -409,14 +409,19 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <Link
+          {/* Open in a new tab so the runtime gets the full viewport
+              and the author can keep this configuration tab open for
+              quick reference. Mirrors viewer/detail.tsx. */}
+          <a
             href={`/items/${itemId}/editor/run`}
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            title="Open this editor in workspace mode"
+            title="Open this editor in a new tab"
           >
             <Play className="h-3.5 w-3.5" />
             Open in workspace
-          </Link>
+          </a>
           {canEdit ? (
             <>
               <button
