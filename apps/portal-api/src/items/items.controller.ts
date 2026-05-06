@@ -305,6 +305,25 @@ export class ItemsController {
   }
 
   /**
+   * Cascade-revert candidates (#334). Inverse of #310's
+   * cascade-public flow. Returns the transitive dependencies that
+   * are currently access='public' and aren't independently required
+   * by any other public item -- i.e. the items the caller can
+   * safely downgrade alongside making this parent non-public. The
+   * client surfaces these in a confirmation dialog before applying
+   * the downgrade. Items referenced by another public consumer are
+   * silently dropped so the dialog never offers to break that
+   * consumer's anonymous render.
+   */
+  @Get(':id/cascade-revert-candidates')
+  cascadeRevertCandidates(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ) {
+    return this.items.listCascadeRevertCandidates(user, id);
+  }
+
+  /**
    * GeoJSON-only view of a data_layer item. Handles both v1 (inline
    * JSON) and v2 (PostGIS) storage transparently.
    *

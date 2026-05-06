@@ -2226,6 +2226,94 @@ export class ItemsService {
   }
 
   /**
+   * Cascade-revert candidates (#334). Inverse of the
+   * cascade-on-public flow (#310): when the caller is about to flip
+   * an item OUT of access='public', return the transitive
+   * dependencies that:
+   *
+   *   - are currently access='public', and
+   *   - are NOT also depended on by ANY OTHER access='public' item in
+   *     the same org (other than the parent being changed).
+   *
+   * Those are the items the user can safely downgrade with the
+   * parent: they're only public because of this parent, so taking
+   * the parent private leaves no public consumer. A dep that's also
+   * referenced by another public item is omitted -- downgrading it
+   * would break the other public consumer's anonymous render.
+   *
+   * Caller is responsible for actually applying the downgrade
+   * (sequential PATCHes to /items/:id with { access }) AFTER the
+   * user confirms; this endpoint only computes the candidate list.
+   * The downgrade target tier defaults to 'org' on the client; the
+   * user can override per item if they want strict private.
+   *
+   * Performance: O(P * D) where P is public items in the org and D
+   * is the average transitive-dep count per public item. For most
+   * orgs (P < 50, D < 20) this is comfortable. If catalogs grow
+   * larger, swap for a maintained item_dependency table.
+   */
+  async listCascadeRevertCandidates(user: AuthUser, id: string) {
+    // Same visibility gate as listDependencies. The caller has to be
+    // able to see the item itself before walking its graph.
+    await this.get(user, id);
+
+    // 1. Pull this item's transitive deps that are currently public.
+    const myDeps = await this.listDependencies(user, id, {
+      transitive: true,
+    });
+    const publicDeps = myDeps.filter((d) => d.access === 'public');
+    if (publicDeps.length === 0) return [];
+
+    // 2. Find every OTHER public item in the org. We need their full
+    //    `data` so we can walk their transitive deps and compute the
+    //    "still needed by some other public" set.
+    const otherPublics = await this.prisma.item.findMany({
+      where: {
+        orgId: user.orgId,
+        access: 'public',
+        deletedAt: null,
+        id: { not: id },
+      },
+      select: { id: true, type: true, data: true },
+    });
+
+    // 3. Walk every other public item's transitive deps, union the
+    //    reached ids into stillNeeded. publicDeps that AREN'T in
+    //    stillNeeded are safe to revert.
+    const stillNeeded = new Set<string>();
+    for (const op of otherPublics) {
+      // Direct hop: the ids the item explicitly names.
+      const seed = extractDependencies({ type: op.type, data: op.data });
+      const collected = new Set<string>(seed.itemIds);
+      const frontier: string[] = [...seed.itemIds];
+      // BFS for transitive coverage. Same shape as listDependencies's
+      // BFS but inlined here so we don't double-pay the per-call
+      // arcgis URL index build for each public item; URL refs aren't
+      // load-bearing for the cascade-revert decision (a URL ref
+      // points at an arcgis_service item, which IS in the dep set).
+      while (frontier.length > 0) {
+        const batch = frontier.splice(0, frontier.length);
+        const rows = await this.prisma.item.findMany({
+          where: { id: { in: batch }, deletedAt: null },
+          select: { id: true, type: true, data: true },
+        });
+        for (const r of rows) {
+          const deps = extractDependencies({ type: r.type, data: r.data });
+          for (const nid of deps.itemIds) {
+            if (!collected.has(nid)) {
+              collected.add(nid);
+              frontier.push(nid);
+            }
+          }
+        }
+      }
+      for (const dep of collected) stillNeeded.add(dep);
+    }
+
+    return publicDeps.filter((d) => !stillNeeded.has(d.id));
+  }
+
+  /**
    * Return the items that reference THIS one (reverse edges).
    *
    * Two modes:

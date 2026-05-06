@@ -27,6 +27,7 @@ import type {
 } from '@gratis-gis/shared-types';
 
 import { PublicCascadeDialog } from './public-cascade-dialog';
+import { PublicCascadeRevertDialog } from './public-cascade-revert-dialog';
 
 /**
  * Compact sharing indicator for rendering inline with an item card or
@@ -172,9 +173,14 @@ export function ItemSharingIndicator({
   // #310: after a successful flip to access='public', open the
   // cascade-prompt modal so the author can also flip every
   // referenced item to public without having to navigate to each
-  // one individually. Lazy-imported to keep the access switcher
-  // bundle small for the common case (no flip).
+  // one individually.
   const [cascadeOpen, setCascadeOpen] = useState(false);
+  // #334: inverse cascade. After a flip OUT of access='public', open
+  // the revert-prompt modal so the author can also downgrade every
+  // public dep that was only public because of THIS parent. The
+  // server filters out deps still needed by another public item.
+  const [revertOpen, setRevertOpen] = useState(false);
+  const [revertTarget, setRevertTarget] = useState<ItemAccess>('org');
   const [principalMeta, setPrincipalMeta] = useState<{
     users: Record<string, PrincipalMeta>;
     groups: Record<string, PrincipalMeta>;
@@ -302,6 +308,18 @@ export function ItemSharingIndicator({
       // row doesn't re-prompt unnecessarily.
       if (next === 'public' && prev !== 'public') {
         setCascadeOpen(true);
+      }
+      // #334: inverse cascade. Transitioning OUT of public is the
+      // moment to offer to revert dependencies that were only
+      // public because of this parent. The dialog self-dismisses
+      // when the candidate list is empty, so a flip with no
+      // independent-public deps stays silent. We seed the
+      // downgrade target tier from where the parent landed (org
+      // or private) so the dialog's default keeps the cascade
+      // visually consistent with what the author just chose.
+      if (prev === 'public' && next !== 'public') {
+        setRevertTarget(next);
+        setRevertOpen(true);
       }
       router.refresh();
     },
@@ -497,6 +515,19 @@ export function ItemSharingIndicator({
         parentTitle={itemTitle}
         onClose={() => {
           setCascadeOpen(false);
+          router.refresh();
+        }}
+      />
+      {/* #334 cascade-revert prompt. Same self-dismissing pattern
+          as the public cascade above; fires when the access
+          transition was OUT of public. */}
+      <PublicCascadeRevertDialog
+        open={revertOpen}
+        parentId={itemId}
+        parentTitle={itemTitle}
+        downgradeTo={revertTarget}
+        onClose={() => {
+          setRevertOpen(false);
           router.refresh();
         }}
       />

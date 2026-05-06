@@ -362,18 +362,38 @@ export function AttributeTable({
     }
     updateActiveSelection(next);
     setLastPicked(displayIdx);
+    // #335: auto-zoom on row click so the user doesn't also have to
+    // click the explicit zoom-to-selection button. Especially load-
+    // bearing in the Response Viewer where users land data-first.
+    // Read directly from `next` (not activeSelection) because the
+    // setState above hasn't flushed yet inside this handler.
+    const bbox = bboxOfKeySet(next);
+    if (bbox) onZoomTo(bbox);
   }
 
-  function zoomToSelection() {
-    if (activeSelection.size === 0) return;
-    const features = [...activeSelection]
+  /**
+   * Compute the union bbox of every feature whose stable key is in
+   * the given set. Skips keys that resolve to a missing feature or
+   * to a feature without geometry (e.g. a non-spatial table layer).
+   * Returns null when the bbox would be degenerate; callers fall
+   * back to no-op rather than zoom into an empty rect.
+   */
+  function bboxOfKeySet(
+    keys: Set<number | string>,
+  ): [number, number, number, number] | null {
+    if (keys.size === 0) return null;
+    const features = [...keys]
       .map((key) => {
         const idx = indexForKey(key);
         return idx >= 0 ? activeFeatures[idx] : null;
       })
       .filter((f): f is GeoJSON.Feature => Boolean(f && f.geometry));
-    if (features.length === 0) return;
-    const bbox = bboxOfFeatures(features);
+    if (features.length === 0) return null;
+    return bboxOfFeatures(features);
+  }
+
+  function zoomToSelection() {
+    const bbox = bboxOfKeySet(activeSelection);
     if (bbox) onZoomTo(bbox);
   }
 
