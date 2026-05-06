@@ -28,6 +28,15 @@ interface Props {
    */
   defaultMapId?: string | undefined;
   /**
+   * Pass true to allow layers whose editingEnabled flag is false
+   * (#259 slice 4b). Used by the Viewer's bulk-import flow: a
+   * read-only viewer doesn't care about edit privileges, so an
+   * editingEnabled=false layer is still a perfectly valid target
+   * to display. Defaults to false to preserve the Editor's
+   * behavior (editable layers only).
+   */
+  allowNonEditable?: boolean;
+  /**
    * Called with the full list of new EditorTarget seeds the user
    * confirmed. The parent merges them into the targets array.
    */
@@ -81,6 +90,7 @@ export function AddFromMapDialog({
   onClose,
   existingTargets,
   defaultMapId,
+  allowNonEditable = false,
   onAdd,
 }: Props) {
   // The map we're importing from. Holds the FULL Item (data + layers)
@@ -171,7 +181,12 @@ export function AddFromMapDialog({
           dataLayerTitle: dl.title,
           layer: sub,
           alreadyTarget: existingTargets.has(key),
-          notEditable: sub.editingEnabled === false,
+          // When allowNonEditable is on (Viewer path), non-editable
+          // layers are still valid targets, so we never mark them
+          // as "blocked" -- the picker treats them like any other.
+          notEditable: allowNonEditable
+            ? false
+            : sub.editingEnabled === false,
         });
       }
     }

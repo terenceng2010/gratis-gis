@@ -26,6 +26,7 @@ import type {
 } from '@gratis-gis/shared-types';
 import { DEFAULT_VIEWER_TOOLS } from '@gratis-gis/shared-types';
 import { AddTargetDialog } from '../editor/add-target-dialog';
+import { AddFromMapDialog } from '../editor/add-from-map-dialog';
 import { PickMapDialog } from '../editor/pick-map-dialog';
 
 interface Props {
@@ -79,6 +80,7 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addingFromMap, setAddingFromMap] = useState(false);
   const [pickingMap, setPickingMap] = useState(false);
 
   // Resolved title for the referenced map. Looked up by id so a
@@ -219,6 +221,51 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
         layer: input.layer,
       },
     }));
+    markDirty();
+  }
+
+  /**
+   * Bulk add from the AddFromMapDialog (#259 slice 4b). The dialog
+   * has already deduped against existingTargets, but we still
+   * filter defensively here to dodge any race where the dialog's
+   * snapshot is older than this state. Each addition becomes a
+   * minimal ViewerTarget (just the identity pair) -- a viewer has
+   * no per-target capabilities to seed, unlike the editor's
+   * bulkAddFromMap.
+   */
+  function bulkAddFromMap(
+    additions: Array<{
+      dataLayerId: string;
+      layerKey: string;
+      layer: DataLayerSublayer;
+      dataLayerTitle: string;
+    }>,
+  ) {
+    if (additions.length === 0) return;
+    const seen = new Set(
+      viewer.targets.map((t) => `${t.dataLayerId}:${t.layerKey}`),
+    );
+    const newTargets: ViewerTarget[] = [];
+    const newResolved: typeof resolved = { ...resolved };
+    for (const a of additions) {
+      const key = `${a.dataLayerId}:${a.layerKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      newTargets.push({
+        dataLayerId: a.dataLayerId,
+        layerKey: a.layerKey,
+      });
+      newResolved[key] = {
+        item: {
+          id: a.dataLayerId,
+          title: a.dataLayerTitle,
+        } as unknown as Item,
+        layer: a.layer,
+      };
+    }
+    if (newTargets.length === 0) return;
+    setViewer((cur) => ({ ...cur, targets: [...cur.targets, ...newTargets] }));
+    setResolved(newResolved);
     markDirty();
   }
 
@@ -446,14 +493,25 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
             </p>
           </div>
           {canEdit ? (
-            <button
-              type="button"
-              onClick={() => setAdding(true)}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add layer
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAddingFromMap(true)}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+                title="Bulk-import layers from a map"
+              >
+                <MapIcon className="h-3.5 w-3.5" />
+                Add from map
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdding(true)}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add layer
+              </button>
+            </div>
           ) : null}
         </div>
         {viewer.targets.length === 0 ? (
@@ -525,6 +583,15 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
         existingTargets={existingKeys}
         allowNonEditable
         onAdd={addTarget}
+      />
+
+      <AddFromMapDialog
+        open={addingFromMap}
+        onClose={() => setAddingFromMap(false)}
+        existingTargets={existingKeys}
+        defaultMapId={viewer.mapId}
+        allowNonEditable
+        onAdd={bulkAddFromMap}
       />
 
       <PickMapDialog
