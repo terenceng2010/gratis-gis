@@ -67,6 +67,7 @@ const TEMPLATE_LABELS: Record<WebAppTemplate, string> = {
   editor: 'Editor',
   viewer: 'Viewer',
   survey: 'Survey',
+  custom: 'Custom',
 };
 
 export function FilterPopover({

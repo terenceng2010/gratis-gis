@@ -16,6 +16,7 @@
  * "open" affordance.
  */
 
+import type { CustomAppData } from './custom-app';
 import type { EditorData } from './editor';
 import type { SurveyData } from './survey';
 import type { ViewerData } from './viewer';
@@ -25,7 +26,7 @@ import type { ViewerData } from './viewer';
  * a config sub-shape in WebAppData.config. Adding a value: extend
  * this union and the WebAppData['config'] discriminated branch.
  */
-export type WebAppTemplate = 'editor' | 'viewer' | 'survey';
+export type WebAppTemplate = 'editor' | 'viewer' | 'survey' | 'custom';
 
 /**
  * Top-level shape on a web_app's `data` field.
@@ -65,6 +66,7 @@ export type WebAppConfig =
   | { template: 'editor'; editor: EditorData }
   | { template: 'viewer'; viewer: ViewerData }
   | { template: 'survey'; survey: SurveyData }
+  | { template: 'custom'; custom: CustomAppData }
   | { template: string; [key: string]: unknown };
 
 /**
@@ -289,6 +291,66 @@ export function readSurveyData(item: {
     'formId' in d
   ) {
     return d as unknown as SurveyData;
+  }
+  return null;
+}
+
+/**
+ * Type guard: was this item created as the `custom` Web App template
+ * (#261)? Mirrors isViewerItem / isSurveyItem. CustomAppData carries
+ * `pages` (an array) which is its primary structural marker; an
+ * unwrapped CustomAppData is detectable by the presence of `pages`
+ * without the `targets` + `tools` Viewer/Editor combination.
+ */
+export function isCustomAppItem(item: {
+  type: string;
+  data?: unknown;
+}): boolean {
+  if (item.type !== 'web_app') return false;
+  const d = item.data as WebAppData | null | undefined;
+  if (d?.template === 'custom') return true;
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    'pages' in d &&
+    Array.isArray((d as { pages?: unknown }).pages)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Read the CustomAppData out of a web_app+custom item. Returns null
+ * when the item isn't a custom app or when the data is missing /
+ * malformed. Mirrors readSurveyData / readViewerData.
+ */
+export function readCustomAppData(item: {
+  type: string;
+  data?: unknown;
+}): CustomAppData | null {
+  if (item.type !== 'web_app') return null;
+  const d = item.data as WebAppData | null | undefined;
+  if (d?.template === 'custom') {
+    const cfg = d.config as
+      | { template: 'custom'; custom?: CustomAppData }
+      | null
+      | undefined;
+    if (cfg?.template === 'custom' && cfg.custom) return cfg.custom;
+    if (cfg && typeof cfg === 'object' && 'pages' in cfg) {
+      return cfg as unknown as CustomAppData;
+    }
+    return null;
+  }
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    'pages' in d &&
+    Array.isArray((d as { pages?: unknown }).pages)
+  ) {
+    return d as unknown as CustomAppData;
   }
   return null;
 }
