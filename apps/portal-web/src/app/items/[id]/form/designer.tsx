@@ -153,8 +153,16 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
     };
   }, [form.linkedLayerId, form.linkedLayerKey]);
 
+  // Selection key is a question id, but `null` means "nothing
+  // selected" -- NOT empty string. Don't truthy-check `selectedId`
+  // here: an empty string is a valid (if transient) id while the
+  // user is actively editing the Question id field, and falling back
+  // to null hides the entire properties panel mid-edit (#324). The
+  // ID input is buffered locally in Properties so the form's
+  // question.id never actually goes empty, but the selection
+  // function still has to be tolerant of any non-null string.
   const selected = useMemo(
-    () => (selectedId ? findById(form.questions, selectedId) : null),
+    () => (selectedId !== null ? findById(form.questions, selectedId) : null),
     [form.questions, selectedId],
   );
 
@@ -1531,6 +1539,69 @@ function QuestionRow({
 
 // ---- Properties -------------------------------------------------
 
+/**
+ * Locally-buffered text input for editing a question id (#324).
+ *
+ * Why local state: the question id doubles as the bound column name
+ * in the layer schema, so committing every intermediate value as the
+ * user types corrupts the schema mid-edit. Just as bad, the live
+ * selection key is the question id, so a transiently-empty id (e.g.
+ * the moment after the author select-all-deletes the field, before
+ * typing a replacement) flips the panel into the empty state and
+ * the author loses every other property they were editing.
+ *
+ * The component is mounted with a `key={question.id}` from the
+ * caller, so a successful commit (or a switch to a different
+ * question) remounts it and re-seeds the input from the canonical
+ * value; we don't need a useEffect to sync.
+ *
+ * Commit triggers: blur, Enter. Escape reverts to the seeded value.
+ * Empty / whitespace / unchanged values silently revert without
+ * firing onCommit -- a question id of "" is never a sensible
+ * intent and it's better UX to drop it on the floor than to surface
+ * a nag.
+ */
+function BufferedIdInput({
+  initial,
+  disabled,
+  inputClassName,
+  onCommit,
+}: {
+  initial: string;
+  disabled: boolean;
+  inputClassName: string;
+  onCommit: (newId: string) => void;
+}) {
+  const [value, setValue] = useState(initial);
+  return (
+    <input
+      type="text"
+      value={value}
+      disabled={disabled}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        const trimmed = value.trim();
+        if (!trimmed || trimmed === initial) {
+          setValue(initial);
+          return;
+        }
+        onCommit(trimmed);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          setValue(initial);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={inputClassName}
+    />
+  );
+}
+
 function Properties({
   form,
   question,
@@ -1633,12 +1704,20 @@ function Properties({
       )}
 
       <Field label="Question id" hint="Used as the column name in the layer schema.">
-        <input
-          type="text"
-          value={question.id}
+        {/* #324: buffer locally and commit on blur / Enter. Editing
+            the id per-keystroke would (a) commit every intermediate
+            value as the column name, polluting the layer schema
+            mid-edit, and (b) bounce the selection key when the user
+            cleared the field, hiding the entire properties panel.
+            Keyed on question.id so switching to a different question
+            (or a successful commit) remounts the input with the new
+            seed value. */}
+        <BufferedIdInput
+          key={`${question.id}`}
+          initial={question.id}
           disabled={!canEdit}
-          onChange={(e) => onRename(e.target.value)}
-          className={`${inputCls} font-mono`}
+          inputClassName={`${inputCls} font-mono`}
+          onCommit={onRename}
         />
       </Field>
 
