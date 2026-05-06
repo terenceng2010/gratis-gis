@@ -54,8 +54,14 @@ export default withAuth(
         // when the admin marked the item public, and falls back to
         // sign-in otherwise. The /editor/run path is left auth'd --
         // public anonymous editing is not a thing.
+        //
+        // #260: /items/:id/survey/run is also a read-only runtime
+        // (you "view responses, never edit a submission"), so it
+        // shares the same anonymous-public allowlist behavior.
         if (
-          /^\/items\/[^/]+\/viewer\/run(?:\/|$)/.test(req.nextUrl.pathname)
+          /^\/items\/[^/]+\/(?:viewer|survey)\/run(?:\/|$)/.test(
+            req.nextUrl.pathname,
+          )
         ) {
           return true;
         }
