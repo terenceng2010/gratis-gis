@@ -30,6 +30,7 @@ import { DEFAULT_EDITOR_TOOLS } from '@gratis-gis/shared-types';
 import { AddTargetDialog } from './add-target-dialog';
 import { AddFromMapDialog } from './add-from-map-dialog';
 import { PickMapDialog } from './pick-map-dialog';
+import { ConvertToCustomButton } from '../convert-to-custom';
 
 interface Props {
   itemId: string;
@@ -424,6 +425,12 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
           </a>
           {canEdit ? (
             <>
+              <ConvertToCustomButton
+                itemId={itemId}
+                sourceTemplate="editor"
+                {...(editor.mapId ? { sourceMapId: editor.mapId } : {})}
+                sourceTargets={editor.targets}
+              />
               <button
                 type="button"
                 onClick={cancel}

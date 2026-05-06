@@ -16,6 +16,7 @@ import {
 import type { Item, SurveyData, ViewerTool, WebAppData } from '@gratis-gis/shared-types';
 import { DEFAULT_SURVEY_TOOLS } from '@gratis-gis/shared-types';
 import { PickMapDialog } from '../editor/pick-map-dialog';
+import { ConvertToCustomButton } from '../convert-to-custom';
 
 interface Props {
   itemId: string;
@@ -230,6 +231,23 @@ export function SurveyDetail({ itemId, initial, canEdit }: Props) {
           </a>
           {canEdit ? (
             <>
+              <ConvertToCustomButton
+                itemId={itemId}
+                sourceTemplate="survey"
+                {...(survey.formId
+                  ? // Survey has no editor-target list of its own;
+                    // the runtime synthesizes a single target from
+                    // the bound form's paired data_layer at render
+                    // time. We can't resolve that synchronously
+                    // here without an extra fetch, so the conversion
+                    // ships with empty targets and the user can
+                    // re-add them in the designer. mapId carries
+                    // over directly.
+                    {}
+                  : {})}
+                {...(survey.mapId ? { sourceMapId: survey.mapId } : {})}
+                sourceTargets={[]}
+              />
               <button
                 type="button"
                 onClick={cancel}

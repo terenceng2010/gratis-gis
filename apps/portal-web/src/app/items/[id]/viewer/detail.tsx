@@ -28,6 +28,7 @@ import { DEFAULT_VIEWER_TOOLS } from '@gratis-gis/shared-types';
 import { AddTargetDialog } from '../editor/add-target-dialog';
 import { AddFromMapDialog } from '../editor/add-from-map-dialog';
 import { PickMapDialog } from '../editor/pick-map-dialog';
+import { ConvertToCustomButton } from '../convert-to-custom';
 
 interface Props {
   itemId: string;
@@ -374,6 +375,12 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
           </a>
           {canEdit ? (
             <>
+              <ConvertToCustomButton
+                itemId={itemId}
+                sourceTemplate="viewer"
+                {...(viewer.mapId ? { sourceMapId: viewer.mapId } : {})}
+                sourceTargets={viewer.targets}
+              />
               <button
                 type="button"
                 onClick={cancel}
