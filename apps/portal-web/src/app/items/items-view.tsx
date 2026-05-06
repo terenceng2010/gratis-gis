@@ -699,6 +699,54 @@ export function ItemsView({
     }
   }
 
+  /**
+   * Bulk access-tier flip. Walks each selected item and PATCHes
+   * the access field to 'org' or 'public' (#310). Distinct from
+   * handleBulkShare because this is the item's own visibility
+   * floor, not a row in the shares table; the API enforces the
+   * same canAdmin gate either way. Items the caller can't admin
+   * skip silently and surface in the per-skip count, matching
+   * the share-bulk error UX.
+   */
+  async function handleBulkAccess(next: 'org' | 'public') {
+    setBulkSaving(true);
+    setBulkError(null);
+    let done = 0;
+    let skipped = 0;
+    try {
+      for (const id of selected) {
+        try {
+          const res = await fetch(`/api/portal/items/${id}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ access: next }),
+          });
+          if (res.ok) {
+            done += 1;
+          } else {
+            skipped += 1;
+          }
+        } catch {
+          skipped += 1;
+        }
+      }
+      if (done === 0 && skipped > 0) {
+        setBulkError(
+          'No items were updated. You may not have admin rights on the selected items.',
+        );
+      } else if (skipped > 0) {
+        setBulkError(
+          `Updated ${done} item${done === 1 ? '' : 's'}; skipped ${skipped} (no admin rights).`,
+        );
+      }
+      setShowBulkShare(false);
+      setSelected(new Set());
+      router.refresh();
+    } finally {
+      setBulkSaving(false);
+    }
+  }
+
   async function handleBulkReassign(
     newOwnerId: string,
     keepPreviousOwnerAccess: 'view' | 'download' | 'edit' | 'admin' | null,
@@ -881,6 +929,7 @@ export function ItemsView({
           count={selected.size}
           saving={bulkSaving}
           onSubmit={handleBulkShare}
+          onSubmitAccess={handleBulkAccess}
           onClose={() => {
             if (!bulkSaving) {
               setShowBulkShare(false);
@@ -1032,6 +1081,7 @@ function BulkShareDialog({
   count,
   saving,
   onSubmit,
+  onSubmitAccess,
   onClose,
 }: {
   count: number;
@@ -1041,8 +1091,22 @@ function BulkShareDialog({
     permission: 'view' | 'download' | 'edit' | 'admin',
     expiresAt: string | null,
   ) => void | Promise<void>;
+  /** Bulk access-level flip (org / public). Distinct from per-share
+   *  grants because it's a property of the item, not a row in the
+   *  shares table. Provided so users can reach both kinds of share
+   *  from the same dialog without bouncing through each item's
+   *  detail page. */
+  onSubmitAccess: (next: 'org' | 'public') => void | Promise<void>;
   onClose: () => void;
 }) {
+  // Tab between "share with a principal" (the existing flow) and
+  // "raise visibility for everyone in the org / on the internet"
+  // (the access-level flip). They produce different writes server
+  // side -- POST /share rows vs PATCH access -- so the UI keeps them
+  // visually separate even though they share the dialog frame.
+  const [mode, setMode] = useState<'principal' | 'org' | 'public'>(
+    'principal',
+  );
   const [picked, setPicked] = useState<PrincipalOption | null>(null);
   const [permission, setPermission] = useState<
     'view' | 'download' | 'edit' | 'admin'
@@ -1119,6 +1183,52 @@ function BulkShareDialog({
         </div>
 
         <div className="space-y-3 px-4 py-4 text-sm">
+          {/* Share-target tabs: pick a user/group OR raise the
+              item's own access level. Org and Public are
+              non-additive: every selected item's access field is
+              flipped to the chosen tier in one PATCH per item.
+              Existing per-share rows on those items are left
+              untouched -- this is purely the visibility floor. */}
+          <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-surface-1 p-0.5">
+            {(
+              [
+                { key: 'principal', label: 'User or group' },
+                { key: 'org', label: 'Org' },
+                { key: 'public', label: 'Public' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setMode(opt.key)}
+                className={`rounded px-2 py-1 text-xs ${
+                  mode === opt.key
+                    ? 'bg-accent text-white'
+                    : 'text-muted hover:bg-surface-2 hover:text-ink-1'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {mode === 'org' ? (
+            <p className="text-xs text-muted">
+              Anyone signed into your organization will be able to see the {count}{' '}
+              selected item{count === 1 ? '' : 's'}. This raises the item&apos;s
+              access tier; existing user / group shares are kept intact.
+            </p>
+          ) : mode === 'public' ? (
+            <p className="text-xs text-muted">
+              Anyone on the internet will be able to see the {count} selected
+              item{count === 1 ? '' : 's'} without signing in. Use this for
+              shareable map / viewer links. Items referenced by the selection
+              (layers, basemaps, etc.) need to be public too -- you&apos;ll be
+              prompted to cascade after this completes.
+            </p>
+          ) : null}
+
+          {mode !== 'principal' ? null : (
           <div>
             <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
               Recipient
@@ -1151,7 +1261,9 @@ function BulkShareDialog({
               />
             )}
           </div>
+          )}
 
+          {mode !== 'principal' ? null : (
           <div>
             <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
               Permission
@@ -1179,10 +1291,12 @@ function BulkShareDialog({
               ))}
             </div>
           </div>
+          )}
 
           {/* Optional expiry (#84). Default Never. The picker
               writes ISO date strings, which the server stores
               against expires_at on each share row. */}
+          {mode !== 'principal' ? null : (
           <div>
             <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
               Expires
@@ -1193,6 +1307,7 @@ function BulkShareDialog({
               variant="full"
             />
           </div>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
@@ -1206,10 +1321,14 @@ function BulkShareDialog({
           </button>
           <button
             type="button"
-            onClick={() =>
-              picked && void onSubmit(picked, permission, expiresAt)
-            }
-            disabled={saving || !picked}
+            onClick={() => {
+              if (mode === 'principal') {
+                if (picked) void onSubmit(picked, permission, expiresAt);
+              } else {
+                void onSubmitAccess(mode);
+              }
+            }}
+            disabled={saving || (mode === 'principal' && !picked)}
             className="h-9 rounded-md bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? (
@@ -1220,7 +1339,11 @@ function BulkShareDialog({
             ) : (
               <span className="inline-flex items-center gap-1.5">
                 <Check className="h-3.5 w-3.5" />
-                Share
+                {mode === 'principal'
+                  ? 'Share'
+                  : mode === 'org'
+                    ? 'Make org-visible'
+                    : 'Make public'}
               </span>
             )}
           </button>
