@@ -16,8 +16,10 @@ import {
 } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
 import {
+  getItemHref,
   getItemTypeIcon,
   getItemTypeTileClasses,
+  hasRuntime,
 } from '@/lib/item-type-icon';
 
 /**
@@ -431,7 +433,17 @@ function ItemCard({ item }: { item: LandingData['items'][number] }) {
   return (
     <li>
       <Link
-        href={`/items/${item.id}`}
+        href={getItemHref(item)}
+        // Open runnable items (viewer web_apps today, data_collection /
+        // editor once their anonymous surfaces ship) in a new tab so
+        // the landing page stays available for the visitor to keep
+        // browsing. Non-runnable items currently still navigate
+        // same-tab to /items/:id which redirects to sign-in -- those
+        // shouldn't be on the landing yet (no public detail page),
+        // and the parent grid filters them out.
+        {...(hasRuntime(item)
+          ? { target: '_blank', rel: 'noopener noreferrer' }
+          : {})}
         className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card transition-all hover:-translate-y-0.5 hover:shadow-raised"
       >
         {item.thumbnailUrl ? (
