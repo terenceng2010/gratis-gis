@@ -25,6 +25,7 @@ export * from './wms-service';
 export * from './folder';
 export * from './editor';
 export * from './viewer';
+export * from './survey';
 export * from './web-app';
 export * from './data-collection';
 export * from './file';

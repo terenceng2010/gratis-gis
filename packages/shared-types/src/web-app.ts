@@ -17,6 +17,7 @@
  */
 
 import type { EditorData } from './editor';
+import type { SurveyData } from './survey';
 import type { ViewerData } from './viewer';
 
 /**
@@ -24,7 +25,7 @@ import type { ViewerData } from './viewer';
  * a config sub-shape in WebAppData.config. Adding a value: extend
  * this union and the WebAppData['config'] discriminated branch.
  */
-export type WebAppTemplate = 'editor' | 'viewer';
+export type WebAppTemplate = 'editor' | 'viewer' | 'survey';
 
 /**
  * Top-level shape on a web_app's `data` field.
@@ -63,6 +64,7 @@ export interface WebAppData {
 export type WebAppConfig =
   | { template: 'editor'; editor: EditorData }
   | { template: 'viewer'; viewer: ViewerData }
+  | { template: 'survey'; survey: SurveyData }
   | { template: string; [key: string]: unknown };
 
 /**
@@ -219,6 +221,74 @@ export function readViewerData(item: {
     !('snapping' in d)
   ) {
     return d as unknown as ViewerData;
+  }
+  return null;
+}
+
+/**
+ * Type guard: was this item created as the survey (Survey Response
+ * Viewer) template? Mirrors isViewerItem. SurveyData is structurally
+ * narrower than ViewerData -- it carries `formId` instead of
+ * `targets` -- so an unwrapped survey data is detectable by the
+ * presence of `formId` and absence of `targets`.
+ */
+export function isSurveyItem(item: {
+  type: string;
+  data?: unknown;
+}): boolean {
+  if (item.type !== 'web_app') return false;
+  const d = item.data as WebAppData | null | undefined;
+  if (d?.template === 'survey') return true;
+  // Tolerance branch: unwrapped SurveyData on a web_app item. Survey
+  // is uniquely identified by `formId` + `tools` without a `targets`
+  // array (which is what distinguishes it from Viewer / Editor).
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    !('targets' in d) &&
+    !('snapping' in d) &&
+    'tools' in d &&
+    'formId' in d
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Read the SurveyData out of a web_app+survey item. Returns null
+ * when the item isn't a survey or when the data is missing/malformed.
+ * Mirrors readViewerData / readEditorData.
+ */
+export function readSurveyData(item: {
+  type: string;
+  data?: unknown;
+}): SurveyData | null {
+  if (item.type !== 'web_app') return null;
+  const d = item.data as WebAppData | null | undefined;
+  if (d?.template === 'survey') {
+    const cfg = d.config as
+      | { template: 'survey'; survey?: SurveyData }
+      | null
+      | undefined;
+    if (cfg?.template === 'survey' && cfg.survey) return cfg.survey;
+    // Older partial-migration tolerance: config IS the SurveyData.
+    if (cfg && typeof cfg === 'object' && 'tools' in cfg) {
+      return cfg as unknown as SurveyData;
+    }
+    return null;
+  }
+  if (
+    d &&
+    typeof d === 'object' &&
+    !('template' in d) &&
+    !('targets' in d) &&
+    !('snapping' in d) &&
+    'tools' in d &&
+    'formId' in d
+  ) {
+    return d as unknown as SurveyData;
   }
   return null;
 }

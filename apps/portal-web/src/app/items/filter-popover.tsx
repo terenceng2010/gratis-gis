@@ -66,6 +66,7 @@ interface Props {
 const TEMPLATE_LABELS: Record<WebAppTemplate, string> = {
   editor: 'Editor',
   viewer: 'Viewer',
+  survey: 'Survey',
 };
 
 export function FilterPopover({
