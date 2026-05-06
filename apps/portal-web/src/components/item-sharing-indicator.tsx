@@ -26,6 +26,8 @@ import type {
   SharePermission,
 } from '@gratis-gis/shared-types';
 
+import { PublicCascadeDialog } from './public-cascade-dialog';
+
 /**
  * Compact sharing indicator for rendering inline with an item card or
  * list row. Shows access level (Private / Org / Public) plus a count
@@ -167,6 +169,12 @@ export function ItemSharingIndicator({
   const [currentShares, setCurrentShares] = useState<ItemShare[]>(shares);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // #310: after a successful flip to access='public', open the
+  // cascade-prompt modal so the author can also flip every
+  // referenced item to public without having to navigate to each
+  // one individually. Lazy-imported to keep the access switcher
+  // bundle small for the common case (no flip).
+  const [cascadeOpen, setCascadeOpen] = useState(false);
   const [principalMeta, setPrincipalMeta] = useState<{
     users: Record<string, PrincipalMeta>;
     groups: Record<string, PrincipalMeta>;
@@ -286,6 +294,14 @@ export function ItemSharingIndicator({
         setCurrentAccess(prev);
         setError(`Could not update: ${res.status}`);
         return;
+      }
+      // #310: prompt for cascade only when transitioning UP to
+      // public. Going to private/org doesn't expose anything
+      // newly, so no cascade is warranted. Only triggers from a
+      // non-public starting tier so picking 'public' twice in a
+      // row doesn't re-prompt unnecessarily.
+      if (next === 'public' && prev !== 'public') {
+        setCascadeOpen(true);
       }
       router.refresh();
     },
@@ -471,6 +487,19 @@ export function ItemSharingIndicator({
       {popover && typeof document !== 'undefined'
         ? createPortal(popover, document.body)
         : null}
+      {/* #310 cascade prompt. Mounted unconditionally so the
+          dialog can drive its own open/close state -- the dialog
+          self-dismisses when the dependency walk returns an
+          empty list, so a no-op flip to public stays silent. */}
+      <PublicCascadeDialog
+        open={cascadeOpen}
+        parentId={itemId}
+        parentTitle={itemTitle}
+        onClose={() => {
+          setCascadeOpen(false);
+          router.refresh();
+        }}
+      />
     </>
   );
 }

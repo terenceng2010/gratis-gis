@@ -39,6 +39,7 @@ import {
 } from '@/lib/item-type-icon';
 import { FilterPopover } from './filter-popover';
 import { ItemSharingIndicator } from '@/components/item-sharing-indicator';
+import { PublicCascadeDialog } from '@/components/public-cascade-dialog';
 import { ReassignOwnerDialog } from '@/components/reassign-owner-dialog';
 import { AreaSearchPanel } from './area-search-panel';
 import { AddToFolderDialog } from './add-to-folder-dialog';
@@ -147,6 +148,11 @@ export function ItemsView({
   // out to one share-write per selected item. Items the caller
   // can't admin are silently skipped server-side.
   const [showBulkShare, setShowBulkShare] = useState(false);
+  // #310: queue of item ids to walk after a bulk flip to public.
+  // Each id is fed into the cascade dialog one at a time so the
+  // author confirms each parent's dependency tree separately
+  // (an admin might want to expose Map A's layers but not Map B's).
+  const [bulkCascadeIds, setBulkCascadeIds] = useState<string[]>([]);
   // Bulk Move-to-Trash confirmation (#77). Soft-delete only;
   // permanent purge stays a per-item action on the recycle-bin
   // page so a misclick on the items list can't lose data.
@@ -713,6 +719,10 @@ export function ItemsView({
     setBulkError(null);
     let done = 0;
     let skipped = 0;
+    // Capture before clearing -- the cascade prompt for next='public'
+    // walks each id's dependencies after the bulk flip, and `selected`
+    // gets reset to empty at the end of this handler.
+    const targetIds = Array.from(selected);
     try {
       for (const id of selected) {
         try {
@@ -741,6 +751,14 @@ export function ItemsView({
       }
       setShowBulkShare(false);
       setSelected(new Set());
+      // After a bulk flip to public, surface the cascade prompt for
+      // every item so admins don't have to remember to mark each
+      // dependency public manually. The dialog walks dependencies,
+      // hides the no-deps case silently, and runs sequentially per
+      // parent.
+      if (next === 'public' && done > 0) {
+        setBulkCascadeIds(targetIds);
+      }
       router.refresh();
     } finally {
       setBulkSaving(false);
@@ -935,6 +953,21 @@ export function ItemsView({
               setShowBulkShare(false);
               setBulkError(null);
             }
+          }}
+        />
+      ) : null}
+      {/* #310: cascade prompt fires once per bulk-public item.
+          The first id stays visible until the user confirms or
+          skips, then we shift to the next one. This lets the
+          author make different cascade choices per parent. */}
+      {bulkCascadeIds.length > 0 ? (
+        <PublicCascadeDialog
+          open={true}
+          parentId={bulkCascadeIds[0]!}
+          parentTitle="Selected item"
+          onClose={() => {
+            setBulkCascadeIds((prev) => prev.slice(1));
+            router.refresh();
           }}
         />
       ) : null}
