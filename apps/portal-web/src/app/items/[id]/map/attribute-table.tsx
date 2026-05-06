@@ -5,9 +5,13 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  FileIcon,
   Filter as FilterIcon,
   Focus,
   History,
+  ImageIcon,
+  Loader2,
+  Paperclip,
   Search,
   Table,
   X,
@@ -288,6 +292,67 @@ export function AttributeTable({
   }
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? null;
+
+  // #352: AGO-style Attachments column. Surfaces the v3
+  // feature_attachment rows for any attribute table sourced from a
+  // v3 data_layer sublayer (those carry the data-layer source kind
+  // with both itemId + layerKey). Other source kinds (legacy
+  // geojson-url / arcgis-rest / inline) skip the column entirely
+  // since the v3 attachments controller is the only path today.
+  // The drawer below renders the same thumbnails-or-file-rows the
+  // FormView Attachments section ships for the Response Viewer
+  // (#351), so the visual shape is consistent across surfaces.
+  const attachmentsItemId =
+    activeLayer && activeLayer.source.kind === 'data-layer'
+      ? activeLayer.source.itemId
+      : null;
+  const attachmentsLayerKey =
+    activeLayer && activeLayer.source.kind === 'data-layer'
+      ? (activeLayer.source.layerKey ?? null)
+      : null;
+  const showAttachmentsColumn = Boolean(
+    attachmentsItemId && attachmentsLayerKey,
+  );
+  // The drawer that pops up on click. featureId is the row's
+  // _global_id (UUID); attachments=null while loading, [] when no
+  // attachments exist.
+  const [attachmentDrawer, setAttachmentDrawer] = useState<{
+    featureId: string;
+  } | null>(null);
+  const [drawerAttachments, setDrawerAttachments] = useState<
+    AttributeAttachmentRow[] | null
+  >(null);
+  useEffect(() => {
+    if (
+      !attachmentDrawer ||
+      !attachmentsItemId ||
+      !attachmentsLayerKey
+    ) {
+      setDrawerAttachments(null);
+      return;
+    }
+    let abort = false;
+    setDrawerAttachments(null);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/portal/items/${attachmentsItemId}/layers/${attachmentsLayerKey}/features/${attachmentDrawer.featureId}/attachments`,
+        );
+        if (!res.ok) {
+          if (!abort) setDrawerAttachments([]);
+          return;
+        }
+        const rows = (await res.json()) as AttributeAttachmentRow[];
+        if (!abort) setDrawerAttachments(rows);
+      } catch {
+        if (!abort) setDrawerAttachments([]);
+      }
+    })();
+    return () => {
+      abort = true;
+    };
+  }, [attachmentDrawer, attachmentsItemId, attachmentsLayerKey]);
+
   const activeFields =
     activeLayer && metadata[activeLayer.id]?.fields.length
       ? metadata[activeLayer.id]!.fields
@@ -739,6 +804,17 @@ export function AttributeTable({
                       </th>
                     ))
                   : null}
+                {showAttachmentsColumn ? (
+                  <th
+                    className="border-b border-border bg-surface-1 px-3 py-1.5 text-left font-medium text-muted"
+                    title="Files attached to each feature (#352)"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <Paperclip className="h-3 w-3" />
+                      Attachments
+                    </span>
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
@@ -853,6 +929,33 @@ export function AttributeTable({
                           </td>
                         ))
                       : null}
+                    {showAttachmentsColumn ? (
+                      <td className="whitespace-nowrap px-3 py-1">
+                        {(() => {
+                          const fid = props['_global_id'];
+                          if (typeof fid !== 'string' || !fid) {
+                            // No stable id on this row -- can't query
+                            // attachments. Show a muted dash so the
+                            // column doesn't visually break.
+                            return <span className="text-muted">-</span>;
+                          }
+                          return (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAttachmentDrawer({ featureId: fid });
+                              }}
+                              className="inline-flex items-center gap-1 rounded border border-border bg-surface-1 px-2 py-0.5 text-[10px] text-ink-1 hover:border-accent/40 hover:bg-surface-2"
+                              title="View attachments"
+                            >
+                              <Paperclip className="h-3 w-3 text-muted" />
+                              View
+                            </button>
+                          );
+                        })()}
+                      </td>
+                    ) : null}
                   </tr>
                 );
               })}
@@ -883,7 +986,144 @@ export function AttributeTable({
           </div>
         )
       ) : null}
+      {/* #352 attachment drawer. Shared global state: only one row's
+          attachments are visible at a time. Sits at the bottom-right
+          of the table so it overlaps the canvas as little as
+          possible while staying visible alongside the row that
+          opened it. */}
+      {attachmentDrawer ? (
+        <AttachmentDrawer
+          attachments={drawerAttachments}
+          onClose={() => setAttachmentDrawer(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+interface AttributeAttachmentRow {
+  id: string;
+  fileName: string;
+  mime: string;
+  sizeBytes: number;
+  storageUrl: string | null;
+  createdAt: string;
+  createdBy: string;
+}
+
+/**
+ * AGO-style attachments drawer (#352). Renders thumbnails for image
+ * MIME types and labeled file rows for everything else, mirroring
+ * the FormView attachments section so the visual shape is
+ * consistent across surfaces. Anchored bottom-right so it overlaps
+ * the table least; clicking outside or pressing Escape closes it.
+ */
+function AttachmentDrawer({
+  attachments,
+  onClose,
+}: {
+  attachments: AttributeAttachmentRow[] | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div
+      role="dialog"
+      aria-label="Attachments"
+      className="absolute bottom-3 right-3 z-30 flex max-h-80 w-80 flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay"
+    >
+      <header className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface-2/40 px-3 py-1.5">
+        <Paperclip className="h-3.5 w-3.5 text-muted" />
+        <span className="text-xs font-semibold text-ink-0">Attachments</span>
+        {attachments && attachments.length > 0 ? (
+          <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-normal text-violet-800">
+            {attachments.length}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          onClick={onClose}
+          className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-1 hover:text-ink-0"
+          aria-label="Close"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-auto p-2">
+        {attachments === null ? (
+          <p className="inline-flex items-center gap-1 px-1 py-2 text-xs italic text-muted">
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+          </p>
+        ) : attachments.length === 0 ? (
+          <p className="px-1 py-2 text-xs italic text-muted">No attachments</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {attachments.map((a) => (
+              <AttachmentDrawerTile key={a.id} attachment={a} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AttachmentDrawerTile({
+  attachment,
+}: {
+  attachment: AttributeAttachmentRow;
+}) {
+  const isImage = attachment.mime.startsWith('image/');
+  const url = attachment.storageUrl ?? null;
+  if (isImage && url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        title={attachment.fileName}
+        className="group block overflow-hidden rounded-md border border-border bg-surface-2 hover:border-accent/40"
+      >
+        <img
+          src={url}
+          alt={attachment.fileName}
+          className="h-24 w-full object-cover"
+          loading="lazy"
+        />
+        <div className="truncate px-1.5 py-1 text-[10px] text-muted group-hover:text-ink-1">
+          {attachment.fileName}
+        </div>
+      </a>
+    );
+  }
+  return (
+    <a
+      href={url ?? '#'}
+      target="_blank"
+      rel="noreferrer"
+      title={attachment.fileName}
+      className="flex flex-col gap-1 rounded-md border border-border bg-surface-2 p-2 hover:border-accent/40"
+    >
+      <div className="flex h-10 items-center justify-center rounded bg-surface-1">
+        {isImage ? (
+          <ImageIcon className="h-5 w-5 text-muted" />
+        ) : (
+          <FileIcon className="h-5 w-5 text-muted" />
+        )}
+      </div>
+      <div className="truncate text-[10px] text-ink-1" title={attachment.fileName}>
+        {attachment.fileName}
+      </div>
+      <div className="text-[9px] text-muted">
+        {Math.max(1, Math.round(attachment.sizeBytes / 1024))} KB
+      </div>
+    </a>
   );
 }
 
