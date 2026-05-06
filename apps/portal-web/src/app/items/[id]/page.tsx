@@ -28,6 +28,7 @@ import type {
   PickListData,
   MapData,
   ServiceData,
+  CustomAppData,
   SurveyData,
   ViewerData,
   WfsServiceData,
@@ -41,11 +42,14 @@ import {
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
+  DEFAULT_CUSTOM_APP,
   DEFAULT_SURVEY,
   DEFAULT_VIEWER,
+  isCustomAppItem,
   isEditorItem,
   isSurveyItem,
   isViewerItem,
+  readCustomAppData,
   readEditorData,
   readSurveyData,
   readViewerData,
@@ -128,6 +132,7 @@ import { OgcServiceEditor } from './ogc-service/editor';
 import { ServiceEditor } from './service/editor';
 import { ViewerDetail } from './viewer/detail';
 import { SurveyDetail } from './survey/detail';
+import { CustomAppDetail } from './custom/detail';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -649,6 +654,21 @@ export default async function ItemDetailPage({ params }: Props) {
             initial={{
               ...DEFAULT_SURVEY,
               ...((readSurveyData(item) ?? {}) as Partial<SurveyData>),
+            }}
+            canEdit={canManage}
+          />
+        </section>
+      ) : isCustomAppItem(item) ? (
+        <section className="mb-6">
+          {/* #261: Custom Web App config. The Phase-1 surface is
+              structural (map, targets list, pages + widget kinds);
+              the full drag-drop visual designer lands as a follow-up
+              on top of this scaffolding. */}
+          <CustomAppDetail
+            itemId={item.id}
+            initial={{
+              ...DEFAULT_CUSTOM_APP,
+              ...((readCustomAppData(item) ?? {}) as Partial<CustomAppData>),
             }}
             canEdit={canManage}
           />

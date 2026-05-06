@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
 import {
+  isCustomAppItem,
   isEditorItem,
   isSurveyItem,
   isViewerItem,
@@ -200,6 +201,9 @@ export function getItemHref(item: {
   // the paired data_layer's submissions as map features with
   // form-shaped popups.
   if (isSurveyItem(item)) return `/items/${item.id}/survey/run`;
+  // #261: custom web_app template lands at its own runtime which
+  // walks pages + widgets and renders them on a 12-column grid.
+  if (isCustomAppItem(item)) return `/items/${item.id}/custom/run`;
   // data_collection items go straight to field-mode runtime (#193).
   // The config / sharing surface is still reachable via the back
   // button or the Edit link from inside the runtime.
@@ -226,6 +230,7 @@ export function hasRuntime(item: {
   if (isEditorItem(item)) return true;
   if (isViewerItem(item)) return true;
   if (isSurveyItem(item)) return true;
+  if (isCustomAppItem(item)) return true;
   if (item.type === 'data_collection') return true;
   return false;
 }

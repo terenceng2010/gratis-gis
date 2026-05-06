@@ -54,6 +54,7 @@ import {
   DEFAULT_WMS_SERVICE,
   DEFAULT_WFS_SERVICE,
   DEFAULT_FOLDER,
+  DEFAULT_CUSTOM_APP,
   DEFAULT_EDITOR,
   DEFAULT_SURVEY,
   DEFAULT_VIEWER,
@@ -100,7 +101,7 @@ interface TypeOption {
    * web_app + a template tag at submit time so the storage model
    * stays collapsed while the picker keeps Esri-friendly names.
    */
-  value: ItemType | 'viewer' | 'survey';
+  value: ItemType | 'viewer' | 'survey' | 'custom';
   label: string;
   desc: string;
   Icon: LucideIcon;
@@ -222,9 +223,9 @@ const TYPE_GROUPS: TypeGroup[] = [
         Icon: FileText,
       },
       {
-        value: 'web_app',
-        label: 'Web app',
-        desc: 'A configurable app built from widgets.',
+        value: 'custom',
+        label: 'Custom web app',
+        desc: 'Drag-drop layout of map, layer-list, attribute-table, chart, and text widgets. The freeform option when Editor / Viewer / Survey are too constrained.',
         Icon: Sparkles,
       },
     ],
@@ -310,7 +311,9 @@ export function NewItemWizard() {
   // template='viewer' at submit time. It isn't a persisted ItemType
   // (the picker stays an Esri-friendly noun while the storage stays
   // collapsed under web_app templates).
-  const [type, setType] = useState<ItemType | 'viewer' | 'survey' | null>(queryType);
+  const [type, setType] = useState<
+    ItemType | 'viewer' | 'survey' | 'custom' | null
+  >(queryType);
 
   // Metadata persists across back/forward between steps so the user
   // doesn't lose typed input when they pop back to change type.
@@ -437,11 +440,14 @@ export function NewItemWizard() {
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const pickType = useCallback((t: ItemType | 'viewer' | 'survey') => {
-    setType(t);
-    setStep('details');
-    setError(null);
-  }, []);
+  const pickType = useCallback(
+    (t: ItemType | 'viewer' | 'survey' | 'custom') => {
+      setType(t);
+      setStep('details');
+      setError(null);
+    },
+    [],
+  );
 
   const backToPicker = useCallback(() => {
     setStep('pick');
@@ -949,6 +955,18 @@ export function NewItemWizard() {
         config: { template: 'survey', survey: DEFAULT_SURVEY },
       };
       data = webApp;
+    } else if (type === 'custom') {
+      // #261: Custom Web App template (drag-drop designer over a
+      // 12-column grid). Same WebAppData wrapper pattern; the
+      // designer surfaces on the detail page once the item exists.
+      // DEFAULT_CUSTOM_APP ships with one empty page, no widgets;
+      // the designer prompts to drop the first widget on open.
+      const webApp: WebAppData = {
+        version: 1,
+        template: 'custom',
+        config: { template: 'custom', custom: DEFAULT_CUSTOM_APP },
+      };
+      data = webApp;
     } else if (type === 'data_collection') {
       // mapId is structural: a data_collection without a map has
       // nothing for collectors to tap on. Block create until the
@@ -1033,7 +1051,10 @@ export function NewItemWizard() {
     // payload-build boundary. Keeps the user-facing word stable
     // while we collapse the storage model.
     const payloadType: ItemType =
-      type === 'editor' || type === 'viewer' || type === 'survey'
+      type === 'editor' ||
+      type === 'viewer' ||
+      type === 'survey' ||
+      type === 'custom'
         ? 'web_app'
         : type;
 
