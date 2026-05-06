@@ -516,24 +516,32 @@ export function AttributeTable({
             {visibleIndexes.length.toLocaleString()} rows
             {activeSelection.size > 0 ? ` · ${activeSelection.size} selected` : ''}
           </span>
-          <button
-            type="button"
-            onClick={() => setShowEditorTracking((v) => !v)}
-            aria-pressed={showEditorTracking}
-            title={
-              showEditorTracking
-                ? 'Hide who-edited-when columns'
-                : 'Show who-edited-when columns'
-            }
-            className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] transition-colors ${
-              showEditorTracking
-                ? 'border-accent bg-accent/10 text-accent'
-                : 'border-border bg-surface-1 text-muted hover:text-ink-1'
-            }`}
-          >
-            <History className="h-3 w-3" />
-            Track edits
-          </button>
+          {/* Track edits toggle exposes the who-edited-when audit
+              columns. Hidden in read-only contexts (the Viewer /
+              Survey templates pass canEdit=false): viewers have
+              no editing surface so the audit trail is internal
+              metadata they don't need to see. Authors and field
+              users keep the toggle. */}
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => setShowEditorTracking((v) => !v)}
+              aria-pressed={showEditorTracking}
+              title={
+                showEditorTracking
+                  ? 'Hide who-edited-when columns'
+                  : 'Show who-edited-when columns'
+              }
+              className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] transition-colors ${
+                showEditorTracking
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border bg-surface-1 text-muted hover:text-ink-1'
+              }`}
+            >
+              <History className="h-3 w-3" />
+              Track edits
+            </button>
+          ) : null}
         </div>
         <button
           type="button"
