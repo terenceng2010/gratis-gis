@@ -302,6 +302,7 @@ export default async function FormResponsesPage({ params }: Props) {
       canEdit={false}
       formViewSchema={formViewSchema}
       surveyTargetLayerId={surveyTargetLayerId}
+      tableOpenDefault
     />
   );
 }

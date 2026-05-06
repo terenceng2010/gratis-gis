@@ -273,6 +273,47 @@ function renderValue(
   switch (q.type) {
     case 'boolean':
       return <span>{value ? 'Yes' : 'No'}</span>;
+    case 'geopoint':
+    case 'geotrace':
+    case 'geoshape': {
+      // Form runtime stores a geopoint as { lat, lng, accuracy? } and
+      // line/polygon answers as arrays of those. Render the point as
+      // "33.96942, -116.96896 (±105m)" instead of the default
+      // String(value) which prints "[object Object]".
+      const v = value as
+        | { lat?: unknown; lng?: unknown; accuracy?: unknown }
+        | unknown[];
+      if (Array.isArray(v)) {
+        return (
+          <span className="font-mono text-xs">
+            {v.length} vertices
+          </span>
+        );
+      }
+      if (
+        v &&
+        typeof v === 'object' &&
+        typeof (v as { lat?: unknown }).lat === 'number' &&
+        typeof (v as { lng?: unknown }).lng === 'number'
+      ) {
+        const { lat, lng, accuracy } = v as {
+          lat: number;
+          lng: number;
+          accuracy?: number;
+        };
+        const acc =
+          typeof accuracy === 'number'
+            ? ` (±${Math.round(accuracy)}m)`
+            : '';
+        return (
+          <span className="font-mono text-xs">
+            {lat.toFixed(5)}, {lng.toFixed(5)}
+            {acc}
+          </span>
+        );
+      }
+      return <span className="italic text-muted">No answer</span>;
+    }
     case 'select-one':
       return <span>{labelForCode(q, value, pickLists) ?? String(value)}</span>;
     case 'select-many': {

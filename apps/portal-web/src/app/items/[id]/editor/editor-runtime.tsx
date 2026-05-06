@@ -125,6 +125,14 @@ interface Props {
    * formViewSchema is set.
    */
   surveyTargetLayerId?: string | null;
+  /**
+   * Open the bottom attribute table on first render. Editor / Viewer
+   * land map-first because the user wants to see the canvas; the
+   * Response Viewer (#321) lands data-first because the user is
+   * here to inspect submissions, so the table should be visible
+   * immediately. Defaults false.
+   */
+  tableOpenDefault?: boolean;
 }
 
 /**
@@ -182,6 +190,7 @@ export function EditorRuntime({
   printEnabled = false,
   formViewSchema = null,
   surveyTargetLayerId = null,
+  tableOpenDefault = false,
 }: Props) {
   const [mapData, setMapData] = useState<MapData>(initialMapData);
   // Track the camera's current zoom so LayerPanel can render the
@@ -470,7 +479,7 @@ export function EditorRuntime({
   // shared with MapCanvas + AttributeTable so highlighting a row
   // also highlights the feature on the canvas (and vice versa).
   // Same shape map-editor uses.
-  const [tableOpen, setTableOpen] = useState(false);
+  const [tableOpen, setTableOpen] = useState(tableOpenDefault);
   const [tableFocusLayerId, setTableFocusLayerId] = useState<string | null>(
     null,
   );
