@@ -252,6 +252,12 @@ export function getItemHref(item: {
   // The config / sharing surface is still reachable via the back
   // button or the Edit link from inside the runtime.
   if (item.type === 'data_collection') return `/items/${item.id}/field`;
+  // #323: forms are runnable -- the "Open" / "Launch" target is the
+  // respondent-facing runtime that lets a user submit a response.
+  // (View Responses, the implicit response browser, is a separate
+  // affordance on the form detail page; it lives at
+  // /items/<id>/responses.)
+  if (item.type === 'form') return `/forms/${item.id}/respond`;
   return `/items/${item.id}`;
 }
 
@@ -262,10 +268,11 @@ export function getItemHref(item: {
  * and "Configure" (detail page); when false, there's only one
  * landing place so the menu has a single Open entry.
  *
- * Currently true for the templated web_apps (editor/viewer) and
- * data_collection (field PWA). Forms also have a runtime, but the
- * runtime today opens through the paired data_layer (#284) so we
- * leave forms with the single Open until the runtime URL settles.
+ * Currently true for the templated web_apps (editor/viewer/survey/
+ * custom), data_collection (field PWA), and form (#323 -- Open
+ * targets the respondent-facing runtime at /forms/<id>/respond, with
+ * a separate View Responses action wired in on the form detail page
+ * for the implicit response browser).
  */
 export function hasRuntime(item: {
   type: ItemType;
@@ -276,6 +283,7 @@ export function hasRuntime(item: {
   if (isSurveyItem(item)) return true;
   if (isCustomAppItem(item)) return true;
   if (item.type === 'data_collection') return true;
+  if (item.type === 'form') return true;
   return false;
 }
 

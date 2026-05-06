@@ -5,6 +5,8 @@ import {
   Building2,
   Calendar,
   ChevronDown,
+  ClipboardList,
+  ExternalLink,
   Globe2,
   Lock,
   Pencil,
@@ -383,6 +385,37 @@ export default async function ItemDetailPage({ params }: Props) {
             </span>
           </div>
         </div>
+        {/* #323: forms get a prominent Open (respondent runtime) +
+            View Responses (implicit response viewer) pair right in
+            the header. Visible to anyone who can read the form, not
+            gated by canManage -- a viewer with edit-rows access still
+            wants to submit a response or browse responses. Both open
+            in a new tab so the form detail page stays as the
+            persistent landing strip the user can keep reaching from. */}
+        {item.type === 'form' ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={`/forms/${item.id}/respond`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent bg-accent px-3 text-xs font-medium text-white shadow-card hover:bg-accent/90"
+              title="Open the form to submit a response"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open
+            </a>
+            <a
+              href={`/items/${item.id}/responses`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2.5 text-xs font-medium text-ink-1 shadow-card hover:bg-surface-2"
+              title="Browse submitted responses on a map and through the form view"
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              Responses
+            </a>
+          </div>
+        ) : null}
         {canManage ? (
           <div className="flex shrink-0 items-center gap-2">
             <Link
@@ -701,6 +734,13 @@ export default async function ItemDetailPage({ params }: Props) {
             canEdit={canManage}
           />
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+            {/* The big Open / Responses buttons in the page header
+                are the primary affordances (#323). The remaining
+                pill row is for "I want the URL to paste somewhere"
+                use-cases: the respondent link is what gets shared
+                externally, and the data_layer link drops the user
+                onto the layer's standard detail page (different
+                lens than the form-shaped Response Viewer). */}
             <span>
               Respondent link:{' '}
               <Link
@@ -710,16 +750,6 @@ export default async function ItemDetailPage({ params }: Props) {
                 /forms/{item.id}/respond
               </Link>
             </span>
-            {/* #321: every form gets a built-in Response Viewer at
-                /items/<id>/responses -- form-view side panel + map +
-                attribute table over the paired data_layer's
-                submissions. No separate Survey app to create. */}
-            <Link
-              href={`/items/${item.id}/responses`}
-              className="text-accent hover:underline"
-            >
-              View responses
-            </Link>
             {(() => {
               // #281f: every form has a paired data_layer where
               // submissions land (#283 / #284). Surface a link to it
