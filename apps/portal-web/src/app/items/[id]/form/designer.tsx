@@ -5486,6 +5486,18 @@ function LinkedLayerSummary({
     if (s.kind === 'matched') matched += 1;
     else if (s.kind === 'will-add') willAdd += 1;
   }
+  // #333: count geo questions on the form. The first one wins for
+  // the layer's geometryType promotion (#325) -- matches Survey123's
+  // "first map question drives the layer" convention. We surface
+  // the count here so a form with two geo questions doesn't quietly
+  // ignore the second one.
+  let geoCount = 0;
+  for (const q of walkAll(form.questions)) {
+    if (q.type === 'geopoint' || q.type === 'geotrace' || q.type === 'geoshape') {
+      geoCount += 1;
+    }
+  }
+
   return (
     <div className="mb-3 rounded-md border border-accent/40 bg-accent/5 p-2 text-xs">
       <div className="mb-1 flex items-center gap-1.5">
@@ -5502,6 +5514,13 @@ function LinkedLayerSummary({
         Submissions go to this layer. New questions land as additive columns
         the next time someone submits.
       </p>
+      {geoCount > 1 ? (
+        <p className="mt-1 text-[11px] text-amber-700">
+          Multiple map questions on this form. Only the first one drives
+          the layer&apos;s geometry; the rest are stored as data on each
+          submission but won&apos;t plot on the map.
+        </p>
+      ) : null}
       {canEdit ? (
         <button
           type="button"

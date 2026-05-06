@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -68,8 +69,6 @@ export function FormView({
   onNext,
   onClose,
 }: Props) {
-  if (!open) return null;
-
   // Look up _submitted_at / _created_at and _submitted_by / _created_by
   // off the row. Forms write the canonical "submitted" pair via the
   // form-mirror path (#284) but feature-tracking columns also exist
@@ -83,6 +82,54 @@ export function FormView({
     (activeProperties?.['submitted_by'] as string | undefined) ||
     (activeProperties?.['_created_by'] as string | undefined) ||
     null;
+
+  // #331: resolve a submitted_by UUID into a human display name.
+  // Cached across renders so prev/next walks through a selection
+  // don't re-fetch the same name; cleared lazily as new submitter
+  // ids appear. The fetcher hits the same /api/portal/users?ids=
+  // endpoint the share popover uses.
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const looksLikeUuid =
+      typeof submittedBy === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        submittedBy,
+      );
+    if (!looksLikeUuid) return;
+    if (userNames[submittedBy as string]) return;
+    let abort = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/portal/users?ids=${encodeURIComponent(submittedBy as string)}`,
+        );
+        if (!res.ok) return;
+        const rows = (await res.json()) as Array<{
+          id: string;
+          fullName: string | null;
+          username: string;
+        }>;
+        if (abort) return;
+        setUserNames((prev) => {
+          const next = { ...prev };
+          for (const u of rows) {
+            next[u.id] = u.fullName?.trim() || u.username;
+          }
+          return next;
+        });
+      } catch {
+        /* non-fatal -- the UUID stays visible as a fallback */
+      }
+    })();
+    return () => {
+      abort = true;
+    };
+  }, [submittedBy, userNames]);
+
+  if (!open) return null;
+
+  const submittedByDisplay =
+    submittedBy !== null ? userNames[submittedBy] ?? submittedBy : null;
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -152,7 +199,7 @@ export function FormView({
                     <div className="flex gap-2">
                       <dt className="text-muted">Submitted by</dt>
                       <dd className="font-medium text-ink-1">
-                        {submittedBy}
+                        {submittedByDisplay}
                       </dd>
                     </div>
                   )}
