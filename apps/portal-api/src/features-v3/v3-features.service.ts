@@ -323,6 +323,30 @@ export class V3FeaturesService {
     //   geom:    (5 + typedFields) params/row * 500
     // Even with 50 typed fields, 500 rows * 55 = 27,500: under the cap.
     const BATCH = 500;
+    // #349: explicit per-column casts for the typed-field tail.
+    // Earlier note ("PG infers the type from the column on INSERT")
+    // turned out to be wishful thinking: when coerce() returns a
+    // JS string for a date/number/boolean field, node-postgres
+    // binds it as TEXT and PG refuses the implicit cast to
+    // timestamptz / numeric / boolean (SQLSTATE 42804). The form
+    // mirror's #329 typed-bookkeeping path landed the failure
+    // first because submitted_at was suddenly a typed timestamptz
+    // column being fed an ISO string. Add the cast inline at the
+    // placeholder so PG knows what to do with the bound text.
+    const typedCastFor = (
+      type: 'string' | 'number' | 'boolean' | 'date',
+    ): string => {
+      switch (type) {
+        case 'date':
+          return '::timestamptz';
+        case 'number':
+          return '::numeric';
+        case 'boolean':
+          return '::boolean';
+        case 'string':
+          return ''; // text default; no cast needed
+      }
+    };
     if (opts.isTable) {
       // Table sublayers (no geom column) get a different INSERT shape:
       // dropping the geom column from the column list AND its parameter
@@ -344,12 +368,8 @@ export class V3FeaturesService {
           for (const tf of typedFields) {
             params.push(coerce(f.properties?.[tf.name], tf.type));
           }
-          // SQL placeholders for the typed-column tail. PG infers the
-          // type from the column on INSERT, so we don't need explicit
-          // ::type casts here -- letting node-postgres bind by JS type
-          // is enough now that coerce() normalised the value.
           const typedPlaceholders = typedFields
-            .map((_, ti) => `$${base + 4 + ti}`)
+            .map((tf, ti) => `$${base + 4 + ti}${typedCastFor(tf.type)}`)
             .join(typedFields.length > 0 ? ', ' : '');
           valueRows.push(
             `(COALESCE($${base}::uuid, gen_random_uuid()), ` +
@@ -387,7 +407,7 @@ export class V3FeaturesService {
             params.push(coerce(f.properties?.[tf.name], tf.type));
           }
           const typedPlaceholders = typedFields
-            .map((_, ti) => `$${base + 5 + ti}`)
+            .map((tf, ti) => `$${base + 5 + ti}${typedCastFor(tf.type)}`)
             .join(typedFields.length > 0 ? ', ' : '');
           valueRows.push(
             `(COALESCE($${base}::uuid, gen_random_uuid()), ` +
