@@ -272,7 +272,10 @@ export function MapEditor({
    * its row selection. That alignment lets one Set serve both the
    * map highlight and the table checkboxes without translation.
    */
-  const [selection, setSelection] = useState<Record<string, Set<number>>>({});
+  // #318: feature ids may be string (v3 promoteId UUID) or number.
+  const [selection, setSelection] = useState<
+    Record<string, Set<number | string>>
+  >({});
   // Active map-side selection tool. `off` is the default pan +
   // popup-on-click behaviour; the other modes are owned by the
   // MapCanvas and fed here so the SelectToolbar reads live state.
@@ -482,7 +485,7 @@ export function MapEditor({
     const known = new Set(map.layers.map((l) => l.id));
     setSelection((prev) => {
       let changed = false;
-      const next: Record<string, Set<number>> = {};
+      const next: Record<string, Set<number | string>> = {};
       for (const [id, set] of Object.entries(prev)) {
         if (known.has(id)) next[id] = set;
         else changed = true;

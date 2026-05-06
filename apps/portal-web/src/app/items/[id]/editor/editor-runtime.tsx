@@ -451,7 +451,12 @@ export function EditorRuntime({
   const [tableFocusLayerId, setTableFocusLayerId] = useState<string | null>(
     null,
   );
-  const [selection, setSelection] = useState<Record<string, Set<number>>>({});
+  // #318: feature ids are string | number. v3 data-layer sources use
+  // promoteId='_global_id' so feature.id is the row's UUID (string);
+  // other sources fall through to generateId (number).
+  const [selection, setSelection] = useState<
+    Record<string, Set<number | string>>
+  >({});
   // #306 WAB-style chrome: LayerPanel slides in from the right
   // instead of taking a permanent left rail. Defaults open so the
   // first-time viewer sees what's on the map; the user can close

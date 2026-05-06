@@ -31,12 +31,15 @@ interface Props {
   canEdit: boolean;
   /**
    * Shared selection state owned by the editor. Keys are layer ids;
-   * values are Sets of feature ids (== indexes into each layer's
-   * cached feature collection, since sources use generateId: true).
+   * values are Sets of feature ids that match what setFeatureState
+   * sees on the map: a row's `_global_id` UUID (string) for v3
+   * data-layer sources (promoteId), or a sequential index (number)
+   * for sources that fall back to generateId. The table treats both
+   * uniformly when matching rows to selection state. (#318)
    */
-  selection: Record<string, Set<number>>;
+  selection: Record<string, Set<number | string>>;
   setSelection: React.Dispatch<
-    React.SetStateAction<Record<string, Set<number>>>
+    React.SetStateAction<Record<string, Set<number | string>>>
   >;
   onClose: () => void;
   /** Fly to a bbox in the map canvas. */
@@ -175,7 +178,12 @@ export function AttributeTable({
 
   // The active layer's selection; the table only ever shows one
   // layer at a time, so we read a single slice off the shared map.
-  const activeSelection = (activeLayerId && selection[activeLayerId]) || new Set<number>();
+  // Selection keys are either the row's `_global_id` UUID (string)
+  // for v3 sources that use promoteId, or a numeric array index for
+  // sources that fall back to generateId. Helpers below handle both.
+  const activeSelection: Set<number | string> =
+    (activeLayerId && selection[activeLayerId]) ||
+    new Set<number | string>();
 
   // Default to the top visible queryable layer whenever the list
   // changes. Also resets the active layer if the currently-active one
@@ -225,9 +233,58 @@ export function AttributeTable({
   }, [open, queryableLayers, activeLayerId, focusLayerId]);
 
   /** Replace the active layer's slice; leave other layers untouched. */
-  function updateActiveSelection(next: Set<number>) {
+  function updateActiveSelection(next: Set<number | string>) {
     if (!activeLayerId) return;
     setSelection((prev) => ({ ...prev, [activeLayerId]: next }));
+  }
+
+  /**
+   * Stable key for a row in the shared selection set. v3 promoteId
+   * sources expose `_global_id` in properties; we prefer that so the
+   * selection survives the bbox-driven setData refresh that happens on
+   * every map pan (#318). Sources without a stable property fall back
+   * to the row's array index, which is fine when the source data isn't
+   * being reshuffled. Returning the same value MapCanvas's setFeatureState
+   * will receive lets the table's row-checkmark match the map highlight
+   * one-for-one.
+   */
+  function featureKeyAt(idx: number): number | string {
+    const f = activeFeatures[idx];
+    const gid =
+      f && f.properties && typeof f.properties === 'object'
+        ? (f.properties as Record<string, unknown>)['_global_id']
+        : undefined;
+    return typeof gid === 'string' ? gid : idx;
+  }
+
+  /**
+   * Resolve a stored selection key back to a row index in the active
+   * feature collection. Numeric keys are used as-is; string keys hunt
+   * for a row with a matching `_global_id`. Returns -1 when no match
+   * (the selected feature isn't currently in the table's view, e.g.
+   * the user selected something on the map that's outside the table's
+   * filter / sort window).
+   */
+  function indexForKey(key: number | string): number {
+    if (typeof key === 'number') {
+      return key < activeFeatures.length ? key : -1;
+    }
+    for (let i = 0; i < activeFeatures.length; i += 1) {
+      const props = activeFeatures[i]?.properties ?? null;
+      if (
+        props &&
+        typeof props === 'object' &&
+        (props as Record<string, unknown>)['_global_id'] === key
+      ) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** Set membership check using the row's stable key. */
+  function isRowSelected(idx: number): boolean {
+    return activeSelection.has(featureKeyAt(idx));
   }
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? null;
@@ -287,17 +344,21 @@ export function AttributeTable({
     if (activeLayer && activeLayer.interactions?.selectable === false) return;
     const idx = visibleIndexes[displayIdx];
     if (idx === undefined) return;
-    const next = new Set(activeSelection);
+    // #318: store the stable feature key (UUID for v3, index otherwise)
+    // so the map highlight survives the bbox-driven setData refresh.
+    const rowKey = featureKeyAt(idx);
+    const next = new Set<number | string>(activeSelection);
     if (shift && lastPicked !== null) {
       const a = Math.min(displayIdx, lastPicked);
       const b = Math.max(displayIdx, lastPicked);
       for (let i = a; i <= b; i += 1) {
         const ix = visibleIndexes[i];
-        if (ix !== undefined) next.add(ix);
+        if (ix === undefined) continue;
+        next.add(featureKeyAt(ix));
       }
     } else {
-      if (next.has(idx)) next.delete(idx);
-      else next.add(idx);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
     }
     updateActiveSelection(next);
     setLastPicked(displayIdx);
@@ -306,7 +367,10 @@ export function AttributeTable({
   function zoomToSelection() {
     if (activeSelection.size === 0) return;
     const features = [...activeSelection]
-      .map((i) => activeFeatures[i])
+      .map((key) => {
+        const idx = indexForKey(key);
+        return idx >= 0 ? activeFeatures[idx] : null;
+      })
       .filter((f): f is GeoJSON.Feature => Boolean(f && f.geometry));
     if (features.length === 0) return;
     const bbox = bboxOfFeatures(features);
@@ -462,14 +526,23 @@ export function AttributeTable({
 
   function selectionToFilter() {
     if (!activeLayer || activeSelection.size === 0) return;
+    // #318: selection keys are heterogeneous (UUID for v3 promoteId,
+    // numeric idx otherwise). Resolve to numeric indexes here so
+    // pickIdField + the property-extraction loop below stay simple.
+    const idxSet = new Set<number>();
+    for (const key of activeSelection) {
+      const i = indexForKey(key);
+      if (i >= 0) idxSet.add(i);
+    }
+    if (idxSet.size === 0) return;
     // Strategy: if the features carry a stable id field, convert to a
     // single `in` clause. Otherwise fall back to a boolean-OR of per-
     // feature primary-key guesses. If no usable id field is
     // discoverable, we bail with a visible error rather than silently
     // filtering nothing.
-    const idField = pickIdField(activeFields, activeFeatures, activeSelection);
+    const idField = pickIdField(activeFields, activeFeatures, idxSet);
     if (!idField) return;
-    const values = [...activeSelection]
+    const values = [...idxSet]
       .map((i) => {
         const v = (activeFeatures[i]?.properties ?? {}) as Record<string, unknown>;
         return v[idField];
@@ -656,7 +729,7 @@ export function AttributeTable({
                   string,
                   unknown
                 >;
-                const selected = activeSelection.has(idx);
+                const selected = isRowSelected(idx);
                 return (
                   <tr
                     key={idx}
@@ -972,6 +1045,12 @@ function bboxOfFeatures(
  * Heuristic pick for a stable id field. Prefers fields literally named
  * `id`, `fid`, `objectid`, then the first field whose values are
  * unique across the selected feature subset.
+ */
+/**
+ * pickIdField receives a numeric index Set (resolved upstream from
+ * the heterogeneous selection keys). Kept as Set<number> on purpose:
+ * the caller projects from Set<number | string> down to indexes via
+ * `indexForKey()` before calling in.
  */
 function pickIdField(
   fields: string[],

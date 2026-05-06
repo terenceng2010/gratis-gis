@@ -1252,7 +1252,10 @@ export function FieldRuntime({
   // Selection is unused at this slice but MapCanvas requires the
   // controlled-state props. Empty selection + an off-tool keeps the
   // canvas rendering without firing select-related side effects.
-  const [selection, setSelection] = useState<Record<string, Set<number>>>({});
+  // #318: feature ids may be string (v3 promoteId UUID) or number.
+  const [selection, setSelection] = useState<
+    Record<string, Set<number | string>>
+  >({});
 
   const handleMapReady = useCallback((map: maplibregl.Map | null) => {
     mapRef.current = map;

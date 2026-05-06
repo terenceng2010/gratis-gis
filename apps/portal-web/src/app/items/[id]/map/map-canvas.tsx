@@ -70,8 +70,14 @@ interface Props {
   basemaps?: CustomBasemap[];
   /** Fired whenever the user pans, zooms, rotates, or pitches. */
   onCameraChange: (next: Pick<MapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
-  /** Per-layer sets of selected feature ids (identical to feature indexes). */
-  selection: Record<string, Set<number>>;
+  /**
+   * Per-layer sets of selected feature ids. The ids are passed
+   * directly to MapLibre's setFeatureState as `id`; v3 data-layer
+   * sources use promoteId so the id is the row's `_global_id` UUID
+   * (string), and other sources fall through to `generateId: true`
+   * which yields a sequential number. Hence the union (#318).
+   */
+  selection: Record<string, Set<number | string>>;
   /**
    * Active selection tool. When `'off'`, clicks show popups and drags
    * pan the camera (today's default). Any other mode suppresses popups
@@ -93,7 +99,7 @@ interface Props {
    * the selection state directly: parent owns the canonical copy.
    */
   onSelectionChange: (
-    next: Record<string, Set<number>>,
+    next: Record<string, Set<number | string>>,
   ) => void;
   /**
    * Optional callback fired with the underlying maplibregl.Map
@@ -323,7 +329,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // Remember the last selection we applied to MapLibre's feature-state,
   // so we know which ids to clear when the selection shrinks. A bare
   // ref is enough: we don't need this in React state.
-  const appliedSelectionRef = useRef<Record<string, Set<number>>>({});
+  const appliedSelectionRef = useRef<Record<string, Set<number | string>>>(
+    {},
+  );
 
   // Sync shared selection state → MapLibre feature-state. Diffs against
   // the previously-applied map so we only touch what changed rather
@@ -332,7 +340,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     const m = mapRef.current;
     if (!m) return;
     const prevApplied = appliedSelectionRef.current;
-    const nextApplied: Record<string, Set<number>> = {};
+    const nextApplied: Record<string, Set<number | string>> = {};
 
     for (const layerId of new Set([
       ...Object.keys(prevApplied),
@@ -343,8 +351,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       // loading), skip: the next syncOverlays will handle it.
       if (!m.getSource(sourceId)) continue;
 
-      const prev = prevApplied[layerId] ?? new Set<number>();
-      const next = selection[layerId] ?? new Set<number>();
+      const prev = prevApplied[layerId] ?? new Set<number | string>();
+      const next = selection[layerId] ?? new Set<number | string>();
       nextApplied[layerId] = next;
 
       for (const id of prev) {
@@ -852,7 +860,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
           layers: map.layers,
           hit:
             hit && layer && layer.interactions.selectable !== false
-              ? { layerId: layer.id, featureId: hit.id as number }
+              ? {
+                  layerId: layer.id,
+                  // #318: hit.id is the row's UUID (string) for v3
+                  // promoteId sources, or a number for generateId
+                  // sources. Pass through as-is.
+                  featureId: hit.id as number | string,
+                }
               : null,
           mods: {
             shift: (e.originalEvent as MouseEvent).shiftKey,
@@ -1133,7 +1147,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // merge into it (shift click). Used by both rectangle and polygon
   // closers so modifier handling stays consistent.
   function applyShiftOrReplace(
-    picked: Record<string, Set<number>>,
+    picked: Record<string, Set<number | string>>,
     shift: boolean,
   ): void {
     if (!shift) {
@@ -1142,8 +1156,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     }
     const merged = { ...selectionRef.current };
     for (const [lid, ids] of Object.entries(picked)) {
-      const cur = merged[lid] ?? new Set<number>();
-      const next = new Set(cur);
+      const cur = merged[lid] ?? new Set<number | string>();
+      const next = new Set<number | string>(cur);
       for (const id of ids) next.add(id);
       merged[lid] = next;
     }
@@ -1449,20 +1463,20 @@ function applySelectionMutation({
   mods,
   apply,
 }: {
-  current: Record<string, Set<number>>;
+  current: Record<string, Set<number | string>>;
   layers: MapLayer[];
-  hit: { layerId: string; featureId: number } | null;
+  hit: { layerId: string; featureId: number | string } | null;
   mods: { shift: boolean; meta: boolean };
-  apply: (next: Record<string, Set<number>>) => void;
+  apply: (next: Record<string, Set<number | string>>) => void;
 }): void {
   if (!hit) {
     if (!mods.shift && !mods.meta) apply({});
     return;
   }
   const { layerId, featureId } = hit;
-  const cur = current[layerId] ?? new Set<number>();
+  const cur = current[layerId] ?? new Set<number | string>();
   if (mods.meta) {
-    const set = new Set(cur);
+    const set = new Set<number | string>(cur);
     if (set.has(featureId)) set.delete(featureId);
     else set.add(featureId);
     const next = { ...current };
@@ -1473,11 +1487,11 @@ function applySelectionMutation({
   }
   if (mods.shift) {
     const next = { ...current };
-    next[layerId] = new Set([...cur, featureId]);
+    next[layerId] = new Set<number | string>([...cur, featureId]);
     apply(next);
     return;
   }
-  apply({ [layerId]: new Set([featureId]) });
+  apply({ [layerId]: new Set<number | string>([featureId]) });
 }
 
 /**
@@ -1490,7 +1504,7 @@ function collectFeaturesInBbox(
   m: maplibregl.Map,
   layers: MapLayer[],
   bbox: [[number, number], [number, number]],
-): Record<string, Set<number>> {
+): Record<string, Set<number | string>> {
   const wanted = layers
     .filter((l) => l.interactions.selectable !== false)
     .flatMap((l) => overlayLayerIds(l.id));
@@ -1517,7 +1531,7 @@ function collectFeaturesInPolygon(
   m: maplibregl.Map,
   layers: MapLayer[],
   polygon: Array<[number, number]>,
-): Record<string, Set<number>> {
+): Record<string, Set<number | string>> {
   if (polygon.length < 3) return {};
   let minX = Infinity;
   let minY = Infinity;
@@ -1554,17 +1568,23 @@ function collectFeaturesInPolygon(
 function hitsByLayer(
   hits: maplibregl.MapGeoJSONFeature[],
   layers: MapLayer[],
-): Record<string, Set<number>> {
-  const result: Record<string, Set<number>> = {};
+): Record<string, Set<number | string>> {
+  const result: Record<string, Set<number | string>> = {};
   for (const hit of hits) {
     if (hit.id === undefined || hit.id === null) continue;
     const layer = layers.find((l) =>
       overlayLayerIds(l.id).includes(hit.layer.id),
     );
     if (!layer || layer.interactions.selectable === false) continue;
-    const fid = typeof hit.id === 'number' ? hit.id : Number(hit.id);
-    if (!Number.isFinite(fid)) continue;
-    const set = result[layer.id] ?? new Set<number>();
+    // #318: hit.id is a number for generateId sources and a string
+    // (UUID) for v3 promoteId sources. Pass it through; setFeatureState
+    // accepts string | number directly.
+    const fid: number | string =
+      typeof hit.id === 'number' || typeof hit.id === 'string'
+        ? hit.id
+        : Number(hit.id);
+    if (typeof fid === 'number' && !Number.isFinite(fid)) continue;
+    const set = result[layer.id] ?? new Set<number | string>();
     set.add(fid);
     result[layer.id] = set;
   }
@@ -1725,10 +1745,31 @@ function syncOverlays(
     const sourceId = `gg:${layer.id}`;
     const data = sourceData(layer);
     if (!data) continue;
+    // #318: v3 data-layer sources use `promoteId: '_global_id'` so
+    // MapLibre's runtime feature.id pulls from the row's stable UUID
+    // column. The default `generateId: true` reassigns sequential
+    // ids 0..N every time setData runs, and we re-fetch by viewport
+    // on every moveend (the bbox-driven effect below). With
+    // generateId, "feature.id 5 = the parcel I selected" only holds
+    // until the user pans; after that, feature.id 5 is whatever
+    // feature now happens to be 5th in the new bbox-filtered
+    // result, and the selection highlight jumps to a different
+    // feature on the map. promoteId pins the runtime id to the
+    // row's UUID, which doesn't move with the viewport.
+    //
+    // Other source kinds (arcgis-rest, geojson-url, basemap-as-data)
+    // keep generateId: true since we don't have a guaranteed stable
+    // property to promote. Selection on those sources still drifts
+    // on pan, but those sources are a smaller share of real use and
+    // a future slice can extend the per-kind id mapping (OBJECTID
+    // for ArcGIS, etc.).
+    const useStableId = layer.source.kind === 'data-layer';
     m.addSource(sourceId, {
       type: 'geojson',
       data,
-      generateId: true,
+      ...(useStableId
+        ? { promoteId: '_global_id' }
+        : { generateId: true }),
     });
 
     const op = layer.opacity;
