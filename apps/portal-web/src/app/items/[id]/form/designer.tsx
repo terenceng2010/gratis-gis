@@ -5937,6 +5937,20 @@ async function syncPairedLayerColumns(
   }
 
   const toAdd = candidates.filter((c) => !existingNames.has(c.name));
+  // Defensive log so an author can open devtools and see what the
+  // form save thinks is happening to the paired layer (#329 follow-up).
+  // If the layer should promote to spatial but the log says
+  // nextGeometryType=undefined, we have a walk bug; if it says 'point'
+  // but the layer's data_json stays null, the API rejected the PATCH.
+  // eslint-disable-next-line no-console
+  console.info('[gratisgis] syncPairedLayerColumns', {
+    layerItemId,
+    layerKey,
+    currentGeometryType: sub.geometryType ?? null,
+    nextGeometryType: nextGeometryType ?? null,
+    toAddCount: toAdd.length,
+    toAddNames: toAdd.map((f) => f.name),
+  });
   if (toAdd.length === 0 && nextGeometryType === undefined) return;
 
   // Merge: keep every existing field as-is, append the new ones, and
@@ -5962,6 +5976,12 @@ async function syncPairedLayerColumns(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ data: nextData }),
   });
+  // eslint-disable-next-line no-console
+  console.info(
+    '[gratisgis] syncPairedLayerColumns PATCH',
+    res.status,
+    res.ok ? 'ok' : await res.text().catch(() => ''),
+  );
   if (!res.ok) {
     throw new Error(
       `Layer schema patch failed: ${res.status} ${await res.text().catch(() => '')}`,

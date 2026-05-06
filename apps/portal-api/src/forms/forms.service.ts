@@ -210,11 +210,37 @@ export class FormsService {
 
     const properties: Record<string, unknown> = {
       ...responseSansAttachments,
+      // System bookkeeping carried in two parallel naming
+      // conventions (#329):
+      //
+      //   - The underscore-prefixed names (_submitted_at etc.)
+      //     follow the v3 feature-tracking convention (#39 / #118)
+      //     and stay distinct from any user-defined question id.
+      //     Internal feature-tracking UIs read these.
+      //
+      //   - The non-prefixed names match the typed columns that
+      //     createPairedDataLayerForForm provisions on the paired
+      //     layer (submitted_at, submitted_by, schema_version).
+      //     v3-features's #294 property-spread populates typed
+      //     columns by matching property keys to column names; the
+      //     names have to be identical for that to fire. Without
+      //     this duplication, every submitted row showed the three
+      //     bookkeeping columns as NULL even though the data was
+      //     present in JSONB.
+      //
+      // Write order: user response first, system bookkeeping last,
+      // so a malformed form with a question named `submitted_at`
+      // can't shadow the timestamp. The form designer should
+      // eventually reject those reserved ids; for now, last-write-
+      // wins is the safe default.
       _submission_id: args.submissionId,
       _client_id: args.clientId,
       _schema_version: args.schemaVersion,
       _submitted_at: args.capturedAt.toISOString(),
       _submitted_by: args.submittedBy,
+      submitted_at: args.capturedAt.toISOString(),
+      submitted_by: args.submittedBy,
+      schema_version: args.schemaVersion,
     };
 
     // #323: extract the geometry value from the response when the
