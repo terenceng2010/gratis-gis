@@ -5973,7 +5973,12 @@ async function syncPairedLayerColumns(
   // list. Below, we merge each desired layer into the existing
   // layers array (additive: new layers added, existing related
   // sublayers gain new fields, never lose any).
-  type DesiredRelated = { id: string; label: string; fields: RawFeatureField[] };
+  type DesiredRelated = {
+    id: string;
+    label: string;
+    fields: RawFeatureField[];
+    geometryType: 'point' | 'line' | 'polygon' | null;
+  };
   const desiredRelated: DesiredRelated[] = [];
   for (const q of questions) {
     if (q.type !== 'group' || !q.repeat) continue;
@@ -5996,6 +6001,30 @@ async function syncPairedLayerColumns(
     }
     walkChildren(children);
     if (childFields.length === 0) continue;
+    // #336: per-instance geometry. If the repeat group has a child
+    // geo question, the related sublayer becomes spatial so each
+    // instance's geo answer can land in a real geom column. Same
+    // first-wins-promotion semantics as the parent (#325). One
+    // level deep -- nested non-repeat groups walk through, repeat-
+    // inside-repeat is blocked by the designer.
+    function findGeoInChildren(
+      qs: Question[],
+    ): 'point' | 'line' | 'polygon' | null {
+      for (const c of qs) {
+        if (c.type === 'group') {
+          if (!c.repeat) {
+            const inner = findGeoInChildren(c.children);
+            if (inner) return inner;
+          }
+          continue;
+        }
+        if (c.type === 'geopoint') return 'point';
+        if (c.type === 'geotrace') return 'line';
+        if (c.type === 'geoshape') return 'polygon';
+      }
+      return null;
+    }
+    const geoType = findGeoInChildren(children);
     // FK back to the parent submission. We ride the field-name
     // contract instead of parentFkColumn so the existing
     // getTypedFields path populates it from properties on insert
@@ -6009,6 +6038,7 @@ async function syncPairedLayerColumns(
       id: q.id,
       label: q.label || q.id,
       fields: [fkField, ...childFields],
+      geometryType: geoType,
     });
   }
 
@@ -6040,19 +6070,32 @@ async function syncPairedLayerColumns(
         id: dr.id,
         name: dr.id,
         label: dr.label,
-        geometryType: null,
+        geometryType: dr.geometryType,
         fields: dr.fields,
       });
       relatedAdds += 1;
     } else {
-      const existRel = (nextLayers[idx]!.fields ?? []) as RawFeatureField[];
+      const cur = nextLayers[idx]!;
+      const existRel = (cur.fields ?? []) as RawFeatureField[];
       const existRelNames = new Set(existRel.map((f) => f.name));
       const merged = [
         ...existRel,
         ...dr.fields.filter((f) => !existRelNames.has(f.name)),
       ];
-      if (merged.length !== existRel.length) {
-        nextLayers[idx] = { ...nextLayers[idx]!, fields: merged };
+      // #336 promotion: if the related sublayer is currently
+      // non-spatial and the form has gained a per-instance geo
+      // question, flip geometryType. Never downgrade an existing
+      // geometryType for the same reason as the parent (#325):
+      // that's a destructive op handled elsewhere.
+      const wantPromote =
+        (cur.geometryType === null || cur.geometryType === undefined) &&
+        dr.geometryType !== null;
+      if (merged.length !== existRel.length || wantPromote) {
+        nextLayers[idx] = {
+          ...cur,
+          fields: merged,
+          ...(wantPromote ? { geometryType: dr.geometryType } : {}),
+        };
         relatedAdds += 1;
       }
     }

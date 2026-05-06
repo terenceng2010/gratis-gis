@@ -426,14 +426,26 @@ export class FormsService {
       select: { data: true },
     });
     const layerData = (layerRow?.data ?? {}) as {
-      layers?: Array<{ id?: unknown; key?: unknown }>;
+      layers?: Array<{ id?: unknown; key?: unknown; geometryType?: unknown }>;
     };
     const sublayerKeys = new Set<string>();
+    // #336: track each sublayer's geometryType so we can pick the
+    // spatial vs. table insert branch per group. Indexed by id.
+    const sublayerGeomTypes = new Map<
+      string,
+      'point' | 'line' | 'polygon' | null
+    >();
     if (Array.isArray(layerData.layers)) {
       for (const l of layerData.layers) {
         if (!l || typeof l !== 'object') continue;
         const id = (l as { id?: unknown }).id;
-        if (typeof id === 'string') sublayerKeys.add(id);
+        if (typeof id !== 'string') continue;
+        sublayerKeys.add(id);
+        const g = (l as { geometryType?: unknown }).geometryType;
+        sublayerGeomTypes.set(
+          id,
+          g === 'point' || g === 'line' || g === 'polygon' ? g : null,
+        );
       }
     }
 
@@ -460,6 +472,7 @@ export class FormsService {
         type?: unknown;
         id?: unknown;
         repeat?: unknown;
+        children?: unknown;
       };
       if (q.type !== 'group' || !q.repeat) continue;
       if (typeof q.id !== 'string') continue;
@@ -467,33 +480,68 @@ export class FormsService {
       const instances = args.response[q.id];
       if (!Array.isArray(instances) || instances.length === 0) continue;
 
-      const inserts = instances
-        .map((inst, i) => {
-          if (!inst || typeof inst !== 'object') return null;
-          // Each child row carries the same bookkeeping the parent
-          // does (so the attribute table renders Submitted at /
-          // Submitted by per row), plus the FK to the parent. The
-          // bookkeeping fields appear in BOTH naming conventions
-          // for the same #329 reason as the parent path.
-          const properties: Record<string, unknown> = {
-            ...(inst as Record<string, unknown>),
-            parent_submission_id: args.parentGlobalId,
-            _parent_submission_id: args.parentGlobalId,
-            _submission_id: args.parentGlobalId,
-            _client_id: args.clientId,
-            _schema_version: args.schemaVersion,
-            _submitted_at: args.capturedAt.toISOString(),
-            _submitted_by: args.submittedBy,
-            submitted_at: args.capturedAt.toISOString(),
-            submitted_by: args.submittedBy,
-            schema_version: args.schemaVersion,
-          };
-          return {
-            globalId: stableInstanceUuid(args.parentGlobalId, q.id as string, i),
-            properties,
-          };
-        })
-        .filter((row): row is { globalId: string; properties: Record<string, unknown> } => row !== null);
+      // #336: per-instance geometry. If the related sublayer was
+      // promoted to spatial by the designer (a child geo question
+      // was present at save time), pluck the matching value out of
+      // each instance and pack it as GeoJSON; otherwise this stays
+      // undefined and v3-features rides the table insert branch.
+      const subGeomType = sublayerGeomTypes.get(q.id) ?? null;
+      const isTable = subGeomType === null;
+      const childGeoBinding =
+        !isTable && Array.isArray(q.children)
+          ? pickGeoBindingInQuestions(q.children)
+          : null;
+
+      const inserts: Array<{
+        globalId: string;
+        properties: Record<string, unknown>;
+        geometry?: unknown;
+      }> = [];
+      for (let i = 0; i < instances.length; i += 1) {
+        const inst = instances[i];
+        if (!inst || typeof inst !== 'object') continue;
+        const instObj = inst as Record<string, unknown>;
+        // Each child row carries the same bookkeeping the parent
+        // does (so the attribute table renders Submitted at /
+        // Submitted by per row), plus the FK to the parent. The
+        // bookkeeping fields appear in BOTH naming conventions
+        // for the same #329 reason as the parent path.
+        const properties: Record<string, unknown> = {
+          ...instObj,
+          parent_submission_id: args.parentGlobalId,
+          _parent_submission_id: args.parentGlobalId,
+          _submission_id: args.parentGlobalId,
+          _client_id: args.clientId,
+          _schema_version: args.schemaVersion,
+          _submitted_at: args.capturedAt.toISOString(),
+          _submitted_by: args.submittedBy,
+          submitted_at: args.capturedAt.toISOString(),
+          submitted_by: args.submittedBy,
+          schema_version: args.schemaVersion,
+        };
+        const row: {
+          globalId: string;
+          properties: Record<string, unknown>;
+          geometry?: unknown;
+        } = {
+          globalId: stableInstanceUuid(args.parentGlobalId, q.id, i),
+          properties,
+        };
+        // Per-instance geometry (#336). Same shape contract as the
+        // parent path: { lat, lng } -> Point. The runtime only
+        // ships geopoint capture today; line / polygon arrive as
+        // undefined and the row inserts without a geom (which is
+        // the correct outcome for a malformed answer -- partial
+        // rows are better than dropped rows).
+        if (childGeoBinding) {
+          const geometry = responseValueToGeoJson(
+            instObj[childGeoBinding.questionId],
+            childGeoBinding.geometryType,
+          );
+          if (geometry !== undefined) row.geometry = geometry;
+        }
+        inserts.push(row);
+      }
 
       if (inserts.length === 0) continue;
 
@@ -503,10 +551,7 @@ export class FormsService {
           q.id,
           inserts,
           args.user,
-          // Related sublayers for repeat groups are non-spatial
-          // today (no per-instance geo question support yet); the
-          // table sublayer branch in v3-features is the right one.
-          { isTable: true },
+          { isTable },
         );
       } catch (err) {
         this.log.warn(
@@ -843,16 +888,53 @@ function readSublayerGeometryType(
 }
 
 /**
- * Find the form's geometry-binding question. Walks top-level
- * questions and (recursively) non-repeat group children -- repeat
- * groups carry their own per-instance geometry on the related child
- * layer, not on the parent submission. Returns the first geo question
- * encountered; multiple geo questions on one form would each need
- * their own column and we don't support that yet.
- *
- * This mirrors the walk in syncPairedLayerColumns (see
- * apps/portal-web/.../form/designer.tsx) so promotion + submit pick
- * the same question.
+ * Walk a questions array (top-level OR a group's children) and
+ * return the first geo binding. Skips repeat groups at this level
+ * because those carry their own per-instance geometry on a related
+ * child sublayer (#326 / #336); the caller invokes this once per
+ * sublayer with the right question subtree. First-wins matches
+ * Survey123 + the designer-side promotion (#333).
+ */
+function pickGeoBindingInQuestions(
+  questions: unknown[],
+):
+  | { questionId: string; geometryType: 'point' | 'line' | 'polygon' }
+  | null {
+  for (const qRaw of questions) {
+    if (!qRaw || typeof qRaw !== 'object') continue;
+    const q = qRaw as {
+      type?: unknown;
+      id?: unknown;
+      repeat?: unknown;
+      children?: unknown;
+    };
+    if (q.type === 'group') {
+      if (!q.repeat && Array.isArray(q.children)) {
+        const inner = pickGeoBindingInQuestions(q.children);
+        if (inner) return inner;
+      }
+      continue;
+    }
+    if (typeof q.id !== 'string') continue;
+    if (q.type === 'geopoint') {
+      return { questionId: q.id, geometryType: 'point' };
+    }
+    if (q.type === 'geotrace') {
+      return { questionId: q.id, geometryType: 'line' };
+    }
+    if (q.type === 'geoshape') {
+      return { questionId: q.id, geometryType: 'polygon' };
+    }
+  }
+  return null;
+}
+
+/**
+ * Find the form's PARENT-LAYER geometry binding. Walks the form's
+ * top-level questions (and non-repeat group children) for a geo
+ * question. Repeat groups are skipped because each carries its own
+ * per-instance binding handled by the related-sublayer write path
+ * (#336).
  */
 function pickFormGeometryBinding(
   formData: Prisma.JsonValue | null | undefined,
@@ -862,41 +944,7 @@ function pickFormGeometryBinding(
   if (!formData || typeof formData !== 'object') return null;
   const questions = (formData as { questions?: unknown }).questions;
   if (!Array.isArray(questions)) return null;
-
-  function walk(
-    qs: unknown[],
-  ):
-    | { questionId: string; geometryType: 'point' | 'line' | 'polygon' }
-    | null {
-    for (const qRaw of qs) {
-      if (!qRaw || typeof qRaw !== 'object') continue;
-      const q = qRaw as {
-        type?: unknown;
-        id?: unknown;
-        repeat?: unknown;
-        children?: unknown;
-      };
-      if (q.type === 'group') {
-        if (!q.repeat && Array.isArray(q.children)) {
-          const inner = walk(q.children);
-          if (inner) return inner;
-        }
-        continue;
-      }
-      if (typeof q.id !== 'string') continue;
-      if (q.type === 'geopoint') {
-        return { questionId: q.id, geometryType: 'point' };
-      }
-      if (q.type === 'geotrace') {
-        return { questionId: q.id, geometryType: 'line' };
-      }
-      if (q.type === 'geoshape') {
-        return { questionId: q.id, geometryType: 'polygon' };
-      }
-    }
-    return null;
-  }
-  return walk(questions);
+  return pickGeoBindingInQuestions(questions);
 }
 
 /**
