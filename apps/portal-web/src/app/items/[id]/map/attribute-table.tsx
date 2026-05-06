@@ -182,18 +182,32 @@ export function AttributeTable({
   // just had its query permission revoked (e.g. matrix edit on an
   // editor-side map viewer refresh).
   // When the parent passes `focusLayerId` (the per-layer kebab's
-  // "Open attribute table" action, #72) we honour that pick first.
+  // "Open attribute table" action, #72) we honour that pick once
+  // each time it transitions to a new value. The focus prop stays
+  // sticky on the parent after the kebab click; if we re-applied
+  // it on every render the dropdown's "Switch layer" pick would
+  // snap right back the moment the effect re-ran. Track the last
+  // focus we already honoured and only re-apply when it changes.
+  const lastAppliedFocusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open) return;
+    // Honour a fresh focusLayerId from the parent (kebab click).
+    // Only when it differs from the last value we already applied,
+    // so the user's own dropdown picks aren't reverted.
     if (
       focusLayerId &&
+      focusLayerId !== lastAppliedFocusRef.current &&
       queryableLayers.some((l) => l.id === focusLayerId)
     ) {
+      lastAppliedFocusRef.current = focusLayerId;
       setActiveLayerId(focusLayerId);
       setLastPicked(null);
       setSortBy(null);
       return;
     }
+    // Track focus going back to null so the next non-null value
+    // counts as a fresh transition.
+    if (!focusLayerId) lastAppliedFocusRef.current = null;
     if (
       activeLayerId &&
       queryableLayers.some((l) => l.id === activeLayerId)
