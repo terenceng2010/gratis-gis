@@ -198,14 +198,32 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
         row: Math.max(1, Math.round(row)),
       };
       const widget = stampWidget(kind, layout);
-      setApp((cur) => ({
-        ...cur,
-        pages: cur.pages.map((p, i) =>
-          i !== activePageIdx
-            ? p
-            : { ...p, widgets: [...p.widgets, widget] },
-        ),
-      }));
+      setApp((cur) => {
+        // #339: auto-bind a newly-dropped map-following widget to
+        // the only Map widget already on the page. Saves the user
+        // a manual mapWidgetId pick in the common case (one Map on
+        // the canvas + a Legend / LayerList / Search / Print /
+        // Select / BasemapGallery dropped alongside it). When there
+        // are zero or multiple Map widgets we leave mapWidgetId
+        // unset; the user picks via the properties panel.
+        const page = cur.pages[activePageIdx];
+        const onlyMap =
+          page && page.widgets.filter((w) => w.kind === 'map').length === 1
+            ? page.widgets.find((w) => w.kind === 'map')
+            : null;
+        const widgetWithBinding =
+          onlyMap && WIDGETS_BIND_MAP_ID.has(widget.kind)
+            ? autoBindMapWidgetId(widget, onlyMap.id)
+            : widget;
+        return {
+          ...cur,
+          pages: cur.pages.map((p, i) =>
+            i !== activePageIdx
+              ? p
+              : { ...p, widgets: [...p.widgets, widgetWithBinding] },
+          ),
+        };
+      });
       setSelectedWidgetId(widget.id);
       setDirty(true);
     },
@@ -286,7 +304,19 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
             <WidgetProperties
               widget={selectedWidget}
               canEdit={canEdit}
+              pageWidgets={activePage.widgets}
+              appTargets={app.targets}
+              appMapId={app.mapId}
+              appMapTitle={mapTitle}
               onChange={(patch) => updateWidget(selectedWidget.id, patch)}
+              onChangeConfig={(configPatch) =>
+                updateWidget(selectedWidget.id, {
+                  config: {
+                    ...selectedWidget.config,
+                    ...configPatch,
+                  } as CustomWidget['config'],
+                })
+              }
               onRemove={() => removeWidget(selectedWidget.id)}
             />
           ) : (
@@ -954,12 +984,22 @@ function AppProperties({
 function WidgetProperties({
   widget,
   canEdit,
+  pageWidgets,
+  appTargets,
+  appMapId,
+  appMapTitle,
   onChange,
+  onChangeConfig,
   onRemove,
 }: {
   widget: CustomWidget;
   canEdit: boolean;
+  pageWidgets: CustomWidget[];
+  appTargets: ViewerTarget[];
+  appMapId: string | undefined;
+  appMapTitle: string | null;
   onChange: (patch: Partial<CustomWidget>) => void;
+  onChangeConfig: (configPatch: Record<string, unknown>) => void;
   onRemove: () => void;
 }) {
   const tile = PALETTE_TILES.find((t) => t.kind === widget.kind);
@@ -1055,17 +1095,360 @@ function WidgetProperties({
           </Field>
         </div>
         <p className="text-[10px] italic text-muted">
-          Drag-to-resize + drag-to-reposition arrive in #338. For now,
-          enter cells manually.
+          Drag the widget on the canvas to move; drag the right /
+          bottom / corner handles to resize. Or enter cells here.
         </p>
+        <div className="-mx-3 border-t border-border" />
         <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
           Configuration
         </p>
-        <p className="rounded-md border border-dashed border-border bg-surface-2/40 px-2 py-3 text-center text-[11px] italic text-muted">
-          Per-widget config arrives in #339. Today widgets render with
-          their default behavior at runtime.
-        </p>
+        <WidgetConfigForm
+          widget={widget}
+          canEdit={canEdit}
+          pageWidgets={pageWidgets}
+          appTargets={appTargets}
+          appMapId={appMapId}
+          appMapTitle={appMapTitle}
+          onChangeConfig={onChangeConfig}
+        />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Per-kind configuration form rendered inside the widget properties
+ * panel (#339). Each branch renders the controls relevant to that
+ * widget's CustomWidgetConfig shape:
+ *
+ *   - Map: optional override for the app-level default map; toggle
+ *     for the navigation buttons (zoom +/-/home/locate)
+ *   - Legend / LayerList / Search / Print / Select / BasemapGallery:
+ *     pick which Map widget on this page they bind to. The picker
+ *     surfaces every Map widget with a friendly id; auto-bind on
+ *     drop already wires the "only one Map" case (#339 helper), so
+ *     this form only matters for the "two or more Maps" case or for
+ *     fixing a stale binding after deletion / rename.
+ *   - AttributeTable: which target index in the app's targets list
+ *     this table renders + optional sync to a Map widget so row
+ *     selection highlights features
+ *   - Text: a markdown body + presentational preset (header / body /
+ *     callout)
+ *   - Chart: deferred -- the runtime renderer ships with chart last
+ *
+ * Form layout: tiny fields in muted labels so the panel stays
+ * compact. Inputs disabled when canEdit=false (sharee / read-only
+ * viewer of the configuration page).
+ */
+function WidgetConfigForm({
+  widget,
+  canEdit,
+  pageWidgets,
+  appTargets,
+  appMapId,
+  appMapTitle,
+  onChangeConfig,
+}: {
+  widget: CustomWidget;
+  canEdit: boolean;
+  pageWidgets: CustomWidget[];
+  appTargets: ViewerTarget[];
+  appMapId: string | undefined;
+  appMapTitle: string | null;
+  onChangeConfig: (configPatch: Record<string, unknown>) => void;
+}) {
+  // List of map widgets on this page, used by every map-following
+  // kind below to pick a binding.
+  const mapWidgets = pageWidgets.filter((w) => w.kind === 'map');
+  switch (widget.config.kind) {
+    case 'map':
+      return (
+        <MapWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          appMapId={appMapId}
+          appMapTitle={appMapTitle}
+          appTargetCount={appTargets.length}
+          onChangeConfig={onChangeConfig}
+        />
+      );
+    case 'legend':
+    case 'layer-list':
+    case 'search':
+    case 'print':
+    case 'select':
+    case 'basemap-gallery':
+      return (
+        <MapBindingPicker
+          mapWidgetId={widget.config.mapWidgetId}
+          mapWidgets={mapWidgets}
+          canEdit={canEdit}
+          onChange={(mapWidgetId) => onChangeConfig({ mapWidgetId })}
+          extra={
+            widget.config.kind === 'layer-list' ? (
+              <Field label="Allow toggling layers">
+                <select
+                  value={widget.config.allowToggle === false ? 'no' : 'yes'}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    onChangeConfig({
+                      allowToggle: e.target.value === 'yes',
+                    })
+                  }
+                  className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+                >
+                  <option value="yes">Yes</option>
+                  <option value="no">No (read-only)</option>
+                </select>
+              </Field>
+            ) : widget.config.kind === 'search' ? (
+              <Field label="Address geocoding">
+                <select
+                  value={
+                    widget.config.geocodingEnabled === false ? 'no' : 'yes'
+                  }
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    onChangeConfig({
+                      geocodingEnabled: e.target.value === 'yes',
+                    })
+                  }
+                  className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+                >
+                  <option value="yes">Address + attribute search</option>
+                  <option value="no">Attribute search only</option>
+                </select>
+              </Field>
+            ) : null
+          }
+        />
+      );
+    case 'attribute-table':
+      return (
+        <div className="space-y-3">
+          <Field
+            label="Target layer"
+            hint={
+              appTargets.length === 0
+                ? 'No targets defined on the app yet. Add one via the Map widget.'
+                : 'The layer this table renders rows from.'
+            }
+          >
+            <select
+              value={widget.config.targetIndex}
+              disabled={!canEdit || appTargets.length === 0}
+              onChange={(e) =>
+                onChangeConfig({ targetIndex: Number(e.target.value) })
+              }
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            >
+              {appTargets.length === 0 ? (
+                <option value={0}>(no targets)</option>
+              ) : (
+                appTargets.map((t, i) => (
+                  <option key={`${t.dataLayerId}:${t.layerKey}`} value={i}>
+                    #{i} {t.dataLayerId.slice(0, 8)} / {t.layerKey}
+                  </option>
+                ))
+              )}
+            </select>
+          </Field>
+          <Field
+            label="Sync selection with map"
+            hint="Optional. When set, clicking a row highlights that feature on the chosen map."
+          >
+            <select
+              value={widget.config.syncWithMapWidgetId ?? ''}
+              disabled={!canEdit}
+              onChange={(e) =>
+                onChangeConfig({
+                  syncWithMapWidgetId: e.target.value || undefined,
+                })
+              }
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            >
+              <option value="">None</option>
+              {mapWidgets.map((m) => (
+                <option key={m.id} value={m.id}>
+                  Map · {m.id.slice(2, 10)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Max rows">
+            <NumberInput
+              value={widget.config.maxRows ?? 200}
+              min={10}
+              max={5000}
+              disabled={!canEdit}
+              onChange={(v) =>
+                onChangeConfig({ maxRows: Math.max(10, Math.min(5000, v)) })
+              }
+            />
+          </Field>
+        </div>
+      );
+    case 'text':
+      return (
+        <div className="space-y-3">
+          <Field label="Preset">
+            <select
+              value={widget.config.preset ?? 'body'}
+              disabled={!canEdit}
+              onChange={(e) =>
+                onChangeConfig({
+                  preset: e.target.value as
+                    | 'header'
+                    | 'subheader'
+                    | 'body'
+                    | 'callout',
+                })
+              }
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            >
+              <option value="header">Header</option>
+              <option value="subheader">Subheader</option>
+              <option value="body">Body</option>
+              <option value="callout">Callout</option>
+            </select>
+          </Field>
+          <Field label="Markdown" hint="Bold, italic, links, lists, code.">
+            <textarea
+              value={widget.config.markdown}
+              disabled={!canEdit}
+              rows={4}
+              onChange={(e) => onChangeConfig({ markdown: e.target.value })}
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            />
+          </Field>
+        </div>
+      );
+    case 'chart':
+      return (
+        <p className="rounded-md border border-dashed border-border bg-surface-2/40 px-2 py-3 text-center text-[11px] italic text-muted">
+          Chart configuration ships after the runtime (#341).
+        </p>
+      );
+    default: {
+      const _exhaustive: never = widget.config;
+      void _exhaustive;
+      return null;
+    }
+  }
+}
+
+function MapWidgetConfig({
+  config,
+  canEdit,
+  appMapId,
+  appMapTitle,
+  appTargetCount,
+  onChangeConfig,
+}: {
+  config: { kind: 'map'; mapId?: string; showNavigation?: boolean };
+  canEdit: boolean;
+  appMapId: string | undefined;
+  appMapTitle: string | null;
+  appTargetCount: number;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field
+        label="Map source"
+        hint="Per-widget override. Leave empty to inherit the app's default map."
+      >
+        <div className="flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-1">
+          <MapIcon className="h-3.5 w-3.5 text-emerald-600" />
+          <span className="flex-1 truncate text-ink-1">
+            {config.mapId ? (
+              <span className="font-mono text-[10px]">
+                {config.mapId.slice(0, 12)}...
+              </span>
+            ) : appMapId ? (
+              <>
+                <span className="text-muted">app default ·</span>{' '}
+                {appMapTitle ?? appMapId.slice(0, 8)}
+              </>
+            ) : (
+              <span className="italic text-muted">none</span>
+            )}
+          </span>
+          {canEdit && config.mapId && (
+            <button
+              type="button"
+              onClick={() => onChangeConfig({ mapId: undefined })}
+              className="text-muted hover:text-rose-600"
+              title="Use app default"
+              aria-label="Reset to app default"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </Field>
+      <Field label="Navigation buttons">
+        <select
+          value={config.showNavigation === false ? 'no' : 'yes'}
+          disabled={!canEdit}
+          onChange={(e) =>
+            onChangeConfig({ showNavigation: e.target.value === 'yes' })
+          }
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+        >
+          <option value="yes">Show zoom + home + locate</option>
+          <option value="no">Hide</option>
+        </select>
+      </Field>
+      <p className="rounded-md border border-dashed border-border bg-surface-2/40 px-2 py-2 text-[10px] text-muted">
+        {appTargetCount === 0
+          ? 'No targets on the app yet. The runtime will render the map with just the basemap until targets are added.'
+          : `${appTargetCount} target layer${appTargetCount === 1 ? '' : 's'} on the app -- this map renders all of them by default.`}
+      </p>
+    </div>
+  );
+}
+
+function MapBindingPicker({
+  mapWidgetId,
+  mapWidgets,
+  canEdit,
+  onChange,
+  extra,
+}: {
+  mapWidgetId: string;
+  mapWidgets: CustomWidget[];
+  canEdit: boolean;
+  onChange: (next: string) => void;
+  extra?: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field
+        label="Bound map"
+        hint={
+          mapWidgets.length === 0
+            ? 'Drop a Map widget on the page first.'
+            : 'The Map widget this control operates on.'
+        }
+      >
+        <select
+          value={mapWidgetId}
+          disabled={!canEdit || mapWidgets.length === 0}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+        >
+          <option value="">
+            {mapWidgets.length === 0 ? '(no map widgets)' : 'Pick a map…'}
+          </option>
+          {mapWidgets.map((m) => (
+            <option key={m.id} value={m.id}>
+              Map · {m.id.slice(2, 10)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {extra}
     </div>
   );
 }
@@ -1122,6 +1505,42 @@ function NumberInput({
 }
 
 // ---- Helpers ---------------------------------------------------------------
+
+/**
+ * Widget kinds whose CustomWidgetConfig has a `mapWidgetId` field
+ * the runtime needs filled to do anything useful. addWidgetAt
+ * uses this set to decide whether to auto-bind a freshly-dropped
+ * widget to the only Map widget on the page; the WidgetConfigForm
+ * uses the same shape (a map-binding picker) for them all.
+ */
+const WIDGETS_BIND_MAP_ID = new Set<CustomWidgetKind>([
+  'legend',
+  'layer-list',
+  'search',
+  'print',
+  'select',
+  'basemap-gallery',
+]);
+
+/**
+ * Pre-fill `mapWidgetId` on a freshly-stamped widget without any
+ * exhaustive switch over CustomWidgetConfig: the field is uniformly
+ * called `mapWidgetId` across every config kind in the set above,
+ * so a structural copy with the patch applied is type-safe via the
+ * eventual cast back to CustomWidget.
+ */
+function autoBindMapWidgetId(
+  widget: CustomWidget,
+  mapWidgetId: string,
+): CustomWidget {
+  return {
+    ...widget,
+    config: {
+      ...widget.config,
+      mapWidgetId,
+    } as CustomWidget['config'],
+  };
+}
 
 function clampCol(col: number): number {
   return Math.max(1, Math.min(GRID_COLS, Math.round(col)));
