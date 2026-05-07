@@ -2998,10 +2998,11 @@ function TabsWidgetCanvas({
             <button
               key={t.id}
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSetActiveTabIdx(i);
-              }}
+              // Don't stopPropagation: the click bubbles to the
+              // parent WidgetCard so the tabs widget also gets
+              // selected, putting tab management in the right rail
+              // alongside the active-tab switch.
+              onClick={() => onSetActiveTabIdx(i)}
               className={`relative px-3 py-1.5 text-xs font-medium transition-colors ${
                 isActive
                   ? 'text-ink-0'
