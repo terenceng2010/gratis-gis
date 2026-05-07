@@ -9,15 +9,17 @@ import { ItemsModule } from '../items/items.module.js';
 import { StorageModule } from '../storage/storage.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
+import { EngineModule } from '../engine/engine.module.js';
 
 /**
  * v3 feature CRUD + attachments. Depends on ItemsModule (auth / gate
- * checks), StorageModule (attachment cleanup on delete), and
+ * checks), StorageModule (attachment cleanup on delete),
  * DerivedLayersModule (lazy-grow staleness hook for buffer-by-field
- * caches; see DerivedLayerCacheRefreshService). Does NOT depend on
- * V3TablesModule: tables are provisioned upstream by ItemsService;
- * this module just reads / writes rows and attachment metadata
- * against whatever's already there.
+ * caches), and EngineModule (the observation log + DataLayerEngine
+ * adapter that v3 routes through post-Phase-2.2). Does NOT depend on
+ * V3TablesModule: per-layer tables are still provisioned upstream by
+ * ItemsService for now (orphaned post-rewire), but rows are read and
+ * written through the engine.
  */
 @Module({
   imports: [
@@ -25,6 +27,7 @@ import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js'
     StorageModule,
     NotificationsModule,
     DerivedLayersModule,
+    EngineModule,
   ],
   providers: [V3FeaturesService, V3AttachmentsService],
   controllers: [V3FeaturesController, V3AttachmentsController],

@@ -82,6 +82,10 @@ export interface ListFeaturesArgs {
    *  Prisma's napi bridge happy on large layers (matches the v3
    *  service's HARD_CAP). */
   limit?: number;
+  /** Single-entity lookup. When set, only the named entity is
+   *  returned. Used by callers that want one feature back rather
+   *  than the whole collection (e.g. update path read-back). */
+  entity?: string;
   /** Viewport filter as `[minLng, minLat, maxLng, maxLat]` in EPSG:4326. */
   bbox?: [number, number, number, number];
   /**
@@ -297,6 +301,12 @@ export class DataLayerEngine {
     if (args.ownRowsOnly !== undefined) {
       candidateFilters.push(
         Prisma.sql`AND author_sub = ${args.ownRowsOnly.userId}`,
+      );
+    }
+
+    if (args.entity !== undefined) {
+      candidateFilters.push(
+        Prisma.sql`AND entity = ${args.entity}::uuid`,
       );
     }
 
