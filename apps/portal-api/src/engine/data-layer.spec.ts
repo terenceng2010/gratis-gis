@@ -175,6 +175,18 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
     expect(obs.attrs).toBe(null);
     expect(obs.geom).toBe(null);
   });
+
+  it('uses an explicit globalId as the entity id when provided', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const globalId = uuidv7();
+
+    const result = await adapter.writeFeatureCreate(createArgs({ globalId }));
+
+    expect(engine.writes[0]!.entity).toBe(globalId);
+    expect(result.globalId).toBe(globalId);
+  });
 });
 
 describe('DataLayerEngine.writeFeaturesCreate', () => {
@@ -219,6 +231,22 @@ describe('DataLayerEngine.writeFeaturesCreate', () => {
     const out = await adapter.writeFeaturesCreate(inputs);
     const ids = new Set(out.map((r) => r.globalId));
     expect(ids.size).toBe(20);
+  });
+
+  it('honors per-input globalId when provided, generates fresh ones otherwise', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const supplied = uuidv7();
+
+    const out = await adapter.writeFeaturesCreate([
+      createArgs({ globalId: supplied }),
+      createArgs(), // no globalId, should get a fresh one
+    ]);
+
+    expect(out[0]!.globalId).toBe(supplied);
+    expect(isUuid(out[1]!.globalId)).toBe(true);
+    expect(out[1]!.globalId).not.toBe(supplied);
   });
 });
 

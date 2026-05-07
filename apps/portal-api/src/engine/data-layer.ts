@@ -43,6 +43,18 @@ export interface CreateFeatureArgs extends WriteCommon {
   properties?: Record<string, unknown>;
   /** Optional geometry. Cell is computed downstream by `EngineService`. */
   geometry?: GeoJsonGeometry | null;
+  /**
+   * Optional client-supplied entity id. When present, used as the
+   * observation's `entity` instead of generating a fresh UUIDv7.
+   * Editors and form runtimes pass this through so a retried POST
+   * after a network blip does not produce a duplicate feature; if
+   * the same `globalId` lands twice the second write fails the
+   * primary-key constraint on `observation.id` and the caller treats
+   * it as already-persisted.
+   *
+   * Must be a valid UUID. Validation happens inside the engine.
+   */
+  globalId?: string;
 }
 
 export interface UpdateFeatureArgs extends WriteCommon {
@@ -120,7 +132,7 @@ export class DataLayerEngine {
   async writeFeatureCreate(
     args: CreateFeatureArgs,
   ): Promise<{ globalId: string; observationId: string }> {
-    const entity = uuidv7();
+    const entity = args.globalId ?? uuidv7();
     const obs = await this.engine.write({
       scope: this.scope(args.itemId, args.layerId),
       entity,
@@ -153,7 +165,7 @@ export class DataLayerEngine {
 
     const observations: Observation[] = inputs.map((args) => ({
       scope: this.scope(args.itemId, args.layerId),
-      entity: uuidv7(),
+      entity: args.globalId ?? uuidv7(),
       kind: 'create',
       validFrom: new Date(),
       validTo: null,
