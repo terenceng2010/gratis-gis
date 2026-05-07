@@ -634,70 +634,134 @@ const EMPTY_SELECTION: Record<string, Set<number | string>> = {};
 
 // ---- Palette ---------------------------------------------------------------
 
+/**
+ * Widget categories. Mirrors Experience Builder's six-bucket
+ * taxonomy (Mapcentric, Datacentric, Page element, Menu and tool,
+ * Layout, Section) but trimmed to the three buckets we have today.
+ * Future widgets (#361) drop into the existing buckets or grow new
+ * ones (Layout when Row / Column / Grid land).
+ *
+ * `map` here means "binds to or feeds a Map widget" (basemap, layer
+ * toggles, search, print, etc.). `data` means "reads from an app
+ * target" (Attribute Table, Chart). `page` is static layout content
+ * (Text today; Image / Button / Divider / Embed land in #361).
+ */
+type PaletteCategory = 'map' | 'data' | 'page';
+
+const PALETTE_CATEGORIES: Array<{
+  id: PaletteCategory;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: 'map',
+    label: 'Map widgets',
+    hint: 'Drive or follow a map',
+  },
+  {
+    id: 'data',
+    label: 'Data widgets',
+    hint: 'Read from an app target',
+  },
+  {
+    id: 'page',
+    label: 'Page elements',
+    hint: 'Static layout content',
+  },
+];
+
 const PALETTE_TILES: Array<{
   kind: CustomWidgetKind;
   label: string;
   Icon: LucideIcon;
   hint: string;
+  category: PaletteCategory;
 }> = [
-  { kind: 'map', label: 'Map', Icon: MapIcon, hint: 'The main map canvas' },
+  // -- Map widgets -----------------------------------------------
+  {
+    kind: 'map',
+    label: 'Map',
+    Icon: MapIcon,
+    hint: 'The main map canvas',
+    category: 'map',
+  },
   {
     kind: 'layer-list',
     label: 'Layers',
     Icon: LayersIcon,
     hint: 'Layer toggles + ordering for a map',
+    category: 'map',
   },
   {
     kind: 'legend',
     label: 'Legend',
     Icon: ListTree,
     hint: 'Symbology of visible layers',
+    category: 'map',
   },
   {
     kind: 'basemap-gallery',
     label: 'Basemaps',
     Icon: ImageIcon,
     hint: 'Tile grid to switch basemaps on a map',
-  },
-  {
-    kind: 'search',
-    label: 'Search',
-    Icon: Search,
-    hint: 'Address + attribute search bar',
-  },
-  {
-    kind: 'select',
-    label: 'Select',
-    Icon: MousePointer2,
-    hint: 'Selection-mode buttons (click / box / lasso)',
+    category: 'map',
   },
   {
     kind: 'print',
     label: 'Print',
     Icon: Printer,
     hint: 'Print the bound map',
+    category: 'map',
+  },
+  // -- Data widgets ----------------------------------------------
+  {
+    kind: 'search',
+    label: 'Search',
+    Icon: Search,
+    hint: 'Address + attribute search bar',
+    category: 'data',
+  },
+  {
+    kind: 'select',
+    label: 'Select',
+    Icon: MousePointer2,
+    hint: 'Selection-mode buttons (click / box / lasso)',
+    category: 'data',
   },
   {
     kind: 'attribute-table',
     label: 'Attribute Table',
     Icon: Table2,
     hint: 'Rows from one of the app targets',
-  },
-  {
-    kind: 'text',
-    label: 'Text',
-    Icon: TypeIcon,
-    hint: 'Headings, intros, attributions',
+    category: 'data',
   },
   {
     kind: 'chart',
     label: 'Chart',
     Icon: BarChart3,
     hint: 'Bar / line / pie over a target',
+    category: 'data',
+  },
+  // -- Page elements ---------------------------------------------
+  {
+    kind: 'text',
+    label: 'Text',
+    Icon: TypeIcon,
+    hint: 'Headings, intros, attributions',
+    category: 'page',
   },
 ];
 
 function Palette({ canEdit }: { canEdit: boolean }) {
+  // Bucket once at module scope so we don't refilter every render.
+  // Each category renders as its own subsection with a small header
+  // so authors can scan by purpose ("I need a thing that talks to
+  // the map" vs. "I need a static text block").
+  const grouped = PALETTE_CATEGORIES.map((cat) => ({
+    ...cat,
+    tiles: PALETTE_TILES.filter((t) => t.category === cat.id),
+  })).filter((g) => g.tiles.length > 0);
+
   return (
     <aside className="flex w-56 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1">
       <div className="border-b border-border px-3 py-2.5">
@@ -706,9 +770,18 @@ function Palette({ canEdit }: { canEdit: boolean }) {
           {canEdit ? 'Drag onto the canvas' : 'Read only'}
         </p>
       </div>
-      <div className="flex flex-col overflow-auto py-1">
-        {PALETTE_TILES.map((tile) => (
-          <PaletteTile key={tile.kind} {...tile} canEdit={canEdit} />
+      <div className="flex flex-col overflow-auto pb-2">
+        {grouped.map((group) => (
+          <div key={group.id} className="border-b border-border last:border-0">
+            <div className="px-3 pb-1 pt-3">
+              <p className="text-xs font-medium text-ink-1">{group.label}</p>
+            </div>
+            <div className="flex flex-col">
+              {group.tiles.map((tile) => (
+                <PaletteTile key={tile.kind} {...tile} canEdit={canEdit} />
+              ))}
+            </div>
+          </div>
         ))}
       </div>
     </aside>
