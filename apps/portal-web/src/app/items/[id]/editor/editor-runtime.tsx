@@ -588,13 +588,25 @@ export function EditorRuntime({
   // runtime's prev/next navigation. Reset to 0 whenever the
   // selection set changes.
   const [formViewIndex, setFormViewIndex] = useState(0);
-  // Editor pane (right-docked): houses the editing tools row and
-  // (Phase B) the per-target template list. Defaults open for users
-  // with edit rights so the first-time visitor lands ready to edit;
-  // viewers with no edit rights never see it. Toggle in the header
-  // mirrors LayerPanel's pattern: open by default, close to gain
-  // canvas, re-open from the icon.
+  // Editor pane (right-docked): houses the editing tools row, the
+  // per-target template list, and (Phase C) the attribute editing
+  // surface. Defaults open for users with edit rights so the
+  // first-time visitor lands ready to edit; viewers with no edit
+  // rights never see it. Toggle in the header mirrors LayerPanel's
+  // pattern: open by default, close to gain canvas, re-open from
+  // the icon. A separate effect below force-opens the pane whenever
+  // an attribute edit is staged so the user never loses sight of
+  // an in-flight form.
   const [editorPaneOpen, setEditorPaneOpen] = useState(canEdit);
+
+  // Force the editor pane open whenever an attribute edit is
+  // staged. Without this, a user who closed the pane would draw a
+  // feature, terra-draw fires finish, pendingFeature lands, and
+  // there'd be no visible form -- the pane is now the only home
+  // for attribute editing.
+  useEffect(() => {
+    if (pendingFeature && canEdit) setEditorPaneOpen(true);
+  }, [pendingFeature, canEdit]);
 
   // Index resolvedTargets by key so the picker / panel / submit
   // path can look up O(1).
@@ -2683,18 +2695,122 @@ export function EditorRuntime({
           >
             <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-surface-1 px-3">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Editor
+                {pendingFeature
+                  ? pendingFeature.mode === 'create'
+                    ? 'New feature'
+                    : 'Edit feature'
+                  : 'Editor'}
               </span>
               <button
                 type="button"
-                onClick={() => setEditorPaneOpen(false)}
+                onClick={() => {
+                  // If there's a pending attribute edit in flight,
+                  // closing the pane should also cancel it (matches
+                  // how the modal X behaved). Otherwise just hide
+                  // the pane.
+                  if (pendingFeature) cancelPending();
+                  else setEditorPaneOpen(false);
+                }}
                 className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
-                aria-label="Close editor pane"
+                aria-label={pendingFeature ? 'Cancel attribute edit' : 'Close editor pane'}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
+            {pendingFeature && pendingTarget?.layer ? (
+              // Phase C: attribute editing surfaces inside the pane
+              // instead of as a modal. The form fully takes over the
+              // pane body until the user submits or cancels. Tools
+              // and templates aren't shown during this state since
+              // they're irrelevant to filling out a form. Delete is
+              // available as a footer extra on the update flow only
+              // (create has nothing to delete).
+              <div className="min-h-0 flex-1">
+                <AttributeForm
+                  variant="pane"
+                  fields={pendingTarget.layer.fields}
+                  editableFieldNames={editableSet}
+                  pickLists={pickLists}
+                  initial={pendingFeature.initialProperties}
+                  layerTitle={`${pendingTarget.dataLayerTitle} / ${pendingTarget.layer.label}`}
+                  submitting={submitting}
+                  errorMessage={submitError}
+                  onCancel={cancelPending}
+                  onSubmit={submitPending}
+                  submitLabel={
+                    pendingFeature.mode === 'create' ? 'Save feature' : 'Update feature'
+                  }
+                  title={
+                    pendingFeature.mode === 'create'
+                      ? 'New feature attributes'
+                      : 'Edit feature attributes'
+                  }
+                  extraFooter={
+                    pendingFeature.mode === 'update' &&
+                    pendingFeature.featureId &&
+                    deletableTargetKeys.has(pendingFeature.targetKey) ? (
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => {
+                          // Stage a soft-delete confirm against the
+                          // current pending feature. Mirrors the
+                          // delete summary computation used in the
+                          // floating geometry-edit bar so the dialog
+                          // displays a meaningful label.
+                          const props = pendingFeature.initialProperties ?? {};
+                          let summary =
+                            (pendingFeature.featureId ?? '').slice(0, 8) +
+                            '...';
+                          if (pendingTarget?.layer) {
+                            for (const f of pendingTarget.layer.fields) {
+                              const v = (props as Record<string, unknown>)[
+                                f.name
+                              ];
+                              if (v === null || v === undefined || v === '')
+                                continue;
+                              summary = String(v);
+                              break;
+                            }
+                          }
+                          const captureProps: Record<string, unknown> = {};
+                          for (const [k, v] of Object.entries(props)) {
+                            if (k.startsWith('_')) continue;
+                            captureProps[k] = v;
+                          }
+                          setPendingDelete({
+                            dataLayerId:
+                              pendingTarget?.dataLayerId ??
+                              pendingFeature.targetKey.split(':')[0]!,
+                            layerKey:
+                              pendingTarget?.layerKey ??
+                              pendingFeature.targetKey.split(':')[1]!,
+                            featureId: pendingFeature.featureId!,
+                            layerTitle: `${pendingTarget?.dataLayerTitle ?? ''} / ${pendingTarget?.layer?.label ?? ''}`,
+                            summary,
+                            geometry:
+                              (pendingFeature.geometry as
+                                | GeoJSON.Geometry
+                                | undefined) ?? null,
+                            properties: captureProps,
+                          });
+                          // Close the pending attribute edit so the
+                          // delete confirm doesn't sit behind the
+                          // form.
+                          cancelPending();
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                        title="Delete this feature"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    ) : null
+                  }
+                />
+              </div>
+            ) : (
+              <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
               {/* Edit features section: tool buttons specific to the
                   editing workflow (Add, Edit, Snap, Undo, Redo).
                   Select and Measure live in the top toolbar instead
@@ -3047,7 +3163,8 @@ export function EditorRuntime({
                   editor's Configure page to add one.
                 </section>
               )}
-            </div>
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -3288,8 +3405,9 @@ export function EditorRuntime({
                   geometry
                 </span>
                 <span className="text-[10px] uppercase tracking-wide text-purple-700">
-                  drag vertices · click midpoints to add · alt-click to
-                  delete
+                  {pendingGeometryEdit.geometryType === 'point'
+                    ? 'drag the point to move it'
+                    : 'drag vertices · click midpoints to add · alt-click to delete'}
                 </span>
               </div>
               {geomEditError ? (
@@ -3442,31 +3560,11 @@ export function EditorRuntime({
         </div>
       </div>
 
-      {/* Attribute form modal. Driven by pendingFeature; rendered
-          at the document root via fixed-position portal-style div
-          so MapCanvas events under it still register but the form
-          stays on top. */}
-      {pendingFeature && pendingTarget?.layer ? (
-        <AttributeForm
-          fields={pendingTarget.layer.fields}
-          editableFieldNames={editableSet}
-          pickLists={pickLists}
-          initial={pendingFeature.initialProperties}
-          layerTitle={`${pendingTarget.dataLayerTitle} / ${pendingTarget.layer.label}`}
-          submitting={submitting}
-          errorMessage={submitError}
-          onCancel={cancelPending}
-          onSubmit={submitPending}
-          submitLabel={
-            pendingFeature.mode === 'create' ? 'Save feature' : 'Update feature'
-          }
-          title={
-            pendingFeature.mode === 'create'
-              ? 'New feature attributes'
-              : 'Edit feature attributes'
-          }
-        />
-      ) : null}
+      {/* Attribute form: previously a doc-root modal. Phase C moves
+          it inside the editor pane (see the pane's content swap
+          above). The pane is force-opened by an effect when
+          pendingFeature flips on so the user always sees the form
+          even if they had closed the pane earlier. */}
 
       {/* Delete confirm. Uses the shared ConfirmDialog for visual
           consistency with the rest of the portal's destructive

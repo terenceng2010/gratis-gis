@@ -47,6 +47,22 @@ interface Props {
    * which action they're confirming.
    */
   title?: string;
+  /**
+   * Render mode. 'modal' (default) wraps the form in a fixed-
+   * position dialog with a dimmed backdrop, anchored bottom-right
+   * on mobile and centered on larger viewports. 'pane' drops the
+   * backdrop and the rounded card chrome and renders the form as
+   * inline content meant to fill an existing container (the editor
+   * pane), so it slots in seamlessly without floating overlays.
+   */
+  variant?: 'modal' | 'pane';
+  /**
+   * Optional extra footer content rendered to the LEFT of the
+   * Cancel button. The edit flow passes a Delete button here so the
+   * destructive action lives on the same surface as the attribute
+   * edits without being mistakable for the primary submit.
+   */
+  extraFooter?: React.ReactNode;
 }
 
 /**
@@ -80,6 +96,8 @@ export function AttributeForm({
   onSubmit,
   submitLabel = 'Save',
   title = 'New feature attributes',
+  variant = 'modal',
+  extraFooter,
 }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const seed: Record<string, unknown> = {};
@@ -110,6 +128,114 @@ export function AttributeForm({
   }
   const canSubmit = missing.length === 0 && !submitting;
 
+  // Card content: header (title + close), body (fields), footer
+  // (cancel + submit, plus any extra footer slot). Reused by both
+  // variants with slightly different chrome.
+  const card = (
+    <>
+      <div
+        className={
+          variant === 'modal'
+            ? 'flex items-center justify-between border-b border-border px-4 py-3'
+            : 'flex items-center justify-between border-b border-border px-3 py-2'
+        }
+      >
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-ink-0">{title}</h2>
+          <p className="truncate text-xs text-muted">{layerTitle}</p>
+        </div>
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onCancel}
+          className="shrink-0 rounded-md p-1 text-muted hover:bg-surface-2 hover:text-ink-0 disabled:opacity-50"
+          aria-label="Cancel"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div
+        className={
+          variant === 'modal'
+            ? 'flex-1 space-y-3 overflow-auto px-4 py-3'
+            : 'flex-1 space-y-3 overflow-auto px-3 py-3'
+        }
+      >
+        {fields.length === 0 ? (
+          <p className="text-sm text-muted">
+            This layer has no editable fields. Save to drop a feature with
+            just geometry and system metadata.
+          </p>
+        ) : null}
+        {fields.map((f) => {
+          const editable =
+            editableFieldNames === null ||
+            editableFieldNames.has(f.name);
+          return (
+            <FieldRow
+              key={f.name}
+              field={f}
+              value={values[f.name]}
+              editable={editable}
+              pickLists={pickLists}
+              onChange={(v) => set(f.name, v)}
+            />
+          );
+        })}
+        {missing.length > 0 && !submitting ? (
+          <p className="text-xs text-amber-800">
+            Required: {missing.join(', ')}
+          </p>
+        ) : null}
+        {errorMessage ? (
+          <p className="text-sm text-danger" role="alert">
+            {errorMessage}
+          </p>
+        ) : null}
+      </div>
+
+      <div
+        className={
+          variant === 'modal'
+            ? 'flex items-center justify-end gap-2 border-t border-border px-4 py-3'
+            : 'flex items-center justify-end gap-2 border-t border-border px-3 py-2'
+        }
+      >
+        {extraFooter ? (
+          <div className="mr-auto flex items-center gap-2">{extraFooter}</div>
+        ) : null}
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => onSubmit(values)}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+        >
+          {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {submitLabel}
+        </button>
+      </div>
+    </>
+  );
+
+  if (variant === 'pane') {
+    // Inline rendering: parent (the editor pane) supplies the
+    // surrounding container, header bar, and absolute positioning.
+    // We just render the form chrome as a flex column that fills
+    // available height.
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-surface-1">{card}</div>
+    );
+  }
+
   return (
     <div
       className="fixed inset-0 z-30 flex items-end justify-end bg-black/30 p-4 sm:items-center sm:justify-center"
@@ -118,75 +244,7 @@ export function AttributeForm({
       }}
     >
       <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold text-ink-0">{title}</h2>
-            <p className="truncate text-xs text-muted">{layerTitle}</p>
-          </div>
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={onCancel}
-            className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-ink-0 disabled:opacity-50"
-            aria-label="Cancel"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 space-y-3 overflow-auto px-4 py-3">
-          {fields.length === 0 ? (
-            <p className="text-sm text-muted">
-              This layer has no editable fields. Save to drop a feature with
-              just geometry and system metadata.
-            </p>
-          ) : null}
-          {fields.map((f) => {
-            const editable =
-              editableFieldNames === null ||
-              editableFieldNames.has(f.name);
-            return (
-              <FieldRow
-                key={f.name}
-                field={f}
-                value={values[f.name]}
-                editable={editable}
-                pickLists={pickLists}
-                onChange={(v) => set(f.name, v)}
-              />
-            );
-          })}
-          {missing.length > 0 && !submitting ? (
-            <p className="text-xs text-amber-800">
-              Required: {missing.join(', ')}
-            </p>
-          ) : null}
-          {errorMessage ? (
-            <p className="text-sm text-danger" role="alert">
-              {errorMessage}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={submitting}
-            className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onSubmit(values)}
-            disabled={!canSubmit}
-            className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-          >
-            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            {submitLabel}
-          </button>
-        </div>
+        {card}
       </div>
     </div>
   );
