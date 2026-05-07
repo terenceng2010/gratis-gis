@@ -639,6 +639,25 @@ export function EditorRuntime({
           map: mapInstance,
           coordinatePrecision: 9,
         }),
+        // Permissive id strategy. terra-draw 1.x's default validator
+        // requires every feature id to be a UUIDv4 string; we wrap
+        // edit-mode ids with a `gg-edit-` prefix (so the in-edit copy
+        // doesn't collide with the underlying source feature) and
+        // the prefixed value fails that regex. Without this, addFeatures
+        // silently rejects the wrapped feature and selectFeature then
+        // throws "No feature with this id (...), can not get properties
+        // copy" from getPropertiesCopy. Accept any non-empty string id
+        // (or number) and keep getId producing a real UUIDv4 for any
+        // feature terra-draw creates internally (drawing flow).
+        idStrategy: {
+          isValidId: (id) =>
+            (typeof id === 'string' && id.length > 0) ||
+            typeof id === 'number',
+          getId: () =>
+            typeof crypto !== 'undefined' && 'randomUUID' in crypto
+              ? crypto.randomUUID()
+              : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`,
+        },
         modes: [
           new td.TerraDrawPointMode(),
           new td.TerraDrawLineStringMode(
