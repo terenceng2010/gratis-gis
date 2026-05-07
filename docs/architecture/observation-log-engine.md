@@ -551,20 +551,40 @@ Add `apps/portal-api/src/engine/data-layer.ts` (and tests) with:
 
 No wiring yet. Pure additive surface.
 
-#### 2.2 Wire the data_layer write path through the engine
+#### 2.2 Rewire the v3 write and read paths through the engine
 
-Replace the SQL inside `V3FeaturesService.insertFeatures`,
-`updateFeature`, and `deleteFeature` to call the adapter from 2.1.
-Per-layer tables stay around but stop being written to. Existing
-controllers, DTOs, and validation are unchanged.
+Originally split into 2.2 (write) and 2.3 (read). Merged: shipping
+the write rewire without the read rewire would put the system in a
+state where new features land in the observation log while
+`V3FeaturesService.listFeatures` still reads the per-layer tables,
+hiding them from the layer detail page. The dev DB is throwaway test
+data, but a half-rewired main is the kind of state we explicitly do
+not want during strangler-fig migration.
 
-#### 2.3 Wire the data_layer read path through the engine
+Replace the SQL inside `V3FeaturesService` (`insertFeatures`,
+`updateFeature`, `deleteFeature`, `listFeatures`) with calls into the
+adapter from 2.1. The v3 service collapses into a thin wrapper that
+preserves the controller-facing interface (DTOs, response shapes,
+own-rows-only guard, the `editor_feature_created` and
+`data_collection_feature_created` notification fan-outs).
 
-Replace the SQL inside `V3FeaturesService.listFeatures` to read from
-the observation log via the adapter. The output shape must remain
-identical so the portal-web layer detail page, attribute table, and
-map page render unchanged. `bbox` and `at` query params translate to
-engine read filters.
+Per-layer tables (`fs_<itemId>_<layerId>`) stay around as orphans
+after this step. They get dropped at sub-phase 2.5 (rename "stop
+creating" to "stop creating + drop existing").
+
+The append-only model means `updateFeature`'s historical
+`SELECT...FOR UPDATE + UPDATE valid_to + INSERT new` transaction
+collapses into a single observation write. Two concurrent updates
+both append; the read path picks the latest. No locking is needed.
+
+The typed-column projection is removed: features land as JSONB
+`attrs` only. Engine-side queries that need typed access go through
+`(attrs->>'field')::type` casts when 2.7 (derived layers) lands.
+
+Phase 2.2 will probably ship as 2-3 commits internally:
+prerequisite (`globalId` passthrough on the adapter), the
+write+list rewire, then update+delete. Each commit keeps `main`
+green.
 
 #### 2.4 Wire ingest and bbox aggregation
 
