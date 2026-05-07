@@ -2882,13 +2882,45 @@ export function EditorRuntime({
                   </div>
                 </section>
               ) : null}
-              {/* Phase B will add the "Create features" section
-                  below this. For now, a placeholder communicates the
-                  intent without taking up space. */}
-              <section className="rounded-md border border-dashed border-border bg-surface-0 px-3 py-4 text-xs text-muted">
-                Create-features template list lands in the next slice.
-                Use the Add tool above for now.
-              </section>
+              {/* Contextual help / status, scoped to the active
+                  tool. Replaces the floating "Edit mode: ..." banner
+                  that used to overlay the canvas top-left -- per
+                  user feedback, this kind of contextual instruction
+                  belongs in the pane, not as a floating overlay.
+                  Each branch carries its own X-button to exit the
+                  active tool, so the user can dismiss without
+                  hunting for a tool button. Phase B replaces the
+                  default branch with the Create-features template
+                  list. */}
+              {activeTool === 'edit' ? (
+                <section className="flex items-start gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-xs text-purple-900">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">Edit mode</p>
+                    <p className="mt-0.5">
+                      Click a feature on the map to edit its geometry,
+                      or open its attributes from the floating bar.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTool('off');
+                      setActiveTargetKey(null);
+                      cancelGeometryEdit();
+                    }}
+                    className="shrink-0 rounded-md p-0.5 text-purple-900 hover:bg-purple-100"
+                    aria-label="Exit edit mode"
+                    title="Exit edit mode"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </section>
+              ) : (
+                <section className="rounded-md border border-dashed border-border bg-surface-0 px-3 py-4 text-xs text-muted">
+                  Create-features template list lands in the next slice.
+                  Use the Add tool above for now.
+                </section>
+              )}
             </div>
           </div>
         ) : null}
@@ -3092,27 +3124,6 @@ export function EditorRuntime({
                   </div>
                 );
               })()}
-            </div>
-          ) : activeTool === 'edit' ? (
-            <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs text-purple-900 shadow-card">
-              <span className="font-medium">Edit mode:</span>
-              <span>
-                click a feature to edit its geometry, or open attributes
-                from the floating bar
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTool('off');
-                  setActiveTargetKey(null);
-                  cancelGeometryEdit();
-                }}
-                className="rounded-md p-0.5 text-purple-900 hover:bg-purple-100"
-                aria-label="Exit edit mode"
-                title="Exit edit mode"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
             </div>
           ) : activeTool === 'measure' ? (
             <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs text-sky-900 shadow-card">
