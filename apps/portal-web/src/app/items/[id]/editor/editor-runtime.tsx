@@ -12,6 +12,8 @@ import {
   Layers as LayersIcon,
   Map as MapBaseIcon,
   MousePointer2,
+  PanelRightClose,
+  PanelRightOpen,
   PencilRuler,
   Pentagon,
   Plus,
@@ -587,6 +589,13 @@ export function EditorRuntime({
   // runtime's prev/next navigation. Reset to 0 whenever the
   // selection set changes.
   const [formViewIndex, setFormViewIndex] = useState(0);
+  // Editor pane (right-docked): houses the editing tools row and
+  // (Phase B) the per-target template list. Defaults open for users
+  // with edit rights so the first-time visitor lands ready to edit;
+  // viewers with no edit rights never see it. Toggle in the header
+  // mirrors LayerPanel's pattern: open by default, close to gain
+  // canvas, re-open from the icon.
+  const [editorPaneOpen, setEditorPaneOpen] = useState(canEdit);
 
   // Index resolvedTargets by key so the picker / panel / submit
   // path can look up O(1).
@@ -2258,195 +2267,14 @@ export function EditorRuntime({
           ) : null}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted">
-          {/* Tool icons row in the header. Replaces the floating
-              top-left palette + top-right Print pill so all the
-              clickable controls share one row at a consistent size
-              and never overlap the SearchBar or MapLibre's stock
-              zoom controls. WAB-style: title left, tools right.
-              Filtered by editor.tools so authors trim what shows. */}
-          {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).length > 0 ? (
-            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
-              {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).map(
-                (t) => {
-                  const isToggle = t.key === 'snap';
-                  const isActive = isToggle
-                    ? snappingEnabled
-                    : activeTool === t.key;
-                  const stackEmpty =
-                    (t.key === 'undo' && undoStack.length === 0) ||
-                    (t.key === 'redo' && redoStack.length === 0);
-                  const isStackButton =
-                    t.key === 'undo' || t.key === 'redo';
-                  const isReadOnlyTool =
-                    t.key === 'select' || t.key === 'measure';
-                  const disabled =
-                    (!canEdit && !isReadOnlyTool) ||
-                    (isStackButton && stackEmpty) ||
-                    (isStackButton && undoBusy);
-                  // #312: Select gets a split-button treatment so users
-                  // can pick rectangle / polygon / lasso modes. The
-                  // chevron opens a small dropdown anchored to the
-                  // button group.
-                  if (t.key === 'select') {
-                    const ModeIcon =
-                      selectMode === 'click'
-                        ? MousePointer2
-                        : selectMode === 'rectangle'
-                          ? Square
-                          : selectMode === 'polygon'
-                            ? Pentagon
-                            : Spline;
-                    return (
-                      <div
-                        key={t.key}
-                        ref={selectMenuRef}
-                        className="relative flex items-stretch"
-                      >
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          onClick={() => onToolClick(t.key)}
-                          className={`inline-flex h-9 w-9 items-center justify-center rounded-l text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
-                            isActive
-                              ? 'bg-purple-100 text-purple-800'
-                              : ''
-                          }`}
-                          title={`Select (${selectMode})`}
-                          aria-label={`Select (${selectMode})`}
-                          aria-pressed={isActive}
-                        >
-                          <ModeIcon className="h-5 w-5" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          onClick={() => setSelectMenuOpen((v) => !v)}
-                          className={`inline-flex h-9 w-5 items-center justify-center rounded-r text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
-                            isActive
-                              ? 'bg-purple-100 text-purple-800'
-                              : ''
-                          }`}
-                          aria-label="Select mode"
-                          aria-haspopup="menu"
-                          aria-expanded={selectMenuOpen}
-                          title="Select mode"
-                        >
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        </button>
-                        {selectMenuOpen ? (
-                          <div
-                            role="menu"
-                            className="absolute left-0 top-11 z-30 w-44 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
-                          >
-                            <SelectModeItem
-                              Icon={MousePointer2}
-                              label="Click"
-                              active={selectMode === 'click'}
-                              onClick={() => {
-                                setSelectMode('click');
-                                setSelectMenuOpen(false);
-                                if (activeTool !== 'select')
-                                  onToolClick('select');
-                              }}
-                            />
-                            <SelectModeItem
-                              Icon={Square}
-                              label="Rectangle"
-                              active={selectMode === 'rectangle'}
-                              onClick={() => {
-                                setSelectMode('rectangle');
-                                setSelectMenuOpen(false);
-                                if (activeTool !== 'select')
-                                  onToolClick('select');
-                              }}
-                            />
-                            <SelectModeItem
-                              Icon={Pentagon}
-                              label="Polygon"
-                              active={selectMode === 'polygon'}
-                              onClick={() => {
-                                setSelectMode('polygon');
-                                setSelectMenuOpen(false);
-                                if (activeTool !== 'select')
-                                  onToolClick('select');
-                              }}
-                            />
-                            <SelectModeItem
-                              Icon={Spline}
-                              label="Lasso"
-                              active={selectMode === 'lasso'}
-                              onClick={() => {
-                                setSelectMode('lasso');
-                                setSelectMenuOpen(false);
-                                if (activeTool !== 'select')
-                                  onToolClick('select');
-                              }}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  }
-                  return (
-                    <button
-                      key={t.key}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => onToolClick(t.key)}
-                      className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
-                        isActive
-                          ? isToggle
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-purple-100 text-purple-800'
-                          : ''
-                      }`}
-                      title={
-                        isToggle
-                          ? `${t.label}: ${snappingEnabled ? 'on' : 'off'}`
-                          : isStackButton
-                            ? `${t.label}${
-                                t.key === 'undo'
-                                  ? ` (${undoStack.length} available)`
-                                  : ` (${redoStack.length} available)`
-                              }`
-                            : t.label
-                      }
-                      aria-label={t.label}
-                      aria-pressed={isActive}
-                    >
-                      <t.Icon className="h-5 w-5" />
-                    </button>
-                  );
-                },
-              )}
-              {/* Print button lives in the same row when the runtime
-                  surfaces it. Today this is window.print() against
-                  a print-only stylesheet; #132 will swap in a Print
-                  Template chooser. */}
-              {printEnabled ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (typeof window === 'undefined') return;
-                    document.body.classList.add('print-runtime');
-                    window.dispatchEvent(new Event('resize'));
-                    setTimeout(() => {
-                      window.print();
-                      document.body.classList.remove('print-runtime');
-                      window.dispatchEvent(new Event('resize'));
-                    }, 50);
-                  }}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
-                  title="Print the current view"
-                  aria-label="Print"
-                >
-                  <Printer className="h-5 w-5" />
-                </button>
-              ) : null}
-            </div>
-          ) : printEnabled ? (
-            // Viewer with no editor.tools but Print on: still render
-            // a single-button pill for Print so the user can reach it.
+          {/* Editor tools (Add, Edit, Delete, Select, Snap, Measure,
+              Undo, Redo) used to live in a header pill here. They
+              now live in the right-docked Editor pane below, which
+              also hosts the per-target template list (Phase B) and
+              the attribute editing surface (Phase C). The header
+              keeps just the Print pill (when enabled) plus the
+              "what's on the map" panel toggles. */}
+          {printEnabled ? (
             <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
               <button
                 type="button"
@@ -2474,8 +2302,29 @@ export function EditorRuntime({
               controls at a glance. WAB-style: panels open / close
               from header icons rather than living as a permanent
               left rail. Active panel is highlighted in purple to
-              match the active-tool styling. */}
+              match the active-tool styling. The Editor pane toggle
+              leads the pill for canEdit users since it is the
+              primary editing affordance now that tools live inside
+              the pane. */}
           <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={() => setEditorPaneOpen((v) => !v)}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                  editorPaneOpen ? 'bg-purple-100 text-purple-800' : ''
+                }`}
+                title={editorPaneOpen ? 'Close editor pane' : 'Open editor pane'}
+                aria-label="Editor pane"
+                aria-pressed={editorPaneOpen}
+              >
+                {editorPaneOpen ? (
+                  <PanelRightClose className="h-5 w-5" />
+                ) : (
+                  <PanelRightOpen className="h-5 w-5" />
+                )}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setLayersOpen((v) => !v)}
@@ -2710,6 +2559,212 @@ export function EditorRuntime({
               }
               onClose={() => setFormViewOpen(false)}
             />
+          </div>
+        ) : null}
+
+        {/* Editor pane (Phase A scaffold). Right-docked, slides in
+            like LayerPanel. Houses the editing tools row that used
+            to live in the header. Phase B will add the
+            "Create features" template list under the tools; Phase C
+            will route the attribute editing surface through here.
+            Only renders for canEdit users; viewers never see it.
+            z-25 sits above LayerPanel (z-20) so the pane is reachable
+            even with Layers open, and below FormView (z-30) so the
+            survey runtime's form view still wins for that surface. */}
+        {canEdit ? (
+          <div
+            className={`absolute right-0 top-0 flex h-full w-80 shrink-0 transform flex-col border-l border-border bg-surface-1 shadow-overlay transition-transform duration-200 ${
+              editorPaneOpen ? 'translate-x-0' : 'translate-x-full'
+            }`}
+            aria-hidden={!editorPaneOpen}
+            style={{ zIndex: 25 }}
+          >
+            <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-surface-1 px-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Editor
+              </span>
+              <button
+                type="button"
+                onClick={() => setEditorPaneOpen(false)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+                aria-label="Close editor pane"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
+              {/* Edit features section: same set of tool buttons that
+                  used to live in the header, just laid out as a
+                  wrapping row inside the pane. Same handlers, same
+                  state, same active-state styling. The split-button
+                  Select control still works because selectMenuRef and
+                  the menu position are scoped to the button group. */}
+              {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).length > 0 ? (
+                <section>
+                  <h3 className="mb-1.5 text-xs font-semibold text-ink-0">
+                    Edit features
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-0.5 rounded-md border border-border bg-surface-0 p-1">
+                    {ALL_TOOLS.filter((t) =>
+                      editor.tools.includes(t.key),
+                    ).map((t) => {
+                      const isToggle = t.key === 'snap';
+                      const isActive = isToggle
+                        ? snappingEnabled
+                        : activeTool === t.key;
+                      const stackEmpty =
+                        (t.key === 'undo' && undoStack.length === 0) ||
+                        (t.key === 'redo' && redoStack.length === 0);
+                      const isStackButton =
+                        t.key === 'undo' || t.key === 'redo';
+                      const isReadOnlyTool =
+                        t.key === 'select' || t.key === 'measure';
+                      const disabled =
+                        (!canEdit && !isReadOnlyTool) ||
+                        (isStackButton && stackEmpty) ||
+                        (isStackButton && undoBusy);
+                      if (t.key === 'select') {
+                        const ModeIcon =
+                          selectMode === 'click'
+                            ? MousePointer2
+                            : selectMode === 'rectangle'
+                              ? Square
+                              : selectMode === 'polygon'
+                                ? Pentagon
+                                : Spline;
+                        return (
+                          <div
+                            key={t.key}
+                            ref={selectMenuRef}
+                            className="relative flex items-stretch"
+                          >
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => onToolClick(t.key)}
+                              className={`inline-flex h-9 w-9 items-center justify-center rounded-l text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                                isActive
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : ''
+                              }`}
+                              title={`Select (${selectMode})`}
+                              aria-label={`Select (${selectMode})`}
+                              aria-pressed={isActive}
+                            >
+                              <ModeIcon className="h-5 w-5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => setSelectMenuOpen((v) => !v)}
+                              className={`inline-flex h-9 w-5 items-center justify-center rounded-r text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                                isActive
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : ''
+                              }`}
+                              aria-label="Select mode"
+                              aria-haspopup="menu"
+                              aria-expanded={selectMenuOpen}
+                              title="Select mode"
+                            >
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            </button>
+                            {selectMenuOpen ? (
+                              <div
+                                role="menu"
+                                className="absolute left-0 top-11 z-30 w-44 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                              >
+                                <SelectModeItem
+                                  Icon={MousePointer2}
+                                  label="Click"
+                                  active={selectMode === 'click'}
+                                  onClick={() => {
+                                    setSelectMode('click');
+                                    setSelectMenuOpen(false);
+                                    if (activeTool !== 'select')
+                                      onToolClick('select');
+                                  }}
+                                />
+                                <SelectModeItem
+                                  Icon={Square}
+                                  label="Rectangle"
+                                  active={selectMode === 'rectangle'}
+                                  onClick={() => {
+                                    setSelectMode('rectangle');
+                                    setSelectMenuOpen(false);
+                                    if (activeTool !== 'select')
+                                      onToolClick('select');
+                                  }}
+                                />
+                                <SelectModeItem
+                                  Icon={Pentagon}
+                                  label="Polygon"
+                                  active={selectMode === 'polygon'}
+                                  onClick={() => {
+                                    setSelectMode('polygon');
+                                    setSelectMenuOpen(false);
+                                    if (activeTool !== 'select')
+                                      onToolClick('select');
+                                  }}
+                                />
+                                <SelectModeItem
+                                  Icon={Spline}
+                                  label="Lasso"
+                                  active={selectMode === 'lasso'}
+                                  onClick={() => {
+                                    setSelectMode('lasso');
+                                    setSelectMenuOpen(false);
+                                    if (activeTool !== 'select')
+                                      onToolClick('select');
+                                  }}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      }
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => onToolClick(t.key)}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+                            isActive
+                              ? isToggle
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-purple-100 text-purple-800'
+                              : ''
+                          }`}
+                          title={
+                            isToggle
+                              ? `${t.label}: ${snappingEnabled ? 'on' : 'off'}`
+                              : isStackButton
+                                ? `${t.label}${
+                                    t.key === 'undo'
+                                      ? ` (${undoStack.length} available)`
+                                      : ` (${redoStack.length} available)`
+                                  }`
+                                : t.label
+                          }
+                          aria-label={t.label}
+                          aria-pressed={isActive}
+                        >
+                          <t.Icon className="h-5 w-5" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
+              {/* Phase B will add the "Create features" section
+                  below this. For now, a placeholder communicates the
+                  intent without taking up space. */}
+              <section className="rounded-md border border-dashed border-border bg-surface-0 px-3 py-4 text-xs text-muted">
+                Create-features template list lands in the next slice.
+                Use the Add tool above for now.
+              </section>
+            </div>
           </div>
         ) : null}
 
