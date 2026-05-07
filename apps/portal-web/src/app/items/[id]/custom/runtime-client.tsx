@@ -37,6 +37,8 @@ import type {
   CustomWidgetKind,
   MapData,
   MapLayer,
+  PanelAnchor,
+  PanelArrangement,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import type { SelectToolMode } from '../map/select-tool';
@@ -130,6 +132,13 @@ interface CustomMapsCtx {
    */
   maps: Record<string, maplibregl.Map | null>;
   registerMap: (mapWidgetId: string, map: maplibregl.Map | null) => void;
+  /**
+   * #364: ref to the runtime grid container. Tool-mode popovers
+   * with placement='floating' anchor against this so they stay
+   * within the runtime even on a scrolling page. May be null until
+   * the first render lands.
+   */
+  runtimeContainerRef: RefObject<HTMLDivElement>;
 }
 
 const CustomMapsContext = createContext<CustomMapsCtx | null>(null);
@@ -188,6 +197,10 @@ export function CustomRuntimeClient({
   // a Map's layer toggles persist when the user switches pages and
   // comes back. Single-page apps skip the tab strip entirely.
   const [activePageIdx, setActivePageIdx] = useState(0);
+  // #364: runtime container ref. Tool-mode popovers anchor against
+  // this so "fixed" placement docks to the runtime viewport rather
+  // than the browser one.
+  const runtimeContainerRef = useRef<HTMLDivElement | null>(null);
   const safePageIdx = Math.min(activePageIdx, app.pages.length - 1);
   const page = app.pages[safePageIdx]!;
   const totalWidgets = app.pages.reduce((n, p) => n + p.widgets.length, 0);
@@ -304,6 +317,7 @@ export function CustomRuntimeClient({
       pages: pagesForCtx,
       maps,
       registerMap,
+      runtimeContainerRef,
     }),
     [
       states,
@@ -400,7 +414,8 @@ export function CustomRuntimeClient({
             </div>
           ) : (
             <div
-              className="grid h-full w-full"
+              ref={runtimeContainerRef}
+              className="relative grid h-full w-full"
               style={{
                 // #357: matches the designer's v2 grid (24 cols x
                 // 24px rows). Old v1 apps are migrated on load via
@@ -424,17 +439,324 @@ export function CustomRuntimeClient({
 }
 
 function WidgetSlot({ widget }: { widget: CustomWidget }) {
+  // #364: tool-mode widgets render as a small icon button in the
+  // grid cell + a popover panel anchored per panelArrangement.
+  // Panel-mode widgets render inline using the existing card chrome.
+  const isToolMode = isToolDisplayWidget(widget) && widgetDisplayMode(widget) === 'tool';
   return (
     <section
       style={{
         gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
         gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
       }}
-      className="flex h-full w-full flex-col overflow-hidden rounded-md border border-border bg-surface-1"
+      className={
+        isToolMode
+          ? 'flex h-full w-full items-stretch'
+          : 'flex h-full w-full flex-col overflow-hidden rounded-md border border-border bg-surface-1'
+      }
     >
-      {renderWidget(widget)}
+      {isToolMode ? (
+        <ToolWidgetSlot widget={widget} />
+      ) : (
+        renderWidget(widget)
+      )}
     </section>
   );
+}
+
+const TOOL_DISPLAY_KINDS: ReadonlySet<CustomWidgetKind> = new Set([
+  'layer-list',
+  'legend',
+  'search',
+  'print',
+  'select',
+  'basemap-gallery',
+  'bookmark',
+  'coordinates',
+  'my-location',
+]);
+
+function isToolDisplayWidget(widget: CustomWidget): boolean {
+  return TOOL_DISPLAY_KINDS.has(widget.kind);
+}
+
+function widgetDisplayMode(widget: CustomWidget): 'panel' | 'tool' {
+  if (!isToolDisplayWidget(widget)) return 'panel';
+  const cfg = widget.config as { displayMode?: 'panel' | 'tool' };
+  return cfg.displayMode ?? 'panel';
+}
+
+function widgetPanelArrangement(widget: CustomWidget): PanelArrangement {
+  const cfg = widget.config as { panelArrangement?: PanelArrangement };
+  return cfg.panelArrangement ?? {};
+}
+
+const KIND_TOOL_LABEL: Record<string, string> = {
+  'layer-list': 'Layers',
+  legend: 'Legend',
+  search: 'Search',
+  print: 'Print',
+  select: 'Select',
+  'basemap-gallery': 'Basemaps',
+  bookmark: 'Bookmarks',
+  coordinates: 'Coordinates',
+  'my-location': 'My location',
+};
+
+/**
+ * #364: tool-mode wrapper. Renders an icon button in the canvas
+ * grid cell. On click, opens a popover positioned per the widget's
+ * panelArrangement, using the existing widget renderer for content.
+ */
+function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
+  const ctx = useContext(CustomMapsContext);
+  const [open, setOpen] = useState(false);
+  const Icon = KIND_ICON[widget.kind] ?? SquareIcon;
+  const label = KIND_TOOL_LABEL[widget.kind] ?? widget.kind;
+  const arrangement = widgetPanelArrangement(widget);
+
+  // Esc closes; click outside closes (handled by ToolPopover via
+  // an overlay catcher).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-pressed={open}
+        title={label}
+        className={`flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-md border bg-surface-1 transition-colors ${
+          open
+            ? 'border-ink-0 text-ink-0'
+            : 'border-border text-ink-1 hover:border-ink-1'
+        }`}
+      >
+        <Icon className="h-5 w-5" strokeWidth={1.75} />
+        <span className="text-[10px] font-medium leading-none">{label}</span>
+      </button>
+      {open && ctx && (
+        <ToolPopover
+          arrangement={arrangement}
+          containerRef={ctx.runtimeContainerRef}
+          title={label}
+          icon={Icon}
+          onClose={() => setOpen(false)}
+        >
+          <div className="flex h-full min-h-0 flex-col">{renderWidget(widget)}</div>
+        </ToolPopover>
+      )}
+    </>
+  );
+}
+
+/**
+ * Anchored, animated popover for tool-mode widgets. Positions
+ * itself at one of the 9 anchor cells of the runtime container
+ * (or browser viewport if placement='fixed'), with optional
+ * fade/slide animation on open.
+ */
+function ToolPopover({
+  arrangement,
+  containerRef,
+  title,
+  icon: Icon,
+  onClose,
+  children,
+}: {
+  arrangement: PanelArrangement;
+  containerRef: RefObject<HTMLDivElement>;
+  title: string;
+  icon: typeof MapIcon;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const placement = arrangement.placement ?? 'floating';
+  const anchor: PanelAnchor = arrangement.anchor ?? 'top-right';
+  const width = arrangement.width ?? 360;
+  const height = arrangement.height ?? 480;
+  const offsetX = arrangement.offsetX ?? 12;
+  const offsetY = arrangement.offsetY ?? 12;
+  const animation = arrangement.animation ?? 'fade';
+
+  // Brief delay before applying the "open" class so the CSS
+  // transition runs even though we mounted with the panel
+  // already in the DOM.
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => setShown(true));
+    return () => window.cancelAnimationFrame(id);
+  }, []);
+
+  // Animate-out on close: flip shown off, wait the transition
+  // duration, then call onClose. The parent unmounts us synchronously
+  // today, but doing it this way lets a future "close on click
+  // outside" path benefit from the same animation.
+  function handleClose() {
+    setShown(false);
+    window.setTimeout(onClose, 160);
+  }
+
+  // Click-outside via a transparent backdrop. Lower z-index than
+  // the popover itself so the popover stays interactive.
+  const positionStyle = computePopoverPosition({
+    anchor,
+    width,
+    height,
+    offsetX,
+    offsetY,
+  });
+
+  const animationClass =
+    animation === 'none'
+      ? 'transition-none'
+      : animation === 'slide'
+        ? `transition-[opacity,transform] duration-150 ease-out ${
+            shown ? 'translate-y-0 opacity-100' : '-translate-y-1 opacity-0'
+          }`
+        : `transition-opacity duration-150 ease-out ${
+            shown ? 'opacity-100' : 'opacity-0'
+          }`;
+
+  // Fixed mode pins to the browser viewport. Floating mode pins to
+  // the runtime container so the popover stays inside the app's
+  // space even on a scrolling page.
+  const positionMode =
+    placement === 'fixed'
+      ? 'fixed'
+      : 'absolute';
+
+  // For floating, render relative to the runtime container so the
+  // CSS anchors (top/right/bottom/left) line up. We achieve that by
+  // creating an overlay div that's `position:absolute inset-0`
+  // inside the container, then positioning the popover within it.
+  // For fixed, we render directly with position:fixed.
+  if (placement === 'fixed') {
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={handleClose}
+          className="fixed inset-0 z-40 cursor-default bg-transparent"
+        />
+        <div
+          role="dialog"
+          aria-label={title}
+          style={{ ...positionStyle, position: 'fixed', width, height }}
+          className={`z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay ${animationClass}`}
+        >
+          <ToolPopoverHeader title={title} icon={Icon} onClose={handleClose} />
+          <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        </div>
+      </>
+    );
+  }
+
+  // Floating: portal-style. The container ref might not yet be
+  // mounted; in that case we render relative to the document body
+  // as a fallback, which gives the same visual outcome on a
+  // single-pane runtime layout.
+  const container = containerRef.current ?? null;
+  if (!container) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={handleClose}
+        // Backdrop sits behind the popover but above page content,
+        // catching click-outside without blocking ARIA focus.
+        style={{ position: 'absolute', inset: 0 }}
+        className="z-40 cursor-default bg-transparent"
+      />
+      <div
+        role="dialog"
+        aria-label={title}
+        style={{
+          ...positionStyle,
+          position: positionMode,
+          width,
+          height,
+        }}
+        className={`z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay ${animationClass}`}
+      >
+        <ToolPopoverHeader title={title} icon={Icon} onClose={handleClose} />
+        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      </div>
+    </>
+  );
+}
+
+function ToolPopoverHeader({
+  title,
+  icon: Icon,
+  onClose,
+}: {
+  title: string;
+  icon: typeof MapIcon;
+  onClose: () => void;
+}) {
+  return (
+    <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+      <span className="flex-1 truncate text-sm font-medium text-ink-0">{title}</span>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close panel"
+        className="rounded p-1 text-muted hover:bg-surface-2 hover:text-ink-1"
+      >
+        <SquareIcon className="h-3 w-3 rotate-45" strokeWidth={1.75} />
+      </button>
+    </header>
+  );
+}
+
+/**
+ * Translate a 9-cell anchor + offset into CSS positioning rules.
+ * Each anchor corresponds to a corner / edge of the parent.
+ * Offsets nudge inward (positive value moves the panel away from
+ * the anchored edge).
+ */
+function computePopoverPosition({
+  anchor,
+  offsetX,
+  offsetY,
+}: {
+  anchor: PanelAnchor;
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
+}): React.CSSProperties {
+  const [vert, horiz] = anchor.split('-') as [
+    'top' | 'middle' | 'bottom',
+    'left' | 'center' | 'right',
+  ];
+  const style: React.CSSProperties = {};
+  if (vert === 'top') style.top = offsetY;
+  if (vert === 'bottom') style.bottom = offsetY;
+  if (vert === 'middle') {
+    style.top = '50%';
+    style.transform = (style.transform ?? '') + ' translateY(-50%)';
+  }
+  if (horiz === 'left') style.left = offsetX;
+  if (horiz === 'right') style.right = offsetX;
+  if (horiz === 'center') {
+    style.left = '50%';
+    const t = style.transform ?? '';
+    style.transform = (t ? `${t} ` : '') + 'translateX(-50%)';
+  }
+  return style;
 }
 
 function renderWidget(widget: CustomWidget): React.ReactNode {

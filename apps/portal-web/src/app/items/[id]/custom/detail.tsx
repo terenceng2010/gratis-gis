@@ -51,6 +51,8 @@ import type {
   CustomWidgetKind,
   Item,
   MapData,
+  PanelAnchor,
+  PanelArrangement,
   ViewerTarget,
   WebAppData,
 } from '@gratis-gis/shared-types';
@@ -1429,6 +1431,11 @@ function WidgetCard({
   // widget) so a drag of a sibling widget doesn't cause MapLibre to
   // re-render mid-frame and stutter.
   const showLivePreview = widget.kind === 'map' && previewMapData !== null;
+  // #364: tool-mode rendering. Map-following widgets default to
+  // 'tool' mode where they render as a small icon-only card on the
+  // canvas (matching how they'll appear at runtime as a tool button).
+  // Legacy 'panel' mode keeps the full-card layout.
+  const isToolMode = effectiveDisplayMode(widget) === 'tool';
 
   return (
     <div
@@ -1451,15 +1458,30 @@ function WidgetCard({
           : 'shadow-[0_0_0_1px_var(--color-border,_#e5e7eb)] hover:shadow-[0_0_0_1px_var(--color-ink-1,_#374151)]'
       } ${gesturing ? 'opacity-90' : ''}`}
     >
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-xs">
-        <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
-        <span className="font-medium text-ink-0">{label}</span>
-        {summary && (
-          <span className="ml-auto truncate text-muted" title={summary}>
-            {summary}
+      {isToolMode ? (
+        // #364: tool-mode card. Compact icon + tiny label, no
+        // title bar / summary chrome. Mirrors the runtime tool
+        // button so the canvas matches what authors will publish.
+        <div
+          className="flex h-full w-full flex-col items-center justify-center gap-1 p-1"
+          title={`${label} (tool)${summary ? ` · ${summary}` : ''}`}
+        >
+          <Icon className="h-5 w-5 text-ink-1" strokeWidth={1.75} />
+          <span className="truncate text-[10px] font-medium text-muted">
+            {label}
           </span>
-        )}
-      </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-xs">
+            <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+            <span className="font-medium text-ink-0">{label}</span>
+            {summary && (
+              <span className="ml-auto truncate text-muted" title={summary}>
+                {summary}
+              </span>
+            )}
+          </div>
       {showLivePreview ? (
         <div className="relative flex flex-1 overflow-hidden">
           <MapWidgetPreview
@@ -1507,6 +1529,8 @@ function WidgetCard({
         <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted">
           {widgetPlaceholderText(widget.kind, label)}
         </div>
+      )}
+        </>
       )}
       {/* Resize handles -- only visible when the widget is selected
           AND the user can edit. Three handles cover the common cases
@@ -1890,6 +1914,18 @@ function WidgetProperties({
           onChangeConfig={onChangeConfig}
           onPickWidgetMap={onPickWidgetMap}
         />
+        {TOOL_MODE_KINDS.has(widget.kind) && (
+          <ToolModeSection
+            config={
+              widget.config as {
+                displayMode?: 'panel' | 'tool';
+                panelArrangement?: PanelArrangement;
+              }
+            }
+            canEdit={canEdit}
+            onChangeConfig={onChangeConfig}
+          />
+        )}
       </div>
     </div>
   );
@@ -2813,6 +2849,200 @@ function MyLocationWidgetConfigBody({
   );
 }
 
+// ---- Tool mode + panel arrangement editor (#364) ---------------------------
+
+const ANCHOR_GRID: PanelAnchor[][] = [
+  ['top-left', 'top-center', 'top-right'],
+  ['middle-left', 'middle-center', 'middle-right'],
+  ['bottom-left', 'bottom-center', 'bottom-right'],
+];
+
+const ANCHOR_LABELS: Record<PanelAnchor, string> = {
+  'top-left': 'Top left',
+  'top-center': 'Top center',
+  'top-right': 'Top right',
+  'middle-left': 'Left',
+  'middle-center': 'Center',
+  'middle-right': 'Right',
+  'bottom-left': 'Bottom left',
+  'bottom-center': 'Bottom center',
+  'bottom-right': 'Bottom right',
+};
+
+/**
+ * Properties section that authors use to flip a tool-supporting
+ * widget between panel and tool modes, then dial in the popover
+ * size and placement when in tool mode. Mirrors EB's Widget
+ * Controller properties (anchor grid + W/H + offsets + floating-vs-
+ * fixed + animation) but applied per-widget for full flexibility.
+ */
+function ToolModeSection({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: {
+    displayMode?: 'panel' | 'tool';
+    panelArrangement?: PanelArrangement;
+  };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const mode = config.displayMode ?? 'panel';
+  const pa = config.panelArrangement ?? {};
+  const placement = pa.placement ?? 'floating';
+  const anchor = pa.anchor ?? 'top-right';
+  const animation = pa.animation ?? 'fade';
+
+  function patchArrangement(p: Partial<PanelArrangement>) {
+    onChangeConfig({ panelArrangement: { ...pa, ...p } });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="-mx-4 border-t border-border" />
+      <p className="text-sm font-medium text-ink-0">Display mode</p>
+      <div className="flex rounded-md border border-border bg-surface-1 p-0.5">
+        {(['panel', 'tool'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            disabled={!canEdit}
+            onClick={() => onChangeConfig({ displayMode: m })}
+            aria-pressed={mode === m}
+            className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+              mode === m
+                ? 'bg-surface-2 text-ink-0'
+                : 'text-muted hover:text-ink-1'
+            } disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            {m === 'panel' ? 'Panel' : 'Tool icon'}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs leading-snug text-muted">
+        {mode === 'panel'
+          ? 'Widget is always-visible inline on the canvas.'
+          : 'Widget renders as a small icon button. Click to open the popover panel below.'}
+      </p>
+
+      {mode === 'tool' && (
+        <>
+          <p className="pt-1 text-sm font-medium text-ink-0">
+            Panel arrangement
+          </p>
+
+          <Field label="Anchor" hint="Where the popover docks within the runtime container.">
+            <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-surface-2 p-1.5">
+              {ANCHOR_GRID.flat().map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => patchArrangement({ anchor: a })}
+                  aria-pressed={anchor === a}
+                  title={ANCHOR_LABELS[a]}
+                  className={`flex h-7 w-full items-center justify-center rounded transition-colors ${
+                    anchor === a
+                      ? 'bg-ink-0 text-surface-1'
+                      : 'bg-surface-1 text-muted hover:bg-surface-2 hover:text-ink-1'
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Width (px)">
+              <NumberInput
+                value={pa.width ?? 360}
+                min={120}
+                max={1200}
+                disabled={!canEdit}
+                onChange={(v) => patchArrangement({ width: v })}
+              />
+            </Field>
+            <Field label="Height (px)">
+              <NumberInput
+                value={pa.height ?? 480}
+                min={64}
+                max={1200}
+                disabled={!canEdit}
+                onChange={(v) => patchArrangement({ height: v })}
+              />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Offset X (px)">
+              <NumberInput
+                value={pa.offsetX ?? 0}
+                min={-400}
+                max={400}
+                disabled={!canEdit}
+                onChange={(v) => patchArrangement({ offsetX: v })}
+              />
+            </Field>
+            <Field label="Offset Y (px)">
+              <NumberInput
+                value={pa.offsetY ?? 0}
+                min={-400}
+                max={400}
+                disabled={!canEdit}
+                onChange={(v) => patchArrangement({ offsetY: v })}
+              />
+            </Field>
+          </div>
+
+          <Field label="Placement">
+            <div className="flex rounded-md border border-border bg-surface-1 p-0.5">
+              {(['floating', 'fixed'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => patchArrangement({ placement: p })}
+                  aria-pressed={placement === p}
+                  className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+                    placement === p
+                      ? 'bg-surface-2 text-ink-0'
+                      : 'text-muted hover:text-ink-1'
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {p === 'floating' ? 'Floating' : 'Fixed'}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs leading-snug text-muted">
+              {placement === 'floating'
+                ? 'Floats over the runtime container. Scrolls with the page.'
+                : 'Pinned to the browser viewport. Stays put on scroll.'}
+            </p>
+          </Field>
+
+          <Field label="Animation">
+            <select
+              value={animation}
+              disabled={!canEdit}
+              onChange={(e) => {
+                const next = e.target.value as PanelArrangement['animation'];
+                if (next) patchArrangement({ animation: next });
+              }}
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+            >
+              <option value="none">None</option>
+              <option value="fade">Fade</option>
+              <option value="slide">Slide</option>
+            </select>
+          </Field>
+        </>
+      )}
+    </div>
+  );
+}
+
 function MapBindingPicker({
   mapWidgetId,
   mapWidgets,
@@ -2958,31 +3188,30 @@ function clampCol(col: number): number {
 function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
   // Sizes are in v2 grid units (24 cols x 24px rows). 1 v2 col is
   // half the width of the old v1 col; 1 v2 row is half the height.
-  // So a Map that used to be 8x12 in v1 is 16x24 in v2 (same
-  // physical space, finer snap).
+  // Map-following kinds are sized for tool mode (icon-only card,
+  // 2x2 v2 cells). Authors flipping a widget to panel mode get
+  // a more useful initial footprint via the properties panel.
   switch (kind) {
     case 'map':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 24 };
+    // Tool-mode-by-default kinds. 2x2 v2 cells = ~50px square,
+    // big enough for a 16px icon + a comfortable click target.
     case 'layer-list':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 16 };
     case 'legend':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 12 };
+    case 'search':
+    case 'print':
+    case 'select':
+    case 'basemap-gallery':
+    case 'bookmark':
+    case 'coordinates':
+    case 'my-location':
+      return { col: 1, row: 1, colSpan: 2, rowSpan: 2 };
     case 'attribute-table':
       return { col: 1, row: 1, colSpan: 24, rowSpan: 10 };
     case 'text':
       return { col: 1, row: 1, colSpan: 24, rowSpan: 2 };
     case 'chart':
       return { col: 1, row: 1, colSpan: 12, rowSpan: 12 };
-    case 'search':
-      // Compact search bar typically dropped at the top of the
-      // canvas. Wide enough to hold a placeholder + result list.
-      return { col: 1, row: 1, colSpan: 12, rowSpan: 2 };
-    case 'print':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 2 };
-    case 'select':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 2 };
-    case 'basemap-gallery':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
     case 'image':
       return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
     case 'button':
@@ -2991,18 +3220,98 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 24, rowSpan: 1 };
     case 'embed':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
-    case 'bookmark':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 12 };
-    case 'coordinates':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 2 };
-    case 'my-location':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 2 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
       return { col: 1, row: 1, colSpan: 12, rowSpan: 8 };
     }
   }
+}
+
+/**
+ * Sensible per-kind default panel arrangement (#364) used when the
+ * author hasn't customized one yet. Each kind picks the corner +
+ * size that fits its content best:
+ *   - List-style widgets (Layers, Legend, Bookmarks) dock top-right,
+ *     ~tall enough to scroll a real list.
+ *   - Single-row widgets (Coordinates, Search) dock top-center
+ *     with a wider, shorter panel.
+ *   - Galleries (Basemap) use a wider square panel.
+ *   - One-shot buttons (Print, Select, MyLocation) get a tight
+ *     square that fits their compact UI.
+ */
+function defaultPanelArrangement(kind: CustomWidgetKind): PanelArrangement {
+  const base: PanelArrangement = {
+    placement: 'floating',
+    anchor: 'top-right',
+    width: 320,
+    height: 420,
+    offsetX: 12,
+    offsetY: 12,
+    animation: 'fade',
+  };
+  switch (kind) {
+    case 'layer-list':
+    case 'legend':
+    case 'bookmark':
+      return { ...base, anchor: 'top-right', width: 280, height: 420 };
+    case 'basemap-gallery':
+      return { ...base, anchor: 'top-right', width: 320, height: 360 };
+    case 'search':
+      return {
+        ...base,
+        anchor: 'top-center',
+        width: 420,
+        height: 240,
+        offsetY: 12,
+      };
+    case 'coordinates':
+      return {
+        ...base,
+        anchor: 'bottom-left',
+        width: 320,
+        height: 64,
+        offsetX: 12,
+        offsetY: 12,
+      };
+    case 'select':
+      return { ...base, anchor: 'top-right', width: 280, height: 200 };
+    case 'print':
+      return { ...base, anchor: 'top-right', width: 280, height: 180 };
+    case 'my-location':
+      return { ...base, anchor: 'top-right', width: 280, height: 160 };
+    default:
+      return base;
+  }
+}
+
+/**
+ * The set of widget kinds that respect displayMode. Used by the
+ * properties panel to show / hide the tool-mode controls and by
+ * the canvas WidgetCard + runtime to decide between icon and
+ * inline rendering.
+ */
+const TOOL_MODE_KINDS: ReadonlySet<CustomWidgetKind> = new Set([
+  'layer-list',
+  'legend',
+  'search',
+  'print',
+  'select',
+  'basemap-gallery',
+  'bookmark',
+  'coordinates',
+  'my-location',
+]);
+
+/**
+ * Resolve the effective display mode for a widget. Map-following
+ * kinds default to 'tool' for new (unstamped) data; legacy widgets
+ * without the field stay in 'panel' mode for back-compat.
+ */
+function effectiveDisplayMode(widget: CustomWidget): 'panel' | 'tool' {
+  if (!TOOL_MODE_KINDS.has(widget.kind)) return 'panel';
+  const cfg = widget.config as { displayMode?: 'panel' | 'tool' };
+  return cfg.displayMode ?? 'panel';
 }
 
 /**
@@ -3016,13 +3325,28 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
     case 'map':
       return { id, kind, layout, config: { kind: 'map' } };
     case 'legend':
-      return { id, kind, layout, config: { kind: 'legend', mapWidgetId: '' } };
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'legend',
+          mapWidgetId: '',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('legend'),
+        },
+      };
     case 'layer-list':
       return {
         id,
         kind,
         layout,
-        config: { kind: 'layer-list', mapWidgetId: '' },
+        config: {
+          kind: 'layer-list',
+          mapWidgetId: '',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('layer-list'),
+        },
       };
     case 'attribute-table':
       return {
@@ -3055,28 +3379,49 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
         id,
         kind,
         layout,
-        config: { kind: 'search', mapWidgetId: '', geocodingEnabled: true },
+        config: {
+          kind: 'search',
+          mapWidgetId: '',
+          geocodingEnabled: true,
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('search'),
+        },
       };
     case 'print':
       return {
         id,
         kind,
         layout,
-        config: { kind: 'print', mapWidgetId: '' },
+        config: {
+          kind: 'print',
+          mapWidgetId: '',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('print'),
+        },
       };
     case 'select':
       return {
         id,
         kind,
         layout,
-        config: { kind: 'select', mapWidgetId: '' },
+        config: {
+          kind: 'select',
+          mapWidgetId: '',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('select'),
+        },
       };
     case 'basemap-gallery':
       return {
         id,
         kind,
         layout,
-        config: { kind: 'basemap-gallery', mapWidgetId: '' },
+        config: {
+          kind: 'basemap-gallery',
+          mapWidgetId: '',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('basemap-gallery'),
+        },
       };
     case 'image':
       return {
@@ -3116,7 +3461,13 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
         id,
         kind,
         layout,
-        config: { kind: 'bookmark', mapWidgetId: '', bookmarks: [] },
+        config: {
+          kind: 'bookmark',
+          mapWidgetId: '',
+          bookmarks: [],
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('bookmark'),
+        },
       };
     case 'coordinates':
       return {
@@ -3129,6 +3480,8 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           format: 'dd',
           precision: 5,
           showZoom: false,
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('coordinates'),
         },
       };
     case 'my-location':
@@ -3141,6 +3494,8 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           mapWidgetId: '',
           zoomLevel: 14,
           keepMarker: true,
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('my-location'),
         },
       };
     default: {

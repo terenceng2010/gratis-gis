@@ -176,6 +176,67 @@ export type CustomWidgetKind =
   | 'coordinates'
   | 'my-location';
 
+// ---- Tool-mode display (#364) ----------------------------------
+
+/**
+ * Where a tool-mode panel docks within the runtime viewport.
+ * The 9-cell grid mirrors EB's panel arrangement picker.
+ */
+export type PanelAnchor =
+  | 'top-left' | 'top-center' | 'top-right'
+  | 'middle-left' | 'middle-center' | 'middle-right'
+  | 'bottom-left' | 'bottom-center' | 'bottom-right';
+
+/**
+ * Placement strategy:
+ *   - 'floating': position absolute, relative to the runtime
+ *     container. Scrolls with the page.
+ *   - 'fixed': position fixed, relative to the browser viewport.
+ *     Stays put on scroll. Useful for sticky tool panels.
+ */
+export type PanelPlacement = 'floating' | 'fixed';
+
+/**
+ * Open/close transition for tool-mode panels.
+ */
+export type PanelAnimation = 'none' | 'fade' | 'slide';
+
+/**
+ * Per-widget panel arrangement for tool mode (#364). Mirrors the
+ * controls EB's Widget Controller exposes, but applied per-widget
+ * here instead of as a single setting on a controller container.
+ * That gives authors per-tool flexibility: the Layers panel can
+ * dock top-right while the Search panel floats next to its button.
+ *
+ * All fields are optional; the runtime falls back to sensible
+ * defaults (floating, top-right of the runtime container, 360x480,
+ * fade animation, no offset).
+ */
+export interface PanelArrangement {
+  placement?: PanelPlacement;
+  anchor?: PanelAnchor;
+  /** Width in CSS pixels. Default 360. */
+  width?: number;
+  /** Height in CSS pixels. Default 480. */
+  height?: number;
+  /** Pixel nudge from the anchor corner. Positive values move the
+   *  panel inward; the runtime applies the sign for each anchor. */
+  offsetX?: number;
+  offsetY?: number;
+  animation?: PanelAnimation;
+}
+
+/**
+ * Widget display modes:
+ *   - 'panel': widget renders inline in the canvas grid (existing
+ *     behavior). Default for legacy widgets without the field.
+ *   - 'tool': widget renders as a small icon button inline; click
+ *     opens a popover panel positioned per `panelArrangement`.
+ *     Default for newly-stamped map-following widgets so authors
+ *     don't have to flip the toggle.
+ */
+export type DisplayMode = 'panel' | 'tool';
+
 /**
  * Discriminated union of every widget kind's config shape. The
  * runtime + designer narrow on `kind` before reading these fields.
@@ -223,6 +284,9 @@ export interface LegendWidgetConfig {
    *  Required: a free-floating legend with no map reference is
    *  meaningless. */
   mapWidgetId: string;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface LayerListWidgetConfig {
@@ -232,6 +296,9 @@ export interface LayerListWidgetConfig {
   /** Allow users to toggle layer visibility. When false, this is a
    *  "see what's loaded" reference panel only. */
   allowToggle?: boolean;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface AttributeTableWidgetConfig {
@@ -288,6 +355,9 @@ export interface SearchWidgetConfig {
    *  target attribute search. Default true; turning off removes
    *  the address half and leaves a layer-attribute search bar. */
   geocodingEnabled?: boolean;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface PrintWidgetConfig {
@@ -296,6 +366,9 @@ export interface PrintWidgetConfig {
    *  map's print stylesheet (window.print scoped via CSS); Phase 2
    *  hooks #132's report_template item once it lands. */
   mapWidgetId: string;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface SelectWidgetConfig {
@@ -306,6 +379,9 @@ export interface SelectWidgetConfig {
    *  four when omitted. The runtime button order matches this
    *  array order, so authors can promote their preferred mode. */
   modes?: Array<'click' | 'rectangle' | 'polygon' | 'lasso'>;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface BasemapGalleryWidgetConfig {
@@ -319,6 +395,9 @@ export interface BasemapGalleryWidgetConfig {
    * these three branded basemaps" scenarios.
    */
   basemapIds?: string[];
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 // ---- Page-element widgets (#361) -------------------------------
@@ -438,6 +517,9 @@ export interface BookmarkWidgetConfig {
     /** Optional camera pitch in degrees from vertical. */
     pitch?: number;
   }>;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 /**
@@ -461,6 +543,9 @@ export interface CoordinatesWidgetConfig {
   /** When true, also displays a small "Zoom: N.NN" chip alongside
    *  the coordinates. Default false. */
   showZoom?: boolean;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 /**
@@ -481,6 +566,9 @@ export interface MyLocationWidgetConfig {
   /** When true, the marker stays visible until the user clicks
    *  the button again or the page reloads. Default true. */
   keepMarker?: boolean;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 /**
