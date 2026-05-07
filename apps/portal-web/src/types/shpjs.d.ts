@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Hand-written type stub for shpjs. The library ships no .d.ts; what
  * we actually use is one default-exported async function that takes a

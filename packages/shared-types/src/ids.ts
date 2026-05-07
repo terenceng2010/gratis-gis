@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /** Branded ID types. Prevents accidentally passing a UserId where an ItemId is expected. */
 
 type Brand<T, B extends string> = T & { readonly __brand: B };

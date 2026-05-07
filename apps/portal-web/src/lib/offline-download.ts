@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Download manager for caching a data_collection deployment for
  * offline use. Walks every editable layer, fetches its features

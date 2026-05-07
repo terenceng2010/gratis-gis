@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Canonical shape stored in a `web_app` Item's data when
  * `template = 'viewer'`. The Read-Only Viewer is the AGOL Map Viewer

@@ -87,4 +87,21 @@ automatically; until then, self-policing is expected.
 
 ## Licensing
 
-Contributions are accepted under the repo's license (Apache-2.0, TBD final).
+GratisGIS is licensed under the GNU Affero General Public License,
+version 3.0 or later (AGPL-3.0-or-later). See [LICENSE](./LICENSE) for
+the full text.
+
+By submitting a contribution (pull request, patch, doc edit, anything
+touching this repository), you agree that your contribution is licensed
+under the same AGPL-3.0-or-later terms as the rest of the project. No
+separate Contributor License Agreement is required.
+
+New source files should carry an SPDX header on the first line:
+
+```
+// SPDX-License-Identifier: AGPL-3.0-or-later
+```
+
+(Or the equivalent comment syntax for the file's language.) The
+existing tree was swept in one pass; please do not remove headers when
+editing.

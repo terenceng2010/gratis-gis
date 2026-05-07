@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Pre-fetches basemap tiles for an offline area so the field client
  * has them available when the radio drops. Slice 10 of the offline

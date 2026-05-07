@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { Module } from '@nestjs/common';
 import { UsersController } from './users.controller.js';
 import { AdminModule } from '../admin/admin.module.js';

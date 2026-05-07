@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { extractDependencies } from './dependency-extractor.js';
 
 describe('extractDependencies for derived_layer', () => {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Canonical shape stored in a `web_app` Item's data when
  * `template = 'custom'`. The Custom Web App template is the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Direct-to-MinIO upload helper for form attachments (#280, #233).
  *

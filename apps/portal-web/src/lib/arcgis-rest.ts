@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Thin client for ArcGIS REST Map / Feature services.
  *

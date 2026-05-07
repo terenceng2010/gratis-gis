@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { BadRequestException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { GroupAccess, GroupRole } from '@prisma/client';
 

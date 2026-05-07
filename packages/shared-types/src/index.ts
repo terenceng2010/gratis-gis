@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Cross-cutting domain types shared between portal-api, portal-web, the
  * field app, and the form designer.

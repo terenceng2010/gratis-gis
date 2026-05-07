@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { FeatureField } from '@gratis-gis/shared-types';
 
 import { randomSampleGenerator } from './random-sample.js';

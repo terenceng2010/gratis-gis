@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Users, Lock, Building2, Globe2, Pencil } from 'lucide-react';

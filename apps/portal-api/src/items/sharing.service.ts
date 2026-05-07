@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { Injectable } from '@nestjs/common';
 import type { Item, ItemShare } from '@prisma/client';
 import { Prisma } from '@prisma/client';

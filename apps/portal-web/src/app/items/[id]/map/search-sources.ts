@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Two shaped-identically search sources powering the map's search bar:
  *

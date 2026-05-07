@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Shared pick list: a named, authoritative list of coded values that
  * can be referenced from feature-service field domains, form choices,

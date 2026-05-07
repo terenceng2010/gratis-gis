@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { SetMetadata } from '@nestjs/common';
 
 /** Mark a route handler as not requiring auth. */

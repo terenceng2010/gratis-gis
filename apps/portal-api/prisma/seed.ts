@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Dev seed. Mirrors the Keycloak realm seed: org `acme` with three
  * generic users keyed on the role they exercise (admin, contributor,

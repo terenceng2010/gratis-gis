@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Geographic distance + area helpers for the editor's measure tool
  * (#122). Small enough to avoid pulling in turf for one feature

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Persistent-storage and quota helpers for the field offline path.
  *

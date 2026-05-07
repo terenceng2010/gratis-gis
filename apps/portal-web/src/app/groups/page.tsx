@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { Plus, Users, Lock, Globe2, Building2 } from 'lucide-react';
 import type { Group } from '@gratis-gis/shared-types';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { Download, FileText, ImageIcon, FileType2 } from 'lucide-react';
 import type { FileData } from '@gratis-gis/shared-types';

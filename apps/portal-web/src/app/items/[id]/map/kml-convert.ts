@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Thin compatibility shim. Original parsing logic moved to
  * `src/lib/spatial-import.ts` so feature-service ingest and add-layer

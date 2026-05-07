@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /** Baseline access level applied to every Item. */
 export type ItemAccess = 'private' | 'org' | 'public';
 

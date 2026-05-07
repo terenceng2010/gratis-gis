@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Module-level user-name cache for resolving editor-tracking UUIDs
  * (_created_by, _edited_by on PostGIS-backed feature properties)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Offline-first submission queue for the Data Collection runtime
  * (#131). Submissions are persisted to IndexedDB on capture and

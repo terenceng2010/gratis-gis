@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Lightweight client-side parser for the three metadata XML formats
  * the GIS world stubbornly keeps in circulation:

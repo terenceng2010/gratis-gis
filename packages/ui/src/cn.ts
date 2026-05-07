@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Minimal className joiner. We intentionally don't pull in clsx/tailwind-merge
  * from this package to keep the peer-dep surface small; apps can use their

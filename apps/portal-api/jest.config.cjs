@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Jest configuration for portal-api unit tests.
 //
 // The codebase uses TypeScript with `.js`-suffixed imports

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Default point-symbol icon registry. Each entry is a single lucide
  * SVG rendered as a 24x24 viewBox with `currentColor` strokes; the

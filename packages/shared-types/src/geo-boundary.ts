@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Shared geographic boundary: a named, authoritative polygon (or
  * multipolygon) that other items can reference as a geographic

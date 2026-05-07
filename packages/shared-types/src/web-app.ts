@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Canonical shape stored in an Item's `data` when `type = 'web_app'`.
  *

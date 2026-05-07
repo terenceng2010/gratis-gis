@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * GPS metadata stamping for field-runtime feature inserts (#225 item 3).
  *

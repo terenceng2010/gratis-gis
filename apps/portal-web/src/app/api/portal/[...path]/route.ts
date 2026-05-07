@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Portal-api proxy. The browser hits /api/portal/<rest> and this route
  * forwards the request to portal-api with the current user's Keycloak

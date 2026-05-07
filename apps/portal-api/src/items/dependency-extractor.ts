@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ItemType } from '@prisma/client';
 import { isEditorItem, readEditorData } from '@gratis-gis/shared-types';
 

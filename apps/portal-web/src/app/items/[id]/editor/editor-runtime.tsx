@@ -1,4 +1,5 @@
-﻿'use client';
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';

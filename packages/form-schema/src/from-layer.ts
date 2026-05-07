@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Auto-generate a FormSchema from a data_layer's column metadata.
  *

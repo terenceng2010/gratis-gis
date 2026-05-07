@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Basemap item payload. Basemaps are first-class items (Phase 1a of
  * the basemap refactor, task #72) so they participate in sharing,

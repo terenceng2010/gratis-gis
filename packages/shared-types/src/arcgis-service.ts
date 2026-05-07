@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Canonical shape stored in an Item's dataJson when `type = 'arcgis_service'`.
  *

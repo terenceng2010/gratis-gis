@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Geocoder proxy. The browser hits `/api/geocode?q=...` and this route
  * forwards to the Nominatim instance configured by NOMINATIM_URL

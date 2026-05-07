@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowUpRight, Sparkles } from 'lucide-react';
 import type { ItemType } from '@gratis-gis/shared-types';
 

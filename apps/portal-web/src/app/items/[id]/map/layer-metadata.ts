@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { MapLayer } from '@gratis-gis/shared-types';
 import { prefetchUserNames } from '@/lib/user-name-cache';
 

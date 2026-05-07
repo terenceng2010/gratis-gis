@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Canonical impl lives at `@/lib/arcgis-rest`: moved out of the
  * bracketed route segment so callers from outside `items/[id]/...` can

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { Calendar, FileInput, Globe } from 'lucide-react';
 import type {
   DataLayerData,

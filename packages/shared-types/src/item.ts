@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ItemId, UserId, OrgId, ISODateString } from './ids';
 import type { ItemAccess, SharePermission } from './sharing';
 import type { ItemType } from './item-types';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /** Loading skeletons shown during data fetches instead of spinners. */
 export function Skeleton({ className = '' }: { className?: string }) {
   return (

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { OrgRole } from '@prisma/client';
 import { BUILTIN_BASEMAP_SEEDS } from '@gratis-gis/shared-types';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { Plus, Layers, ChevronRight, Folder as FolderIcon } from 'lucide-react';
 import type { ItemWithShares } from '@gratis-gis/shared-types';

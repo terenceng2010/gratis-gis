@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Unified spatial-file importer. Takes any supported vector file and
  * returns a GeoJSON FeatureCollection, plus metadata the caller can

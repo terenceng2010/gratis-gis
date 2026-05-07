@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { Trash2 } from 'lucide-react';
 import type { Group, Item } from '@gratis-gis/shared-types';

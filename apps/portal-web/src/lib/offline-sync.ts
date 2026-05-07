@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Drains the offline write queue against the live API. Slice 5 of the
  * Field Maps arc (#199) — the part that turns the runtime from

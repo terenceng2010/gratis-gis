@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ReactNode } from 'react';
 import type { Item } from '@gratis-gis/shared-types';
 import { EntityBadge } from './entity-badge';

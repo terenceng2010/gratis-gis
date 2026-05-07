@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Length units shared across UI surfaces and SQL emission. Used by
  * tools that take a distance parameter (currently `buffer`; future

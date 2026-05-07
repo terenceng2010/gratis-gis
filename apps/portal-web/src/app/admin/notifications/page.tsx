@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { ArrowLeft, Bell } from 'lucide-react';

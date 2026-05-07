@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The enumerated set of content types an Item can represent. The string
  * values match the Prisma-generated enum names (underscore form), which

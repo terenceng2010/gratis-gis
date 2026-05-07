@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import {
   DEFAULT_LAYER_ACCESS,
   DEFAULT_LAYER_INTERACTIONS,
