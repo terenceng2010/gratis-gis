@@ -28,6 +28,7 @@ import {
   Search as SearchIcon,
   Square as SquareIcon,
   Type as TypeIcon,
+  X as XIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import maplibregl from 'maplibre-gl';
@@ -541,13 +542,18 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
         onClick={() => setOpen((v) => !v)}
         aria-pressed={open}
         title={label}
-        className={`flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-md border bg-surface-1 transition-colors ${
+        className={`group/tool flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-md border bg-surface-1 shadow-sm transition-all ${
           open
-            ? 'border-ink-0 text-ink-0'
-            : 'border-border text-ink-1 hover:border-ink-1'
+            ? 'border-ink-0 text-ink-0 ring-2 ring-ink-0/10'
+            : 'border-border text-ink-1 hover:-translate-y-0.5 hover:border-ink-1 hover:shadow-md'
         }`}
       >
-        <Icon className="h-5 w-5" strokeWidth={1.75} />
+        <Icon
+          className={`h-5 w-5 transition-transform ${
+            open ? 'scale-110' : 'group-hover/tool:scale-105'
+          }`}
+          strokeWidth={1.75}
+        />
         <span className="text-[10px] font-medium leading-none">{label}</span>
       </button>
       {open && ctx && (
@@ -558,7 +564,15 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
           icon={Icon}
           onClose={() => setOpen(false)}
         >
-          <div className="flex h-full min-h-0 flex-col">{renderWidget(widget)}</div>
+          {/* #364: suppress the inner widget's header so we don't
+              stack two title bars on top of each other. The
+              ToolPopoverHeader carries the title; WidgetFrame
+              checks this context and skips its own header. */}
+          <SuppressFrameHeaderContext.Provider value={true}>
+            <div className="flex h-full min-h-0 flex-col">
+              {renderWidget(widget)}
+            </div>
+          </SuppressFrameHeaderContext.Provider>
         </ToolPopover>
       )}
     </>
@@ -626,11 +640,13 @@ function ToolPopover({
     animation === 'none'
       ? 'transition-none'
       : animation === 'slide'
-        ? `transition-[opacity,transform] duration-150 ease-out ${
-            shown ? 'translate-y-0 opacity-100' : '-translate-y-1 opacity-0'
+        ? `transition-[opacity,transform] duration-200 ease-out ${
+            shown
+              ? 'translate-y-0 scale-100 opacity-100'
+              : '-translate-y-1 scale-95 opacity-0'
           }`
-        : `transition-opacity duration-150 ease-out ${
-            shown ? 'opacity-100' : 'opacity-0'
+        : `transition-[opacity,transform] duration-150 ease-out ${
+            shown ? 'scale-100 opacity-100' : 'scale-[0.97] opacity-0'
           }`;
 
   // Fixed mode pins to the browser viewport. Floating mode pins to
@@ -659,7 +675,7 @@ function ToolPopover({
           role="dialog"
           aria-label={title}
           style={{ ...positionStyle, position: 'fixed', width, height }}
-          className={`z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay ${animationClass}`}
+          className={`z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-[0_10px_40px_-10px_rgba(15,15,16,0.25),_0_2px_8px_-2px_rgba(15,15,16,0.08)] ${animationClass}`}
         >
           <ToolPopoverHeader title={title} icon={Icon} onClose={handleClose} />
           <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
@@ -714,16 +730,18 @@ function ToolPopoverHeader({
   onClose: () => void;
 }) {
   return (
-    <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-      <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
-      <span className="flex-1 truncate text-sm font-medium text-ink-0">{title}</span>
+    <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3 py-2">
+      <Icon className="h-4 w-4 text-muted" strokeWidth={1.75} />
+      <span className="flex-1 truncate text-sm font-semibold text-ink-0">
+        {title}
+      </span>
       <button
         type="button"
         onClick={onClose}
         aria-label="Close panel"
-        className="rounded p-1 text-muted hover:bg-surface-2 hover:text-ink-1"
+        className="-mr-1 rounded p-1 text-muted transition-colors hover:bg-surface-2 hover:text-ink-1"
       >
-        <SquareIcon className="h-3 w-3 rotate-45" strokeWidth={1.75} />
+        <XIcon className="h-3.5 w-3.5" strokeWidth={2} />
       </button>
     </header>
   );
@@ -1911,6 +1929,14 @@ function TabsWidgetRender({ widget }: { widget: CustomWidget }) {
 
 // ---- Shared frame ----------------------------------------------------------
 
+/**
+ * When true, WidgetFrame skips its own header. Used when a widget
+ * is rendered inside a ToolPopover (#364) so the popover's own
+ * header doesn't stack with the widget's. Defaults to false so
+ * panel-mode widgets keep their existing chrome.
+ */
+const SuppressFrameHeaderContext = createContext<boolean>(false);
+
 function WidgetFrame({
   icon: Icon,
   title,
@@ -1920,12 +1946,15 @@ function WidgetFrame({
   title: string;
   children: React.ReactNode;
 }) {
+  const suppressHeader = useContext(SuppressFrameHeaderContext);
   return (
     <>
-      <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs">
-        <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
-        <span className="font-medium text-ink-0">{title}</span>
-      </header>
+      {!suppressHeader && (
+        <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs">
+          <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+          <span className="font-medium text-ink-0">{title}</span>
+        </header>
+      )}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {children}
       </div>
