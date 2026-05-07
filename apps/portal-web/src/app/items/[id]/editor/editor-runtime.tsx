@@ -640,15 +640,13 @@ export function EditorRuntime({
           coordinatePrecision: 9,
         }),
         // Permissive id strategy. terra-draw 1.x's default validator
-        // requires every feature id to be a UUIDv4 string; we wrap
-        // edit-mode ids with a `gg-edit-` prefix (so the in-edit copy
-        // doesn't collide with the underlying source feature) and
-        // the prefixed value fails that regex. Without this, addFeatures
-        // silently rejects the wrapped feature and selectFeature then
-        // throws "No feature with this id (...), can not get properties
-        // copy" from getPropertiesCopy. Accept any non-empty string id
-        // (or number) and keep getId producing a real UUIDv4 for any
-        // feature terra-draw creates internally (drawing flow).
+        // requires every feature id to be a UUIDv4-shaped string
+        // (length 36). The geometry-edit setup pushes the server's
+        // feature id (a UUID, but format not guaranteed across
+        // historical and engine-issued rows) into terra-draw's store,
+        // so we accept any non-empty string or number to avoid silent
+        // rejection. getId still produces a real UUIDv4 for any
+        // feature terra-draw creates internally during the draw flow.
         idStrategy: {
           isValidId: (id) =>
             (typeof id === 'string' && id.length > 0) ||
@@ -1545,10 +1543,13 @@ export function EditorRuntime({
       | {
           start: () => void;
           setMode: (m: string) => void;
-          addFeatures: (features: unknown[]) => void;
+          addFeatures: (
+            features: unknown[],
+          ) => Array<{ id?: string | number; valid: boolean; reason?: string }>;
           selectFeature: (id: string) => void;
           deselectFeature: (id: string) => void;
           removeFeatures: (ids: Array<string | number>) => void;
+          hasFeature: (id: string | number) => boolean;
         }
       | null;
     if (!draw || !pendingGeometryEdit) return;
@@ -1573,11 +1574,31 @@ export function EditorRuntime({
       pendingGeometryEdit.geometryType === 'line'
         ? 'linestring'
         : pendingGeometryEdit.geometryType;
-    const tdId = `gg-edit-${pendingGeometryEdit.featureId}`;
+    // Use the bare server feature id as terra-draw's feature id.
+    // We previously wrapped this with a `gg-edit-` prefix on the
+    // assumption that it would collide with the underlying source
+    // layer's feature id, but terra-draw maintains its own store
+    // separate from MapLibre's source, so there is no collision.
+    // The prefix made debugging harder (any rejection surfaced as
+    // "No feature with this id (gg-edit-...)") and was unnecessary.
+    const tdId = pendingGeometryEdit.featureId;
     tdEditFeatureIdRef.current = tdId;
 
+    // Belt-and-suspenders: if a previous edit on the same feature id
+    // somehow left a record in terra-draw's store (e.g. cleanup raced
+    // with a re-entry), the duplicate check inside _store.load would
+    // reject the new feature with "Feature already exists with this id".
+    // Clear it before adding.
     try {
-      draw.addFeatures([
+      if (draw.hasFeature(tdId)) {
+        draw.removeFeatures([tdId]);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const results = draw.addFeatures([
         {
           id: tdId,
           type: 'Feature',
@@ -1585,11 +1606,24 @@ export function EditorRuntime({
           properties: { mode: tdMode },
         },
       ]);
-      draw.selectFeature(tdId);
+      // _store.load returns a StoreValidation[]: one entry per input
+      // feature with `{valid, reason?}`. addFeatures swallows
+      // rejections silently, so a feature that fails validation never
+      // lands in the store and selectFeature then throws "No feature
+      // with this id, can not get properties copy". Read the result
+      // here so we can surface the actual reason in the in-modal error.
+      const rejection = (results ?? []).find((r) => !r.valid);
+      if (rejection) {
+        setGeomEditError(
+          `Could not load geometry: ${rejection.reason ?? 'unknown reason'}`,
+        );
+      } else {
+        draw.selectFeature(tdId);
+      }
     } catch (err) {
-      // addFeatures rejects when terra-draw can't validate the
-      // geometry. We surface this as the in-modal error so the
-      // user can cancel out cleanly rather than getting stuck.
+      // selectFeature throws when the feature is missing from the
+      // store. We surface this as the in-modal error so the user can
+      // cancel out cleanly rather than getting stuck.
       setGeomEditError(
         err instanceof Error
           ? `Could not load geometry: ${err.message}`
