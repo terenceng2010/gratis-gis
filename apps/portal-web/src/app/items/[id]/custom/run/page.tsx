@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import type {
   BasemapData,
@@ -29,6 +30,26 @@ import { CustomRuntimeClient } from '../runtime-client';
 
 interface Props {
   params: { id: string };
+}
+
+/**
+ * Per-app page title so the runtime tab shows the app's name in
+ * the browser tab strip + window title. Mirrors the form-respond
+ * page's metadata pattern (#345). Falls back to GratisGIS if the
+ * lookup fails.
+ */
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  try {
+    const isAnonymous = !(await hasSession());
+    const item = isAnonymous
+      ? await publicApiFetch<{ title: string }>(
+          `/api/public/items/${params.id}`,
+        )
+      : await apiFetch<{ title: string }>(`/api/items/${params.id}`);
+    return { title: item.title };
+  } catch {
+    return {};
+  }
 }
 
 /**
