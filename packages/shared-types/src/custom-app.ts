@@ -29,7 +29,12 @@
 import type { ViewerTarget } from './viewer';
 
 export interface CustomAppData {
-  version: 1;
+  /** Schema version. Bumped from 1 to 2 (#357) when the canvas grid
+   *  resolution doubled (12 -> 24 columns, 48px -> 24px row height)
+   *  for finer drag/snap. Migration multiplies every widget's
+   *  col / row / colSpan / rowSpan by 2 on load and rewrites
+   *  version=2 on the next save. */
+  version: 1 | 2;
   /**
    * Optional reference to a `map` item the canvas-style widgets
    * (MapWidget) inherit basemap + viewport from. Individual widgets
@@ -301,7 +306,7 @@ export interface BasemapGalleryWidgetConfig {
  * the designer prompts the author to drop a widget on first open.
  */
 export const DEFAULT_CUSTOM_APP: CustomAppData = {
-  version: 1,
+  version: 2,
   targets: [],
   pages: [
     {
@@ -311,3 +316,34 @@ export const DEFAULT_CUSTOM_APP: CustomAppData = {
     },
   ],
 };
+
+/**
+ * Migrate a CustomAppData to the latest schema version. v1 -> v2
+ * doubles every widget layout coordinate so the same physical layout
+ * round-trips through the new 24-column / 24px-row designer grid.
+ *
+ * Idempotent: calling on an already-v2 app is a no-op. Caller should
+ * persist the result back to the item on the next save (the
+ * designer's setApp(initial) flow handles that automatically).
+ */
+export function migrateCustomAppData(data: CustomAppData): CustomAppData {
+  if (data.version === 2) return data;
+  return {
+    ...data,
+    version: 2,
+    pages: data.pages.map((p) => ({
+      ...p,
+      widgets: p.widgets.map((w) => ({
+        ...w,
+        layout: {
+          // v1 grid was 12 cols x 48px rows; v2 is 24 x 24. Doubling
+          // every coordinate keeps the visual layout identical.
+          col: ((w.layout.col - 1) * 2) + 1,
+          row: ((w.layout.row - 1) * 2) + 1,
+          colSpan: w.layout.colSpan * 2,
+          rowSpan: w.layout.rowSpan * 2,
+        },
+      })),
+    })),
+  };
+}

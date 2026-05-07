@@ -337,9 +337,16 @@ export default async function ItemDetailPage({ params }: Props) {
     item.type === 'map' ||
     item.type === 'data_layer' ||
     item.type === 'arcgis_service';
-  // Bump the container up for workspace types so the map gets more
-  // horizontal room; other pages keep the old 6xl width.
-  const containerWidth = isWorkspace ? 'max-w-7xl' : 'max-w-6xl';
+  // Web app designers (viewer / editor / survey / custom) are also
+  // content-heavy: a 12-column drag-and-drop canvas wedged into a
+  // 6xl container ends up with about 700px of usable canvas width
+  // after the palette and properties rails eat their share, which
+  // makes laying out a real app awkward. Bump those up to the same
+  // 2xl tier maps + data_layers use; the canvas's own min-width
+  // takes over below that on narrower viewports.
+  const isAppBuilder = item.type === 'web_app';
+  const containerWidth =
+    isWorkspace || isAppBuilder ? 'max-w-screen-2xl' : 'max-w-6xl';
 
   return (
     <div className={`mx-auto w-full ${containerWidth} px-6 py-6`}>

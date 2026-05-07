@@ -20,6 +20,7 @@ import {
   DEFAULT_MAP,
   DEFAULT_CUSTOM_APP,
   isCustomAppItem,
+  migrateCustomAppData,
   readCustomAppData,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
@@ -104,10 +105,13 @@ export default async function CustomAppRuntimePage({ params }: Props) {
   }
   if (!isCustomAppItem(item)) notFound();
 
-  const app: CustomAppData = {
+  // #357: migrate v1 (12-col / 48px-row) apps to v2 (24-col / 24px-
+  // row) on load so the runtime sees v2 coordinates. Idempotent for
+  // already-v2 apps; the migrator no-ops when version === 2.
+  const app: CustomAppData = migrateCustomAppData({
     ...DEFAULT_CUSTOM_APP,
     ...((readCustomAppData(item) ?? {}) as Partial<CustomAppData>),
-  };
+  });
 
   // Resolve targets to MapLayer descriptors. Each target points at a
   // v3 data_layer sublayer; we look up the layer item, find the

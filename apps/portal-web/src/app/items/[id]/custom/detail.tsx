@@ -48,7 +48,7 @@ import type {
   ViewerTarget,
   WebAppData,
 } from '@gratis-gis/shared-types';
-import { DEFAULT_MAP } from '@gratis-gis/shared-types';
+import { DEFAULT_MAP, migrateCustomAppData } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
@@ -86,12 +86,24 @@ interface Props {
  * (#341); the designer's job is layout + binding.
  */
 export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
-  const [app, setApp] = useState<CustomAppData>(initial);
+  // #357: migrate any v1 (12-col / 48px-row) app to the new v2 grid
+  // (24-col / 24px-row) on load so the rest of the designer can
+  // assume v2 coordinates. Idempotent: v2 input passes through
+  // unchanged. The migrated app is dirty-on-first-save which is
+  // intentional (a single re-save persists the v2 layout).
+  const [app, setApp] = useState<CustomAppData>(() =>
+    migrateCustomAppData(initial),
+  );
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pickingMap, setPickingMap] = useState(false);
+  // The PickMapDialog is reused for both the app-default map and the
+  // per-Map-widget override (#357 follow-up). Tagged scope lets one
+  // dialog instance write to the right slot.
+  const [pickingMap, setPickingMap] = useState<
+    null | { scope: 'app' } | { scope: 'widget'; widgetId: string }
+  >(null);
   // Multi-page support (#342). The home page is always pages[0]; if
   // the user deletes pages or reorders, activePageIdx clamps. Per-
   // page selection is reset on page switch so the right rail doesn't
@@ -456,6 +468,9 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
                   } as CustomWidget['config'],
                 })
               }
+              onPickWidgetMap={() =>
+                setPickingMap({ scope: 'widget', widgetId: selectedWidget.id })
+              }
               onRemove={() => removeWidget(selectedWidget.id)}
             />
           ) : (
@@ -474,19 +489,34 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
                 });
                 setDirty(true);
               }}
-              onPickMap={() => setPickingMap(true)}
+              onPickMap={() => setPickingMap({ scope: 'app' })}
             />
           )}
         </aside>
       </div>
 
       <PickMapDialog
-        open={pickingMap}
+        open={pickingMap !== null}
         onPick={(picked) => {
-          updateApp({ mapId: picked.id });
-          setPickingMap(false);
+          if (pickingMap?.scope === 'widget') {
+            // Per-widget override path: write to widget.config.mapId.
+            const wid = pickingMap.widgetId;
+            const widget = activePage.widgets.find((w) => w.id === wid);
+            if (widget && widget.kind === 'map') {
+              updateWidget(wid, {
+                config: {
+                  ...widget.config,
+                  mapId: picked.id,
+                } as CustomWidget['config'],
+              });
+            }
+          } else {
+            // App-default path (or null fallthrough): write to app.mapId.
+            updateApp({ mapId: picked.id });
+          }
+          setPickingMap(null);
         }}
-        onClose={() => setPickingMap(false)}
+        onClose={() => setPickingMap(null)}
       />
     </div>
   );
@@ -891,8 +921,19 @@ function PageTabs({
 
 // ---- Canvas -----------------------------------------------------------------
 
-const ROW_HEIGHT_PX = 48;
-const GRID_COLS = 12;
+// #357: doubled grid resolution. The schema bumped from version 1 to
+// 2 (12-col + 48px row -> 24-col + 24px row) for finer drag/snap.
+// Existing apps are migrated on load via migrateCustomAppData.
+const ROW_HEIGHT_PX = 24;
+const GRID_COLS = 24;
+/**
+ * Floor for the canvas's working width. On viewports narrower than
+ * this the canvas pane scrolls horizontally instead of squeezing the
+ * 24-column grid into a sliver. Sized so each column gets ~50px,
+ * which is the floor below which Map / AttributeTable widgets start
+ * to look unusable in a real layout.
+ */
+const CANVAS_MIN_WIDTH_PX = 1200;
 
 /**
  * Active drag-or-resize gesture state. The canvas owns one of these
@@ -1069,12 +1110,17 @@ function Canvas({
       >
         {/* The actual grid. CSS Grid makes the placement math cheap:
             each widget's gridColumn / gridRow line up with the
-            schema's col/row + spans, no manual translation needed. */}
+            schema's col/row + spans, no manual translation needed.
+            Min-width keeps the canvas usable on narrower viewports
+            (matches Experience Builder + Webflow's "fixed canvas
+            with horizontal scroll" pattern); on wider viewports the
+            grid expands naturally to fill the canvas pane. */}
         <div
           className="grid w-full"
           style={{
             gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
             gridAutoRows: `${ROW_HEIGHT_PX}px`,
+            minWidth: `${CANVAS_MIN_WIDTH_PX}px`,
             minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
             gap: '6px',
           }}
@@ -1438,6 +1484,7 @@ function WidgetProperties({
   appMapTitle,
   onChange,
   onChangeConfig,
+  onPickWidgetMap,
   onRemove,
 }: {
   widget: CustomWidget;
@@ -1448,6 +1495,7 @@ function WidgetProperties({
   appMapTitle: string | null;
   onChange: (patch: Partial<CustomWidget>) => void;
   onChangeConfig: (configPatch: Record<string, unknown>) => void;
+  onPickWidgetMap: () => void;
   onRemove: () => void;
 }) {
   const tile = PALETTE_TILES.find((t) => t.kind === widget.kind);
@@ -1558,6 +1606,7 @@ function WidgetProperties({
           appMapId={appMapId}
           appMapTitle={appMapTitle}
           onChangeConfig={onChangeConfig}
+          onPickWidgetMap={onPickWidgetMap}
         />
       </div>
     </div>
@@ -1596,6 +1645,7 @@ function WidgetConfigForm({
   appMapId,
   appMapTitle,
   onChangeConfig,
+  onPickWidgetMap,
 }: {
   widget: CustomWidget;
   canEdit: boolean;
@@ -1604,6 +1654,7 @@ function WidgetConfigForm({
   appMapId: string | undefined;
   appMapTitle: string | null;
   onChangeConfig: (configPatch: Record<string, unknown>) => void;
+  onPickWidgetMap: () => void;
 }) {
   // List of map widgets on this page, used by every map-following
   // kind below to pick a binding.
@@ -1618,6 +1669,7 @@ function WidgetConfigForm({
           appMapTitle={appMapTitle}
           appTargetCount={appTargets.length}
           onChangeConfig={onChangeConfig}
+          onPickMap={onPickWidgetMap}
         />
       );
     case 'legend':
@@ -1792,6 +1844,7 @@ function MapWidgetConfig({
   appMapTitle,
   appTargetCount,
   onChangeConfig,
+  onPickMap,
 }: {
   config: { kind: 'map'; mapId?: string; showNavigation?: boolean };
   canEdit: boolean;
@@ -1799,6 +1852,7 @@ function MapWidgetConfig({
   appMapTitle: string | null;
   appTargetCount: number;
   onChangeConfig: (patch: Record<string, unknown>) => void;
+  onPickMap: () => void;
 }) {
   return (
     <div className="space-y-3">
@@ -1822,6 +1876,16 @@ function MapWidgetConfig({
               <span className="italic text-muted">none</span>
             )}
           </span>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onPickMap}
+              className="text-[10px] font-medium text-accent hover:underline"
+              title={config.mapId ? 'Change override' : 'Pick a map override'}
+            >
+              {config.mapId ? 'Change' : 'Pick'}
+            </button>
+          )}
           {canEdit && config.mapId && (
             <button
               type="button"
@@ -2002,33 +2066,37 @@ function clampCol(col: number): number {
  * grid cell the user dropped into.
  */
 function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
+  // Sizes are in v2 grid units (24 cols x 24px rows). 1 v2 col is
+  // half the width of the old v1 col; 1 v2 row is half the height.
+  // So a Map that used to be 8x12 in v1 is 16x24 in v2 (same
+  // physical space, finer snap).
   switch (kind) {
     case 'map':
-      return { col: 1, row: 1, colSpan: 8, rowSpan: 12 };
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 24 };
     case 'layer-list':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 8 };
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 16 };
     case 'legend':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 6 };
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 12 };
     case 'attribute-table':
-      return { col: 1, row: 1, colSpan: 12, rowSpan: 5 };
+      return { col: 1, row: 1, colSpan: 24, rowSpan: 10 };
     case 'text':
-      return { col: 1, row: 1, colSpan: 12, rowSpan: 1 };
+      return { col: 1, row: 1, colSpan: 24, rowSpan: 2 };
     case 'chart':
-      return { col: 1, row: 1, colSpan: 6, rowSpan: 6 };
+      return { col: 1, row: 1, colSpan: 12, rowSpan: 12 };
     case 'search':
-      // Compact search bar -- typically dropped at the top of the
+      // Compact search bar typically dropped at the top of the
       // canvas. Wide enough to hold a placeholder + result list.
-      return { col: 1, row: 1, colSpan: 6, rowSpan: 1 };
+      return { col: 1, row: 1, colSpan: 12, rowSpan: 2 };
     case 'print':
-      return { col: 1, row: 1, colSpan: 2, rowSpan: 1 };
+      return { col: 1, row: 1, colSpan: 4, rowSpan: 2 };
     case 'select':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 1 };
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 2 };
     case 'basemap-gallery':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 4 };
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
-      return { col: 1, row: 1, colSpan: 6, rowSpan: 4 };
+      return { col: 1, row: 1, colSpan: 12, rowSpan: 8 };
     }
   }
 }

@@ -311,10 +311,14 @@ export function CustomRuntimeClient({
             <div
               className="grid h-full w-full"
               style={{
-                gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
-                gridAutoRows: `minmax(48px, auto)`,
-                minHeight: `${totalRows * 48}px`,
-                gap: '8px',
+                // #357: matches the designer's v2 grid (24 cols x
+                // 24px rows). Old v1 apps are migrated on load via
+                // migrateCustomAppData in the page entry, so the
+                // runtime always sees v2 coordinates here.
+                gridTemplateColumns: 'repeat(24, minmax(0, 1fr))',
+                gridAutoRows: `minmax(24px, auto)`,
+                minHeight: `${totalRows * 24}px`,
+                gap: '6px',
               }}
             >
               {page.widgets.map((w) => (
