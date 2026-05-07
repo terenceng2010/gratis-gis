@@ -36,8 +36,14 @@ import { UserMenu } from './user-menu';
  * when they back out.
  *
  * Suppressed routes:
- *   /items/<id>/field         -- field runtime owns the full screen
- *   /items/<id>/field/...     -- subroutes (offline shell, etc.)
+ *   /items/<id>/field         field runtime owns the full screen
+ *   /items/<id>/field/...     subroutes (offline shell, etc.)
+ *   /items/<id>/viewer/run    web-app viewer
+ *   /items/<id>/editor/run    web-app editor
+ *   /items/<id>/survey/run    web-app survey runtime
+ *   /items/<id>/custom/run    web-app custom runtime
+ *   /items/<id>/responses     response viewer
+ *   /forms/<id>/respond       respondent-facing form runtime (#345)
  *
  * Everything else gets the full chrome.
  */
@@ -75,10 +81,20 @@ export function AppShellChrome({
   // Rendering bare lets a shared link open the runtime as the
   // entire viewport, just like AGOL Web App Builder.
   const isFieldRuntime = /^\/items\/[^/]+\/field(?:\/|$)/.test(pathname);
-  const isAppRuntime = /^\/items\/[^/]+\/(?:viewer|editor)\/run(?:\/|$)/.test(
-    pathname,
-  );
-  if (isFieldRuntime || isAppRuntime) {
+  // Web-app runtimes that own their own header + chrome. Survey,
+  // viewer, editor, and custom each ship a configure-back link in
+  // their own header, so layering the portal sidebar on top makes a
+  // public-share link feel cluttered and breaks AGOL parity.
+  const isAppRuntime =
+    /^\/items\/[^/]+\/(?:viewer|editor|survey|custom)\/run(?:\/|$)/.test(
+      pathname,
+    );
+  // Form respondent runtime (#345). The detail page already opens
+  // /forms/<id>/respond in a new tab; rendering bare lets the
+  // tab stand on its own as a sharable submission surface, the way
+  // an AGO Survey123 link does.
+  const isFormRespond = /^\/forms\/[^/]+\/respond(?:\/|$)/.test(pathname);
+  if (isFieldRuntime || isAppRuntime || isFormRespond) {
     return (
       <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
     );

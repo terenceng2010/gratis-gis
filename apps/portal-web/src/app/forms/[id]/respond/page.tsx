@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { apiFetch } from '@/lib/api';
 import { RespondClient } from './respond-client';
@@ -11,6 +12,23 @@ interface ItemPayload {
   type: string;
   title: string;
   data: unknown;
+}
+
+/**
+ * Per-form metadata so the new-tab title (and OS tab strip) shows
+ * the form title rather than just "GratisGIS". Falls back to the
+ * default if the lookup fails (e.g. soft-deleted form, expired
+ * share). The respond runtime is intentionally chromeless (#345),
+ * so the browser tab itself becomes the only place to see the
+ * form's identity.
+ */
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  try {
+    const item = await apiFetch<ItemPayload>(`/api/items/${params.id}`);
+    return { title: item.title };
+  } catch {
+    return {};
+  }
 }
 
 /**
