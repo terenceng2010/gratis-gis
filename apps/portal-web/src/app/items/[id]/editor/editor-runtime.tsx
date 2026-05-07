@@ -1152,6 +1152,16 @@ export function EditorRuntime({
     if (!draw) return;
 
     const handleFinish = (id: string) => {
+      // terra-draw emits 'finish' both when a draw completes (the
+      // create flow we want to handle) AND when a drag completes in
+      // select mode. The latter happens during geometry-edit mode
+      // (e.g. the user drags a point or vertex). Ignore those: the
+      // geometry-edit change listener already mirrors the dragged
+      // geometry into pendingGeometryEdit.currentGeometry, and the
+      // floating "Save geometry" button is what should commit it.
+      // tdEditFeatureIdRef is set whenever a geometry edit is in
+      // flight, so gate on that.
+      if (tdEditFeatureIdRef.current) return;
       const snap = draw.getSnapshot();
       const f = snap.find((x) => String(x.id) === String(id));
       if (!f || !f.geometry) return;
