@@ -108,6 +108,13 @@ interface CustomMapsCtx {
     mapWidgetId: string,
     bbox: [number, number, number, number],
   ) => void;
+  /**
+   * #361: jump to one of the app's pages by id. Used by the Button
+   * widget's page-link path. Resolves the id to its index and falls
+   * through silently if the page was deleted.
+   */
+  navigateToPage: (pageId: string) => void;
+  pages: { id: string; title: string }[];
 }
 
 const CustomMapsContext = createContext<CustomMapsCtx | null>(null);
@@ -225,6 +232,21 @@ export function CustomRuntimeClient({
     [],
   );
 
+  // #361: navigate-by-id for the Button widget's page-link path.
+  // Pages are passed as a stripped {id, title} list to avoid leaking
+  // widget data into the context.
+  const navigateToPage = useCallback(
+    (pageId: string) => {
+      const idx = app.pages.findIndex((p) => p.id === pageId);
+      if (idx >= 0) setActivePageIdx(idx);
+    },
+    [app.pages],
+  );
+  const pagesForCtx = useMemo(
+    () => app.pages.map((p) => ({ id: p.id, title: p.title })),
+    [app.pages],
+  );
+
   const ctxValue: CustomMapsCtx = useMemo(
     () => ({
       states,
@@ -233,8 +255,19 @@ export function CustomRuntimeClient({
       basemaps,
       resolvedTargets,
       flyTo,
+      navigateToPage,
+      pages: pagesForCtx,
     }),
-    [states, update, registerRef, basemaps, resolvedTargets, flyTo],
+    [
+      states,
+      update,
+      registerRef,
+      basemaps,
+      resolvedTargets,
+      flyTo,
+      navigateToPage,
+      pagesForCtx,
+    ],
   );
 
   return (
@@ -377,6 +410,14 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <SelectWidgetRender widget={widget} />;
     case 'basemap-gallery':
       return <BasemapGalleryWidgetRender widget={widget} />;
+    case 'image':
+      return <ImageWidgetRender widget={widget} />;
+    case 'button':
+      return <ButtonWidgetRender widget={widget} />;
+    case 'divider':
+      return <DividerWidgetRender widget={widget} />;
+    case 'embed':
+      return <EmbedWidgetRender widget={widget} />;
     default: {
       const _exhaustive: never = widget.kind;
       void _exhaustive;
@@ -973,6 +1014,139 @@ function ChartWidgetRender() {
   );
 }
 
+// ---- Page-element widgets (#361) -------------------------------------------
+
+function ImageWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'image') return null;
+  const { url, alt, objectFit, href, openInNewTab } = widget.config;
+  if (!url) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-xs text-muted">
+        No image set
+      </div>
+    );
+  }
+  // <img> uses object-fit. Wrapper is full bleed; image fills it
+  // according to the chosen fit. http(s) only is enforced by the
+  // designer; if a malformed URL slips through, the browser shows
+  // the broken-image icon and no script runs.
+  const imgEl = (
+    <img
+      src={url}
+      alt={alt ?? ''}
+      className="h-full w-full"
+      style={{ objectFit: objectFit ?? 'contain' }}
+    />
+  );
+  if (href) {
+    return (
+      <a
+        href={href}
+        target={openInNewTab ? '_blank' : undefined}
+        rel={openInNewTab ? 'noreferrer noopener' : undefined}
+        className="block h-full w-full"
+      >
+        {imgEl}
+      </a>
+    );
+  }
+  return <div className="h-full w-full">{imgEl}</div>;
+}
+
+function ButtonWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'button') return null;
+  const ctx = useContext(CustomMapsContext);
+  const { label, variant, linkKind, url, pageId, openInNewTab } = widget.config;
+  const v = variant ?? 'primary';
+  const className = `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
+    v === 'primary'
+      ? 'bg-accent text-white hover:opacity-90'
+      : 'border border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+  }`;
+  const text = label || 'Button';
+  if ((linkKind ?? 'url') === 'page') {
+    // Page-link path. Resolves to setActivePageIdx via the runtime
+    // context. Renders as a plain button so middle-click / right-
+    // click don't behave like an external link.
+    return (
+      <div className="flex h-full w-full items-center justify-center p-2">
+        <button
+          type="button"
+          disabled={!pageId}
+          onClick={() => {
+            if (pageId) ctx?.navigateToPage(pageId);
+          }}
+          className={`${className} disabled:cursor-not-allowed disabled:opacity-50`}
+        >
+          {text}
+        </button>
+      </div>
+    );
+  }
+  // External-URL path. Real <a> so the browser handles middle-click,
+  // right-click, copy-link, etc.
+  return (
+    <div className="flex h-full w-full items-center justify-center p-2">
+      <a
+        href={url || '#'}
+        target={openInNewTab ? '_blank' : undefined}
+        rel={openInNewTab ? 'noreferrer noopener' : undefined}
+        aria-disabled={!url}
+        onClick={(e) => {
+          if (!url) e.preventDefault();
+        }}
+        className={className}
+      >
+        {text}
+      </a>
+    </div>
+  );
+}
+
+function DividerWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'divider') return null;
+  const { thicknessPx, color, style } = widget.config;
+  return (
+    <div className="flex h-full w-full items-center px-2">
+      <hr
+        className="w-full"
+        style={{
+          borderTop: `${thicknessPx ?? 1}px ${style ?? 'solid'} ${color ?? 'var(--color-border, #e5e7eb)'}`,
+          margin: 0,
+        }}
+      />
+    </div>
+  );
+}
+
+function EmbedWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'embed') return null;
+  const { url, title, strict } = widget.config;
+  if (!url) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-xs text-muted">
+        No URL set
+      </div>
+    );
+  }
+  // Sandbox flags. Default allows scripts + same-origin + popups +
+  // forms (typical for embedded dashboards). Strict mode drops
+  // same-origin so the embedded site can't read parent storage /
+  // cookies, useful for arbitrary third-party URLs.
+  const sandbox = strict
+    ? 'allow-scripts allow-popups allow-forms'
+    : 'allow-scripts allow-same-origin allow-popups allow-forms';
+  return (
+    <iframe
+      src={url}
+      title={title ?? url}
+      sandbox={sandbox}
+      className="h-full w-full border-0"
+      loading="lazy"
+    />
+  );
+}
+
 // ---- Shared frame ----------------------------------------------------------
 
 function WidgetFrame({
@@ -1012,4 +1186,11 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   print: Printer,
   select: MousePointer2,
   'basemap-gallery': ImageIcon,
+  // #361 page-element kinds. The icons mirror the designer's
+  // PALETTE_TILES so a future WidgetFrame.kindIcon defaults stay
+  // consistent.
+  image: ImageIcon,
+  button: ChevronRight,
+  divider: ChevronRight,
+  embed: ChevronRight,
 };

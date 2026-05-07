@@ -161,7 +161,15 @@ export type CustomWidgetKind =
   | 'search'
   | 'print'
   | 'select'
-  | 'basemap-gallery';
+  | 'basemap-gallery'
+  // #361: page-element widgets. None of these touch a Map widget or
+  // a target layer; they're static content the author drops onto the
+  // canvas to round out the page. EB calls these "page element"
+  // widgets and groups them in their own bucket; we mirror that.
+  | 'image'
+  | 'button'
+  | 'divider'
+  | 'embed';
 
 /**
  * Discriminated union of every widget kind's config shape. The
@@ -177,7 +185,11 @@ export type CustomWidgetConfig =
   | SearchWidgetConfig
   | PrintWidgetConfig
   | SelectWidgetConfig
-  | BasemapGalleryWidgetConfig;
+  | BasemapGalleryWidgetConfig
+  | ImageWidgetConfig
+  | ButtonWidgetConfig
+  | DividerWidgetConfig
+  | EmbedWidgetConfig;
 
 export interface MapWidgetConfig {
   kind: 'map';
@@ -299,6 +311,92 @@ export interface BasemapGalleryWidgetConfig {
    * these three branded basemaps" scenarios.
    */
   basemapIds?: string[];
+}
+
+// ---- Page-element widgets (#361) -------------------------------
+
+/**
+ * Static image. Source is a URL the author pastes (a portal item's
+ * thumbnail, an external CDN URL, etc.). Local upload is left for a
+ * follow-up; for now authors paste a URL the same way they would in
+ * a Markdown image.
+ */
+export interface ImageWidgetConfig {
+  kind: 'image';
+  /** Image URL. http(s) only. */
+  url?: string;
+  /** Alt text for accessibility. Empty alt is fine for purely
+   *  decorative images; the runtime falls back to '' when omitted. */
+  alt?: string;
+  /** How the image fits its widget cell. Defaults to 'contain' so
+   *  letterboxing is the default and aspect-ratios survive resize. */
+  objectFit?: 'contain' | 'cover' | 'fill' | 'none';
+  /** Optional click target. Behaves like a Button widget when set:
+   *  wraps the image in an <a> with href + target. */
+  href?: string;
+  /** When true, opens href in a new tab. */
+  openInNewTab?: boolean;
+}
+
+/**
+ * Inline call-to-action button. Two link modes:
+ *   - external URL: opens the URL (in a new tab if requested)
+ *   - internal page: navigates the runtime to one of the app's
+ *     pages by id. Useful for "Next" / "Back" style flows in
+ *     multi-page apps.
+ */
+export interface ButtonWidgetConfig {
+  kind: 'button';
+  /** Visible label. */
+  label: string;
+  /** Click target. Either an external URL or a page id from the
+   *  app's pages array. The runtime narrows on `linkKind`. */
+  linkKind?: 'url' | 'page';
+  /** External URL (when linkKind='url'). */
+  url?: string;
+  /** Page id (when linkKind='page'). Falls back to no-op if the
+   *  page has been deleted since the button was configured. */
+  pageId?: string;
+  /** Visual variant. 'primary' is filled with the app's accent;
+   *  'secondary' is outlined. */
+  variant?: 'primary' | 'secondary';
+  /** Open external links in a new tab. Ignored for page links. */
+  openInNewTab?: boolean;
+}
+
+/**
+ * Horizontal rule. Lets authors break up a page without resorting
+ * to a Text widget with `---` markdown.
+ */
+export interface DividerWidgetConfig {
+  kind: 'divider';
+  /** Stroke thickness in px. Default 1. */
+  thicknessPx?: number;
+  /** CSS color for the stroke. Defaults to the app's border color. */
+  color?: string;
+  /** Style of the rule. */
+  style?: 'solid' | 'dashed' | 'dotted';
+}
+
+/**
+ * Embedded iframe content (videos, dashboards, forms, slide decks).
+ * The author pastes a URL; the runtime renders an iframe with a
+ * conservative sandbox. Cross-origin embedding obeys the target's
+ * X-Frame-Options / CSP -- some sites refuse to embed and the
+ * author sees a blank frame. We can't probe ahead-of-time without
+ * a server-side check, so we surface a hint instead and trust the
+ * author to verify.
+ */
+export interface EmbedWidgetConfig {
+  kind: 'embed';
+  /** Iframe src. http(s) only; the designer rejects non-http URLs. */
+  url?: string;
+  /** Optional title attribute for assistive tech. */
+  title?: string;
+  /** When true, the iframe runs in a stricter sandbox (allow-same-
+   *  origin off). Authors who embed trusted dashboards typically
+   *  leave this off; opt in for arbitrary third-party URLs. */
+  strict?: boolean;
 }
 
 /**

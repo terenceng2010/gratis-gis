@@ -14,6 +14,7 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  Code as CodeIcon,
   ExternalLink,
   Eye,
   Image as ImageIcon,
@@ -21,8 +22,10 @@ import {
   ListTree,
   Loader2,
   Map as MapIcon,
+  Minus as MinusIcon,
   MoreVertical,
   MousePointer2,
+  MousePointerClick,
   Pencil,
   Plus,
   Printer,
@@ -456,6 +459,7 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
               widget={selectedWidget}
               canEdit={canEdit}
               pageWidgets={activePage.widgets}
+              appPages={app.pages}
               appTargets={app.targets}
               appMapId={app.mapId}
               appMapTitle={mapTitle}
@@ -748,6 +752,34 @@ const PALETTE_TILES: Array<{
     label: 'Text',
     Icon: TypeIcon,
     hint: 'Headings, intros, attributions',
+    category: 'page',
+  },
+  {
+    kind: 'image',
+    label: 'Image',
+    Icon: ImageIcon,
+    hint: 'Static image from a URL',
+    category: 'page',
+  },
+  {
+    kind: 'button',
+    label: 'Button',
+    Icon: MousePointerClick,
+    hint: 'Link to another page or external URL',
+    category: 'page',
+  },
+  {
+    kind: 'divider',
+    label: 'Divider',
+    Icon: MinusIcon,
+    hint: 'Horizontal rule between sections',
+    category: 'page',
+  },
+  {
+    kind: 'embed',
+    label: 'Embed',
+    Icon: CodeIcon,
+    hint: 'iframe a video, dashboard, or form',
     category: 'page',
   },
 ];
@@ -1331,6 +1363,41 @@ function WidgetCard({
             frozen={anyGesture}
           />
         </div>
+      ) : widget.config.kind === 'image' && widget.config.url ? (
+        // Live preview for the Image widget when a URL is set. No
+        // sandboxing concerns -- it's a read-only <img>.
+        <div className="relative flex flex-1 overflow-hidden bg-surface-2/40">
+          <img
+            src={widget.config.url}
+            alt={widget.config.alt ?? ''}
+            className="pointer-events-none h-full w-full"
+            style={{ objectFit: widget.config.objectFit ?? 'contain' }}
+          />
+        </div>
+      ) : widget.config.kind === 'divider' ? (
+        // Live preview for the Divider widget. Mirrors the runtime.
+        <div className="flex flex-1 items-center px-2">
+          <hr
+            className="w-full"
+            style={{
+              borderTop: `${widget.config.thicknessPx ?? 1}px ${widget.config.style ?? 'solid'} ${widget.config.color ?? 'var(--color-border, #e5e7eb)'}`,
+              margin: 0,
+            }}
+          />
+        </div>
+      ) : widget.config.kind === 'button' ? (
+        // Live preview for the Button widget.
+        <div className="flex flex-1 items-center justify-center p-2">
+          <span
+            className={`pointer-events-none inline-flex h-8 items-center justify-center rounded-md px-3 text-xs font-medium ${
+              (widget.config.variant ?? 'primary') === 'primary'
+                ? 'bg-accent text-white'
+                : 'border border-border bg-surface-1 text-ink-1'
+            }`}
+          >
+            {widget.config.label || 'Button'}
+          </span>
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted">
           {widgetPlaceholderText(widget.kind, label)}
@@ -1398,6 +1465,14 @@ function widgetPlaceholderText(
       return 'Click / box / polygon / lasso';
     case 'basemap-gallery':
       return 'Tiles of available basemaps';
+    case 'image':
+      return 'Paste an image URL in the right rail';
+    case 'button':
+      return 'Configure label + link in the right rail';
+    case 'divider':
+      return 'Horizontal rule';
+    case 'embed':
+      return 'Paste an iframe URL in the right rail';
     default:
       return `${label} content`;
   }
@@ -1424,6 +1499,14 @@ function summarizeWidget(w: CustomWidget): string {
       return w.config.preset ?? 'body';
     case 'chart':
       return `${w.config.chartType} of #${w.config.targetIndex}`;
+    case 'image':
+      return w.config.url ? 'image set' : 'no url';
+    case 'button':
+      return w.config.label || 'no label';
+    case 'divider':
+      return w.config.style ?? 'solid';
+    case 'embed':
+      return w.config.url ? 'url set' : 'no url';
     default:
       return '';
   }
@@ -1559,6 +1642,7 @@ function WidgetProperties({
   widget,
   canEdit,
   pageWidgets,
+  appPages,
   appTargets,
   appMapId,
   appMapTitle,
@@ -1570,6 +1654,7 @@ function WidgetProperties({
   widget: CustomWidget;
   canEdit: boolean;
   pageWidgets: CustomWidget[];
+  appPages: CustomPage[];
   appTargets: ViewerTarget[];
   appMapId: string | undefined;
   appMapTitle: string | null;
@@ -1678,6 +1763,7 @@ function WidgetProperties({
           widget={widget}
           canEdit={canEdit}
           pageWidgets={pageWidgets}
+          appPages={appPages}
           appTargets={appTargets}
           appMapId={appMapId}
           appMapTitle={appMapTitle}
@@ -1717,6 +1803,7 @@ function WidgetConfigForm({
   widget,
   canEdit,
   pageWidgets,
+  appPages,
   appTargets,
   appMapId,
   appMapTitle,
@@ -1726,6 +1813,7 @@ function WidgetConfigForm({
   widget: CustomWidget;
   canEdit: boolean;
   pageWidgets: CustomWidget[];
+  appPages: CustomPage[];
   appTargets: ViewerTarget[];
   appMapId: string | undefined;
   appMapTitle: string | null;
@@ -1905,6 +1993,39 @@ function WidgetConfigForm({
           Chart configuration ships after the runtime (#341).
         </p>
       );
+    case 'image':
+      return (
+        <ImageWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
+      );
+    case 'button':
+      return (
+        <ButtonWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          pages={appPages}
+          onChangeConfig={onChangeConfig}
+        />
+      );
+    case 'divider':
+      return (
+        <DividerWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
+      );
+    case 'embed':
+      return (
+        <EmbedWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
+      );
     default: {
       const _exhaustive: never = widget.config;
       void _exhaustive;
@@ -1993,6 +2114,261 @@ function MapWidgetConfig({
           ? 'No targets on the app yet. The runtime will render the map with just the basemap until targets are added.'
           : `${appTargetCount} target layer${appTargetCount === 1 ? '' : 's'} on the app -- this map renders all of them by default.`}
       </p>
+    </div>
+  );
+}
+
+// ---- Page-element widget config editors (#361) -----------------------------
+
+function ImageWidgetConfig({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: { kind: 'image'; url?: string; alt?: string; objectFit?: 'contain' | 'cover' | 'fill' | 'none'; href?: string; openInNewTab?: boolean };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="Image URL" hint="Paste an https URL. Local upload is a follow-up.">
+        <input
+          type="url"
+          value={config.url ?? ''}
+          disabled={!canEdit}
+          placeholder="https://..."
+          onChange={(e) => onChangeConfig({ url: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field label="Alt text" hint="Describe the image for screen readers. Leave blank if decorative.">
+        <input
+          type="text"
+          value={config.alt ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ alt: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field label="Fit">
+        <select
+          value={config.objectFit ?? 'contain'}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ objectFit: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="contain">Contain (letterbox)</option>
+          <option value="cover">Cover (crop)</option>
+          <option value="fill">Fill (stretch)</option>
+          <option value="none">None (actual size)</option>
+        </select>
+      </Field>
+      <Field label="Click target (optional)" hint="When set, the image becomes a link.">
+        <input
+          type="url"
+          value={config.href ?? ''}
+          disabled={!canEdit}
+          placeholder="https://..."
+          onChange={(e) => onChangeConfig({ href: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      {config.href ? (
+        <label className="flex items-center gap-2 text-xs text-ink-1">
+          <input
+            type="checkbox"
+            disabled={!canEdit}
+            checked={config.openInNewTab ?? false}
+            onChange={(e) => onChangeConfig({ openInNewTab: e.target.checked })}
+          />
+          Open in a new tab
+        </label>
+      ) : null}
+    </div>
+  );
+}
+
+function ButtonWidgetConfig({
+  config,
+  canEdit,
+  pages,
+  onChangeConfig,
+}: {
+  config: {
+    kind: 'button';
+    label: string;
+    linkKind?: 'url' | 'page';
+    url?: string;
+    pageId?: string;
+    variant?: 'primary' | 'secondary';
+    openInNewTab?: boolean;
+  };
+  canEdit: boolean;
+  pages: CustomPage[];
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const linkKind = config.linkKind ?? 'url';
+  return (
+    <div className="space-y-3">
+      <Field label="Label">
+        <input
+          type="text"
+          value={config.label ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ label: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field label="Variant">
+        <select
+          value={config.variant ?? 'primary'}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ variant: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="primary">Primary (filled)</option>
+          <option value="secondary">Secondary (outline)</option>
+        </select>
+      </Field>
+      <Field label="Links to">
+        <select
+          value={linkKind}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ linkKind: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="url">External URL</option>
+          <option value="page">Page in this app</option>
+        </select>
+      </Field>
+      {linkKind === 'url' ? (
+        <>
+          <Field label="URL">
+            <input
+              type="url"
+              value={config.url ?? ''}
+              disabled={!canEdit}
+              placeholder="https://..."
+              onChange={(e) => onChangeConfig({ url: e.target.value })}
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-xs text-ink-1">
+            <input
+              type="checkbox"
+              disabled={!canEdit}
+              checked={config.openInNewTab ?? false}
+              onChange={(e) => onChangeConfig({ openInNewTab: e.target.checked })}
+            />
+            Open in a new tab
+          </label>
+        </>
+      ) : (
+        <Field label="Page">
+          <select
+            value={config.pageId ?? ''}
+            disabled={!canEdit || pages.length === 0}
+            onChange={(e) => onChangeConfig({ pageId: e.target.value })}
+            className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+          >
+            <option value="">Pick a page</option>
+            {pages.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+    </div>
+  );
+}
+
+function DividerWidgetConfig({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: { kind: 'divider'; thicknessPx?: number; color?: string; style?: 'solid' | 'dashed' | 'dotted' };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="Style">
+        <select
+          value={config.style ?? 'solid'}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ style: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="solid">Solid</option>
+          <option value="dashed">Dashed</option>
+          <option value="dotted">Dotted</option>
+        </select>
+      </Field>
+      <Field label="Thickness (px)">
+        <NumberInput
+          value={config.thicknessPx ?? 1}
+          min={1}
+          max={8}
+          disabled={!canEdit}
+          onChange={(v) => onChangeConfig({ thicknessPx: v })}
+        />
+      </Field>
+      <Field label="Color (CSS)" hint="Hex, rgb, or any CSS color. Leave blank to inherit border color.">
+        <input
+          type="text"
+          value={config.color ?? ''}
+          disabled={!canEdit}
+          placeholder="#e5e7eb"
+          onChange={(e) => onChangeConfig({ color: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+    </div>
+  );
+}
+
+function EmbedWidgetConfig({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: { kind: 'embed'; url?: string; title?: string; strict?: boolean };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="URL" hint="https only. Some sites refuse to be iframed (X-Frame-Options); test in the runtime.">
+        <input
+          type="url"
+          value={config.url ?? ''}
+          disabled={!canEdit}
+          placeholder="https://..."
+          onChange={(e) => onChangeConfig({ url: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field label="Title" hint="Used for assistive tech. Defaults to the URL when blank.">
+        <input
+          type="text"
+          value={config.title ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ title: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <label className="flex items-center gap-2 text-xs text-ink-1">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={config.strict ?? false}
+          onChange={(e) => onChangeConfig({ strict: e.target.checked })}
+        />
+        Strict sandbox (recommended for untrusted URLs)
+      </label>
     </div>
   );
 }
@@ -2167,6 +2543,14 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 8, rowSpan: 2 };
     case 'basemap-gallery':
       return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
+    case 'image':
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
+    case 'button':
+      return { col: 1, row: 1, colSpan: 4, rowSpan: 2 };
+    case 'divider':
+      return { col: 1, row: 1, colSpan: 24, rowSpan: 1 };
+    case 'embed':
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
@@ -2247,6 +2631,39 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
         kind,
         layout,
         config: { kind: 'basemap-gallery', mapWidgetId: '' },
+      };
+    case 'image':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'image', objectFit: 'contain' },
+      };
+    case 'button':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'button',
+          label: 'Button',
+          variant: 'primary',
+          linkKind: 'url',
+        },
+      };
+    case 'divider':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'divider', thicknessPx: 1, style: 'solid' },
+      };
+    case 'embed':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'embed' },
       };
     default: {
       const _exhaustive: never = kind;
