@@ -2295,134 +2295,16 @@ export function EditorRuntime({
               </button>
             </div>
           ) : null}
-          {/* Read-side interaction tools: Select (with mode dropdown)
-              and Measure. These are not edit-specific (viewers can
-              use them too) so they live in the top toolbar rather
-              than the editor pane. Same activeTool / onToolClick
-              machinery as the pane's editing tools. Only rendered
-              when the editor.tools configuration includes them. */}
-          {(editor.tools.includes('select') ||
-            editor.tools.includes('measure')) ? (
-            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
-              {editor.tools.includes('select') ? (() => {
-                const ModeIcon =
-                  selectMode === 'click'
-                    ? MousePointer2
-                    : selectMode === 'rectangle'
-                      ? Square
-                      : selectMode === 'polygon'
-                        ? Pentagon
-                        : Spline;
-                const isActive = activeTool === 'select';
-                return (
-                  <div
-                    key="select"
-                    ref={selectMenuRef}
-                    className="relative flex items-stretch"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onToolClick('select')}
-                      className={`inline-flex h-9 w-9 items-center justify-center rounded-l text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                        isActive ? 'bg-purple-100 text-purple-800' : ''
-                      }`}
-                      title={`Select (${selectMode})`}
-                      aria-label={`Select (${selectMode})`}
-                      aria-pressed={isActive}
-                    >
-                      <ModeIcon className="h-5 w-5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectMenuOpen((v) => !v)}
-                      className={`inline-flex h-9 w-5 items-center justify-center rounded-r text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                        isActive ? 'bg-purple-100 text-purple-800' : ''
-                      }`}
-                      aria-label="Select mode"
-                      aria-haspopup="menu"
-                      aria-expanded={selectMenuOpen}
-                      title="Select mode"
-                    >
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    </button>
-                    {selectMenuOpen ? (
-                      <div
-                        role="menu"
-                        className="absolute right-0 top-11 z-30 w-44 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
-                      >
-                        <SelectModeItem
-                          Icon={MousePointer2}
-                          label="Click"
-                          active={selectMode === 'click'}
-                          onClick={() => {
-                            setSelectMode('click');
-                            setSelectMenuOpen(false);
-                            if (activeTool !== 'select') onToolClick('select');
-                          }}
-                        />
-                        <SelectModeItem
-                          Icon={Square}
-                          label="Rectangle"
-                          active={selectMode === 'rectangle'}
-                          onClick={() => {
-                            setSelectMode('rectangle');
-                            setSelectMenuOpen(false);
-                            if (activeTool !== 'select') onToolClick('select');
-                          }}
-                        />
-                        <SelectModeItem
-                          Icon={Pentagon}
-                          label="Polygon"
-                          active={selectMode === 'polygon'}
-                          onClick={() => {
-                            setSelectMode('polygon');
-                            setSelectMenuOpen(false);
-                            if (activeTool !== 'select') onToolClick('select');
-                          }}
-                        />
-                        <SelectModeItem
-                          Icon={Spline}
-                          label="Lasso"
-                          active={selectMode === 'lasso'}
-                          onClick={() => {
-                            setSelectMode('lasso');
-                            setSelectMenuOpen(false);
-                            if (activeTool !== 'select') onToolClick('select');
-                          }}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })() : null}
-              {editor.tools.includes('measure') ? (
-                <button
-                  type="button"
-                  onClick={() => onToolClick('measure')}
-                  className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                    activeTool === 'measure'
-                      ? 'bg-purple-100 text-purple-800'
-                      : ''
-                  }`}
-                  title="Measure"
-                  aria-label="Measure"
-                  aria-pressed={activeTool === 'measure'}
-                >
-                  <Ruler className="h-5 w-5" />
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {/* #306 panel toggles: Layers list + Attribute Table.
-              Separate pill from the editing tools so users can read
-              "what's on the map" controls vs "edit the map"
-              controls at a glance. WAB-style: panels open / close
-              from header icons rather than living as a permanent
-              left rail. Active panel is highlighted in purple to
-              match the active-tool styling. The Editor pane toggle
-              leads the pill for canEdit users since it is the
-              primary editing affordance now that tools live inside
-              the pane. */}
+          {/* Header toolbar: a single pill that holds the editor pane
+              toggle (canEdit only), the read-side interaction tools
+              (Select with mode dropdown, Measure -- not
+              edit-specific so they live here, not in the pane), and
+              the panel toggles (Layers, Attribute Table, Form View,
+              Basemap). One pill instead of three because all of
+              these icons share the same visual rhythm and splitting
+              them by function created more noise than it relieved.
+              Active panel / active tool both highlight in purple to
+              match. */}
           <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
             {canEdit ? (
               <button
@@ -2436,6 +2318,113 @@ export function EditorRuntime({
                 aria-pressed={editorPaneOpen}
               >
                 <PencilLine className="h-5 w-5" />
+              </button>
+            ) : null}
+            {editor.tools.includes('select') ? (() => {
+              const ModeIcon =
+                selectMode === 'click'
+                  ? MousePointer2
+                  : selectMode === 'rectangle'
+                    ? Square
+                    : selectMode === 'polygon'
+                      ? Pentagon
+                      : Spline;
+              const isActive = activeTool === 'select';
+              return (
+                <div
+                  key="select"
+                  ref={selectMenuRef}
+                  className="relative flex items-stretch"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onToolClick('select')}
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-l text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                      isActive ? 'bg-purple-100 text-purple-800' : ''
+                    }`}
+                    title={`Select (${selectMode})`}
+                    aria-label={`Select (${selectMode})`}
+                    aria-pressed={isActive}
+                  >
+                    <ModeIcon className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectMenuOpen((v) => !v)}
+                    className={`inline-flex h-9 w-5 items-center justify-center rounded-r text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                      isActive ? 'bg-purple-100 text-purple-800' : ''
+                    }`}
+                    aria-label="Select mode"
+                    aria-haspopup="menu"
+                    aria-expanded={selectMenuOpen}
+                    title="Select mode"
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                  {selectMenuOpen ? (
+                    <div
+                      role="menu"
+                      className="absolute right-0 top-11 z-30 w-44 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                    >
+                      <SelectModeItem
+                        Icon={MousePointer2}
+                        label="Click"
+                        active={selectMode === 'click'}
+                        onClick={() => {
+                          setSelectMode('click');
+                          setSelectMenuOpen(false);
+                          if (activeTool !== 'select') onToolClick('select');
+                        }}
+                      />
+                      <SelectModeItem
+                        Icon={Square}
+                        label="Rectangle"
+                        active={selectMode === 'rectangle'}
+                        onClick={() => {
+                          setSelectMode('rectangle');
+                          setSelectMenuOpen(false);
+                          if (activeTool !== 'select') onToolClick('select');
+                        }}
+                      />
+                      <SelectModeItem
+                        Icon={Pentagon}
+                        label="Polygon"
+                        active={selectMode === 'polygon'}
+                        onClick={() => {
+                          setSelectMode('polygon');
+                          setSelectMenuOpen(false);
+                          if (activeTool !== 'select') onToolClick('select');
+                        }}
+                      />
+                      <SelectModeItem
+                        Icon={Spline}
+                        label="Lasso"
+                        active={selectMode === 'lasso'}
+                        onClick={() => {
+                          setSelectMode('lasso');
+                          setSelectMenuOpen(false);
+                          if (activeTool !== 'select') onToolClick('select');
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })() : null}
+            {editor.tools.includes('measure') ? (
+              <button
+                type="button"
+                onClick={() => onToolClick('measure')}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                  activeTool === 'measure'
+                    ? 'bg-purple-100 text-purple-800'
+                    : ''
+                }`}
+                title="Measure"
+                aria-label="Measure"
+                aria-pressed={activeTool === 'measure'}
+              >
+                <Ruler className="h-5 w-5" />
               </button>
             ) : null}
             <button
@@ -2888,10 +2877,7 @@ export function EditorRuntime({
                   user feedback, this kind of contextual instruction
                   belongs in the pane, not as a floating overlay.
                   Each branch carries its own X-button to exit the
-                  active tool, so the user can dismiss without
-                  hunting for a tool button. Phase B replaces the
-                  default branch with the Create-features template
-                  list. */}
+                  active tool. */}
               {activeTool === 'edit' ? (
                 <section className="flex items-start gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-xs text-purple-900">
                   <div className="min-w-0 flex-1">
@@ -2915,10 +2901,150 @@ export function EditorRuntime({
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </section>
+              ) : null}
+
+              {/* Create features section (Phase B). Lists every
+                  editor target the user can add to (canCreate +
+                  resolved layer + non-null geometry type), grouped
+                  by layer, with each per-target template rendered
+                  as a clickable row. Clicking a template enters Add
+                  mode pre-bound to that target and template; the
+                  active row highlights so the user can see what is
+                  about to drop on the next click. The first row in
+                  each group is a "New feature" default that uses
+                  the layer's plain geometry tool with no preset
+                  attributes -- mirrors today's no-template flow.
+                  Replaces the previous floating template tray; the
+                  pane is the home for this surface now. */}
+              {eligibleAddTargets.length > 0 ? (
+                <section>
+                  <h3 className="mb-1.5 text-xs font-semibold text-ink-0">
+                    Create features
+                  </h3>
+                  <div className="space-y-3">
+                    {eligibleAddTargets.map((e) => {
+                      const layerTitle =
+                        e.resolved?.layer?.label ??
+                        e.resolved?.dataLayerTitle ??
+                        'Layer';
+                      const dataLayerTitle = e.resolved?.dataLayerTitle;
+                      const templates = e.editorTarget.templates ?? [];
+                      const geomType =
+                        e.resolved?.layer?.geometryType ?? 'point';
+                      // The default "New feature" row inherits the
+                      // layer's geometry type; templates can pick a
+                      // different geometryTool, which is reflected
+                      // by the per-template swatch.
+                      return (
+                        <div key={e.key}>
+                          <p className="mb-1 text-[11px] font-medium text-muted">
+                            {dataLayerTitle && dataLayerTitle !== layerTitle
+                              ? `${dataLayerTitle} / ${layerTitle}`
+                              : layerTitle}
+                          </p>
+                          <div className="space-y-0.5">
+                            {(() => {
+                              const isActive =
+                                activeTool === 'add' &&
+                                activeTargetKey === e.key &&
+                                activeTemplateId === null;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isActive) {
+                                      // Toggle off if clicking the
+                                      // already-active default row
+                                      // again (lets the user back
+                                      // out of Add mode without
+                                      // hunting for a different
+                                      // tool button).
+                                      setActiveTool('off');
+                                      setActiveTargetKey(null);
+                                      setActiveTemplateId(null);
+                                    } else {
+                                      setActiveTool('add');
+                                      setActiveTargetKey(e.key);
+                                      setActiveTemplateId(null);
+                                    }
+                                  }}
+                                  aria-pressed={isActive}
+                                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs ${
+                                    isActive
+                                      ? 'bg-purple-100 text-purple-900'
+                                      : 'text-ink-1 hover:bg-surface-2'
+                                  }`}
+                                >
+                                  <span
+                                    aria-hidden
+                                    className={`inline-block h-3 w-3 shrink-0 border ${
+                                      geomType === 'point'
+                                        ? 'rounded-full border-ink-2 bg-purple-400'
+                                        : geomType === 'line'
+                                          ? 'h-[3px] rounded-sm border-ink-2 bg-purple-500'
+                                          : 'rounded-sm border-ink-2 bg-purple-300'
+                                    }`}
+                                  />
+                                  <span>New feature</span>
+                                </button>
+                              );
+                            })()}
+                            {templates.map((tpl) => {
+                              const isActive =
+                                activeTool === 'add' &&
+                                activeTargetKey === e.key &&
+                                activeTemplateId === tpl.id;
+                              return (
+                                <button
+                                  key={tpl.id}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isActive) {
+                                      setActiveTool('off');
+                                      setActiveTargetKey(null);
+                                      setActiveTemplateId(null);
+                                    } else {
+                                      setActiveTool('add');
+                                      setActiveTargetKey(e.key);
+                                      setActiveTemplateId(tpl.id);
+                                    }
+                                  }}
+                                  aria-pressed={isActive}
+                                  title={`${tpl.label} - ${tpl.geometryTool}`}
+                                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs ${
+                                    isActive
+                                      ? 'bg-purple-100 text-purple-900'
+                                      : 'text-ink-1 hover:bg-surface-2'
+                                  }`}
+                                >
+                                  <span
+                                    aria-hidden
+                                    className={`inline-block h-3 w-3 shrink-0 border border-ink-2 ${
+                                      tpl.geometryTool === 'point'
+                                        ? 'rounded-full'
+                                        : tpl.geometryTool === 'line'
+                                          ? 'h-[3px] rounded-sm'
+                                          : 'rounded-sm'
+                                    }`}
+                                    style={{
+                                      backgroundColor:
+                                        tpl.previewColor ?? '#a78bfa',
+                                    }}
+                                  />
+                                  <span className="truncate">{tpl.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               ) : (
                 <section className="rounded-md border border-dashed border-border bg-surface-0 px-3 py-4 text-xs text-muted">
-                  Create-features template list lands in the next slice.
-                  Use the Add tool above for now.
+                  No editable target layers configured. Open the
+                  editor's Configure page to add one.
                 </section>
               )}
             </div>
@@ -2992,138 +3118,66 @@ export function EditorRuntime({
             />
           ) : null}
 
-          {/* Active-mode chip / banner overlay. Add shows a target
-              dropdown; Edit shows a "click any feature" prompt;
-              Delete shows the same in rose to telegraph the
-              destructive nature.
-
-              The tool palette + Print button used to live here as
-              floating overlays at left-3 top-3 / right-3 top-28; both
-              moved into the runtime header so every clickable
-              control sits in one row at a consistent size, and the
-              SearchBar at top-left no longer overlaps. */}
+          {/* Active-mode status banner. Add now lives almost entirely
+              in the editor pane (Create features section): the user
+              picks a template there and the cursor goes hot. This
+              floating banner is a compact status indicator only so
+              the user can see at a glance what's armed and exit
+              without hunting for the pane. The dropdown and
+              template tray that used to live here moved into the
+              pane in the Phase B slice. */}
           {activeTool === 'add' ? (
-            <div className="pointer-events-auto absolute left-16 top-3 z-10 flex flex-col gap-1 rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs text-purple-900 shadow-card">
-              <div className="flex items-center gap-2">
-                <span className="font-medium">Drawing into:</span>
-                <select
-                  value={activeTargetKey ?? ''}
-                  onChange={(e) => {
-                    setActiveTargetKey(e.target.value || null);
-                    // Switching the target invalidates the active
-                    // template (each target has its own list).
-                    setActiveTemplateId(null);
-                  }}
-                  className="rounded-md border border-purple-300 bg-white px-2 py-0.5 text-xs"
-                >
-                  <option value="">pick a layer...</option>
-                  {eligibleAddTargets.map((e) => (
-                    <option key={e.key} value={e.key}>
-                      {e.resolved?.dataLayerTitle} /{' '}
-                      {e.resolved?.layer?.label} (
-                      {e.resolved?.layer?.geometryType})
-                    </option>
-                  ))}
-                </select>
-                {activeTarget?.layer?.geometryType ? (
-                  <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
-                    click to add{' '}
-                    {(() => {
-                      const tplTarget = activeTargetKey
-                        ? editor.targets.find(
-                            (t) =>
-                              `${t.dataLayerId}:${t.layerKey}` ===
-                              activeTargetKey,
-                          )
-                        : undefined;
-                      const tpl = activeTemplateId
-                        ? tplTarget?.templates.find(
-                            (t) => t.id === activeTemplateId,
-                          )
-                        : undefined;
-                      return tpl?.geometryTool ?? activeTarget?.layer?.geometryType ?? '';
-                    })()}
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTool('off');
-                    setActiveTargetKey(null);
-                    setActiveTemplateId(null);
-                  }}
-                  className="rounded-md p-0.5 text-purple-900 hover:bg-purple-100"
-                  aria-label="Exit add mode"
-                  title="Exit add mode"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              {/* Feature-template tray (#121). Renders only when
-                  the chosen target has templates configured. The
-                  Default tile clears the active template so the
-                  next draw uses the layer's plain geometry tool
-                  with empty initial attributes (today's behaviour
-                  when no templates exist). Each template tile shows
-                  the label + a small swatch in the optional preview
-                  color so authors who configured many templates can
-                  pick the right one at a glance. */}
+            <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs text-purple-900 shadow-card">
+              <span className="font-medium">Click on the map to add:</span>
               {(() => {
-                const tplTarget = activeTargetKey
-                  ? editor.targets.find(
-                      (t) =>
-                        `${t.dataLayerId}:${t.layerKey}` === activeTargetKey,
-                    )
-                  : undefined;
-                const tpls = tplTarget?.templates ?? [];
-                if (tpls.length === 0) return null;
-                return (
-                  <div className="flex flex-wrap items-center gap-1 border-t border-purple-200 pt-1">
-                    <span className="text-[10px] uppercase tracking-wide text-purple-700">
-                      Template:
+                if (!activeTargetKey) {
+                  return (
+                    <span className="italic text-purple-700">
+                      pick a feature template from the editor pane
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTemplateId(null)}
-                      aria-pressed={activeTemplateId === null}
-                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
-                        activeTemplateId === null
-                          ? 'border-purple-400 bg-purple-100 text-purple-900'
-                          : 'border-purple-200 bg-white text-purple-800 hover:bg-purple-100'
-                      }`}
-                    >
-                      Default
-                    </button>
-                    {tpls.map((tpl) => {
-                      const selected = activeTemplateId === tpl.id;
-                      return (
-                        <button
-                          key={tpl.id}
-                          type="button"
-                          onClick={() => setActiveTemplateId(tpl.id)}
-                          aria-pressed={selected}
-                          title={`${tpl.label} · ${tpl.geometryTool}`}
-                          className={`inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-[11px] ${
-                            selected
-                              ? 'border-purple-400 bg-purple-100 text-purple-900'
-                              : 'border-purple-200 bg-white text-purple-800 hover:bg-purple-100'
-                          }`}
-                        >
-                          <span
-                            aria-hidden
-                            className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-purple-300"
-                            style={{
-                              backgroundColor: tpl.previewColor ?? '#a78bfa',
-                            }}
-                          />
-                          {tpl.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  );
+                }
+                const tplTarget = editor.targets.find(
+                  (t) =>
+                    `${t.dataLayerId}:${t.layerKey}` === activeTargetKey,
+                );
+                const tpl = activeTemplateId
+                  ? tplTarget?.templates.find((t) => t.id === activeTemplateId)
+                  : null;
+                const layerLabel =
+                  activeTarget?.layer?.label ??
+                  activeTarget?.dataLayerTitle ??
+                  'feature';
+                const geomType =
+                  tpl?.geometryTool ??
+                  activeTarget?.layer?.geometryType ??
+                  '';
+                return (
+                  <>
+                    <span className="font-medium text-purple-900">
+                      {tpl?.label ?? `New ${layerLabel}`}
+                    </span>
+                    {geomType ? (
+                      <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+                        {geomType}
+                      </span>
+                    ) : null}
+                  </>
                 );
               })()}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTool('off');
+                  setActiveTargetKey(null);
+                  setActiveTemplateId(null);
+                }}
+                className="rounded-md p-0.5 text-purple-900 hover:bg-purple-100"
+                aria-label="Exit add mode"
+                title="Exit add mode"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           ) : activeTool === 'measure' ? (
             <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs text-sky-900 shadow-card">
