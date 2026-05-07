@@ -1,53 +1,103 @@
 import { notFound } from 'next/navigation';
-import Link from 'next/link';
-import {
-  ArrowLeft,
-  BarChart3,
-  Hammer,
-  Image as ImageIcon,
-  Layers as LayersIcon,
-  ListTree,
-  Map as MapIcon,
-  MousePointer2,
-  Printer,
-  Search,
-  Sparkles,
-  Square,
-  Table2,
-  Type as TypeIcon,
-} from 'lucide-react';
 import type {
+  BasemapData,
   CustomAppData,
-  CustomWidget,
-  CustomWidgetKind,
+  DataLayerData,
+  DataLayerSublayer,
   Item,
+  MapData,
+  MapLayer,
 } from '@gratis-gis/shared-types';
 import {
+  DEFAULT_LAYER_ACCESS,
+  DEFAULT_LAYER_INTERACTIONS,
+  DEFAULT_LAYER_LABELS,
+  DEFAULT_LAYER_POPUP,
+  DEFAULT_LAYER_RENDERER,
+  DEFAULT_LAYER_SCALE,
+  DEFAULT_LAYER_SEARCH,
+  DEFAULT_LAYER_STYLE,
+  DEFAULT_MAP,
   DEFAULT_CUSTOM_APP,
   isCustomAppItem,
   readCustomAppData,
 } from '@gratis-gis/shared-types';
-import { apiFetch } from '@/lib/api';
+import type { CustomBasemap } from '@/lib/custom-basemap';
+import { apiFetch, hasSession, publicApiFetch } from '@/lib/api';
+import { CustomRuntimeClient } from '../runtime-client';
 
 interface Props {
   params: { id: string };
 }
 
-const ROW_HEIGHT_PX = 48;
+/**
+ * Map a basemap item into the CustomBasemap shape MapCanvas
+ * consumes. Same helper survey/run + viewer/run inline; extract
+ * to a shared util when a fifth caller appears.
+ */
+function basemapItemToCustomBasemap(
+  it: Item<BasemapData>,
+): CustomBasemap | null {
+  const d = it.data ?? ({} as BasemapData);
+  let url: string | undefined;
+  let sourceKind: CustomBasemap['sourceKind'];
+  let config: Record<string, unknown> | null = null;
+  switch (d.kind) {
+    case 'style-url':
+      if (!d.styleUrl) return null;
+      url = d.styleUrl;
+      sourceKind = 'vector-style';
+      break;
+    case 'tile-url':
+      if (!d.tileUrl) return null;
+      url = d.tileUrl;
+      sourceKind = 'xyz';
+      break;
+    case 'wms':
+      if (!d.wmsUrl) return null;
+      url = d.wmsUrl;
+      sourceKind = 'wms';
+      config = (d.wmsConfig ?? null) as Record<string, unknown> | null;
+      break;
+    default:
+      return null;
+  }
+  return {
+    id: it.id,
+    orgId: it.orgId,
+    label: it.title,
+    description: it.description ?? '',
+    url,
+    sourceKind,
+    attribution: d.attribution ?? '',
+    thumbnailUrl: d.thumbnailUrl ?? it.thumbnailUrl ?? null,
+    config,
+    isDefault: false,
+  };
+}
 
 /**
- * Custom Web App runtime (#261). Slice 5 (#341) replaces the
- * placeholder cards below with real widget renderers (Map = real
- * MapLibre, LayerList = wired to the bound map, etc.). Until that
- * lands, this page already renders the designed page's layout
- * faithfully -- same 12-column grid, same widget cards in their
- * configured positions -- so the author can verify the layout
- * end-to-end without waiting on the renderer.
+ * Custom Web App runtime (#261 / #341).
+ *
+ * Server entry: resolve the app's targets to MapLayer descriptors,
+ * fetch basemaps, and hydrate the client runtime. The client
+ * component does the actual widget rendering against bound map
+ * state (CustomRuntimeClient).
  */
 export default async function CustomAppRuntimePage({ params }: Props) {
+  const isAnonymous = !(await hasSession());
+  const fetchItem = <T,>(path: string): Promise<T> =>
+    isAnonymous
+      ? publicApiFetch<T>(path.replace('/api/items/', '/api/public/items/'))
+      : apiFetch<T>(path);
+  const fetchItemList = <T,>(path: string): Promise<T> =>
+    isAnonymous
+      ? publicApiFetch<T>(path.replace('/api/items', '/api/public/items'))
+      : apiFetch<T>(path);
+
   let item: Item<unknown>;
   try {
-    item = await apiFetch<Item<unknown>>(`/api/items/${params.id}`);
+    item = await fetchItem<Item<unknown>>(`/api/items/${params.id}`);
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
     throw err;
@@ -58,158 +108,96 @@ export default async function CustomAppRuntimePage({ params }: Props) {
     ...DEFAULT_CUSTOM_APP,
     ...((readCustomAppData(item) ?? {}) as Partial<CustomAppData>),
   };
-  const page = app.pages[0]!;
-  const totalWidgets = app.pages.reduce((n, p) => n + p.widgets.length, 0);
-  const usedRows = page.widgets.reduce(
-    (n, w) => Math.max(n, w.layout.row + w.layout.rowSpan - 1),
-    0,
-  );
-  const totalRows = Math.max(8, usedRows + 2);
 
-  return (
-    <div className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col bg-surface-0">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link
-            href="/items"
-            className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to items
-          </Link>
-          <span className="text-muted">/</span>
-          <span className="inline-flex items-center gap-1.5 text-base font-semibold text-ink-0">
-            <Sparkles className="h-4 w-4 text-amber-500" />
-            {item.title}
-          </span>
-        </div>
-        <div className="inline-flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
-            <Hammer className="h-3 w-3" />
-            Layout preview
-          </span>
-          <Link
-            href={`/items/${item.id}`}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-1 hover:bg-surface-2"
-          >
-            Configure
-          </Link>
-        </div>
-      </header>
-
-      <div className="flex-1 overflow-auto bg-surface-0 p-4">
-        {totalWidgets === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="max-w-md rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center shadow-card">
-              <Hammer className="mx-auto h-8 w-8 text-amber-500" />
-              <h2 className="mt-3 text-base font-semibold text-ink-0">
-                Empty app
-              </h2>
-              <p className="mt-2 text-sm text-muted">
-                Head back to{' '}
-                <Link
-                  href={`/items/${item.id}`}
-                  className="text-accent hover:underline"
-                >
-                  the configuration page
-                </Link>{' '}
-                to drag a widget onto the canvas.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div
-            className="grid w-full"
-            style={{
-              gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
-              gridAutoRows: `${ROW_HEIGHT_PX}px`,
-              minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
-              gap: '8px',
-            }}
-          >
-            {page.widgets.map((w) => (
-              <RenderedWidget key={w.id} widget={w} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {totalWidgets > 0 && (
-        <footer className="shrink-0 border-t border-border bg-surface-1 px-4 py-2 text-[11px] text-muted">
-          Placeholder render. Real Map / Layer-List / Attribute-Table /
-          Search / Print / Select / Basemap-Gallery wired to bound data
-          ships in #341.
-        </footer>
-      )}
-    </div>
-  );
-}
-
-const KIND_LABEL: Record<CustomWidgetKind, string> = {
-  map: 'Map',
-  legend: 'Legend',
-  'layer-list': 'Layers',
-  'attribute-table': 'Attribute Table',
-  text: 'Text',
-  chart: 'Chart',
-  search: 'Search',
-  print: 'Print',
-  select: 'Select',
-  'basemap-gallery': 'Basemaps',
-};
-
-function iconFor(kind: CustomWidgetKind) {
-  switch (kind) {
-    case 'map':
-      return MapIcon;
-    case 'legend':
-      return ListTree;
-    case 'layer-list':
-      return LayersIcon;
-    case 'attribute-table':
-      return Table2;
-    case 'text':
-      return TypeIcon;
-    case 'chart':
-      return BarChart3;
-    case 'search':
-      return Search;
-    case 'print':
-      return Printer;
-    case 'select':
-      return MousePointer2;
-    case 'basemap-gallery':
-      return ImageIcon;
-    default:
-      return Square;
+  // Resolve targets to MapLayer descriptors. Each target points at a
+  // v3 data_layer sublayer; we look up the layer item, find the
+  // matching sublayer, and build a MapLayer that reads features via
+  // the per-sublayer geojson endpoint. Targets pointing at deleted
+  // / unreadable layers get silently dropped; the runtime renders
+  // whatever survives.
+  const resolvedTargets: Array<{
+    dataLayerId: string;
+    layerKey: string;
+    title: string;
+    mapLayer: MapLayer;
+  }> = [];
+  for (const t of app.targets) {
+    let layerItem: Item<DataLayerData> | null = null;
+    try {
+      layerItem = await fetchItem<Item<DataLayerData>>(
+        `/api/items/${t.dataLayerId}`,
+      );
+    } catch {
+      continue;
+    }
+    if (!layerItem) continue;
+    const dlData = layerItem.data as DataLayerData | undefined;
+    if (!dlData || dlData.version !== 3) continue;
+    const sub: DataLayerSublayer | undefined = dlData.layers.find(
+      (l) => l.id === t.layerKey,
+    );
+    if (!sub || !sub.geometryType) continue;
+    const id = `custom-target:${t.dataLayerId}:${t.layerKey}`;
+    const url = `/api/portal/items/${t.dataLayerId}/layers/${t.layerKey}/geojson`;
+    resolvedTargets.push({
+      dataLayerId: t.dataLayerId,
+      layerKey: t.layerKey,
+      title: `${layerItem.title} / ${sub.label}`,
+      mapLayer: {
+        id,
+        title: `${layerItem.title} / ${sub.label}`,
+        visible: true,
+        opacity: 1,
+        source: { kind: 'geojson-url', url },
+        style: DEFAULT_LAYER_STYLE,
+        renderer: DEFAULT_LAYER_RENDERER,
+        popup: DEFAULT_LAYER_POPUP,
+        interactions: DEFAULT_LAYER_INTERACTIONS,
+        labels: DEFAULT_LAYER_LABELS,
+        search: DEFAULT_LAYER_SEARCH,
+        filter: null,
+        scale: DEFAULT_LAYER_SCALE,
+        access: DEFAULT_LAYER_ACCESS,
+      },
+    });
   }
-}
 
-function RenderedWidget({ widget }: { widget: CustomWidget }) {
-  const Icon = iconFor(widget.kind);
-  const label = KIND_LABEL[widget.kind] ?? widget.kind;
+  // Fetch the org's basemaps (for MapCanvas's basemap library +
+  // BasemapGallery) and the optional reference map (for viewport +
+  // base layers + basemap default).
+  const [basemapItems, referencedMap] = await Promise.all([
+    fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
+      () => [] as Array<Item<BasemapData>>,
+    ),
+    app.mapId
+      ? fetchItem<Item<MapData>>(`/api/items/${app.mapId}`).catch(() => null)
+      : Promise.resolve(null as Item<MapData> | null),
+  ]);
+
+  const basemaps: CustomBasemap[] = basemapItems
+    .map(basemapItemToCustomBasemap)
+    .filter((b): b is CustomBasemap => b !== null);
+
+  // Build the base MapData every Map widget starts from. Inherits
+  // basemap + viewport + non-target layers from the referenced map
+  // when set, falls through to DEFAULT_MAP otherwise. Then appends
+  // every resolved target layer so a fresh app with one Map widget
+  // shows its targets right away.
+  const baseLayers = referencedMap?.data?.layers ?? [];
+  const baseMapData: MapData = {
+    ...(referencedMap?.data ?? DEFAULT_MAP),
+    layers: [...baseLayers, ...resolvedTargets.map((t) => t.mapLayer)],
+  };
+
   return (
-    <section
-      style={{
-        gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
-        gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
-      }}
-      className="flex h-full w-full flex-col overflow-hidden rounded-md border border-border bg-surface-1 shadow-card"
-    >
-      <header className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface-2/40 px-2 py-1 text-[11px]">
-        <Icon className="h-3.5 w-3.5 text-accent" />
-        <span className="font-semibold text-ink-0">{label}</span>
-      </header>
-      <div className="flex flex-1 items-center justify-center p-3 text-xs italic text-muted">
-        {widget.kind === 'text' && widget.config.kind === 'text' ? (
-          <span className="not-italic text-ink-1">
-            {widget.config.markdown}
-          </span>
-        ) : (
-          <span>Renderer ships in #341</span>
-        )}
-      </div>
-    </section>
+    <CustomRuntimeClient
+      itemId={item.id}
+      itemTitle={item.title}
+      app={app}
+      basemaps={basemaps}
+      baseMapData={baseMapData}
+      resolvedTargets={resolvedTargets}
+    />
   );
 }
 
