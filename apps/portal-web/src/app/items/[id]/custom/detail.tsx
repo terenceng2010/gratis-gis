@@ -37,15 +37,20 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type {
+  BasemapData,
   CustomAppData,
   CustomLayout,
   CustomPage,
   CustomWidget,
   CustomWidgetKind,
   Item,
+  MapData,
   ViewerTarget,
   WebAppData,
 } from '@gratis-gis/shared-types';
+import { DEFAULT_MAP } from '@gratis-gis/shared-types';
+import type { CustomBasemap } from '@/lib/custom-basemap';
+import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
 
 interface Props {
@@ -101,21 +106,50 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
   // Resolved referenced map title (optional). Same lazy-fetch as the
   // previous detail page.
   const [mapTitle, setMapTitle] = useState<string | null>(null);
+  // Preview-time MapData composed from the referenced map (basemap +
+  // viewport + non-target layers), feeding the live MapLibre preview
+  // in Map widgets on the canvas (#343). Targets are intentionally
+  // not resolved here -- the runtime does the per-target geojson
+  // fetch; the designer just needs a "this is what your map will
+  // look like" frame.
+  const [previewMapData, setPreviewMapData] = useState<MapData | null>(null);
+  // Org's basemap library, resolved into the CustomBasemap shape
+  // MapCanvas consumes. Stays empty until the fetch completes; the
+  // preview falls back to MapCanvas's inline OSM raster style in
+  // that interim window.
+  const [previewBasemaps, setPreviewBasemaps] = useState<CustomBasemap[]>([]);
   useEffect(() => {
-    if (!app.mapId) {
-      setMapTitle(null);
-      return;
-    }
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/portal/items/${app.mapId}`);
+        const [mapsRes, mapItemRes] = await Promise.all([
+          fetch('/api/portal/items?type=basemap'),
+          app.mapId
+            ? fetch(`/api/portal/items/${app.mapId}`)
+            : Promise.resolve(null),
+        ]);
         if (cancelled) return;
-        if (!res.ok) return;
-        const item = (await res.json()) as Item;
-        setMapTitle(item.title);
+        if (mapsRes.ok) {
+          const items = (await mapsRes.json()) as Array<Item<BasemapData>>;
+          const built = items
+            .map(basemapItemToCustomBasemap)
+            .filter((b): b is CustomBasemap => b !== null);
+          if (!cancelled) setPreviewBasemaps(built);
+        }
+        if (mapItemRes && mapItemRes.ok) {
+          const item = (await mapItemRes.json()) as Item<MapData>;
+          if (!cancelled) {
+            setMapTitle(item.title);
+            setPreviewMapData(item.data ?? DEFAULT_MAP);
+          }
+        } else {
+          if (!cancelled) {
+            setMapTitle(null);
+            setPreviewMapData(null);
+          }
+        }
       } catch {
-        /* silent: missing map falls through to default basemap */
+        /* silent: preview fall through to default basemap */
       }
     })();
     return () => {
@@ -395,6 +429,8 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
             widgets={activePage.widgets}
             selectedId={selectedWidgetId}
             canEdit={canEdit}
+            previewMapData={previewMapData}
+            previewBasemaps={previewBasemaps}
             onSelect={setSelectedWidgetId}
             onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
             onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
@@ -455,6 +491,116 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
     </div>
   );
 }
+
+// ---- Live Map preview helpers (#343) ---------------------------------------
+
+/**
+ * Map a basemap item into the CustomBasemap shape MapCanvas consumes.
+ * Mirrors the same helper that lives in run/page.tsx (and survey +
+ * viewer); kept duplicated for now because the four call sites read
+ * from different fetch shapes (server-side vs. client-side). Promote
+ * to a shared util when a fifth caller appears.
+ */
+function basemapItemToCustomBasemap(
+  it: Item<BasemapData>,
+): CustomBasemap | null {
+  const d = it.data ?? ({} as BasemapData);
+  let url: string | undefined;
+  let sourceKind: CustomBasemap['sourceKind'];
+  let config: Record<string, unknown> | null = null;
+  switch (d.kind) {
+    case 'style-url':
+      if (!d.styleUrl) return null;
+      url = d.styleUrl;
+      sourceKind = 'vector-style';
+      break;
+    case 'tile-url':
+      if (!d.tileUrl) return null;
+      url = d.tileUrl;
+      sourceKind = 'xyz';
+      break;
+    case 'wms':
+      if (!d.wmsUrl) return null;
+      url = d.wmsUrl;
+      sourceKind = 'wms';
+      config = (d.wmsConfig ?? null) as Record<string, unknown> | null;
+      break;
+    default:
+      return null;
+  }
+  return {
+    id: it.id,
+    orgId: it.orgId,
+    label: it.title,
+    description: it.description ?? '',
+    url,
+    sourceKind,
+    attribution: d.attribution ?? '',
+    thumbnailUrl: d.thumbnailUrl ?? it.thumbnailUrl ?? null,
+    config,
+    isDefault: false,
+  };
+}
+
+/**
+ * Tiny read-only MapLibre preview tile shown inside a Map widget on
+ * the designer canvas. Mirrors what the runtime renders for that
+ * widget but with all interaction suppressed -- the user is editing
+ * layout, not exploring the map. Camera state lives in local
+ * useState so MapCanvas's onCameraChange has somewhere to land
+ * without bubbling back up into CustomAppData.
+ *
+ * Frozen during a gesture to avoid MapLibre re-rendering on every
+ * mousemove tick; we render a static placeholder so the drag stays
+ * smooth.
+ */
+function MapWidgetPreview({
+  baseMapData,
+  basemaps,
+  frozen,
+}: {
+  baseMapData: MapData | null;
+  basemaps: CustomBasemap[];
+  frozen: boolean;
+}) {
+  // MapCanvas mutates camera through the controlled prop; we hold
+  // it locally so panning + zooming inside the preview tile stays
+  // contained.
+  const [previewMap, setPreviewMap] = useState<MapData | null>(baseMapData);
+  useEffect(() => {
+    setPreviewMap(baseMapData);
+  }, [baseMapData]);
+  if (!previewMap) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-[10px] italic text-muted">
+        Pick a Map in the right rail to preview
+      </div>
+    );
+  }
+  if (frozen) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-[10px] italic text-muted">
+        Resizing...
+      </div>
+    );
+  }
+  return (
+    <div className="pointer-events-none h-full w-full">
+      <MapCanvas
+        map={previewMap}
+        basemaps={basemaps}
+        selection={EMPTY_SELECTION}
+        selectTool="off"
+        suppressPopup
+        hideNavigationControl
+        onCameraChange={(c) => setPreviewMap((cur) => (cur ? { ...cur, ...c } : cur))}
+        onSelectionChange={() => {}}
+      />
+    </div>
+  );
+}
+
+const EMPTY_SELECTION: Record<string, Set<number | string>> = {};
 
 // ---- Palette ---------------------------------------------------------------
 
@@ -779,6 +925,8 @@ function Canvas({
   widgets,
   selectedId,
   canEdit,
+  previewMapData,
+  previewBasemaps,
   onSelect,
   onCanvasDrop,
   onWidgetLayout,
@@ -786,6 +934,8 @@ function Canvas({
   widgets: CustomWidget[];
   selectedId: string | null;
   canEdit: boolean;
+  previewMapData: MapData | null;
+  previewBasemaps: CustomBasemap[];
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
   onWidgetLayout: (id: string, layout: CustomLayout) => void;
@@ -936,6 +1086,9 @@ function Canvas({
               selected={w.id === selectedId}
               canEdit={canEdit}
               gesturing={Boolean(gesture && gesture.widgetId === w.id)}
+              anyGesture={gesture !== null}
+              previewMapData={previewMapData}
+              previewBasemaps={previewBasemaps}
               onClick={(e) => {
                 e.stopPropagation();
                 onSelect(w.id);
@@ -979,6 +1132,9 @@ function WidgetCard({
   selected,
   canEdit,
   gesturing,
+  anyGesture,
+  previewMapData,
+  previewBasemaps,
   onClick,
   onMoveStart,
   onResizeStart,
@@ -987,6 +1143,9 @@ function WidgetCard({
   selected: boolean;
   canEdit: boolean;
   gesturing: boolean;
+  anyGesture: boolean;
+  previewMapData: MapData | null;
+  previewBasemaps: CustomBasemap[];
   onClick: (e: React.MouseEvent) => void;
   onMoveStart: (e: ReactMouseEvent<HTMLElement>) => void;
   onResizeStart: (
@@ -998,6 +1157,11 @@ function WidgetCard({
   const Icon = tile?.Icon ?? Square;
   const label = tile?.label ?? widget.kind;
   const summary = summarizeWidget(widget);
+  // #343: live MapLibre preview for Map widgets. We freeze the
+  // preview during ANY canvas gesture (not just the one on this
+  // widget) so a drag of a sibling widget doesn't cause MapLibre to
+  // re-render mid-frame and stutter.
+  const showLivePreview = widget.kind === 'map' && previewMapData !== null;
 
   return (
     <div
@@ -1029,9 +1193,19 @@ function WidgetCard({
           </span>
         )}
       </div>
-      <div className="flex flex-1 items-center justify-center p-2 text-[11px] italic text-muted">
-        {widgetPlaceholderText(widget.kind, label)}
-      </div>
+      {showLivePreview ? (
+        <div className="relative flex flex-1 overflow-hidden">
+          <MapWidgetPreview
+            baseMapData={previewMapData}
+            basemaps={previewBasemaps}
+            frozen={anyGesture}
+          />
+        </div>
+      ) : (
+        <div className="flex flex-1 items-center justify-center p-2 text-[11px] italic text-muted">
+          {widgetPlaceholderText(widget.kind, label)}
+        </div>
+      )}
       {/* Resize handles -- only visible when the widget is selected
           AND the user can edit. Three handles cover the common cases
           (right edge for width, bottom edge for height, bottom-right
@@ -1085,7 +1259,7 @@ function widgetPlaceholderText(
 ): string {
   switch (kind) {
     case 'map':
-      return 'Map preview lands in #343';
+      return 'No map referenced. Pick one in the right rail to preview.';
     case 'search':
       return 'Address + attribute search';
     case 'print':
