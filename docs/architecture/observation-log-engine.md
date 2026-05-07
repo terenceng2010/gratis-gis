@@ -520,32 +520,89 @@ independently. `main` is always green and deployable.
 
 ### Phase 2: data_layer migration (target: 2 weeks)
 
-Shorter than the original plan because we are not running a shadow
-comparator: there is no legacy data to compare against (we ship pre-v1,
-and the existing `feature_v3.*` rows are dev-only test data, dropped
-at cutover). The migration is a one-way swap.
+The legacy `V3FeaturesService` plus `V3TablesService` already store
+features in a half-bitemporal shape (`valid_to IS NULL` for current
+truth, "insert new on update" for history, soft-delete via
+`valid_to = now`, denormalized `created_by`/`edited_by`). This makes
+Phase 2 mostly a code reorganization rather than a data-model change:
+the same operations move from per-layer tables into the observation
+log, with the existing semantics preserved one-for-one.
 
-**Deliverables:**
+Phase 2 ships as a sequence of small commits. Each commit keeps `main`
+green and verifiable. Per-layer tables stay alive until the cutover
+sub-phase explicitly drops them.
 
-- The data_layer creation flow in portal-api is rewritten to write
-  through the engine instead of into `feature_v3.<table>`.
-- The data_layer read flow is rewritten to read through the engine.
-- A single migration drops the legacy `feature_v3.*` tables and the
-  v3-specific Prisma models. The v3 code paths are deleted from
-  portal-api in the same commit. (No flag, no parallel paths; this
-  is the cutover.)
-- The dev database is reset as part of the cutover. Matt's existing
-  test data is recreated through the engine path so nothing
-  user-visible breaks.
+**Sub-phases:**
 
-**Acceptance:**
+#### 2.1 Engine adapter for the data_layer item type
+
+Add `apps/portal-api/src/engine/data-layer.ts` (and tests) with:
+
+- `dataLayerScope(itemId, layerId)` returning the canonical scope
+  string (`data_layer:{itemId}:{layerId}`).
+- `writeFeatureCreate`, `writeFeatureUpdate`, `writeFeatureDelete`
+  helpers that wrap `EngineService.write` with the right `kind` and
+  populate `attrs` and `geom` from feature input.
+- `listFeatures` helper that wraps `EngineService.read` and renders
+  the same shape `V3FeaturesService.listFeatures` returns today
+  (GeoJSON FeatureCollection, editor-tracking properties surfaced as
+  `_created_by` / `_created_at` / `_edited_by` / `_edited_at`).
+- Unit tests for each helper using the existing fake-prisma pattern.
+
+No wiring yet. Pure additive surface.
+
+#### 2.2 Wire the data_layer write path through the engine
+
+Replace the SQL inside `V3FeaturesService.insertFeatures`,
+`updateFeature`, and `deleteFeature` to call the adapter from 2.1.
+Per-layer tables stay around but stop being written to. Existing
+controllers, DTOs, and validation are unchanged.
+
+#### 2.3 Wire the data_layer read path through the engine
+
+Replace the SQL inside `V3FeaturesService.listFeatures` to read from
+the observation log via the adapter. The output shape must remain
+identical so the portal-web layer detail page, attribute table, and
+map page render unchanged. `bbox` and `at` query params translate to
+engine read filters.
+
+#### 2.4 Wire ingest and bbox aggregation
+
+`ingest.controller` already calls `V3FeaturesService.insertFeatures`,
+so 2.2 carries it. `V3TablesService.aggregateBbox` and
+`lastDataActivityAt` get rewritten to query the observation log.
+`V3TablesService.truncateLayer` becomes a delete-by-scope on the log.
+
+#### 2.5 Stop creating per-layer tables on item create
+
+`ItemsService.create` no longer calls `V3TablesService.reconcile`. The
+schema continues to live on `item.data_json`. Existing per-layer
+tables stay (orphaned) until 2.6.
+
+#### 2.6 Drop legacy and rename
+
+A single migration drops every `fs_*` per-layer table (script-driven,
+introspect by name pattern). The `apps/portal-api/src/features-v3/`
+module is removed; the controller routes are reattached to a new
+`data-layer` module that delegates to the engine adapter. After this
+commit, `git grep feature_v3` returns zero matches in
+`apps/portal-api/src`. The dev database is reset to align.
+
+#### 2.7 Rewire derived layers
+
+`DerivedLayersService` reads from data_layers; update its source-read
+path to use the engine adapter. The cache-refresh pipeline stays.
+
+**Acceptance (whole phase):**
 
 - A new data_layer can be created end-to-end through portal-web,
   written through the engine, and read back through the engine for
   display in the layer detail page and the map.
-- `pnpm typecheck`, `pnpm lint`, `pnpm test` all green.
+- `pnpm typecheck`, `pnpm lint`, `pnpm test` all green at every
+  intermediate sub-phase commit.
 - `git grep feature_v3` returns zero matches in `apps/portal-api/src`
-  after the cutover commit.
+  after 2.6.
+- `git grep "fs_"` finds no per-layer-table references after 2.6.
 
 ### Phase 3: map and lens spec (target: 2 weeks)
 
