@@ -29,6 +29,17 @@ import {
   validateObservation,
 } from '@gratis-gis/engine';
 
+/** Hard cap on rows per INSERT statement.
+ *
+ *  PostgreSQL's per-statement parameter cap is around 32,000. Each
+ *  observation row binds 13 parameters, so a 500-row batch uses 6,500
+ *  parameters per statement, comfortably under the cap. The 500
+ *  number matches the v3 service's existing batch size so single-
+ *  shapefile ingest runs land in roughly the same wall-clock as
+ *  before once the rewire completes.
+ */
+const WRITE_BATCH_SIZE = 500;
+
 import { PrismaService } from '../prisma/prisma.service.js';
 
 interface ObservationRow {
@@ -96,6 +107,76 @@ export class EngineService {
     `;
 
     return obs;
+  }
+
+  /**
+   * Write many observations in batched INSERTs. Validates and fills
+   * `id`, `txTime`, and `cell` for each input the same way `write`
+   * does, then runs one multi-row INSERT per WRITE_BATCH_SIZE chunk.
+   *
+   * Order is preserved: the returned array matches the input order
+   * one-for-one, with bookkeeping fields populated.
+   *
+   * Failure mode: if any chunk fails, prior chunks have already been
+   * persisted. Callers that need transactional all-or-nothing
+   * semantics across a large batch should wrap the call in their own
+   * `prisma.$transaction`. Today's v3 ingest does not need that
+   * (partial ingest is recoverable; the caller logs and retries).
+   */
+  async writeMany(inputs: Observation[]): Promise<Observation[]> {
+    if (inputs.length === 0) return [];
+
+    const filled: Observation[] = inputs.map((obs) => ({
+      ...obs,
+      id: obs.id ?? uuidv7(),
+      txTime: obs.txTime ?? new Date(),
+      cell: obs.cell ?? cellForGeometry(obs.geom),
+    }));
+    for (const obs of filled) validateObservation(obs);
+
+    for (let i = 0; i < filled.length; i += WRITE_BATCH_SIZE) {
+      const batch = filled.slice(i, i + WRITE_BATCH_SIZE);
+      const params: unknown[] = [];
+      const valueRows: string[] = [];
+      for (const obs of batch) {
+        const base = params.length + 1;
+        const geomJson = obs.geom !== null ? JSON.stringify(obs.geom) : null;
+        params.push(
+          obs.id,
+          obs.txTime,
+          obs.validFrom,
+          obs.validTo,
+          obs.scope,
+          obs.entity,
+          obs.kind,
+          obs.attrs !== null ? JSON.stringify(obs.attrs) : null,
+          geomJson,
+          obs.cell ?? null,
+          obs.author.sub,
+          JSON.stringify(obs.source),
+          obs.parents,
+        );
+        valueRows.push(
+          `($${base}::uuid, $${base + 1}::timestamptz, ` +
+            `$${base + 2}::timestamptz, $${base + 3}::timestamptz, ` +
+            `$${base + 4}, $${base + 5}::uuid, $${base + 6}, ` +
+            `$${base + 7}::jsonb, ` +
+            `CASE WHEN $${base + 8}::text IS NULL THEN NULL ` +
+            `ELSE ST_GeomFromGeoJSON($${base + 8}::text) END, ` +
+            `$${base + 9}, $${base + 10}, ` +
+            `$${base + 11}::jsonb, $${base + 12}::uuid[])`,
+        );
+      }
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO observation ` +
+          `(id, tx_time, valid_from, valid_to, scope, entity, kind, ` +
+          `attrs, geom, cell, author_sub, source, parents) ` +
+          `VALUES ${valueRows.join(', ')}`,
+        ...params,
+      );
+    }
+
+    return filled;
   }
 
   /**

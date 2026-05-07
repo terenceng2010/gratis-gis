@@ -16,13 +16,19 @@ const ITEM_ID = '11111111-1111-7111-8111-111111111111';
 const LAYER_ID = '22222222-2222-7222-8222-222222222222';
 
 /**
- * Capture-and-return fake EngineService. `write` echoes back the input
- * with `id`, `txTime`, and `cell` filled in so callers can assert the
- * full Observation shape that the adapter produced.
+ * Capture-and-return fake EngineService. `write` and `writeMany` echo
+ * back inputs with `id`, `txTime`, and `cell` filled in so callers can
+ * assert the full Observation shape that the adapter produced.
  */
 function makeFakeEngine() {
   const writes: Observation[] = [];
   let reads: ReadFeature[] = [];
+  const fillBookkeeping = (input: Observation): Observation => ({
+    ...input,
+    id: input.id ?? uuidv7(),
+    txTime: input.txTime ?? new Date(),
+    cell: input.cell ?? null,
+  });
   return {
     writes,
     setReads(features: ReadFeature[]) {
@@ -30,13 +36,13 @@ function makeFakeEngine() {
     },
     fake: {
       async write(input: Observation): Promise<Observation> {
-        const filled: Observation = {
-          ...input,
-          id: input.id ?? uuidv7(),
-          txTime: input.txTime ?? new Date(),
-          cell: input.cell ?? null,
-        };
+        const filled = fillBookkeeping(input);
         writes.push(filled);
+        return filled;
+      },
+      async writeMany(inputs: Observation[]): Promise<Observation[]> {
+        const filled = inputs.map(fillBookkeeping);
+        writes.push(...filled);
         return filled;
       },
       async read(): Promise<ReadFeature[]> {
@@ -168,6 +174,51 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
     const obs = engine.writes[0]!;
     expect(obs.attrs).toBe(null);
     expect(obs.geom).toBe(null);
+  });
+});
+
+describe('DataLayerEngine.writeFeaturesCreate', () => {
+  it('returns an empty array on empty input', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    const out = await adapter.writeFeaturesCreate([]);
+    expect(out).toEqual([]);
+    expect(engine.writes).toHaveLength(0);
+  });
+
+  it('writes one create observation per input and returns aligned ids', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    const inputs = [
+      createArgs({ properties: { i: 0 } }),
+      createArgs({ properties: { i: 1 } }),
+      createArgs({ properties: { i: 2 } }),
+    ];
+    const out = await adapter.writeFeaturesCreate(inputs);
+
+    expect(out).toHaveLength(3);
+    expect(engine.writes).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      expect(engine.writes[i]!.kind).toBe('create');
+      expect(isUuid(engine.writes[i]!.entity)).toBe(true);
+      expect(out[i]!.globalId).toBe(engine.writes[i]!.entity);
+      expect((engine.writes[i]!.attrs as { i: number }).i).toBe(i);
+    }
+  });
+
+  it('every entity id is unique', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    const inputs = Array.from({ length: 20 }, () => createArgs());
+    const out = await adapter.writeFeaturesCreate(inputs);
+    const ids = new Set(out.map((r) => r.globalId));
+    expect(ids.size).toBe(20);
   });
 });
 

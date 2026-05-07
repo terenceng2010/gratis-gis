@@ -19,6 +19,7 @@ import { Injectable } from '@nestjs/common';
 
 import {
   type GeoJsonGeometry,
+  type Observation,
   type PrincipalRef,
   type SourceRef,
   uuidv7,
@@ -133,6 +134,41 @@ export class DataLayerEngine {
       parents: [],
     });
     return { globalId: entity, observationId: requireId(obs.id) };
+  }
+
+  /**
+   * Bulk variant of `writeFeatureCreate`. Used by the v3 ingest path
+   * and by anything else that produces many features at once. Routes
+   * through `EngineService.writeMany`, so all rows land in batched
+   * INSERTs (500 per statement) and a 100k-row import stays under
+   * the BFF timeout.
+   *
+   * Each input gets a fresh UUIDv7 entity id. The returned array is
+   * order-aligned with the input array.
+   */
+  async writeFeaturesCreate(
+    inputs: CreateFeatureArgs[],
+  ): Promise<Array<{ globalId: string; observationId: string }>> {
+    if (inputs.length === 0) return [];
+
+    const observations: Observation[] = inputs.map((args) => ({
+      scope: this.scope(args.itemId, args.layerId),
+      entity: uuidv7(),
+      kind: 'create',
+      validFrom: new Date(),
+      validTo: null,
+      attrs: args.properties ?? null,
+      geom: args.geometry ?? null,
+      author: args.principal,
+      source: args.source ?? DEFAULT_SOURCE,
+      parents: [],
+    }));
+
+    const written = await this.engine.writeMany(observations);
+    return written.map((obs) => ({
+      globalId: obs.entity,
+      observationId: requireId(obs.id),
+    }));
   }
 
   /**

@@ -54,13 +54,20 @@ async function main(): Promise<void> {
   const engine = new EngineService(prisma as unknown as PrismaService);
 
   console.log(`scope = ${SCOPE}`);
-  console.log('writing 10 observations...');
+  console.log('writing 5 observations one-by-one...');
   const written: Observation[] = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 5; i++) {
     const obs = await engine.write(fixturePoint(i));
     written.push(obs);
   }
   console.log(`  ok: ${written.length} written`);
+
+  console.log('writing 5 observations via writeMany...');
+  const batch = await engine.writeMany(
+    Array.from({ length: 5 }, (_, i) => fixturePoint(i + 5)),
+  );
+  written.push(...batch);
+  console.log(`  ok: ${batch.length} written (batch)`);
 
   console.log('reading back as features...');
   const features = await engine.read({ scope: SCOPE });
