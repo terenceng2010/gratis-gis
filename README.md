@@ -1,7 +1,7 @@
 # GratisGIS
 
 [![CI](https://github.com/palavido-dev/gratis-gis/actions/workflows/ci.yml/badge.svg)](https://github.com/palavido-dev/gratis-gis/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 [![PostgreSQL + PostGIS](https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-16%20%2F%203-336791?logo=postgresql&logoColor=white)](https://postgis.net/)
 
@@ -167,7 +167,16 @@ Deeper design references:
 
 ## License
 
-Apache 2.0. Permissive, enterprise-friendly, GPL-compatible.
+GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See
+[LICENSE](./LICENSE) for the full text.
+
+In short: you are free to use, modify, self-host, and redistribute GratisGIS,
+including in commercial settings. Hosting it as a service for others, or
+running modified versions of it on a network, requires you to make the
+corresponding source code available to your users under the same license.
+Selling support, hosting, training, implementation, or custom integrations
+around GratisGIS is fully compatible with this license; what is not is
+wrapping it in a closed-source product and reselling it.
 
 ## Trademarks
 

@@ -30,7 +30,7 @@
     "type": "git",
     "url": "https://github.com/palavido-dev/gratis-gis.git"
   },
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-or-later",
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=20.11.0",

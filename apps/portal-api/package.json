@@ -2,6 +2,7 @@
   "name": "@gratis-gis/portal-api",
   "version": "0.0.0",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "description": "GratisGIS backend API: auth, items, groups, sharing, feature services.",
   "scripts": {
     "build": "nest build",
