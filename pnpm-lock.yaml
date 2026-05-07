@@ -51,6 +51,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.700.0
         version: 3.1032.0
+      '@gratis-gis/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@gratis-gis/form-schema':
         specifier: workspace:*
         version: link:../../packages/form-schema

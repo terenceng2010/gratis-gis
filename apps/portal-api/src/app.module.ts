@@ -20,6 +20,7 @@ import { BackupModule } from './backup/backup.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { FormsModule } from './forms/forms.module.js';
 import { FieldQueueModule } from './field-queue/field-queue.module.js';
+import { EngineModule } from './engine/engine.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
 @Module({
@@ -41,6 +42,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     NotificationsModule,
     FormsModule,
     FieldQueueModule,
+    EngineModule,
   ],
   controllers: [HealthController],
   providers: [
