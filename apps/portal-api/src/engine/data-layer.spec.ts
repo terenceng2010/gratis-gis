@@ -1,0 +1,291 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { type Observation, type ReadFeature, isUuid, uuidv7 } from '@gratis-gis/engine';
+
+import {
+  DataLayerEngine,
+  dataLayerScope,
+  type CreateFeatureArgs,
+  type DeleteFeatureArgs,
+  type UpdateFeatureArgs,
+} from './data-layer.js';
+import type { EngineService } from './engine.service.js';
+import type { PrismaService } from '../prisma/prisma.service.js';
+
+const PRINCIPAL = { sub: 'user-1', displayName: 'User One' };
+const ITEM_ID = '11111111-1111-7111-8111-111111111111';
+const LAYER_ID = '22222222-2222-7222-8222-222222222222';
+
+/**
+ * Capture-and-return fake EngineService. `write` echoes back the input
+ * with `id`, `txTime`, and `cell` filled in so callers can assert the
+ * full Observation shape that the adapter produced.
+ */
+function makeFakeEngine() {
+  const writes: Observation[] = [];
+  let reads: ReadFeature[] = [];
+  return {
+    writes,
+    setReads(features: ReadFeature[]) {
+      reads = features;
+    },
+    fake: {
+      async write(input: Observation): Promise<Observation> {
+        const filled: Observation = {
+          ...input,
+          id: input.id ?? uuidv7(),
+          txTime: input.txTime ?? new Date(),
+          cell: input.cell ?? null,
+        };
+        writes.push(filled);
+        return filled;
+      },
+      async read(): Promise<ReadFeature[]> {
+        return reads;
+      },
+    } as unknown as EngineService,
+  };
+}
+
+/**
+ * Fake PrismaService whose `$queryRaw` returns whatever the test
+ * loaded into `rows`. The DataLayerEngine only uses `$queryRaw` for
+ * the creation-metadata lookup in `listFeatures`.
+ */
+function makeFakePrisma() {
+  let rows: Array<{ entity: string; author_sub: string; tx_time: Date }> = [];
+  return {
+    setRows(next: typeof rows) {
+      rows = next;
+    },
+    fake: {
+      async $queryRaw() {
+        return rows;
+      },
+    } as unknown as PrismaService,
+  };
+}
+
+function createArgs(overrides: Partial<CreateFeatureArgs> = {}): CreateFeatureArgs {
+  return {
+    itemId: ITEM_ID,
+    layerId: LAYER_ID,
+    principal: PRINCIPAL,
+    properties: { name: 'feature-a', value: 42 },
+    geometry: { type: 'Point', coordinates: [-111.65, 40.6] },
+    ...overrides,
+  };
+}
+
+function updateArgs(overrides: Partial<UpdateFeatureArgs> = {}): UpdateFeatureArgs {
+  return {
+    itemId: ITEM_ID,
+    layerId: LAYER_ID,
+    principal: PRINCIPAL,
+    globalId: uuidv7(),
+    properties: { name: 'updated' },
+    ...overrides,
+  };
+}
+
+function deleteArgs(overrides: Partial<DeleteFeatureArgs> = {}): DeleteFeatureArgs {
+  return {
+    itemId: ITEM_ID,
+    layerId: LAYER_ID,
+    principal: PRINCIPAL,
+    globalId: uuidv7(),
+    ...overrides,
+  };
+}
+
+describe('dataLayerScope', () => {
+  it('encodes (itemId, layerId) into a canonical scope string', () => {
+    expect(dataLayerScope('item-x', 'layer-y')).toBe('data_layer:item-x:layer-y');
+  });
+});
+
+describe('DataLayerEngine.writeFeatureCreate', () => {
+  it('writes a kind=create observation with a fresh entity id', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    const result = await adapter.writeFeatureCreate(createArgs());
+
+    expect(engine.writes).toHaveLength(1);
+    const obs = engine.writes[0]!;
+    expect(obs.kind).toBe('create');
+    expect(obs.scope).toBe(dataLayerScope(ITEM_ID, LAYER_ID));
+    expect(isUuid(obs.entity)).toBe(true);
+    expect(result.globalId).toBe(obs.entity);
+    expect(isUuid(result.observationId)).toBe(true);
+  });
+
+  it('passes properties through as attrs and geometry through as geom', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    await adapter.writeFeatureCreate(createArgs());
+
+    const obs = engine.writes[0]!;
+    expect(obs.attrs).toEqual({ name: 'feature-a', value: 42 });
+    expect(obs.geom).toEqual({ type: 'Point', coordinates: [-111.65, 40.6] });
+  });
+
+  it('defaults source.kind to data_layer:write when not given', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    await adapter.writeFeatureCreate(createArgs());
+
+    expect(engine.writes[0]!.source.kind).toBe('data_layer:write');
+  });
+
+  it('respects an explicit source override', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    await adapter.writeFeatureCreate(
+      createArgs({ source: { kind: 'ingest:shapefile' } }),
+    );
+
+    expect(engine.writes[0]!.source.kind).toBe('ingest:shapefile');
+  });
+
+  it('handles missing properties and geometry as null', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+
+    await adapter.writeFeatureCreate({
+      itemId: ITEM_ID,
+      layerId: LAYER_ID,
+      principal: PRINCIPAL,
+    });
+
+    const obs = engine.writes[0]!;
+    expect(obs.attrs).toBe(null);
+    expect(obs.geom).toBe(null);
+  });
+});
+
+describe('DataLayerEngine.writeFeatureUpdate', () => {
+  it('writes a kind=update observation that preserves the entity id', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const args = updateArgs();
+
+    await adapter.writeFeatureUpdate(args);
+
+    const obs = engine.writes[0]!;
+    expect(obs.kind).toBe('update');
+    expect(obs.entity).toBe(args.globalId);
+    expect(obs.attrs).toEqual({ name: 'updated' });
+  });
+});
+
+describe('DataLayerEngine.writeFeatureDelete', () => {
+  it('writes a kind=delete observation with null attrs and geom', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const args = deleteArgs();
+
+    await adapter.writeFeatureDelete(args);
+
+    const obs = engine.writes[0]!;
+    expect(obs.kind).toBe('delete');
+    expect(obs.entity).toBe(args.globalId);
+    expect(obs.attrs).toBe(null);
+    expect(obs.geom).toBe(null);
+  });
+});
+
+describe('DataLayerEngine.listFeatures', () => {
+  function readFeature(entity: string, txTime: Date, authorSub: string): ReadFeature {
+    return {
+      type: 'Feature',
+      id: entity,
+      geometry: { type: 'Point', coordinates: [-111.65, 40.6] },
+      properties: {
+        name: 'feature-a',
+        __engine: {
+          observationId: uuidv7(),
+          validFrom: txTime.toISOString(),
+          validTo: null,
+          txTime: txTime.toISOString(),
+          kind: 'update',
+          authorSub,
+        },
+      },
+    };
+  }
+
+  it('returns an empty array when the engine returns no features', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    engine.setReads([]);
+
+    expect(await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID })).toEqual([]);
+  });
+
+  it('surfaces editor tracking using the latest observation for edited fields', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const entity = uuidv7();
+    const editTime = new Date('2026-04-01T00:00:00Z');
+    engine.setReads([readFeature(entity, editTime, 'editor-user')]);
+    prisma.setRows([
+      {
+        entity,
+        author_sub: 'creator-user',
+        tx_time: new Date('2026-01-01T00:00:00Z'),
+      },
+    ]);
+
+    const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
+    expect(out).toHaveLength(1);
+    const feat = out[0]!;
+    expect(feat.id).toBe(entity);
+    expect(feat.properties._global_id).toBe(entity);
+    expect(feat.properties._created_by).toBe('creator-user');
+    expect(feat.properties._created_at).toBe('2026-01-01T00:00:00.000Z');
+    expect(feat.properties._edited_by).toBe('editor-user');
+    expect(feat.properties._edited_at).toBe(editTime.toISOString());
+  });
+
+  it('does not leak the engine bookkeeping into the output properties', async () => {
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const entity = uuidv7();
+    engine.setReads([readFeature(entity, new Date(), 'user-1')]);
+    prisma.setRows([]);
+
+    const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
+    expect(out[0]!.properties).not.toHaveProperty('__engine');
+  });
+
+  it('falls back to the latest observation when no creation metadata is found', async () => {
+    // Defensive: if a feature exists but its create row is missing
+    // (shouldn't happen in practice; data integrity bug in the log)
+    // we still produce a feature instead of crashing. The fallback
+    // surfaces the latest author/time as the creation values.
+    const engine = makeFakeEngine();
+    const prisma = makeFakePrisma();
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const entity = uuidv7();
+    const t = new Date('2026-05-01T00:00:00Z');
+    engine.setReads([readFeature(entity, t, 'lonely-user')]);
+    prisma.setRows([]); // no create row
+
+    const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
+    expect(out[0]!.properties._created_by).toBe('lonely-user');
+    expect(out[0]!.properties._created_at).toBe(t.toISOString());
+  });
+});
