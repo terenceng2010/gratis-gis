@@ -331,7 +331,7 @@ export class HousekeepingService {
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind = 'r'
-          AND c.relname LIKE 'fs\_%' ESCAPE '\'
+          AND c.relname LIKE 'fs\\_%' ESCAPE '\\'
         GROUP BY 1
       )
       SELECT
@@ -446,6 +446,15 @@ export class HousekeepingService {
       index_bytes: bigint;
       row_estimate: number | null;
     };
+    // #359: explicit ESCAPE clause + a backtick-escaped backslash.
+    // The JS template literal flattens `'\_%'` to `'_%'` (since `\_`
+    // is not a recognized JS escape), and bare `_` is the LIKE
+    // wildcard for "any single char" -- so without this fix the
+    // NOT LIKE excluded every non-empty table name and the panel
+    // always rendered "No tables to report." Backslash-backslash
+    // here yields a single backslash in the SQL string, which the
+    // explicit ESCAPE '\\' clause then treats as the escape char so
+    // `\_` means literal underscore.
     const rows = await this.prisma.$queryRaw<Row[]>`
       SELECT
         n.nspname AS schema,
@@ -460,7 +469,7 @@ export class HousekeepingService {
       WHERE n.nspname = 'public'
         AND c.relkind = 'r'
         AND c.relname <> 'spatial_ref_sys'
-        AND c.relname NOT LIKE '\_%'
+        AND c.relname NOT LIKE '\\_%' ESCAPE '\\'
       ORDER BY pg_total_relation_size(c.oid) DESC
       LIMIT 10
     `;
