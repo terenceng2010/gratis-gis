@@ -3,8 +3,7 @@ import { Trash2 } from 'lucide-react';
 import type { Group, Item } from '@gratis-gis/shared-types';
 import { apiFetch } from '@/lib/api';
 import { EmptyState } from '@/components/empty-state';
-import { ItemRow } from './item-row';
-import { GroupRow } from './group-row';
+import { TrashTable } from './trash-table';
 
 // Retention window shown in the UI. The backend auto-purge job reads
 // the same value from RECYCLE_BIN_RETENTION_DAYS; we default to 30 here
@@ -89,43 +88,11 @@ export default async function RecentlyDeletedPage({ searchParams }: Props) {
           description={`Deleted ${kind} will appear here for ${RETENTION_DAYS} days before permanent removal.`}
         />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-border bg-surface-2 text-xs uppercase tracking-wide text-muted">
-              <tr>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  {kind === 'items' ? 'Item' : 'Group'}
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Deleted
-                </th>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Auto-purge
-                </th>
-                <th scope="col" className="px-4 py-2 text-right font-medium">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="[&>tr>td]:px-4">
-              {kind === 'items'
-                ? items.map((item) => (
-                    <ItemRow
-                      key={item.id}
-                      item={item}
-                      retentionDays={RETENTION_DAYS}
-                    />
-                  ))
-                : groups.map((group) => (
-                    <GroupRow
-                      key={group.id}
-                      group={group}
-                      retentionDays={RETENTION_DAYS}
-                    />
-                  ))}
-            </tbody>
-          </table>
-        </div>
+        <TrashTable
+          kind={kind}
+          records={kind === 'items' ? items : groups}
+          retentionDays={RETENTION_DAYS}
+        />
       )}
     </div>
   );
