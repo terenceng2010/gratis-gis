@@ -189,6 +189,72 @@ interface Props {
  *   - snap toggle / measure: stubs (slice 3b-5)
  *   - undo / redo: stubs (slice 3b-5)
  */
+
+// Decimal places terra-draw is configured to enforce on every
+// coordinate. Has to match the `coordinatePrecision` we pass to the
+// MapLibre adapter below; both reference this constant so they
+// cannot drift apart. Nine digits is roughly 0.1 mm at the equator,
+// which is well past anything that matters at portal-display scales.
+const EDITOR_COORD_PRECISION = 9;
+
+// Round every numeric coordinate component in a GeoJSON geometry to
+// EDITOR_COORD_PRECISION decimal places, returning a fresh
+// structure. terra-draw rejects features whose coordinates exceed
+// the configured precision (its precision validator runs on every
+// addFeatures call), and PostGIS hands geometries back at full
+// double precision (15-ish digits), so any feature loaded from the
+// server has to be normalized before it can re-enter terra-draw
+// for geometry editing. We don't mutate the input.
+function roundCoordsToPrecision(
+  geom: GeoJSON.Geometry,
+  precision: number,
+): GeoJSON.Geometry {
+  const factor = Math.pow(10, precision);
+  const r = (n: number) => Math.round(n * factor) / factor;
+  const rPos = (p: GeoJSON.Position): GeoJSON.Position =>
+    p.length === 2
+      ? [r(p[0]!), r(p[1]!)]
+      : (p.map((v) => r(v)) as GeoJSON.Position);
+  switch (geom.type) {
+    case 'Point':
+      return { type: 'Point', coordinates: rPos(geom.coordinates) };
+    case 'MultiPoint':
+      return {
+        type: 'MultiPoint',
+        coordinates: geom.coordinates.map(rPos),
+      };
+    case 'LineString':
+      return {
+        type: 'LineString',
+        coordinates: geom.coordinates.map(rPos),
+      };
+    case 'MultiLineString':
+      return {
+        type: 'MultiLineString',
+        coordinates: geom.coordinates.map((line) => line.map(rPos)),
+      };
+    case 'Polygon':
+      return {
+        type: 'Polygon',
+        coordinates: geom.coordinates.map((ring) => ring.map(rPos)),
+      };
+    case 'MultiPolygon':
+      return {
+        type: 'MultiPolygon',
+        coordinates: geom.coordinates.map((poly) =>
+          poly.map((ring) => ring.map(rPos)),
+        ),
+      };
+    case 'GeometryCollection':
+      return {
+        type: 'GeometryCollection',
+        geometries: geom.geometries.map((g) =>
+          roundCoordsToPrecision(g, precision),
+        ),
+      };
+  }
+}
+
 export function EditorRuntime({
   editorId,
   editorTitle,
@@ -637,7 +703,7 @@ export function EditorRuntime({
       const draw = new td.TerraDraw({
         adapter: new adapterMod.TerraDrawMapLibreGLAdapter({
           map: mapInstance,
-          coordinatePrecision: 9,
+          coordinatePrecision: EDITOR_COORD_PRECISION,
         }),
         // Permissive id strategy. terra-draw 1.x's default validator
         // requires every feature id to be a UUIDv4-shaped string
@@ -1436,10 +1502,17 @@ export function EditorRuntime({
             targetByKey.get(targetKey)?.layer?.geometryType ?? 'point';
           // hit.geometry from queryRenderedFeatures is already a
           // GeoJSON.Geometry. Clone via JSON to break MapLibre's
-          // internal references; terra-draw reads its own copy.
-          const cloned = JSON.parse(
-            JSON.stringify(hit.geometry),
-          ) as GeoJSON.Geometry;
+          // internal references, then round coordinates to terra-
+          // draw's configured precision -- PostGIS returns 15-digit
+          // doubles, terra-draw rejects anything past
+          // EDITOR_COORD_PRECISION. The rounded geometry is what
+          // both originalGeometry and currentGeometry start as, so
+          // the change-detection comparison still round-trips
+          // cleanly when the user drags a vertex.
+          const cloned = roundCoordsToPrecision(
+            JSON.parse(JSON.stringify(hit.geometry)) as GeoJSON.Geometry,
+            EDITOR_COORD_PRECISION,
+          );
           setGeomEditError(null);
           setPendingGeometryEdit({
             dataLayerId,
