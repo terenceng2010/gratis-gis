@@ -133,15 +133,57 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
   // preview falls back to MapCanvas's inline OSM raster style in
   // that interim window.
   const [previewBasemaps, setPreviewBasemaps] = useState<CustomBasemap[]>([]);
+  // #363: per-Map-widget MapData when the widget has its own
+  // config.mapId override. Without this the canvas preview shows
+  // the app default for EVERY map widget, ignoring overrides.
+  const [widgetMapData, setWidgetMapData] = useState<
+    Record<string, MapData>
+  >({});
+  // Resolved titles for widget-level map overrides, keyed by mapId
+  // (not widget id) so two Map widgets pointing at the same map
+  // share one entry. Used by MapWidgetConfig so the source field
+  // shows the map's title instead of a truncated UUID.
+  const [mapTitlesById, setMapTitlesById] = useState<
+    Record<string, string>
+  >({});
+  // Stable join of every Map widget's id+mapId so the effect
+  // re-runs only when the override-set actually changes (not on
+  // every render or on unrelated widget edits).
+  const widgetMapIdsKey = useMemo(() => {
+    const pairs: string[] = [];
+    for (const p of app.pages) {
+      for (const w of p.widgets) {
+        if (w.kind === 'map' && w.config.kind === 'map' && w.config.mapId) {
+          pairs.push(`${w.id}:${w.config.mapId}`);
+        }
+      }
+    }
+    return pairs.sort().join('|');
+  }, [app.pages]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [mapsRes, mapItemRes] = await Promise.all([
+        // Collect unique map ids: app default + every widget
+        // override. A Set keeps duplicates from re-fetching.
+        const uniqueMapIds = new Set<string>();
+        if (app.mapId) uniqueMapIds.add(app.mapId);
+        for (const p of app.pages) {
+          for (const w of p.widgets) {
+            if (
+              w.kind === 'map' &&
+              w.config.kind === 'map' &&
+              w.config.mapId
+            ) {
+              uniqueMapIds.add(w.config.mapId);
+            }
+          }
+        }
+        const [mapsRes, ...mapResponses] = await Promise.all([
           fetch('/api/portal/items?type=basemap'),
-          app.mapId
-            ? fetch(`/api/portal/items/${app.mapId}`)
-            : Promise.resolve(null),
+          ...Array.from(uniqueMapIds).map((id) =>
+            fetch(`/api/portal/items/${id}`),
+          ),
         ]);
         if (cancelled) return;
         if (mapsRes.ok) {
@@ -151,18 +193,47 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
             .filter((b): b is CustomBasemap => b !== null);
           if (!cancelled) setPreviewBasemaps(built);
         }
-        if (mapItemRes && mapItemRes.ok) {
-          const item = (await mapItemRes.json()) as Item<MapData>;
-          if (!cancelled) {
-            setMapTitle(item.title);
-            setPreviewMapData(item.data ?? DEFAULT_MAP);
-          }
-        } else {
-          if (!cancelled) {
-            setMapTitle(null);
-            setPreviewMapData(null);
+        const dataById = new Map<string, { data: MapData; title: string }>();
+        for (const res of mapResponses) {
+          if (!res.ok) continue;
+          const item = (await res.json()) as Item<MapData>;
+          if (item.data) {
+            dataById.set(item.id, { data: item.data, title: item.title });
           }
         }
+        if (cancelled) return;
+        // App-default first.
+        if (app.mapId && dataById.has(app.mapId)) {
+          const entry = dataById.get(app.mapId)!;
+          setMapTitle(entry.title);
+          setPreviewMapData(entry.data);
+        } else {
+          setMapTitle(null);
+          setPreviewMapData(null);
+        }
+        // Per-widget override map.
+        const widgetMap: Record<string, MapData> = {};
+        for (const p of app.pages) {
+          for (const w of p.widgets) {
+            if (
+              w.kind === 'map' &&
+              w.config.kind === 'map' &&
+              w.config.mapId &&
+              dataById.has(w.config.mapId)
+            ) {
+              widgetMap[w.id] = dataById.get(w.config.mapId)!.data;
+            }
+          }
+        }
+        setWidgetMapData(widgetMap);
+        // Title-by-id surface so MapWidgetConfig can render the map
+        // title instead of the raw UUID. Includes the app default's
+        // entry too so a single lookup works for both scopes.
+        const titles: Record<string, string> = {};
+        for (const [id, entry] of dataById.entries()) {
+          titles[id] = entry.title;
+        }
+        setMapTitlesById(titles);
       } catch {
         /* silent: preview fall through to default basemap */
       }
@@ -170,7 +241,11 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [app.mapId]);
+    // widgetMapIdsKey covers every widget-level mapId change; app.mapId
+    // for the app-default change. Both are needed because the effect
+    // also reacts to mapId-only changes on the same widget set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.mapId, widgetMapIdsKey]);
 
   const onSave = useCallback(async () => {
     setSaving(true);
@@ -446,6 +521,7 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
             canEdit={canEdit}
             previewMapData={previewMapData}
             previewBasemaps={previewBasemaps}
+            widgetMapData={widgetMapData}
             onSelect={setSelectedWidgetId}
             onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
             onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
@@ -463,6 +539,7 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
               appTargets={app.targets}
               appMapId={app.mapId}
               appMapTitle={mapTitle}
+              mapTitlesById={mapTitlesById}
               onChange={(patch) => updateWidget(selectedWidget.id, patch)}
               onChangeConfig={(configPatch) =>
                 updateWidget(selectedWidget.id, {
@@ -1080,6 +1157,7 @@ function Canvas({
   canEdit,
   previewMapData,
   previewBasemaps,
+  widgetMapData,
   onSelect,
   onCanvasDrop,
   onWidgetLayout,
@@ -1089,6 +1167,7 @@ function Canvas({
   canEdit: boolean;
   previewMapData: MapData | null;
   previewBasemaps: CustomBasemap[];
+  widgetMapData: Record<string, MapData>;
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
   onWidgetLayout: (id: string, layout: CustomLayout) => void;
@@ -1249,7 +1328,9 @@ function Canvas({
               canEdit={canEdit}
               gesturing={Boolean(gesture && gesture.widgetId === w.id)}
               anyGesture={gesture !== null}
-              previewMapData={previewMapData}
+              // #363: prefer the widget's own map override if one is
+              // resolved, else fall through to the app default.
+              previewMapData={widgetMapData[w.id] ?? previewMapData}
               previewBasemaps={previewBasemaps}
               onClick={(e) => {
                 e.stopPropagation();
@@ -1646,6 +1727,7 @@ function WidgetProperties({
   appTargets,
   appMapId,
   appMapTitle,
+  mapTitlesById,
   onChange,
   onChangeConfig,
   onPickWidgetMap,
@@ -1658,6 +1740,7 @@ function WidgetProperties({
   appTargets: ViewerTarget[];
   appMapId: string | undefined;
   appMapTitle: string | null;
+  mapTitlesById: Record<string, string>;
   onChange: (patch: Partial<CustomWidget>) => void;
   onChangeConfig: (configPatch: Record<string, unknown>) => void;
   onPickWidgetMap: () => void;
@@ -1767,6 +1850,7 @@ function WidgetProperties({
           appTargets={appTargets}
           appMapId={appMapId}
           appMapTitle={appMapTitle}
+          mapTitlesById={mapTitlesById}
           onChangeConfig={onChangeConfig}
           onPickWidgetMap={onPickWidgetMap}
         />
@@ -1807,6 +1891,7 @@ function WidgetConfigForm({
   appTargets,
   appMapId,
   appMapTitle,
+  mapTitlesById,
   onChangeConfig,
   onPickWidgetMap,
 }: {
@@ -1817,6 +1902,7 @@ function WidgetConfigForm({
   appTargets: ViewerTarget[];
   appMapId: string | undefined;
   appMapTitle: string | null;
+  mapTitlesById: Record<string, string>;
   onChangeConfig: (configPatch: Record<string, unknown>) => void;
   onPickWidgetMap: () => void;
 }) {
@@ -1831,6 +1917,14 @@ function WidgetConfigForm({
           canEdit={canEdit}
           appMapId={appMapId}
           appMapTitle={appMapTitle}
+          // #363: resolved title for the per-widget override mapId,
+          // if one was fetched. Falls back to the UUID stub when the
+          // fetch hasn't completed yet (or the map has been deleted).
+          widgetMapTitle={
+            widget.config.mapId
+              ? mapTitlesById[widget.config.mapId] ?? null
+              : null
+          }
           appTargetCount={appTargets.length}
           onChangeConfig={onChangeConfig}
           onPickMap={onPickWidgetMap}
@@ -2039,6 +2133,7 @@ function MapWidgetConfig({
   canEdit,
   appMapId,
   appMapTitle,
+  widgetMapTitle,
   appTargetCount,
   onChangeConfig,
   onPickMap,
@@ -2047,6 +2142,9 @@ function MapWidgetConfig({
   canEdit: boolean;
   appMapId: string | undefined;
   appMapTitle: string | null;
+  /** #363: resolved title for the per-widget override mapId, or
+   *  null when the fetch is in flight / the map has been deleted. */
+  widgetMapTitle: string | null;
   appTargetCount: number;
   onChangeConfig: (patch: Record<string, unknown>) => void;
   onPickMap: () => void;
@@ -2061,9 +2159,13 @@ function MapWidgetConfig({
           <MapIcon className="h-3.5 w-3.5 text-emerald-600" />
           <span className="flex-1 truncate text-ink-1">
             {config.mapId ? (
-              <span className="font-mono text-[10px]">
-                {config.mapId.slice(0, 12)}...
-              </span>
+              widgetMapTitle ? (
+                <span>{widgetMapTitle}</span>
+              ) : (
+                <span className="font-mono text-[10px]">
+                  {config.mapId.slice(0, 12)}...
+                </span>
+              )
             ) : appMapId ? (
               <>
                 <span className="text-muted">app default ·</span>{' '}

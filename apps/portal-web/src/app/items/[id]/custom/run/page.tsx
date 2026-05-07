@@ -166,32 +166,77 @@ export default async function CustomAppRuntimePage({ params }: Props) {
     });
   }
 
+  // #363: collect every map item id we need to fetch. The set is
+  // (optional) app default + every Map widget's per-widget mapId
+  // override across every page. Unique-ifying with a Set keeps a
+  // page with five Map widgets all bound to the same map from
+  // re-fetching it five times. A Map widget without an override
+  // inherits the app default, which is already in the set.
+  const uniqueMapIds = new Set<string>();
+  if (app.mapId) uniqueMapIds.add(app.mapId);
+  for (const p of app.pages) {
+    for (const w of p.widgets) {
+      if (w.kind === 'map' && w.config.kind === 'map' && w.config.mapId) {
+        uniqueMapIds.add(w.config.mapId);
+      }
+    }
+  }
+
   // Fetch the org's basemaps (for MapCanvas's basemap library +
-  // BasemapGallery) and the optional reference map (for viewport +
-  // base layers + basemap default).
-  const [basemapItems, referencedMap] = await Promise.all([
+  // BasemapGallery) and every needed map item in parallel.
+  const [basemapItems, ...mapItems] = await Promise.all([
     fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
     ),
-    app.mapId
-      ? fetchItem<Item<MapData>>(`/api/items/${app.mapId}`).catch(() => null)
-      : Promise.resolve(null as Item<MapData> | null),
+    ...Array.from(uniqueMapIds).map((id) =>
+      fetchItem<Item<MapData>>(`/api/items/${id}`).catch(() => null),
+    ),
   ]);
+
+  const mapDataById = new Map<string, MapData>();
+  for (const it of mapItems) {
+    if (it && it.data) mapDataById.set(it.id, it.data);
+  }
 
   const basemaps: CustomBasemap[] = basemapItems
     .map(basemapItemToCustomBasemap)
     .filter((b): b is CustomBasemap => b !== null);
 
-  // Build the base MapData every Map widget starts from. Inherits
-  // basemap + viewport + non-target layers from the referenced map
-  // when set, falls through to DEFAULT_MAP otherwise. Then appends
-  // every resolved target layer so a fresh app with one Map widget
-  // shows its targets right away.
-  const baseLayers = referencedMap?.data?.layers ?? [];
+  // Build the base MapData every Map widget starts from when it has
+  // no per-widget override. Inherits basemap + viewport + non-target
+  // layers from the referenced map when app.mapId is set, falls
+  // through to DEFAULT_MAP otherwise. Then appends every resolved
+  // target layer so a fresh app with one Map widget shows its
+  // targets right away.
+  const referencedMapData = app.mapId
+    ? mapDataById.get(app.mapId) ?? null
+    : null;
+  const baseLayers = referencedMapData?.layers ?? [];
   const baseMapData: MapData = {
-    ...(referencedMap?.data ?? DEFAULT_MAP),
+    ...(referencedMapData ?? DEFAULT_MAP),
     layers: [...baseLayers, ...resolvedTargets.map((t) => t.mapLayer)],
   };
+
+  // #363: per-Map-widget MapData. When a Map widget has its own
+  // config.mapId the runtime uses THAT, not the app default. Targets
+  // are appended on top so the per-widget map still picks up the
+  // app's target layers (otherwise authors lose their feature data
+  // when overriding the basemap+viewport host).
+  const widgetMapData: Record<string, MapData> = {};
+  for (const p of app.pages) {
+    for (const w of p.widgets) {
+      if (w.kind !== 'map' || w.config.kind !== 'map') continue;
+      const overrideId = w.config.mapId;
+      if (!overrideId) continue;
+      const overrideData = mapDataById.get(overrideId);
+      if (!overrideData) continue;
+      const overrideLayers = overrideData.layers ?? [];
+      widgetMapData[w.id] = {
+        ...overrideData,
+        layers: [...overrideLayers, ...resolvedTargets.map((t) => t.mapLayer)],
+      };
+    }
+  }
 
   return (
     <CustomRuntimeClient
@@ -200,6 +245,7 @@ export default async function CustomAppRuntimePage({ params }: Props) {
       app={app}
       basemaps={basemaps}
       baseMapData={baseMapData}
+      widgetMapData={widgetMapData}
       resolvedTargets={resolvedTargets}
     />
   );

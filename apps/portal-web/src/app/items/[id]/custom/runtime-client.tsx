@@ -149,6 +149,13 @@ interface Props {
   app: CustomAppData;
   basemaps: CustomBasemap[];
   baseMapData: MapData;
+  /**
+   * #363: per-Map-widget MapData when the widget has its own
+   * `config.mapId` override. Keyed by widget id. Widgets without an
+   * override fall through to baseMapData. The server entry
+   * (run/page.tsx) builds this map.
+   */
+  widgetMapData: Record<string, MapData>;
   resolvedTargets: ResolvedAppTarget[];
 }
 
@@ -158,6 +165,7 @@ export function CustomRuntimeClient({
   app,
   basemaps,
   baseMapData,
+  widgetMapData,
   resolvedTargets,
 }: Props) {
   // Multi-page support (#342). Track which page is showing; render
@@ -184,8 +192,11 @@ export function CustomRuntimeClient({
     for (const p of app.pages) {
       for (const w of p.widgets) {
         if (w.kind === 'map') {
+          // #363: prefer the per-widget MapData when an override is
+          // resolved; fall back to the app-default baseMapData.
+          const seed = widgetMapData[w.id] ?? baseMapData;
           out[w.id] = {
-            mapData: { ...baseMapData, layers: [...(baseMapData.layers ?? [])] },
+            mapData: { ...seed, layers: [...(seed.layers ?? [])] },
             selection: {},
             selectTool: 'off',
           };
