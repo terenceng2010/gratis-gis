@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { type Observation, type ReadFeature, isUuid, uuidv7 } from '@gratis-gis/engine';
+import { type Observation, isUuid, uuidv7 } from '@gratis-gis/engine';
 
 import {
   DataLayerEngine,
@@ -22,7 +22,6 @@ const LAYER_ID = '22222222-2222-7222-8222-222222222222';
  */
 function makeFakeEngine() {
   const writes: Observation[] = [];
-  let reads: ReadFeature[] = [];
   const fillBookkeeping = (input: Observation): Observation => ({
     ...input,
     id: input.id ?? uuidv7(),
@@ -31,9 +30,6 @@ function makeFakeEngine() {
   });
   return {
     writes,
-    setReads(features: ReadFeature[]) {
-      reads = features;
-    },
     fake: {
       async write(input: Observation): Promise<Observation> {
         const filled = fillBookkeeping(input);
@@ -45,22 +41,29 @@ function makeFakeEngine() {
         writes.push(...filled);
         return filled;
       },
-      async read(): Promise<ReadFeature[]> {
-        return reads;
-      },
     } as unknown as EngineService,
   };
 }
 
 /**
  * Fake PrismaService whose `$queryRaw` returns whatever the test
- * loaded into `rows`. The DataLayerEngine only uses `$queryRaw` for
- * the creation-metadata lookup in `listFeatures`.
+ * loaded into `rows`. listFeatures issues a single combined query;
+ * tests load the expected shape directly.
  */
+interface FakeFeatureRow {
+  entity: string;
+  observation_id: string;
+  attrs: Record<string, unknown> | null;
+  geom_geojson: unknown;
+  edited_by: string;
+  edited_at: Date;
+  created_by: string;
+  created_at: Date;
+}
 function makeFakePrisma() {
-  let rows: Array<{ entity: string; author_sub: string; tx_time: Date }> = [];
+  let rows: FakeFeatureRow[] = [];
   return {
-    setRows(next: typeof rows) {
+    setRows(next: FakeFeatureRow[]) {
       rows = next;
     },
     fake: {
@@ -284,87 +287,84 @@ describe('DataLayerEngine.writeFeatureDelete', () => {
 });
 
 describe('DataLayerEngine.listFeatures', () => {
-  function readFeature(entity: string, txTime: Date, authorSub: string): ReadFeature {
+  function row(
+    entity: string,
+    overrides: Partial<FakeFeatureRow> = {},
+  ): FakeFeatureRow {
     return {
-      type: 'Feature',
-      id: entity,
-      geometry: { type: 'Point', coordinates: [-111.65, 40.6] },
-      properties: {
-        name: 'feature-a',
-        __engine: {
-          observationId: uuidv7(),
-          validFrom: txTime.toISOString(),
-          validTo: null,
-          txTime: txTime.toISOString(),
-          kind: 'update',
-          authorSub,
-        },
-      },
+      entity,
+      observation_id: uuidv7(),
+      attrs: { name: 'feature-a' },
+      geom_geojson: { type: 'Point', coordinates: [-111.65, 40.6] },
+      edited_by: 'editor-user',
+      edited_at: new Date('2026-04-01T00:00:00Z'),
+      created_by: 'creator-user',
+      created_at: new Date('2026-01-01T00:00:00Z'),
+      ...overrides,
     };
   }
 
-  it('returns an empty array when the engine returns no features', async () => {
+  it('returns an empty FeatureCollection when the query returns no rows', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
     const adapter = new DataLayerEngine(engine.fake, prisma.fake);
-    engine.setReads([]);
+    prisma.setRows([]);
 
-    expect(await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID })).toEqual([]);
+    const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
+    expect(out).toEqual({ type: 'FeatureCollection', features: [] });
   });
 
-  it('surfaces editor tracking using the latest observation for edited fields', async () => {
+  it('returns a FeatureCollection with surfaced editor tracking', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
     const adapter = new DataLayerEngine(engine.fake, prisma.fake);
     const entity = uuidv7();
-    const editTime = new Date('2026-04-01T00:00:00Z');
-    engine.setReads([readFeature(entity, editTime, 'editor-user')]);
-    prisma.setRows([
-      {
-        entity,
-        author_sub: 'creator-user',
-        tx_time: new Date('2026-01-01T00:00:00Z'),
-      },
-    ]);
+    prisma.setRows([row(entity)]);
 
     const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
-    expect(out).toHaveLength(1);
-    const feat = out[0]!;
+    expect(out.type).toBe('FeatureCollection');
+    expect(out.features).toHaveLength(1);
+    const feat = out.features[0]!;
     expect(feat.id).toBe(entity);
+    expect(feat.geometry).toEqual({
+      type: 'Point',
+      coordinates: [-111.65, 40.6],
+    });
     expect(feat.properties._global_id).toBe(entity);
     expect(feat.properties._created_by).toBe('creator-user');
     expect(feat.properties._created_at).toBe('2026-01-01T00:00:00.000Z');
     expect(feat.properties._edited_by).toBe('editor-user');
-    expect(feat.properties._edited_at).toBe(editTime.toISOString());
+    expect(feat.properties._edited_at).toBe('2026-04-01T00:00:00.000Z');
+    expect(feat.properties.name).toBe('feature-a');
   });
 
-  it('does not leak the engine bookkeeping into the output properties', async () => {
+  it('passes through null geometry and null attrs without crashing', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
     const adapter = new DataLayerEngine(engine.fake, prisma.fake);
     const entity = uuidv7();
-    engine.setReads([readFeature(entity, new Date(), 'user-1')]);
-    prisma.setRows([]);
+    prisma.setRows([row(entity, { attrs: null, geom_geojson: null })]);
 
     const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
-    expect(out[0]!.properties).not.toHaveProperty('__engine');
+    expect(out.features[0]!.geometry).toBe(null);
+    expect(out.features[0]!.properties._global_id).toBe(entity);
   });
 
-  it('falls back to the latest observation when no creation metadata is found', async () => {
-    // Defensive: if a feature exists but its create row is missing
-    // (shouldn't happen in practice; data integrity bug in the log)
-    // we still produce a feature instead of crashing. The fallback
-    // surfaces the latest author/time as the creation values.
+  it('honors a limit override', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
     const adapter = new DataLayerEngine(engine.fake, prisma.fake);
-    const entity = uuidv7();
-    const t = new Date('2026-05-01T00:00:00Z');
-    engine.setReads([readFeature(entity, t, 'lonely-user')]);
-    prisma.setRows([]); // no create row
+    prisma.setRows([row(uuidv7())]);
 
-    const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
-    expect(out[0]!.properties._created_by).toBe('lonely-user');
-    expect(out[0]!.properties._created_at).toBe(t.toISOString());
+    // Just verify the call shape; the SQL contains LIMIT but we are
+    // not asserting on raw SQL here because the fake $queryRaw does
+    // not capture the template strings. The SQL composition is
+    // exercised end-to-end by the integration round-trip script.
+    const out = await adapter.listFeatures({
+      itemId: ITEM_ID,
+      layerId: LAYER_ID,
+      limit: 50,
+    });
+    expect(out.features).toHaveLength(1);
   });
 });

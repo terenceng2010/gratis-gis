@@ -16,6 +16,7 @@
 // internals to call into this adapter.
 
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import {
   type GeoJsonGeometry,
@@ -77,8 +78,47 @@ export interface ListFeaturesArgs {
   layerId: string;
   /** As-of timestamp for bitemporal reads. Defaults to `now`. */
   asOf?: Date;
-  /** Cap on returned features. Engine-default 1000. */
+  /** Hard cap on the result set. Defaults to 100,000 to keep
+   *  Prisma's napi bridge happy on large layers (matches the v3
+   *  service's HARD_CAP). */
   limit?: number;
+  /** Viewport filter as `[minLng, minLat, maxLng, maxLat]` in EPSG:4326. */
+  bbox?: [number, number, number, number];
+  /**
+   * Per-share access scope: rows must intersect this polygon (or
+   * have null geometry). GeoJSON Polygon, MultiPolygon, or
+   * GeometryCollection. Used to enforce share-level geographic
+   * restrictions.
+   */
+  geoLimit?: GeoJsonGeometry;
+  /**
+   * Layer-level boundary clip: rows must intersect this polygon AND
+   * have non-null geometry. Distinct from `geoLimit`; this is the
+   * map author's content scope, not a security filter.
+   */
+  boundaryClip?: GeoJsonGeometry;
+  /**
+   * When set, restricts the result to features the named user
+   * created. Pairs with the share-level rowScope='own' and the
+   * layer-level editingPolicy 'own-rows-only'.
+   */
+  ownRowsOnly?: { userId: string };
+  /**
+   * Parent-FK filter: narrows to rows whose `attrs->>{column}`
+   * equals `parentId`. Used by the field runtime to list children
+   * of a given parent feature.
+   *
+   * The column name is interpolated into the SQL but the caller is
+   * responsible for validating it against the layer schema first
+   * (the v3 controller does this today).
+   */
+  parentFkFilter?: { column: string; parentId: string };
+  /**
+   * Set when the layer was provisioned without a geometry column
+   * (the related-records pattern). Skips every spatial filter so
+   * non-spatial layers pass through cleanly.
+   */
+  isTable?: boolean;
 }
 
 export interface DataLayerFeature {
@@ -93,12 +133,6 @@ export interface DataLayerFeature {
     _edited_by: string;
     _edited_at: string;
   };
-}
-
-interface CreationRow {
-  entity: string;
-  author_sub: string;
-  tx_time: Date;
 }
 
 const DEFAULT_SOURCE: SourceRef = { kind: 'data_layer:write' };
@@ -237,77 +271,167 @@ export class DataLayerEngine {
    * controllers, the layer detail page, and the map renderer keep
    * working without changes.
    *
-   * Tracking metadata is surfaced as underscore-prefixed properties:
+   * Single SQL query that joins the latest-observation-per-entity
+   * (DISTINCT ON) against the creation row for the same entity, so
+   * the editor-tracking metadata lands without a second round-trip.
+   * All v3-era filters (bbox, geoLimit, boundaryClip, ownRowsOnly,
+   * parentFkFilter, isTable) are pushed into the WHERE clause.
    *
-   * - `_global_id` mirrors `Feature.id` so MapLibre's `generateId`
-   *   does not clobber the entity link.
-   * - `_created_by` / `_created_at` come from the entity's first
-   *   `kind: 'create'` observation, fetched in a single batched query.
-   * - `_edited_by` / `_edited_at` come from the latest non-delete
-   *   observation, which is exactly what `EngineService.read` already
-   *   returns.
+   * Tombstones (`kind = 'delete'`) are filtered out: deleted
+   * entities never appear in the result.
+   *
+   * Underscore-prefixed properties match the v3 wire shape:
+   * `_global_id`, `_created_by`, `_created_at`, `_edited_by`,
+   * `_edited_at`.
    */
-  async listFeatures(args: ListFeaturesArgs): Promise<DataLayerFeature[]> {
+  async listFeatures(
+    args: ListFeaturesArgs,
+  ): Promise<{ type: 'FeatureCollection'; features: DataLayerFeature[] }> {
     const scope = this.scope(args.itemId, args.layerId);
-    const features = await this.engine.read({
-      scope,
-      ...(args.asOf !== undefined ? { asOf: args.asOf } : {}),
-      ...(args.limit !== undefined ? { limit: args.limit } : {}),
-    });
-    if (features.length === 0) return [];
+    const asOf = args.asOf ?? new Date();
+    const limit = args.limit ?? 100000;
 
-    const entities = features.map((f) => f.id);
-    const tracking = await this.fetchCreationMetadata(scope, entities);
+    const candidateFilters: Prisma.Sql[] = [];
+    const currentFilters: Prisma.Sql[] = [];
 
-    return features.map((f) => {
-      const baseProps: Record<string, unknown> = { ...f.properties };
-      const meta = f.properties.__engine;
-      delete baseProps.__engine;
-      const created = tracking.get(f.id);
-      return {
-        type: 'Feature',
-        id: f.id,
-        geometry: f.geometry,
-        properties: {
-          ...baseProps,
-          _global_id: f.id,
-          _created_by: created?.authorSub ?? meta.authorSub,
-          _created_at: created?.txTime.toISOString() ?? meta.txTime,
-          _edited_by: meta.authorSub,
-          _edited_at: meta.txTime,
-        },
-      };
-    });
-  }
-
-  /**
-   * Look up creation metadata (`author_sub` and `tx_time` of each
-   * entity's first `kind: 'create'` observation) for a batch of
-   * entity ids. Returns a Map for O(1) lookup during feature
-   * assembly.
-   *
-   * Implemented as a single `DISTINCT ON (entity)` query so reading
-   * N features costs two round-trips total, not N+1.
-   */
-  private async fetchCreationMetadata(
-    scope: string,
-    entities: string[],
-  ): Promise<Map<string, { authorSub: string; txTime: Date }>> {
-    if (entities.length === 0) return new Map();
-    const rows = await this.prisma.$queryRaw<CreationRow[]>`
-      SELECT DISTINCT ON (entity) entity, author_sub, tx_time
-      FROM observation
-      WHERE scope = ${scope}
-        AND entity = ANY(${entities}::uuid[])
-        AND kind = 'create'
-      ORDER BY entity, valid_from ASC, tx_time ASC
-    `;
-    const out = new Map<string, { authorSub: string; txTime: Date }>();
-    for (const row of rows) {
-      out.set(row.entity, { authorSub: row.author_sub, txTime: row.tx_time });
+    if (args.ownRowsOnly !== undefined) {
+      candidateFilters.push(
+        Prisma.sql`AND author_sub = ${args.ownRowsOnly.userId}`,
+      );
     }
-    return out;
+
+    if (!args.isTable) {
+      if (args.bbox !== undefined) {
+        const [w, s, e, n] = args.bbox;
+        currentFilters.push(
+          Prisma.sql`AND geom && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`,
+        );
+      }
+      if (args.geoLimit !== undefined) {
+        const json = JSON.stringify(args.geoLimit);
+        currentFilters.push(
+          Prisma.sql`AND (geom IS NULL OR ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326)))`,
+        );
+      }
+      if (args.boundaryClip !== undefined) {
+        const json = JSON.stringify(args.boundaryClip);
+        currentFilters.push(
+          Prisma.sql`AND geom IS NOT NULL AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+        );
+      }
+    }
+
+    if (args.parentFkFilter !== undefined) {
+      // Column name is caller-validated against the layer schema in
+      // the v3 controller. Quote-safe by virtue of the schema regex
+      // matching only [a-z0-9_]+; we still wrap in a JSONB key
+      // expression that uses single quotes so the column name lives
+      // inside the SQL string, not as a bound parameter (JSONB key
+      // operators do not bind via $params).
+      const col = sanitizeJsonbKey(args.parentFkFilter.column);
+      currentFilters.push(
+        Prisma.sql`AND attrs->>${col} = ${args.parentFkFilter.parentId}`,
+      );
+    }
+
+    interface FeatureRow {
+      entity: string;
+      observation_id: string;
+      attrs: Record<string, unknown> | null;
+      geom_geojson: GeoJsonGeometry | null;
+      edited_by: string;
+      edited_at: Date;
+      created_by: string;
+      created_at: Date;
+    }
+
+    // Prisma.join() rejects an empty array, so collapse to Prisma.empty
+    // when no extra filter fragments were collected. Each fragment
+    // already begins with `AND` so concatenation is just space-joining.
+    const candidateExtras =
+      candidateFilters.length > 0
+        ? Prisma.join(candidateFilters, ' ')
+        : Prisma.empty;
+    const currentExtras =
+      currentFilters.length > 0
+        ? Prisma.join(currentFilters, ' ')
+        : Prisma.empty;
+
+    const rows = await this.prisma.$queryRaw<FeatureRow[]>`
+      WITH candidate_entities AS (
+        SELECT entity
+        FROM observation
+        WHERE scope = ${scope}
+          AND kind = 'create'
+          ${candidateExtras}
+      ),
+      currents AS (
+        SELECT DISTINCT ON (entity)
+          id AS observation_id,
+          entity,
+          attrs,
+          ST_AsGeoJSON(geom)::jsonb AS geom_geojson,
+          kind,
+          author_sub AS edited_by,
+          tx_time AS edited_at
+        FROM observation
+        WHERE scope = ${scope}
+          AND valid_from <= ${asOf}
+          AND entity IN (SELECT entity FROM candidate_entities)
+          ${currentExtras}
+        ORDER BY entity, valid_from DESC, tx_time DESC
+      ),
+      creates AS (
+        SELECT entity,
+               author_sub AS created_by,
+               tx_time    AS created_at
+        FROM observation
+        WHERE scope = ${scope}
+          AND kind = 'create'
+          AND entity IN (SELECT entity FROM currents)
+      )
+      SELECT
+        c.entity,
+        c.observation_id,
+        c.attrs,
+        c.geom_geojson,
+        c.edited_by,
+        c.edited_at,
+        cr.created_by,
+        cr.created_at
+      FROM currents c
+      JOIN creates cr ON cr.entity = c.entity
+      WHERE c.kind <> 'delete'
+      ORDER BY c.entity
+      LIMIT ${limit}
+    `;
+
+    const features: DataLayerFeature[] = rows.map((row) => ({
+      type: 'Feature',
+      id: row.entity,
+      geometry: row.geom_geojson,
+      properties: {
+        ...(row.attrs ?? {}),
+        _global_id: row.entity,
+        _created_by: row.created_by,
+        _created_at: row.created_at.toISOString(),
+        _edited_by: row.edited_by,
+        _edited_at: row.edited_at.toISOString(),
+      },
+    }));
+
+    return { type: 'FeatureCollection', features };
   }
+}
+
+/**
+ * Sanitize a JSONB key name so it is safe to embed in a single-quoted
+ * SQL literal. Keys flow from the v3 controller after schema-name
+ * validation, so this is belt-and-suspenders against an upstream miss.
+ * Replaces every character that is not `[a-zA-Z0-9_]` with `_`.
+ */
+function sanitizeJsonbKey(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9_]/g, '_');
 }
 
 function requireId(id: string | undefined): string {
