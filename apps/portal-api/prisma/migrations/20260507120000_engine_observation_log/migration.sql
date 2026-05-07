@@ -2,8 +2,16 @@
 -- docs/architecture/observation-log-engine.md for the design.
 --
 -- Phase 1 deliberately ships without:
---   - pg_partman:   one default partition for now; monthly rotation
---                   arrives at Phase 2 cutover.
+--   - pg_partman:   the table is created as a regular (non-partitioned)
+--                   table for Phase 1. Postgres requires the primary
+--                   key on a partitioned table to include every
+--                   partition column, which would force a composite
+--                   (id, tx_time) PK; we want id alone to be unique
+--                   for now to keep the engine read paths simple.
+--                   Phase 2 cutover converts the table to partitioned
+--                   (or replaces it) when pg_partman lands and monthly
+--                   rotation actually starts paying for its setup
+--                   cost.
 --   - pgh3:         cell strings are computed in app code via h3-js,
 --                   so the column is just CHAR(15) here.
 --   - pgvector:     embedding column omitted entirely; semantic search
@@ -30,11 +38,7 @@ CREATE TABLE observation (
   author_sub   TEXT        NOT NULL,
   source       JSONB       NOT NULL,
   parents      UUID[]      NOT NULL DEFAULT '{}'
-) PARTITION BY RANGE (tx_time);
-
--- Single default partition for Phase 1. Phase 2 cutover replaces this
--- with monthly partitions managed by pg_partman.
-CREATE TABLE observation_p_default PARTITION OF observation DEFAULT;
+);
 
 -- Spatial index over the geometry column. Used by the read path for
 -- viewport, draw-region, and share-geo filters.

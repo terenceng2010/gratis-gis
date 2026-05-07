@@ -24,6 +24,7 @@ here; the corresponding sections below are kept in sync.
 | 2026-05-07 | Project relicensed to AGPL-3.0-or-later (commits `bbd029a` and `23f5d81`).                        |
 | 2026-05-07 | `observation.id` and `entity` are UUIDv7 (Postgres 17 native or `pg_uuidv7` extension).           |
 | 2026-05-07 | Spatial partitioning uses H3 cells, resolution 7 (~5 km). `pgh3` extension.                       |
+| 2026-05-07 | Phase 1 ships the `observation` table as a regular (non-partitioned) table. Postgres requires the primary key on a partitioned table to include every partition column, which would force a composite `(id, tx_time)` PK and complicate the read path. Phase 2 cutover converts to partitioned alongside `pg_partman`, when monthly rotation actually starts paying for its setup cost. |
 | 2026-05-07 | MV refresh: no MV by default; per-lens `cache` hint with `eager`/`lazy`/`scheduled`+TTL modes; scheduled with 60s TTL is the recommended starting point for hot lenses. |
 | 2026-05-07 | Embedding model: `all-MiniLM-L6-v2` (sentence-transformers, Apache 2.0, 384 dims). Run inference via `transformers.js` inside portal-api. No vendor APIs. |
 | 2026-05-07 | No legacy backfill. Existing `feature_v3.*` test data is dropped at Phase 2 cutover; engine is the only path from there forward. |
