@@ -12,6 +12,8 @@ import {
 import {
   AlertTriangle,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   Eye,
   Image as ImageIcon,
@@ -21,6 +23,7 @@ import {
   Map as MapIcon,
   MoreVertical,
   MousePointer2,
+  Pencil,
   Plus,
   Printer,
   Search,
@@ -30,6 +33,7 @@ import {
   Table2,
   Trash2,
   Type as TypeIcon,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type {
@@ -83,10 +87,16 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickingMap, setPickingMap] = useState(false);
-  // Single-page UX in Slice 1: home page is always pages[0]. The
-  // page tabs + multi-page switcher come in #342.
-  const activePageIdx = 0;
+  // Multi-page support (#342). The home page is always pages[0]; if
+  // the user deletes pages or reorders, activePageIdx clamps. Per-
+  // page selection is reset on page switch so the right rail doesn't
+  // try to render properties for a widget that lives on another page.
+  const [activePageIdx, setActivePageIdxRaw] = useState(0);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  const setActivePageIdx = useCallback((idx: number) => {
+    setActivePageIdxRaw(idx);
+    setSelectedWidgetId(null);
+  }, []);
 
   // Resolved referenced map title (optional). Same lazy-fetch as the
   // previous detail page.
@@ -174,21 +184,24 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
       }));
       setDirty(true);
     },
-    [],
+    [activePageIdx],
   );
 
-  const removeWidget = useCallback((widgetId: string) => {
-    setApp((cur) => ({
-      ...cur,
-      pages: cur.pages.map((p, i) =>
-        i !== activePageIdx
-          ? p
-          : { ...p, widgets: p.widgets.filter((w) => w.id !== widgetId) },
-      ),
-    }));
-    setSelectedWidgetId(null);
-    setDirty(true);
-  }, []);
+  const removeWidget = useCallback(
+    (widgetId: string) => {
+      setApp((cur) => ({
+        ...cur,
+        pages: cur.pages.map((p, i) =>
+          i !== activePageIdx
+            ? p
+            : { ...p, widgets: p.widgets.filter((w) => w.id !== widgetId) },
+        ),
+      }));
+      setSelectedWidgetId(null);
+      setDirty(true);
+    },
+    [activePageIdx],
+  );
 
   const addWidgetAt = useCallback(
     (kind: CustomWidgetKind, col: number, row: number) => {
@@ -227,10 +240,86 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
       setSelectedWidgetId(widget.id);
       setDirty(true);
     },
+    [activePageIdx],
+  );
+
+  // ---- Page CRUD (#342) -----------------------------------------------------
+
+  const addPage = useCallback(() => {
+    setApp((cur) => {
+      const usedTitles = new Set(cur.pages.map((p) => p.title));
+      let n = cur.pages.length + 1;
+      let title = `Page ${n}`;
+      while (usedTitles.has(title)) {
+        n += 1;
+        title = `Page ${n}`;
+      }
+      const newPage: CustomPage = {
+        id: `page-${Date.now().toString(36)}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`,
+        title,
+        widgets: [],
+      };
+      return { ...cur, pages: [...cur.pages, newPage] };
+    });
+    setDirty(true);
+    // Switch to the freshly added page so the user can start dropping
+    // widgets onto it without an extra click. The new page lands at
+    // index `app.pages.length` (current length, before this update).
+    setActivePageIdx(app.pages.length);
+  }, [app.pages.length, setActivePageIdx]);
+
+  const renamePage = useCallback((idx: number, title: string) => {
+    setApp((cur) => ({
+      ...cur,
+      pages: cur.pages.map((p, i) => (i === idx ? { ...p, title } : p)),
+    }));
+    setDirty(true);
+  }, []);
+
+  const removePage = useCallback(
+    (idx: number) => {
+      setApp((cur) => {
+        if (cur.pages.length <= 1) return cur; // home page is sticky
+        return { ...cur, pages: cur.pages.filter((_, i) => i !== idx) };
+      });
+      setDirty(true);
+      // Re-clamp active page index after the removal. If the active
+      // page was the removed one, fall back to the previous page.
+      setActivePageIdxRaw((cur) => {
+        if (cur < idx) return cur;
+        if (cur === idx) return Math.max(0, idx - 1);
+        return cur - 1;
+      });
+      setSelectedWidgetId(null);
+    },
     [],
   );
 
-  const activePage = app.pages[activePageIdx]!;
+  const movePage = useCallback(
+    (from: number, to: number) => {
+      setApp((cur) => {
+        if (from === to || from < 0 || to < 0) return cur;
+        if (from >= cur.pages.length || to >= cur.pages.length) return cur;
+        const next = cur.pages.slice();
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved!);
+        return { ...cur, pages: next };
+      });
+      setDirty(true);
+      // Keep the active page following its widget set across the move.
+      setActivePageIdxRaw((cur) => {
+        if (cur === from) return to;
+        if (from < cur && cur <= to) return cur - 1;
+        if (to <= cur && cur < from) return cur + 1;
+        return cur;
+      });
+    },
+    [],
+  );
+
+  const activePage = app.pages[activePageIdx] ?? app.pages[0]!;
   const selectedWidget =
     activePage.widgets.find((w) => w.id === selectedWidgetId) ?? null;
 
@@ -288,15 +377,29 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
         {/* LEFT: palette */}
         <Palette canEdit={canEdit} />
 
-        {/* CENTER: canvas */}
-        <Canvas
-          widgets={activePage.widgets}
-          selectedId={selectedWidgetId}
-          canEdit={canEdit}
-          onSelect={setSelectedWidgetId}
-          onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
-          onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
-        />
+        {/* CENTER: page tabs + canvas. The tab strip lives just above
+            the canvas so it stays aligned with the grid. The runtime
+            uses the same strip in its header. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <PageTabs
+            pages={app.pages}
+            activeIdx={activePageIdx}
+            canEdit={canEdit}
+            onSelect={setActivePageIdx}
+            onAdd={addPage}
+            onRename={renamePage}
+            onRemove={removePage}
+            onMove={movePage}
+          />
+          <Canvas
+            widgets={activePage.widgets}
+            selectedId={selectedWidgetId}
+            canEdit={canEdit}
+            onSelect={setSelectedWidgetId}
+            onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
+            onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
+          />
+        </div>
 
         {/* RIGHT: properties panel */}
         <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
@@ -466,6 +569,177 @@ function PaletteTile({
       <Icon className="h-5 w-5 text-accent" />
       <span className="font-medium">{label}</span>
     </button>
+  );
+}
+
+// ---- PageTabs (#342) -------------------------------------------------------
+
+/**
+ * Horizontal tab strip above the canvas. One tab per page; click to
+ * switch. The active tab gets inline rename + delete + reorder
+ * affordances. Adding a page is a "+" button at the end.
+ *
+ * Single-page mode: tabs strip still renders so the user discovers
+ * the affordance, but there's nothing to delete and reorder is a
+ * no-op.
+ *
+ * Drag-to-reorder is deferred; for now reorder is left/right arrow
+ * buttons on the active tab (matches the form designer's question
+ * reorder UX).
+ */
+function PageTabs({
+  pages,
+  activeIdx,
+  canEdit,
+  onSelect,
+  onAdd,
+  onRename,
+  onRemove,
+  onMove,
+}: {
+  pages: CustomPage[];
+  activeIdx: number;
+  canEdit: boolean;
+  onSelect: (idx: number) => void;
+  onAdd: () => void;
+  onRename: (idx: number, title: string) => void;
+  onRemove: (idx: number) => void;
+  onMove: (from: number, to: number) => void;
+}) {
+  const [renamingIdx, setRenamingIdx] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+
+  function commitRename() {
+    if (renamingIdx === null) return;
+    const trimmed = renameDraft.trim();
+    if (trimmed.length > 0 && trimmed !== pages[renamingIdx]!.title) {
+      onRename(renamingIdx, trimmed);
+    }
+    setRenamingIdx(null);
+    setRenameDraft('');
+  }
+
+  return (
+    <div className="flex shrink-0 items-stretch gap-1 overflow-x-auto rounded-lg border border-border bg-surface-1 px-2 py-1.5 shadow-card">
+      {pages.map((p, i) => {
+        const isActive = i === activeIdx;
+        const isRenaming = renamingIdx === i;
+        return (
+          <div
+            key={p.id}
+            className={`group flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition ${
+              isActive
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-transparent text-ink-1 hover:bg-surface-2'
+            }`}
+          >
+            {isRenaming ? (
+              <input
+                autoFocus
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitRename();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setRenamingIdx(null);
+                    setRenameDraft('');
+                  }
+                }}
+                className="w-28 rounded border border-border bg-surface-1 px-1 py-0.5 text-xs text-ink-0 focus:border-accent focus:outline-none"
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => onSelect(i)}
+                onDoubleClick={() => {
+                  if (!canEdit) return;
+                  setRenamingIdx(i);
+                  setRenameDraft(p.title);
+                }}
+                title={canEdit ? 'Click to switch, double-click to rename' : ''}
+                className="font-medium"
+              >
+                {p.title}
+              </button>
+            )}
+            {isActive && canEdit && !isRenaming && (
+              <span className="ml-1 inline-flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                <button
+                  type="button"
+                  title="Move left"
+                  disabled={i === 0}
+                  onClick={() => onMove(i, i - 1)}
+                  className="rounded p-0.5 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronLeft className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  title="Move right"
+                  disabled={i === pages.length - 1}
+                  onClick={() => onMove(i, i + 1)}
+                  className="rounded p-0.5 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronRight className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  title="Rename"
+                  onClick={() => {
+                    setRenamingIdx(i);
+                    setRenameDraft(p.title);
+                  }}
+                  className="rounded p-0.5 hover:bg-surface-2"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  title={
+                    pages.length === 1
+                      ? 'A custom app must have at least one page.'
+                      : p.widgets.length > 0
+                        ? `Delete page (${p.widgets.length} widget${p.widgets.length === 1 ? '' : 's'} on it)`
+                        : 'Delete page'
+                  }
+                  disabled={pages.length === 1}
+                  onClick={() => {
+                    if (pages.length === 1) return;
+                    if (
+                      p.widgets.length > 0 &&
+                      !confirm(
+                        `Delete "${p.title}" and its ${p.widgets.length} widget${p.widgets.length === 1 ? '' : 's'}? This cannot be undone.`,
+                      )
+                    ) {
+                      return;
+                    }
+                    onRemove(i);
+                  }}
+                  className="rounded p-0.5 text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            )}
+          </div>
+        );
+      })}
+      {canEdit && (
+        <button
+          type="button"
+          onClick={onAdd}
+          title="Add page"
+          className="ml-1 inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted hover:border-accent/40 hover:text-accent"
+        >
+          <Plus className="h-3 w-3" />
+          Page
+        </button>
+      )}
+    </div>
   );
 }
 

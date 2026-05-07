@@ -153,7 +153,13 @@ export function CustomRuntimeClient({
   baseMapData,
   resolvedTargets,
 }: Props) {
-  const page = app.pages[0]!;
+  // Multi-page support (#342). Track which page is showing; render
+  // only that page's widgets, but seed map state from EVERY page so
+  // a Map's layer toggles persist when the user switches pages and
+  // comes back. Single-page apps skip the tab strip entirely.
+  const [activePageIdx, setActivePageIdx] = useState(0);
+  const safePageIdx = Math.min(activePageIdx, app.pages.length - 1);
+  const page = app.pages[safePageIdx]!;
   const totalWidgets = app.pages.reduce((n, p) => n + p.widgets.length, 0);
   const usedRows = page.widgets.reduce(
     (n, w) => Math.max(n, w.layout.row + w.layout.rowSpan - 1),
@@ -163,16 +169,20 @@ export function CustomRuntimeClient({
 
   // Initial per-Map-widget state derived once from the resolved
   // baseMapData. Each Map widget gets a deep-ish copy so divergent
-  // basemap / layer-visibility changes don't cross-contaminate.
+  // basemap / layer-visibility changes don't cross-contaminate. We
+  // walk EVERY page so cross-page bindings + page-switch persistence
+  // both work without re-initializing state mid-session.
   const [states, setStates] = useState<Record<string, MapState>>(() => {
     const out: Record<string, MapState> = {};
-    for (const w of page.widgets) {
-      if (w.kind === 'map') {
-        out[w.id] = {
-          mapData: { ...baseMapData, layers: [...(baseMapData.layers ?? [])] },
-          selection: {},
-          selectTool: 'off',
-        };
+    for (const p of app.pages) {
+      for (const w of p.widgets) {
+        if (w.kind === 'map') {
+          out[w.id] = {
+            mapData: { ...baseMapData, layers: [...(baseMapData.layers ?? [])] },
+            selection: {},
+            selectTool: 'off',
+          };
+        }
       }
     }
     return out;
@@ -251,6 +261,31 @@ export function CustomRuntimeClient({
             Configure
           </Link>
         </header>
+
+        {/* Page tabs (#342). Hidden when the app has only one page so
+            single-page apps stay chrome-free. */}
+        {app.pages.length > 1 && (
+          <nav
+            className="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface-1 px-3 py-1.5"
+            aria-label="App pages"
+          >
+            {app.pages.map((p, i) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setActivePageIdx(i)}
+                aria-current={i === safePageIdx ? 'page' : undefined}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                  i === safePageIdx
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-ink-1 hover:bg-surface-2'
+                }`}
+              >
+                {p.title}
+              </button>
+            ))}
+          </nav>
+        )}
 
         <div className="relative flex-1 overflow-auto bg-surface-0 p-3">
           {totalWidgets === 0 ? (
