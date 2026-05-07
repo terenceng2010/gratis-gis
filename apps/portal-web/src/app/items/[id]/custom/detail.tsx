@@ -372,11 +372,11 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
   return (
     <div className="space-y-3">
       {/* Header card: status + Save + Open ------------------------------ */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-3 shadow-card">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 px-4 py-3">
         <div className="flex items-center gap-3">
-          <Sparkles className="h-5 w-5 text-amber-500" />
+          <Sparkles className="h-4 w-4 text-amber-500" strokeWidth={1.75} />
           <div>
-            <div className="text-sm font-semibold text-ink-0">
+            <div className="text-sm font-medium text-ink-0">
               Custom web app
             </div>
             <div className="text-xs text-muted">
@@ -450,7 +450,7 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
         </div>
 
         {/* RIGHT: properties panel */}
-        <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
+        <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1">
           {selectedWidget ? (
             <WidgetProperties
               widget={selectedWidget}
@@ -602,14 +602,14 @@ function MapWidgetPreview({
   }, [baseMapData]);
   if (!previewMap) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-[10px] italic text-muted">
+      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-xs text-muted">
         Pick a Map in the right rail to preview
       </div>
     );
   }
   if (frozen) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-[10px] italic text-muted">
+      <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-xs text-muted">
         Resizing...
       </div>
     );
@@ -699,16 +699,14 @@ const PALETTE_TILES: Array<{
 
 function Palette({ canEdit }: { canEdit: boolean }) {
   return (
-    <aside className="flex w-56 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
-      <div className="border-b border-border bg-surface-2/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Widgets
-        </p>
-        <p className="text-[10px] text-muted">
+    <aside className="flex w-56 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1">
+      <div className="border-b border-border px-3 py-2.5">
+        <p className="text-sm font-medium text-ink-0">Widgets</p>
+        <p className="mt-0.5 text-xs text-muted">
           {canEdit ? 'Drag onto the canvas' : 'Read only'}
         </p>
       </div>
-      <div className="grid grid-cols-2 gap-2 overflow-auto p-2">
+      <div className="flex flex-col overflow-auto py-1">
         {PALETTE_TILES.map((tile) => (
           <PaletteTile key={tile.kind} {...tile} canEdit={canEdit} />
         ))}
@@ -740,10 +738,10 @@ function PaletteTile({
       }}
       title={hint}
       disabled={!canEdit}
-      className="flex aspect-square cursor-grab flex-col items-center justify-center gap-1 rounded-md border border-border bg-surface-1 p-2 text-center text-[11px] text-ink-1 hover:border-accent/40 hover:bg-surface-2 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50"
+      className="group flex w-full cursor-grab items-center gap-2.5 px-3 py-2 text-left text-sm text-ink-1 transition-colors hover:bg-surface-2 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
     >
-      <Icon className="h-5 w-5 text-accent" />
-      <span className="font-medium">{label}</span>
+      <Icon className="h-4 w-4 shrink-0 text-muted group-hover:text-ink-1" strokeWidth={1.75} />
+      <span className="truncate">{label}</span>
     </button>
   );
 }
@@ -796,17 +794,17 @@ function PageTabs({
   }
 
   return (
-    <div className="flex shrink-0 items-stretch gap-1 overflow-x-auto rounded-lg border border-border bg-surface-1 px-2 py-1.5 shadow-card">
+    <div className="flex shrink-0 items-end gap-0 overflow-x-auto border-b border-border bg-surface-1 px-2">
       {pages.map((p, i) => {
         const isActive = i === activeIdx;
         const isRenaming = renamingIdx === i;
         return (
           <div
             key={p.id}
-            className={`group flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition ${
+            className={`group relative flex items-center gap-1 px-3 py-2 text-sm transition-colors ${
               isActive
-                ? 'border-accent bg-accent/10 text-accent'
-                : 'border-transparent text-ink-1 hover:bg-surface-2'
+                ? 'text-ink-0'
+                : 'text-muted hover:text-ink-1'
             }`}
           >
             {isRenaming ? (
@@ -825,7 +823,7 @@ function PageTabs({
                     setRenameDraft('');
                   }
                 }}
-                className="w-28 rounded border border-border bg-surface-1 px-1 py-0.5 text-xs text-ink-0 focus:border-accent focus:outline-none"
+                className="w-32 border-none bg-transparent p-0 text-sm font-medium text-ink-0 focus:outline-none focus:ring-0"
               />
             ) : (
               <button
@@ -843,24 +841,24 @@ function PageTabs({
               </button>
             )}
             {isActive && canEdit && !isRenaming && (
-              <span className="ml-1 inline-flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+              <span className="inline-flex items-center gap-0 opacity-0 transition-opacity group-hover:opacity-100">
                 <button
                   type="button"
                   title="Move left"
                   disabled={i === 0}
                   onClick={() => onMove(i, i - 1)}
-                  className="rounded p-0.5 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  <ChevronLeft className="h-3 w-3" />
+                  <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
                 </button>
                 <button
                   type="button"
                   title="Move right"
                   disabled={i === pages.length - 1}
                   onClick={() => onMove(i, i + 1)}
-                  className="rounded p-0.5 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  <ChevronRight className="h-3 w-3" />
+                  <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
                 </button>
                 <button
                   type="button"
@@ -869,9 +867,9 @@ function PageTabs({
                     setRenamingIdx(i);
                     setRenameDraft(p.title);
                   }}
-                  className="rounded p-0.5 hover:bg-surface-2"
+                  className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-ink-1"
                 >
-                  <Pencil className="h-3 w-3" />
+                  <Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />
                 </button>
                 <button
                   type="button"
@@ -895,11 +893,20 @@ function PageTabs({
                     }
                     onRemove(i);
                   }}
-                  className="rounded p-0.5 text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="rounded p-0.5 text-muted hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-3.5 w-3.5" strokeWidth={1.75} />
                 </button>
               </span>
+            )}
+            {/* Active-tab underline. -bottom-px aligns it with the
+                wrapper's border-b so the indicator visually replaces
+                the divider for the active tab. */}
+            {isActive && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-ink-0"
+              />
             )}
           </div>
         );
@@ -909,9 +916,9 @@ function PageTabs({
           type="button"
           onClick={onAdd}
           title="Add page"
-          className="ml-1 inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted hover:border-accent/40 hover:text-accent"
+          className="ml-1 inline-flex items-center gap-1 px-2 py-2 text-sm text-muted transition-colors hover:text-ink-1"
         >
-          <Plus className="h-3 w-3" />
+          <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
           Page
         </button>
       )}
@@ -1100,13 +1107,17 @@ function Canvas({
   }, [gesture, onWidgetLayout]);
 
   return (
-    <div className="relative flex flex-1 overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
+    <div className="relative flex flex-1 overflow-hidden rounded-lg border border-border bg-surface-1">
       <div
         ref={canvasRef}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onClick={() => onSelect(null)}
-        className="relative flex-1 overflow-auto bg-[linear-gradient(to_right,rgba(0,0,0,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.04)_1px,transparent_1px)] bg-[size:8.333%_48px] p-3"
+        // Dot grid background, very subtle. Anchors to (12px, 12px)
+        // so the dots don't sit on the widget edges. Position picked
+        // empirically against a 24x24px snap grid -- the dots fall
+        // on every fourth grid intersection.
+        className="relative flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(0,0,0,0.06)_1px,transparent_0)] bg-[length:24px_24px] p-4"
       >
         {/* The actual grid. CSS Grid makes the placement math cheap:
             each widget's gridColumn / gridRow line up with the
@@ -1155,11 +1166,11 @@ function Canvas({
           ))}
           {widgets.length === 0 && (
             <div
-              className="col-span-12 row-span-6 flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border/70 bg-surface-2/40 p-6 text-center"
-              style={{ gridColumn: '1 / -1', gridRow: '1 / span 6' }}
+              className="flex flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-surface-1/60 p-8 text-center"
+              style={{ gridColumn: '1 / -1', gridRow: '1 / span 12' }}
             >
-              <Square className="h-6 w-6 text-muted" />
-              <p className="text-sm text-ink-1">Empty canvas</p>
+              <Square className="h-5 w-5 text-muted" strokeWidth={1.5} />
+              <p className="text-sm font-medium text-ink-0">Empty canvas</p>
               <p className="text-xs text-muted">
                 Drag a widget from the left rail to get started.
               </p>
@@ -1224,14 +1235,14 @@ function WidgetCard({
         gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
         cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
       }}
-      className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md border-2 bg-surface-1 text-left transition-colors ${
+      className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md bg-surface-1 text-left transition-shadow ${
         selected
-          ? 'border-accent bg-accent/5 ring-1 ring-accent/40'
-          : 'border-border hover:border-accent/40'
-      } ${gesturing ? 'opacity-90 shadow-overlay' : ''}`}
+          ? 'shadow-[0_0_0_2px_var(--color-ink-0,_#0f0f10)]'
+          : 'shadow-[0_0_0_1px_var(--color-border,_#e5e7eb)] hover:shadow-[0_0_0_1px_var(--color-ink-1,_#374151)]'
+      } ${gesturing ? 'opacity-90' : ''}`}
     >
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface-2/40 px-2 py-1 text-[11px]">
-        <Icon className="h-3.5 w-3.5 text-accent" />
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-xs">
+        <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
         <span className="font-medium text-ink-0">{label}</span>
         {summary && (
           <span className="ml-auto truncate text-muted" title={summary}>
@@ -1248,7 +1259,7 @@ function WidgetCard({
           />
         </div>
       ) : (
-        <div className="flex flex-1 items-center justify-center p-2 text-[11px] italic text-muted">
+        <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted">
           {widgetPlaceholderText(widget.kind, label)}
         </div>
       )}
@@ -1368,27 +1379,23 @@ function AppProperties({
 }) {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="border-b border-border bg-surface-2/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Page
-        </p>
+      <div className="border-b border-border px-4 py-3">
+        <p className="text-sm font-medium text-ink-0">Page</p>
       </div>
-      <div className="space-y-3 p-3 text-xs">
+      <div className="space-y-4 p-4 text-sm">
         <Field label="Title">
           <input
             value={page.title}
             disabled={!canEdit}
             onChange={(e) => onUpdatePage({ title: e.target.value })}
-            className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            className="w-full rounded-md border border-border bg-surface-1 px-2.5 py-1.5 text-sm focus:border-ink-1 focus:outline-none focus:ring-0"
           />
         </Field>
       </div>
-      <div className="border-y border-border bg-surface-2/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          App settings
-        </p>
+      <div className="border-y border-border px-4 py-3">
+        <p className="text-sm font-medium text-ink-0">App settings</p>
       </div>
-      <div className="space-y-3 p-3 text-xs">
+      <div className="space-y-4 p-4 text-sm">
         <Field
           label="Default map"
           hint="Map widgets that don't set their own use this for basemap + viewport."
@@ -1436,7 +1443,7 @@ function AppProperties({
           hint="Layers your widgets can bind to. Add via the Map widget's properties (in Slice 3) or the items page for now."
         >
           {app.targets.length === 0 ? (
-            <div className="rounded-md border border-dashed border-border bg-surface-2/40 px-2 py-3 text-center text-[11px] italic text-muted">
+            <div className="rounded-md border border-dashed border-border px-2 py-3 text-center text-xs text-muted">
               No targets yet.
             </div>
           ) : (
@@ -1502,9 +1509,9 @@ function WidgetProperties({
   const Icon = tile?.Icon ?? Square;
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="flex items-center gap-2 border-b border-border bg-surface-2/40 px-3 py-2">
-        <Icon className="h-4 w-4 text-accent" />
-        <span className="text-sm font-semibold text-ink-0">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+        <Icon className="h-4 w-4 text-muted" strokeWidth={1.75} />
+        <span className="text-sm font-medium text-ink-0">
           {tile?.label ?? widget.kind}
         </span>
         <span className="ml-auto inline-flex items-center gap-1">
@@ -1512,20 +1519,18 @@ function WidgetProperties({
             <button
               type="button"
               onClick={onRemove}
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-1 hover:text-rose-600"
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-rose-600"
               title="Remove widget"
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
           )}
-          <MoreVertical className="h-3.5 w-3.5 text-muted" />
+          <MoreVertical className="h-4 w-4 text-muted" strokeWidth={1.75} />
         </span>
       </div>
-      <div className="space-y-3 p-3 text-xs">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Layout
-        </p>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="space-y-4 p-4 text-sm">
+        <p className="text-sm font-medium text-ink-0">Layout</p>
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Column">
             <NumberInput
               value={widget.layout.col}
@@ -1590,14 +1595,12 @@ function WidgetProperties({
             />
           </Field>
         </div>
-        <p className="text-[10px] italic text-muted">
-          Drag the widget on the canvas to move; drag the right /
-          bottom / corner handles to resize. Or enter cells here.
+        <p className="text-xs leading-snug text-muted">
+          Drag the widget on the canvas to move; drag the right,
+          bottom, or corner handles to resize. Or enter cells here.
         </p>
-        <div className="-mx-3 border-t border-border" />
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-          Configuration
-        </p>
+        <div className="-mx-4 border-t border-border" />
+        <p className="text-sm font-medium text-ink-0">Configuration</p>
         <WidgetConfigForm
           widget={widget}
           canEdit={canEdit}
@@ -1825,7 +1828,7 @@ function WidgetConfigForm({
       );
     case 'chart':
       return (
-        <p className="rounded-md border border-dashed border-border bg-surface-2/40 px-2 py-3 text-center text-[11px] italic text-muted">
+        <p className="rounded-md border border-dashed border-border px-2 py-3 text-center text-xs text-muted">
           Chart configuration ships after the runtime (#341).
         </p>
       );
@@ -1873,7 +1876,7 @@ function MapWidgetConfig({
                 {appMapTitle ?? appMapId.slice(0, 8)}
               </>
             ) : (
-              <span className="italic text-muted">none</span>
+              <span className="text-muted">none</span>
             )}
           </span>
           {canEdit && (
@@ -1977,12 +1980,10 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1">
-      <label className="text-[10px] font-medium uppercase tracking-wide text-muted">
-        {label}
-      </label>
+    <div className="space-y-1.5">
+      <label className="block text-xs font-medium text-ink-1">{label}</label>
       {children}
-      {hint && <p className="text-[10px] text-muted">{hint}</p>}
+      {hint && <p className="text-xs leading-snug text-muted">{hint}</p>}
     </div>
   );
 }

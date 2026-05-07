@@ -266,24 +266,33 @@ export function CustomRuntimeClient({
             single-page apps stay chrome-free. */}
         {app.pages.length > 1 && (
           <nav
-            className="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface-1 px-3 py-1.5"
+            className="flex shrink-0 items-end gap-0 overflow-x-auto border-b border-border bg-surface-1 px-3"
             aria-label="App pages"
           >
-            {app.pages.map((p, i) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setActivePageIdx(i)}
-                aria-current={i === safePageIdx ? 'page' : undefined}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                  i === safePageIdx
-                    ? 'bg-accent/10 text-accent'
-                    : 'text-ink-1 hover:bg-surface-2'
-                }`}
-              >
-                {p.title}
-              </button>
-            ))}
+            {app.pages.map((p, i) => {
+              const active = i === safePageIdx;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setActivePageIdx(i)}
+                  aria-current={active ? 'page' : undefined}
+                  className={`relative px-3 py-2 text-sm font-medium transition-colors ${
+                    active
+                      ? 'text-ink-0'
+                      : 'text-muted hover:text-ink-1'
+                  }`}
+                >
+                  {p.title}
+                  {active && (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-ink-0"
+                    />
+                  )}
+                </button>
+              );
+            })}
           </nav>
         )}
 
@@ -339,9 +348,7 @@ function WidgetSlot({ widget }: { widget: CustomWidget }) {
         gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
         gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
       }}
-      className={`flex h-full w-full flex-col overflow-hidden rounded-md border border-border bg-surface-1 shadow-card ${
-        widget.style?.hideHeader ? '' : ''
-      }`}
+      className="flex h-full w-full flex-col overflow-hidden rounded-md border border-border bg-surface-1"
     >
       {renderWidget(widget)}
     </section>
@@ -979,9 +986,9 @@ function WidgetFrame({
 }) {
   return (
     <>
-      <header className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface-2/40 px-2 py-1 text-[11px]">
-        <Icon className="h-3.5 w-3.5 text-accent" />
-        <span className="font-semibold text-ink-0">{title}</span>
+      <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs">
+        <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+        <span className="font-medium text-ink-0">{title}</span>
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {children}
