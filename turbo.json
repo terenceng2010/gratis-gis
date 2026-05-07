@@ -10,6 +10,10 @@
       "outputs": ["dist/**"],
       "inputs": ["src/**/*.ts", "tsconfig.json", "tsconfig.build.json", "package.json"]
     },
+    "@gratis-gis/engine#build": {
+      "outputs": ["dist/**"],
+      "inputs": ["src/**/*.ts", "tsconfig.json", "tsconfig.build.json", "package.json"]
+    },
     "dev": {
       "cache": false,
       "persistent": true,
