@@ -12,11 +12,15 @@ import {
 } from 'react';
 import {
   ArrowLeft,
+  Bookmark as BookmarkIcon,
   ChevronRight,
+  Crosshair as CrosshairIcon,
   Image as ImageIcon,
   Layers as LayersIcon,
   Lasso,
   ListTree,
+  Loader2,
+  Locate as LocateIcon,
   Map as MapIcon,
   MousePointer2,
   Pentagon,
@@ -26,6 +30,7 @@ import {
   Type as TypeIcon,
 } from 'lucide-react';
 import Link from 'next/link';
+import maplibregl from 'maplibre-gl';
 import type {
   CustomAppData,
   CustomWidget,
@@ -115,6 +120,16 @@ interface CustomMapsCtx {
    */
   navigateToPage: (pageId: string) => void;
   pages: { id: string; title: string }[];
+  /**
+   * #361 part 2: live MapLibre Map instances keyed by Map widget id.
+   * Populated by MapWidgetRender via MapCanvas's onMapReady callback.
+   * Widgets that need direct access (Coordinates: mousemove tracking,
+   * Bookmark: imperative flyTo, MyLocation: addSource/addLayer for the
+   * marker) read from this map. Falls back to undefined when the
+   * widget isn't mounted yet.
+   */
+  maps: Record<string, maplibregl.Map | null>;
+  registerMap: (mapWidgetId: string, map: maplibregl.Map | null) => void;
 }
 
 const CustomMapsContext = createContext<CustomMapsCtx | null>(null);
@@ -243,6 +258,25 @@ export function CustomRuntimeClient({
     [],
   );
 
+  // #361 part 2: live MapLibre Map instances per Map widget id.
+  // MapWidgetRender registers via onMapReady so widgets like
+  // Coordinates, Bookmark, and MyLocation can read pointer position,
+  // call flyTo, or add temporary marker layers without a refRegistry
+  // workaround.
+  const [maps, setMaps] = useState<Record<string, maplibregl.Map | null>>({});
+  const registerMap = useCallback(
+    (id: string, map: maplibregl.Map | null) => {
+      setMaps((cur) => {
+        // Avoid resetting state when MapCanvas re-renders with the
+        // same instance; React would otherwise schedule downstream
+        // effects every render.
+        if (cur[id] === map) return cur;
+        return { ...cur, [id]: map };
+      });
+    },
+    [],
+  );
+
   // #361: navigate-by-id for the Button widget's page-link path.
   // Pages are passed as a stripped {id, title} list to avoid leaking
   // widget data into the context.
@@ -268,6 +302,8 @@ export function CustomRuntimeClient({
       flyTo,
       navigateToPage,
       pages: pagesForCtx,
+      maps,
+      registerMap,
     }),
     [
       states,
@@ -278,6 +314,8 @@ export function CustomRuntimeClient({
       flyTo,
       navigateToPage,
       pagesForCtx,
+      maps,
+      registerMap,
     ],
   );
 
@@ -429,6 +467,12 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <DividerWidgetRender widget={widget} />;
     case 'embed':
       return <EmbedWidgetRender widget={widget} />;
+    case 'bookmark':
+      return <BookmarkWidgetRender widget={widget} />;
+    case 'coordinates':
+      return <CoordinatesWidgetRender widget={widget} />;
+    case 'my-location':
+      return <MyLocationWidgetRender widget={widget} />;
     default: {
       const _exhaustive: never = widget.kind;
       void _exhaustive;
@@ -471,6 +515,11 @@ function MapWidgetRender({ widget }: { widget: CustomWidget }) {
         onSelectionChange={(next) =>
           ctx.update(widget.id, (cur) => ({ ...cur, selection: next }))
         }
+        // #361 part 2: surface the live MapLibre Map up to the
+        // runtime context so sibling widgets (Coordinates, Bookmark,
+        // MyLocation) can subscribe to events / addSource / flyTo
+        // imperatively without prop-drilling.
+        onMapReady={(map) => ctx.registerMap(widget.id, map)}
         hideNavigationControl={
           widget.config.kind === 'map' && widget.config.showNavigation === false
         }
@@ -1158,6 +1207,308 @@ function EmbedWidgetRender({ widget }: { widget: CustomWidget }) {
   );
 }
 
+// ---- Mapcentric quick wins (#361 part 2) -----------------------------------
+
+function BookmarkWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'bookmark') return null;
+  const ctx = useContext(CustomMapsContext);
+  const { mapWidgetId, bookmarks } = widget.config;
+  // Mutable in the runtime: authors capture the bound map's current
+  // viewport via the "+" button. We hold these ad-hoc captures in
+  // local state since the runtime doesn't have a save flow.
+  // Hash + timestamp would be redundant -- the design-time list is
+  // the source of truth on reload.
+  const [adhoc, setAdhoc] = useState<typeof bookmarks>([]);
+  const all = useMemo(() => [...bookmarks, ...adhoc], [bookmarks, adhoc]);
+
+  function captureCurrent() {
+    const map = ctx?.maps[mapWidgetId];
+    if (!map) return;
+    const center = map.getCenter();
+    setAdhoc((cur) => [
+      ...cur,
+      {
+        id: `bm_${Math.random().toString(36).slice(2, 8)}`,
+        name: `Captured ${cur.length + 1}`,
+        center: [center.lng, center.lat] as [number, number],
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      },
+    ]);
+  }
+
+  function flyToBookmark(b: (typeof bookmarks)[number]) {
+    const map = ctx?.maps[mapWidgetId];
+    if (!map) return;
+    map.flyTo({
+      center: b.center,
+      zoom: b.zoom,
+      bearing: b.bearing ?? 0,
+      pitch: b.pitch ?? 0,
+      duration: 800,
+    });
+  }
+
+  return (
+    <WidgetFrame icon={BookmarkIcon} title="Bookmarks">
+      {!mapWidgetId ? (
+        <p className="p-3 text-xs text-muted">Bind a map widget.</p>
+      ) : all.length === 0 && !ctx?.maps[mapWidgetId] ? (
+        <p className="p-3 text-xs text-muted">No bookmarks. Map not ready.</p>
+      ) : (
+        <ul className="flex-1 space-y-1 overflow-auto p-2">
+          {all.length === 0 ? (
+            <li className="px-2 py-1 text-xs text-muted">
+              No bookmarks yet. Capture the current view with the + button.
+            </li>
+          ) : (
+            all.map((b) => (
+              <li key={b.id}>
+                <button
+                  type="button"
+                  onClick={() => flyToBookmark(b)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-ink-1 transition-colors hover:bg-surface-2"
+                >
+                  <BookmarkIcon
+                    className="h-3.5 w-3.5 text-muted"
+                    strokeWidth={1.75}
+                  />
+                  <span className="truncate">{b.name}</span>
+                  <span className="ml-auto font-mono text-[10px] text-muted">
+                    z{b.zoom.toFixed(1)}
+                  </span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+      {ctx?.maps[mapWidgetId] && (
+        <div className="border-t border-border px-2 py-1.5">
+          <button
+            type="button"
+            onClick={captureCurrent}
+            className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted hover:border-accent/40 hover:text-ink-1"
+            title="Capture the bound map's current viewport"
+          >
+            + Add current view
+          </button>
+        </div>
+      )}
+    </WidgetFrame>
+  );
+}
+
+function CoordinatesWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'coordinates') return null;
+  const ctx = useContext(CustomMapsContext);
+  const { mapWidgetId, format, precision, showZoom } = widget.config;
+  const map = ctx?.maps[mapWidgetId] ?? null;
+  const fmt = format ?? 'dd';
+  const prec = precision ?? (fmt === 'dd' ? 5 : 0);
+  const [pos, setPos] = useState<{ lng: number; lat: number } | null>(null);
+  const [zoom, setZoom] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!map) {
+      setPos(null);
+      setZoom(null);
+      return;
+    }
+    setZoom(map.getZoom());
+    const onMove = (e: maplibregl.MapMouseEvent) => {
+      setPos({ lng: e.lngLat.lng, lat: e.lngLat.lat });
+    };
+    const onLeave = () => setPos(null);
+    const onZoomEnd = () => setZoom(map.getZoom());
+    map.on('mousemove', onMove);
+    map.on('mouseout', onLeave);
+    map.on('zoomend', onZoomEnd);
+    return () => {
+      map.off('mousemove', onMove);
+      map.off('mouseout', onLeave);
+      map.off('zoomend', onZoomEnd);
+    };
+  }, [map]);
+
+  function formatDms(deg: number, isLat: boolean): string {
+    const hemi = isLat ? (deg >= 0 ? 'N' : 'S') : deg >= 0 ? 'E' : 'W';
+    const abs = Math.abs(deg);
+    const d = Math.floor(abs);
+    const minFloat = (abs - d) * 60;
+    const m = Math.floor(minFloat);
+    const sFloat = (minFloat - m) * 60;
+    const s = sFloat.toFixed(prec);
+    return `${d}° ${m}' ${s}" ${hemi}`;
+  }
+
+  const display = !map
+    ? 'Bind a map widget'
+    : !pos
+      ? 'Move cursor over the bound map'
+      : fmt === 'dms'
+        ? `${formatDms(pos.lat, true)}  ${formatDms(pos.lng, false)}`
+        : `${pos.lat.toFixed(prec)}, ${pos.lng.toFixed(prec)}`;
+
+  return (
+    <WidgetFrame icon={CrosshairIcon} title="Coordinates">
+      <div className="flex flex-1 items-center gap-2 px-3 py-2 font-mono text-xs">
+        <span className="flex-1 truncate text-ink-1">{display}</span>
+        {showZoom && zoom !== null && (
+          <span className="rounded-md border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted">
+            z {zoom.toFixed(2)}
+          </span>
+        )}
+      </div>
+    </WidgetFrame>
+  );
+}
+
+function MyLocationWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'my-location') return null;
+  const ctx = useContext(CustomMapsContext);
+  const { mapWidgetId, zoomLevel, keepMarker } = widget.config;
+  const map = ctx?.maps[mapWidgetId] ?? null;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const sourceId = `mylocation-${widget.id}`;
+  const layerId = `mylocation-layer-${widget.id}`;
+
+  // Clean up the marker source/layer when the widget unmounts so we
+  // don't leak across page switches in multi-page apps.
+  useEffect(() => {
+    return () => {
+      if (!map) return;
+      try {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+      } catch {
+        /* map already torn down */
+      }
+    };
+  }, [map, sourceId, layerId]);
+
+  function dropMarker(lng: number, lat: number) {
+    if (!map) return;
+    // Add or update a single-point GeoJSON source + a styled circle
+    // layer. Two sub-layers (a translucent halo + a solid dot) read
+    // visually like a "current location" pin without needing a
+    // sprite atlas.
+    const data: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [lng, lat] },
+          properties: {},
+        },
+      ],
+    };
+    const existing = map.getSource(sourceId) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (existing) {
+      existing.setData(data);
+    } else {
+      map.addSource(sourceId, { type: 'geojson', data });
+      map.addLayer({
+        id: `${layerId}-halo`,
+        type: 'circle',
+        source: sourceId,
+        paint: {
+          'circle-radius': 14,
+          'circle-color': '#3b82f6',
+          'circle-opacity': 0.18,
+          'circle-stroke-width': 0,
+        },
+      });
+      map.addLayer({
+        id: layerId,
+        type: 'circle',
+        source: sourceId,
+        paint: {
+          'circle-radius': 6,
+          'circle-color': '#3b82f6',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+        },
+      });
+    }
+  }
+
+  function clearMarker() {
+    if (!map) return;
+    try {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getLayer(`${layerId}-halo`)) map.removeLayer(`${layerId}-halo`);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    } catch {
+      /* layer already gone */
+    }
+  }
+
+  function locate() {
+    setError(null);
+    if (!map) {
+      setError('Bind a map widget.');
+      return;
+    }
+    if (!('geolocation' in navigator)) {
+      setError('Geolocation is not available in this browser.');
+      return;
+    }
+    setBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setBusy(false);
+        const { longitude, latitude } = pos.coords;
+        map.flyTo({
+          center: [longitude, latitude],
+          zoom: zoomLevel ?? 14,
+          duration: 800,
+        });
+        dropMarker(longitude, latitude);
+        if (!keepMarker) {
+          // Remove after the fly animation settles + a short read
+          // window so the user sees the pin land before it fades.
+          window.setTimeout(clearMarker, 4000);
+        }
+      },
+      (err) => {
+        setBusy(false);
+        setError(err.message || 'Could not get location.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  }
+
+  return (
+    <WidgetFrame icon={LocateIcon} title="My Location">
+      <div className="flex flex-1 flex-col items-stretch justify-center gap-1.5 p-3">
+        <button
+          type="button"
+          onClick={locate}
+          disabled={busy || !map}
+          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <LocateIcon className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+          {busy ? 'Locating...' : 'Show my location'}
+        </button>
+        {error ? (
+          <p className="text-xs text-rose-600">{error}</p>
+        ) : !map ? (
+          <p className="text-xs text-muted">Bind a map widget to enable.</p>
+        ) : null}
+      </div>
+    </WidgetFrame>
+  );
+}
+
 // ---- Shared frame ----------------------------------------------------------
 
 function WidgetFrame({
@@ -1204,4 +1555,8 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   button: ChevronRight,
   divider: ChevronRight,
   embed: ChevronRight,
+  // #361 part 2 mapcentric kinds.
+  bookmark: BookmarkIcon,
+  coordinates: CrosshairIcon,
+  'my-location': LocateIcon,
 };

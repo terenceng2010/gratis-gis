@@ -169,7 +169,12 @@ export type CustomWidgetKind =
   | 'image'
   | 'button'
   | 'divider'
-  | 'embed';
+  | 'embed'
+  // #361 part 2: mapcentric quick wins. Each binds to a Map widget
+  // by id (mapWidgetId) and reads or drives that map's state.
+  | 'bookmark'
+  | 'coordinates'
+  | 'my-location';
 
 /**
  * Discriminated union of every widget kind's config shape. The
@@ -189,7 +194,10 @@ export type CustomWidgetConfig =
   | ImageWidgetConfig
   | ButtonWidgetConfig
   | DividerWidgetConfig
-  | EmbedWidgetConfig;
+  | EmbedWidgetConfig
+  | BookmarkWidgetConfig
+  | CoordinatesWidgetConfig
+  | MyLocationWidgetConfig;
 
 export interface MapWidgetConfig {
   kind: 'map';
@@ -397,6 +405,82 @@ export interface EmbedWidgetConfig {
    *  origin off). Authors who embed trusted dashboards typically
    *  leave this off; opt in for arbitrary third-party URLs. */
   strict?: boolean;
+}
+
+// ---- Mapcentric quick wins (#361 part 2) ----------------------
+
+/**
+ * One-click viewport bookmarks for a map. Authors capture the bound
+ * Map widget's current viewport at design time + give it a name; at
+ * runtime each entry is a button that flies the bound map there.
+ *
+ * Inspired by Esri's Bookmark widget, scoped to the basics for v1
+ * (no folder grouping, no per-entry thumbnail, no time-aware
+ * extents). Add those if real authors miss them.
+ */
+export interface BookmarkWidgetConfig {
+  kind: 'bookmark';
+  /** id of the Map widget this bookmark list flies. */
+  mapWidgetId: string;
+  /** Saved viewports. Order is the runtime render order. */
+  bookmarks: Array<{
+    /** Stable id. Lets the designer reorder + delete without
+     *  losing identity. */
+    id: string;
+    /** Display name shown in the runtime button list. */
+    name: string;
+    /** [lng, lat] center. Same shape MapData uses. */
+    center: [number, number];
+    /** Zoom level. */
+    zoom: number;
+    /** Optional camera bearing in degrees clockwise from north. */
+    bearing?: number;
+    /** Optional camera pitch in degrees from vertical. */
+    pitch?: number;
+  }>;
+}
+
+/**
+ * Live coordinate readout. Tracks the cursor position over the
+ * bound Map widget and renders the formatted lat/lon. Optional
+ * zoom-level chip for "where am I in scale" feedback.
+ *
+ * v1 supports decimal-degrees and degrees-minutes-seconds. MGRS /
+ * UTM are typed but deferred -- they're a half-day of conversion
+ * code each and most users want plain DD.
+ */
+export interface CoordinatesWidgetConfig {
+  kind: 'coordinates';
+  /** id of the Map widget whose pointer position this tracks. */
+  mapWidgetId: string;
+  /** Display format. Defaults to 'dd' (decimal degrees). */
+  format?: 'dd' | 'dms';
+  /** Decimal places for DD; whole-second precision for DMS.
+   *  Default: 5 for DD, 0 for DMS. */
+  precision?: number;
+  /** When true, also displays a small "Zoom: N.NN" chip alongside
+   *  the coordinates. Default false. */
+  showZoom?: boolean;
+}
+
+/**
+ * "Show my location" button. On click, requests the browser's
+ * Geolocation API and flies the bound Map widget to the result at
+ * a configurable zoom. Drops a temporary marker so the user can
+ * see where the device thinks it is.
+ *
+ * v1 is one-shot (single click = single fly). Continuous-tracking
+ * mode (watch position, follow as user moves) is a v2 enhancement.
+ */
+export interface MyLocationWidgetConfig {
+  kind: 'my-location';
+  /** id of the Map widget to fly + drop the marker on. */
+  mapWidgetId: string;
+  /** Zoom level the bound map flies to on success. Default 14. */
+  zoomLevel?: number;
+  /** When true, the marker stays visible until the user clicks
+   *  the button again or the page reloads. Default true. */
+  keepMarker?: boolean;
 }
 
 /**

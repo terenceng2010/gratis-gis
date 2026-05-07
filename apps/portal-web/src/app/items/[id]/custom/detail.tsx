@@ -12,14 +12,17 @@ import {
 import {
   AlertTriangle,
   BarChart3,
+  Bookmark as BookmarkIcon,
   ChevronLeft,
   ChevronRight,
   Code as CodeIcon,
+  Crosshair as CrosshairIcon,
   ExternalLink,
   Eye,
   Image as ImageIcon,
   Layers as LayersIcon,
   ListTree,
+  Locate as LocateIcon,
   Loader2,
   Map as MapIcon,
   Minus as MinusIcon,
@@ -794,6 +797,27 @@ const PALETTE_TILES: Array<{
     hint: 'Print the bound map',
     category: 'map',
   },
+  {
+    kind: 'bookmark',
+    label: 'Bookmark',
+    Icon: BookmarkIcon,
+    hint: 'Saved viewports as fly-to buttons',
+    category: 'map',
+  },
+  {
+    kind: 'coordinates',
+    label: 'Coordinates',
+    Icon: CrosshairIcon,
+    hint: 'Live cursor lat/lon on the bound map',
+    category: 'map',
+  },
+  {
+    kind: 'my-location',
+    label: 'My Location',
+    Icon: LocateIcon,
+    hint: 'Fly to the browser geolocation',
+    category: 'map',
+  },
   // -- Data widgets ----------------------------------------------
   {
     kind: 'search',
@@ -1554,6 +1578,12 @@ function widgetPlaceholderText(
       return 'Horizontal rule';
     case 'embed':
       return 'Paste an iframe URL in the right rail';
+    case 'bookmark':
+      return 'Saved viewports (bound to a map)';
+    case 'coordinates':
+      return 'Live cursor lat/lon';
+    case 'my-location':
+      return 'Show my location';
     default:
       return `${label} content`;
   }
@@ -1588,6 +1618,12 @@ function summarizeWidget(w: CustomWidget): string {
       return w.config.style ?? 'solid';
     case 'embed':
       return w.config.url ? 'url set' : 'no url';
+    case 'bookmark':
+    case 'coordinates':
+    case 'my-location':
+      return w.config.mapWidgetId
+        ? `→ ${w.config.mapWidgetId.slice(0, 6)}`
+        : 'pick a map widget';
     default:
       return '';
   }
@@ -2120,6 +2156,47 @@ function WidgetConfigForm({
           onChangeConfig={onChangeConfig}
         />
       );
+    case 'bookmark':
+      return (
+        <BookmarkWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          mapWidgets={mapWidgets}
+          onChangeConfig={onChangeConfig}
+        />
+      );
+    case 'coordinates':
+      return (
+        <>
+          <MapBindingPicker
+            mapWidgetId={widget.config.mapWidgetId}
+            mapWidgets={mapWidgets}
+            canEdit={canEdit}
+            onChange={(next) => onChangeConfig({ mapWidgetId: next })}
+          />
+          <CoordinatesWidgetConfigBody
+            config={widget.config}
+            canEdit={canEdit}
+            onChangeConfig={onChangeConfig}
+          />
+        </>
+      );
+    case 'my-location':
+      return (
+        <>
+          <MapBindingPicker
+            mapWidgetId={widget.config.mapWidgetId}
+            mapWidgets={mapWidgets}
+            canEdit={canEdit}
+            onChange={(next) => onChangeConfig({ mapWidgetId: next })}
+          />
+          <MyLocationWidgetConfigBody
+            config={widget.config}
+            canEdit={canEdit}
+            onChangeConfig={onChangeConfig}
+          />
+        </>
+      );
     default: {
       const _exhaustive: never = widget.config;
       void _exhaustive;
@@ -2475,6 +2552,267 @@ function EmbedWidgetConfig({
   );
 }
 
+// ---- Mapcentric quick-win widget config editors (#361 part 2) -----------
+
+function BookmarkWidgetConfig({
+  config,
+  canEdit,
+  mapWidgets,
+  onChangeConfig,
+}: {
+  config: {
+    kind: 'bookmark';
+    mapWidgetId: string;
+    bookmarks: Array<{
+      id: string;
+      name: string;
+      center: [number, number];
+      zoom: number;
+      bearing?: number;
+      pitch?: number;
+    }>;
+  };
+  canEdit: boolean;
+  mapWidgets: CustomWidget[];
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  function update(idx: number, patch: Partial<(typeof config.bookmarks)[number]>) {
+    const next = config.bookmarks.map((b, i) =>
+      i === idx ? { ...b, ...patch } : b,
+    );
+    onChangeConfig({ bookmarks: next });
+  }
+  function remove(idx: number) {
+    onChangeConfig({
+      bookmarks: config.bookmarks.filter((_, i) => i !== idx),
+    });
+  }
+  function move(idx: number, dir: -1 | 1) {
+    const j = idx + dir;
+    if (j < 0 || j >= config.bookmarks.length) return;
+    const next = config.bookmarks.slice();
+    const [moved] = next.splice(idx, 1);
+    next.splice(j, 0, moved!);
+    onChangeConfig({ bookmarks: next });
+  }
+  function add() {
+    // Empty placeholder coordinates; the runtime "Save current view"
+    // button captures the bound map's actual viewport. Authors who
+    // want to author by hand can edit the values inline.
+    const next = [
+      ...config.bookmarks,
+      {
+        id: `bm_${Math.random().toString(36).slice(2, 8)}`,
+        name: `Bookmark ${config.bookmarks.length + 1}`,
+        center: [0, 0] as [number, number],
+        zoom: 2,
+      },
+    ];
+    onChangeConfig({ bookmarks: next });
+  }
+  return (
+    <div className="space-y-3">
+      <MapBindingPicker
+        mapWidgetId={config.mapWidgetId}
+        mapWidgets={mapWidgets}
+        canEdit={canEdit}
+        onChange={(next) => onChangeConfig({ mapWidgetId: next })}
+      />
+      <Field label="Bookmarks" hint="At runtime each row becomes a fly-to button on the bound map.">
+        <div className="space-y-1.5">
+          {config.bookmarks.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border px-2 py-3 text-center text-xs text-muted">
+              No bookmarks yet. Add one to capture a viewport.
+            </p>
+          ) : (
+            config.bookmarks.map((b, i) => (
+              <div
+                key={b.id}
+                className="rounded-md border border-border bg-surface-1 p-2"
+              >
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={b.name}
+                    disabled={!canEdit}
+                    onChange={(e) => update(i, { name: e.target.value })}
+                    className="flex-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    title="Move up"
+                    disabled={!canEdit || i === 0}
+                    onClick={() => move(i, -1)}
+                    className="rounded p-1 text-muted hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5 rotate-90" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Move down"
+                    disabled={!canEdit || i === config.bookmarks.length - 1}
+                    onClick={() => move(i, 1)}
+                    className="rounded p-1 text-muted hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5 -rotate-90" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete"
+                    disabled={!canEdit}
+                    onClick={() => remove(i)}
+                    className="rounded p-1 text-muted hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                </div>
+                <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                  <label className="text-[10px] text-muted">
+                    lng
+                    <input
+                      type="number"
+                      step="0.000001"
+                      value={b.center[0]}
+                      disabled={!canEdit}
+                      onChange={(e) =>
+                        update(i, {
+                          center: [Number(e.target.value), b.center[1]] as [number, number],
+                        })
+                      }
+                      className="mt-0.5 w-full rounded border border-border bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1 focus:border-ink-1 focus:outline-none"
+                    />
+                  </label>
+                  <label className="text-[10px] text-muted">
+                    lat
+                    <input
+                      type="number"
+                      step="0.000001"
+                      value={b.center[1]}
+                      disabled={!canEdit}
+                      onChange={(e) =>
+                        update(i, {
+                          center: [b.center[0], Number(e.target.value)] as [number, number],
+                        })
+                      }
+                      className="mt-0.5 w-full rounded border border-border bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1 focus:border-ink-1 focus:outline-none"
+                    />
+                  </label>
+                  <label className="text-[10px] text-muted">
+                    zoom
+                    <input
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      max={22}
+                      value={b.zoom}
+                      disabled={!canEdit}
+                      onChange={(e) => update(i, { zoom: Number(e.target.value) })}
+                      className="mt-0.5 w-full rounded border border-border bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1 focus:border-ink-1 focus:outline-none"
+                    />
+                  </label>
+                </div>
+              </div>
+            ))
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={add}
+              className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-2 py-1.5 text-xs font-medium text-muted hover:border-accent/40 hover:text-ink-1"
+            >
+              <Plus className="h-3 w-3" strokeWidth={1.75} />
+              Add bookmark
+            </button>
+          )}
+        </div>
+      </Field>
+      <p className="text-xs leading-snug text-muted">
+        Tip: open the runtime, pan and zoom the bound map to where you
+        want, then click the "+" button on the bookmark widget to
+        capture that view automatically.
+      </p>
+    </div>
+  );
+}
+
+function CoordinatesWidgetConfigBody({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: { kind: 'coordinates'; format?: 'dd' | 'dms'; precision?: number; showZoom?: boolean };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const fmt = config.format ?? 'dd';
+  return (
+    <div className="space-y-3">
+      <Field label="Format">
+        <select
+          value={fmt}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ format: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="dd">Decimal degrees (45.12345, -78.54321)</option>
+          <option value="dms">Degrees, minutes, seconds (45° 7' 24" N)</option>
+        </select>
+      </Field>
+      <Field label="Precision" hint={fmt === 'dd' ? 'Decimal places, 0-7.' : 'Whole-second precision typical; 0 omits seconds.'}>
+        <NumberInput
+          value={config.precision ?? (fmt === 'dd' ? 5 : 0)}
+          min={0}
+          max={fmt === 'dd' ? 7 : 3}
+          disabled={!canEdit}
+          onChange={(v) => onChangeConfig({ precision: v })}
+        />
+      </Field>
+      <label className="flex items-center gap-2 text-xs text-ink-1">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={config.showZoom ?? false}
+          onChange={(e) => onChangeConfig({ showZoom: e.target.checked })}
+        />
+        Show zoom level chip
+      </label>
+    </div>
+  );
+}
+
+function MyLocationWidgetConfigBody({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: { kind: 'my-location'; zoomLevel?: number; keepMarker?: boolean };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="Zoom on locate" hint="0 (world) to 22 (street). 14 is town-scale.">
+        <NumberInput
+          value={config.zoomLevel ?? 14}
+          min={0}
+          max={22}
+          disabled={!canEdit}
+          onChange={(v) => onChangeConfig({ zoomLevel: v })}
+        />
+      </Field>
+      <label className="flex items-center gap-2 text-xs text-ink-1">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={config.keepMarker ?? true}
+          onChange={(e) => onChangeConfig({ keepMarker: e.target.checked })}
+        />
+        Leave marker on the map after locating
+      </label>
+    </div>
+  );
+}
+
 function MapBindingPicker({
   mapWidgetId,
   mapWidgets,
@@ -2653,6 +2991,12 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 24, rowSpan: 1 };
     case 'embed':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
+    case 'bookmark':
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 12 };
+    case 'coordinates':
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 2 };
+    case 'my-location':
+      return { col: 1, row: 1, colSpan: 4, rowSpan: 2 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
@@ -2766,6 +3110,38 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
         kind,
         layout,
         config: { kind: 'embed' },
+      };
+    case 'bookmark':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'bookmark', mapWidgetId: '', bookmarks: [] },
+      };
+    case 'coordinates':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'coordinates',
+          mapWidgetId: '',
+          format: 'dd',
+          precision: 5,
+          showZoom: false,
+        },
+      };
+    case 'my-location':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'my-location',
+          mapWidgetId: '',
+          zoomLevel: 14,
+          keepMarker: true,
+        },
       };
     default: {
       const _exhaustive: never = kind;
