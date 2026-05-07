@@ -259,45 +259,46 @@ export default async function FormResponsesPage({ params }: Props) {
   });
 
   // #354: frame the map to the extent of all submissions on first
-  // open. The paired sublayer's stored bbox is populated by the
-  // periodic Recompute extents pass (#93), so it tracks within a
-  // few minutes of the latest insert -- close enough that the user
-  // never sees a "world view" when they have submissions clustered
-  // somewhere. Fall back to the buildEditorMapData center/zoom
-  // (which inherits from the referenced map or DEFAULT_MAP) when
-  // no bbox is available yet -- e.g. a brand-new form with zero
-  // submissions, or an extents pass that hasn't fired yet.
-  const mapData: MapData = (() => {
-    const sub = layer;
-    const subBbox = sub?.bbox;
-    if (
-      !Array.isArray(subBbox) ||
-      subBbox.length !== 4 ||
-      !subBbox.every((n) => typeof n === 'number' && Number.isFinite(n))
-    ) {
-      return builtMapData;
-    }
-    const [minX, minY, maxX, maxY] = subBbox as [
-      number,
-      number,
-      number,
-      number,
-    ];
-    if (minX > maxX || minY > maxY) return builtMapData;
-    const center: [number, number] = [
-      (minX + maxX) / 2,
-      (minY + maxY) / 2,
-    ];
-    // Heuristic zoom from bbox span. log2(360 / span) - 0.5 gives a
-    // little headroom around the features so they aren't pinned to
-    // the viewport edges. Clamped to [1, 18] so a single-point
-    // submission doesn't try to zoom past street level.
-    const lngSpan = Math.max(maxX - minX, 0.0001);
-    const latSpan = Math.max(maxY - minY, 0.0001);
-    const span = Math.max(lngSpan, latSpan);
-    const zoom = Math.max(1, Math.min(18, Math.log2(360 / span) - 0.5));
-    return { ...builtMapData, center, zoom };
-  })();
+  // open. Two ways to find the bbox:
+  //   1. The sublayer's stored bbox, populated by the periodic
+  //      Recompute extents pass (#93). Cheap when present.
+  //   2. Live compute from the geojson endpoint when (1) is empty
+  //      -- the Recompute pass might not have fired yet for a
+  //      brand-new form's paired layer, and forcing the user to
+  //      pan-find their submissions on first load is bad UX.
+  // Fall back to buildEditorMapData center/zoom only when both
+  // paths come up empty (truly no features yet).
+  const submissionsBbox: [number, number, number, number] | null =
+    (() => {
+      const sub = layer;
+      const subBbox = sub?.bbox;
+      if (
+        Array.isArray(subBbox) &&
+        subBbox.length === 4 &&
+        subBbox.every((n) => typeof n === 'number' && Number.isFinite(n))
+      ) {
+        const [minX, minY, maxX, maxY] = subBbox as [
+          number,
+          number,
+          number,
+          number,
+        ];
+        if (minX <= maxX && minY <= maxY) return [minX, minY, maxX, maxY];
+      }
+      return null;
+    })();
+  const liveBbox: [number, number, number, number] | null =
+    submissionsBbox === null
+      ? await computeFeatureBboxFromGeojson(
+          fetchItem,
+          dataLayerItem.id,
+          layerKey,
+        )
+      : null;
+  const finalBbox = submissionsBbox ?? liveBbox;
+  const mapData: MapData = finalBbox
+    ? viewportFromBbox(builtMapData, finalBbox)
+    : builtMapData;
 
   // Pick lists referenced by the paired layer's columns; same as
   // survey/run -- the form mirror writes coded VALUES, so the side
@@ -409,6 +410,91 @@ function UnboundShell({
       </div>
     </div>
   );
+}
+
+/**
+ * Compute a bbox from the live geojson endpoint when the sublayer
+ * doesn't have one stored yet (#354 followup). The Recompute Extents
+ * pass (#93) populates layer bboxes periodically, but for a brand-
+ * new form's paired layer the user might Open Responses before that
+ * pass has fired and the auto-frame would silently no-op.
+ *
+ * This is a one-shot server-side fetch on page render: cheap for the
+ * usual form-paired layer (handful to a few hundred features). If
+ * the layer eventually grows to the point where this is wasteful,
+ * the periodic pass will be populating the stored bbox by then and
+ * this branch never runs.
+ */
+async function computeFeatureBboxFromGeojson(
+  fetchItem: <T>(path: string) => Promise<T>,
+  itemId: string,
+  layerKey: string,
+): Promise<[number, number, number, number] | null> {
+  let fc: GeoJSON.FeatureCollection;
+  try {
+    fc = await fetchItem<GeoJSON.FeatureCollection>(
+      `/api/items/${itemId}/layers/${layerKey}/geojson`,
+    );
+  } catch {
+    return null;
+  }
+  if (!fc || !Array.isArray(fc.features) || fc.features.length === 0) {
+    return null;
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  function walkCoords(coords: unknown): void {
+    if (!Array.isArray(coords)) return;
+    if (
+      coords.length >= 2 &&
+      typeof coords[0] === 'number' &&
+      typeof coords[1] === 'number'
+    ) {
+      const [x, y] = coords as [number, number];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      return;
+    }
+    for (const c of coords) walkCoords(c);
+  }
+  for (const f of fc.features) {
+    if (!f || !f.geometry) continue;
+    const g = f.geometry as { coordinates?: unknown };
+    if (g.coordinates) walkCoords(g.coordinates);
+  }
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null;
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+/**
+ * Apply a bbox-derived center + zoom to a base MapData (#354).
+ * Heuristic zoom: log2(360 / span) - 0.5 gives some headroom around
+ * features so they aren't pinned to the viewport edges; clamped to
+ * [1, 18] so a single-point bbox doesn't try to zoom past street
+ * level.
+ */
+function viewportFromBbox(
+  base: MapData,
+  bbox: [number, number, number, number],
+): MapData {
+  const [minX, minY, maxX, maxY] = bbox;
+  const center: [number, number] = [(minX + maxX) / 2, (minY + maxY) / 2];
+  const lngSpan = Math.max(maxX - minX, 0.0001);
+  const latSpan = Math.max(maxY - minY, 0.0001);
+  const span = Math.max(lngSpan, latSpan);
+  const zoom = Math.max(1, Math.min(18, Math.log2(360 / span) - 0.5));
+  return { ...base, center, zoom };
 }
 
 export const dynamic = 'force-dynamic';

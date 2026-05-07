@@ -304,36 +304,40 @@ export default async function SurveyRuntimePage({ params }: Props) {
   });
 
   // #354: frame the map to the bbox of submissions on first open.
-  // Survey app is the power-user version of the Response Viewer,
-  // and the same "land where the data is" UX applies. Inherits
-  // referencedMap viewport when the sublayer has no bbox yet
-  // (zero submissions or extents pass hasn't fired).
-  const mapData: MapData = (() => {
+  // Same two-step fallback chain as responses/page.tsx -- check the
+  // stored sublayer bbox first (cheap), live-compute from geojson
+  // when empty (the Recompute Extents pass #93 might not have fired
+  // yet on a brand-new form's paired layer), fall through to the
+  // referenced-map viewport only when both come up empty.
+  const submissionsBbox: [number, number, number, number] | null = (() => {
     const subBbox = layer?.bbox;
     if (
-      !Array.isArray(subBbox) ||
-      subBbox.length !== 4 ||
-      !subBbox.every((n) => typeof n === 'number' && Number.isFinite(n))
+      Array.isArray(subBbox) &&
+      subBbox.length === 4 &&
+      subBbox.every((n) => typeof n === 'number' && Number.isFinite(n))
     ) {
-      return builtMapData;
+      const [minX, minY, maxX, maxY] = subBbox as [
+        number,
+        number,
+        number,
+        number,
+      ];
+      if (minX <= maxX && minY <= maxY) return [minX, minY, maxX, maxY];
     }
-    const [minX, minY, maxX, maxY] = subBbox as [
-      number,
-      number,
-      number,
-      number,
-    ];
-    if (minX > maxX || minY > maxY) return builtMapData;
-    const center: [number, number] = [
-      (minX + maxX) / 2,
-      (minY + maxY) / 2,
-    ];
-    const lngSpan = Math.max(maxX - minX, 0.0001);
-    const latSpan = Math.max(maxY - minY, 0.0001);
-    const span = Math.max(lngSpan, latSpan);
-    const zoom = Math.max(1, Math.min(18, Math.log2(360 / span) - 0.5));
-    return { ...builtMapData, center, zoom };
+    return null;
   })();
+  const liveBbox: [number, number, number, number] | null =
+    submissionsBbox === null
+      ? await computeFeatureBboxFromGeojson(
+          fetchItem,
+          dataLayerItem.id,
+          layerKey,
+        )
+      : null;
+  const finalBbox = submissionsBbox ?? liveBbox;
+  const mapData: MapData = finalBbox
+    ? viewportFromBbox(builtMapData, finalBbox)
+    : builtMapData;
 
   // Pick lists referenced by the paired layer's columns. Same shape
   // the Viewer fetches; submissions ingested through the form mirror
@@ -451,6 +455,79 @@ function UnboundShell({
       </div>
     </div>
   );
+}
+
+/**
+ * Live-compute a bbox from the layer's geojson endpoint when the
+ * stored sublayer bbox is empty (#354 followup). Same helper as
+ * responses/page.tsx -- when the Recompute Extents pass (#93)
+ * hasn't fired yet for a brand-new form's paired layer, we need
+ * to surface the actual feature extent ourselves so the runtime
+ * doesn't open on a default world view.
+ */
+async function computeFeatureBboxFromGeojson(
+  fetchItem: <T>(path: string) => Promise<T>,
+  itemId: string,
+  layerKey: string,
+): Promise<[number, number, number, number] | null> {
+  let fc: GeoJSON.FeatureCollection;
+  try {
+    fc = await fetchItem<GeoJSON.FeatureCollection>(
+      `/api/items/${itemId}/layers/${layerKey}/geojson`,
+    );
+  } catch {
+    return null;
+  }
+  if (!fc || !Array.isArray(fc.features) || fc.features.length === 0) {
+    return null;
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  function walkCoords(coords: unknown): void {
+    if (!Array.isArray(coords)) return;
+    if (
+      coords.length >= 2 &&
+      typeof coords[0] === 'number' &&
+      typeof coords[1] === 'number'
+    ) {
+      const [x, y] = coords as [number, number];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      return;
+    }
+    for (const c of coords) walkCoords(c);
+  }
+  for (const f of fc.features) {
+    if (!f || !f.geometry) continue;
+    const g = f.geometry as { coordinates?: unknown };
+    if (g.coordinates) walkCoords(g.coordinates);
+  }
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null;
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+function viewportFromBbox(
+  base: MapData,
+  bbox: [number, number, number, number],
+): MapData {
+  const [minX, minY, maxX, maxY] = bbox;
+  const center: [number, number] = [(minX + maxX) / 2, (minY + maxY) / 2];
+  const lngSpan = Math.max(maxX - minX, 0.0001);
+  const latSpan = Math.max(maxY - minY, 0.0001);
+  const span = Math.max(lngSpan, latSpan);
+  const zoom = Math.max(1, Math.min(18, Math.log2(360 / span) - 0.5));
+  return { ...base, center, zoom };
 }
 
 export const dynamic = 'force-dynamic';
