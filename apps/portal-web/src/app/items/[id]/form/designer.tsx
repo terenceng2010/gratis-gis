@@ -5514,6 +5514,21 @@ function LinkedLayerSummary({
         Submissions go to this layer. New questions land as additive columns
         the next time someone submits.
       </p>
+      {/* #346: respondent isolation. Owners + admins see every
+          submission; everyone else (including org-public viewers
+          via this layer's direct shares) is filtered to rows they
+          themselves submitted. The exception is when the paired
+          layer's access level is set to public or org -- those tiers
+          bypass row scoping by design. The form designer can't read
+          the paired layer's access tier from here, so we phrase this
+          as guidance + caveat. */}
+      <p className="mt-1 text-[11px] text-emerald-700">
+        Privacy: respondents see only their own submissions in the
+        layer&apos;s map and attribute table. Owners and admins still
+        see everything. (Setting the linked layer to public access
+        will broadcast all submissions, so leave it private if that
+        matters.)
+      </p>
       {geoCount > 1 ? (
         <p className="mt-1 text-[11px] text-amber-700">
           Multiple map questions on this form. Only the first one drives
@@ -5718,6 +5733,13 @@ interface RawSublayer {
    *  global_id. Mirrors data_layer.ts's parentFkColumn so the
    *  designer's PATCH preserves it round-trip. */
   parentFkColumn?: string;
+  /** #346: per-sublayer row-scope policy. The form mirror sets this
+   *  to 'own-rows-only' on every form-paired sublayer so respondents
+   *  with read access only see their own submissions; owners + admins
+   *  bypass via SharingService.effectiveRowScope. Mirrors
+   *  data_layer.ts's editingPolicy so the designer's PATCH preserves
+   *  it round-trip. */
+  editingPolicy?: 'all-rows' | 'own-rows-only';
   /** Legacy shape: schema.columns pre-v3. Tolerated for safety. */
   schema?: { columns?: LayerColumn[] };
 }
@@ -6054,13 +6076,25 @@ async function syncPairedLayerColumns(
   //      additively merging fields into an existing one.
   //   3. Preserving every other sublayer untouched.
   const nextLayers = [...layers] as RawSublayer[];
+  // #346: respondent isolation. Every form-paired sublayer (parent +
+  // related) is forced to editingPolicy='own-rows-only' so a
+  // respondent who has read access on the paired data_layer (via
+  // direct share, public link, or a future field-catalog mount) sees
+  // ONLY their own submissions. Owners and admins bypass this in
+  // SharingService.effectiveRowScope, so the form manager still sees
+  // every response. Existing paired layers without this policy get
+  // upgraded on the next form save -- idempotent.
+  const RESPONDENT_ROW_POLICY = 'own-rows-only';
   // (1) parent
+  const parentNeedsPolicy =
+    nextLayers[subIdx]!.editingPolicy !== RESPONDENT_ROW_POLICY;
   const parentMerged: RawSublayer = {
     ...nextLayers[subIdx]!,
     fields: [...existing, ...toAdd],
     ...(nextGeometryType !== undefined
       ? { geometryType: nextGeometryType }
       : {}),
+    ...(parentNeedsPolicy ? { editingPolicy: RESPONDENT_ROW_POLICY } : {}),
   };
   nextLayers[subIdx] = parentMerged;
   // (2) related
@@ -6088,6 +6122,8 @@ async function syncPairedLayerColumns(
         // the rows belong to a parent submission.
         parentLayerId: layerKey,
         parentFkColumn: 'parent_submission_id',
+        // #346: same respondent-isolation policy as the parent.
+        editingPolicy: RESPONDENT_ROW_POLICY,
       });
       relatedAdds += 1;
       knownChildIds.add(dr.id);
@@ -6116,7 +6152,17 @@ async function syncPairedLayerColumns(
       const wantRelMeta =
         cur.parentLayerId !== layerKey ||
         cur.parentFkColumn !== 'parent_submission_id';
-      if (merged.length !== existRel.length || wantPromote || wantRelMeta) {
+      // #346: backfill the respondent-isolation policy on related
+      // sublayers that were created before the rule existed. Same
+      // idempotency guarantee as the parent: a re-save lights it up
+      // without changing semantics for already-policy'd layers.
+      const wantPolicy = cur.editingPolicy !== RESPONDENT_ROW_POLICY;
+      if (
+        merged.length !== existRel.length ||
+        wantPromote ||
+        wantRelMeta ||
+        wantPolicy
+      ) {
         nextLayers[idx] = {
           ...cur,
           fields: merged,
@@ -6127,6 +6173,7 @@ async function syncPairedLayerColumns(
                 parentFkColumn: 'parent_submission_id',
               }
             : {}),
+          ...(wantPolicy ? { editingPolicy: RESPONDENT_ROW_POLICY } : {}),
         };
         relatedAdds += 1;
       }
@@ -6170,11 +6217,16 @@ async function syncPairedLayerColumns(
     relatedAdds,
   });
 
-  // Skip the PATCH entirely when nothing actually changed.
+  // Skip the PATCH entirely when nothing actually changed. Note:
+  // parentNeedsPolicy is folded in here so a form save on a paired
+  // layer that's only missing #346's editingPolicy still lands the
+  // policy backfill -- without this, an unchanged-schema save would
+  // short-circuit and the layer would stay leaky.
   if (
     toAdd.length === 0 &&
     nextGeometryType === undefined &&
-    relatedAdds === 0
+    relatedAdds === 0 &&
+    !parentNeedsPolicy
   ) {
     return;
   }
