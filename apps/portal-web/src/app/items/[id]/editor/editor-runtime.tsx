@@ -12,8 +12,7 @@ import {
   Layers as LayersIcon,
   Map as MapBaseIcon,
   MousePointer2,
-  PanelRightClose,
-  PanelRightOpen,
+  PencilLine,
   PencilRuler,
   Pentagon,
   Plus,
@@ -2296,6 +2295,124 @@ export function EditorRuntime({
               </button>
             </div>
           ) : null}
+          {/* Read-side interaction tools: Select (with mode dropdown)
+              and Measure. These are not edit-specific (viewers can
+              use them too) so they live in the top toolbar rather
+              than the editor pane. Same activeTool / onToolClick
+              machinery as the pane's editing tools. Only rendered
+              when the editor.tools configuration includes them. */}
+          {(editor.tools.includes('select') ||
+            editor.tools.includes('measure')) ? (
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
+              {editor.tools.includes('select') ? (() => {
+                const ModeIcon =
+                  selectMode === 'click'
+                    ? MousePointer2
+                    : selectMode === 'rectangle'
+                      ? Square
+                      : selectMode === 'polygon'
+                        ? Pentagon
+                        : Spline;
+                const isActive = activeTool === 'select';
+                return (
+                  <div
+                    key="select"
+                    ref={selectMenuRef}
+                    className="relative flex items-stretch"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onToolClick('select')}
+                      className={`inline-flex h-9 w-9 items-center justify-center rounded-l text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                        isActive ? 'bg-purple-100 text-purple-800' : ''
+                      }`}
+                      title={`Select (${selectMode})`}
+                      aria-label={`Select (${selectMode})`}
+                      aria-pressed={isActive}
+                    >
+                      <ModeIcon className="h-5 w-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectMenuOpen((v) => !v)}
+                      className={`inline-flex h-9 w-5 items-center justify-center rounded-r text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                        isActive ? 'bg-purple-100 text-purple-800' : ''
+                      }`}
+                      aria-label="Select mode"
+                      aria-haspopup="menu"
+                      aria-expanded={selectMenuOpen}
+                      title="Select mode"
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </button>
+                    {selectMenuOpen ? (
+                      <div
+                        role="menu"
+                        className="absolute right-0 top-11 z-30 w-44 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                      >
+                        <SelectModeItem
+                          Icon={MousePointer2}
+                          label="Click"
+                          active={selectMode === 'click'}
+                          onClick={() => {
+                            setSelectMode('click');
+                            setSelectMenuOpen(false);
+                            if (activeTool !== 'select') onToolClick('select');
+                          }}
+                        />
+                        <SelectModeItem
+                          Icon={Square}
+                          label="Rectangle"
+                          active={selectMode === 'rectangle'}
+                          onClick={() => {
+                            setSelectMode('rectangle');
+                            setSelectMenuOpen(false);
+                            if (activeTool !== 'select') onToolClick('select');
+                          }}
+                        />
+                        <SelectModeItem
+                          Icon={Pentagon}
+                          label="Polygon"
+                          active={selectMode === 'polygon'}
+                          onClick={() => {
+                            setSelectMode('polygon');
+                            setSelectMenuOpen(false);
+                            if (activeTool !== 'select') onToolClick('select');
+                          }}
+                        />
+                        <SelectModeItem
+                          Icon={Spline}
+                          label="Lasso"
+                          active={selectMode === 'lasso'}
+                          onClick={() => {
+                            setSelectMode('lasso');
+                            setSelectMenuOpen(false);
+                            if (activeTool !== 'select') onToolClick('select');
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })() : null}
+              {editor.tools.includes('measure') ? (
+                <button
+                  type="button"
+                  onClick={() => onToolClick('measure')}
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                    activeTool === 'measure'
+                      ? 'bg-purple-100 text-purple-800'
+                      : ''
+                  }`}
+                  title="Measure"
+                  aria-label="Measure"
+                  aria-pressed={activeTool === 'measure'}
+                >
+                  <Ruler className="h-5 w-5" />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {/* #306 panel toggles: Layers list + Attribute Table.
               Separate pill from the editing tools so users can read
               "what's on the map" controls vs "edit the map"
@@ -2318,11 +2435,7 @@ export function EditorRuntime({
                 aria-label="Editor pane"
                 aria-pressed={editorPaneOpen}
               >
-                {editorPaneOpen ? (
-                  <PanelRightClose className="h-5 w-5" />
-                ) : (
-                  <PanelRightOpen className="h-5 w-5" />
-                )}
+                <PencilLine className="h-5 w-5" />
               </button>
             ) : null}
             <button
@@ -2593,20 +2706,32 @@ export function EditorRuntime({
               </button>
             </div>
             <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
-              {/* Edit features section: same set of tool buttons that
-                  used to live in the header, just laid out as a
-                  wrapping row inside the pane. Same handlers, same
-                  state, same active-state styling. The split-button
-                  Select control still works because selectMenuRef and
-                  the menu position are scoped to the button group. */}
-              {ALL_TOOLS.filter((t) => editor.tools.includes(t.key)).length > 0 ? (
+              {/* Edit features section: tool buttons specific to the
+                  editing workflow (Add, Edit, Snap, Undo, Redo).
+                  Select and Measure live in the top toolbar instead
+                  because they are also useful in viewer mode and are
+                  not edit-specific. Delete is reached from the
+                  per-feature floating bar (next to Edit attributes /
+                  Save geometry) rather than as a click-to-delete
+                  tool, so it is filtered out here too. */}
+              {ALL_TOOLS.filter(
+                (t) =>
+                  editor.tools.includes(t.key) &&
+                  t.key !== 'select' &&
+                  t.key !== 'measure' &&
+                  t.key !== 'delete',
+              ).length > 0 ? (
                 <section>
                   <h3 className="mb-1.5 text-xs font-semibold text-ink-0">
                     Edit features
                   </h3>
                   <div className="flex flex-wrap items-center gap-0.5 rounded-md border border-border bg-surface-0 p-1">
-                    {ALL_TOOLS.filter((t) =>
-                      editor.tools.includes(t.key),
+                    {ALL_TOOLS.filter(
+                      (t) =>
+                        editor.tools.includes(t.key) &&
+                        t.key !== 'select' &&
+                        t.key !== 'measure' &&
+                        t.key !== 'delete',
                     ).map((t) => {
                       const isToggle = t.key === 'snap';
                       const isActive = isToggle
@@ -3139,6 +3264,66 @@ export function EditorRuntime({
                 >
                   {geomEditSaving ? 'Saving...' : 'Save geometry'}
                 </button>
+                {/* Delete is reachable from the per-feature flow now
+                    (the Delete tool no longer lives in the editor
+                    pane). Only render the button when the active
+                    target permits delete; routes through the
+                    existing pendingDelete + ConfirmDialog flow so
+                    the safety prompt and undo machinery are
+                    preserved. The button is visually separated and
+                    danger-styled so it's hard to mis-click as a save. */}
+                {deletableTargetKeys.has(pendingGeometryEdit.targetKey) ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = targetByKey.get(
+                        pendingGeometryEdit.targetKey,
+                      );
+                      const props = pendingGeometryEdit.properties;
+                      // Mirror the Delete-tool's summary computation
+                      // (pick the first non-empty user-facing field
+                      // value, else a truncated id).
+                      let summary =
+                        pendingGeometryEdit.featureId.slice(0, 8) + '...';
+                      if (target?.layer) {
+                        for (const f of target.layer.fields) {
+                          const v = props[f.name];
+                          if (v === null || v === undefined || v === '')
+                            continue;
+                          summary = String(v);
+                          break;
+                        }
+                      }
+                      // Strip underscore-prefixed system fields
+                      // (matches the existing capture in the click-
+                      // to-delete handler).
+                      const captureProps: Record<string, unknown> = {};
+                      for (const [k, v] of Object.entries(props)) {
+                        if (k.startsWith('_')) continue;
+                        captureProps[k] = v;
+                      }
+                      setPendingDelete({
+                        dataLayerId: pendingGeometryEdit.dataLayerId,
+                        layerKey: pendingGeometryEdit.layerKey,
+                        featureId: pendingGeometryEdit.featureId,
+                        layerTitle: `${target?.dataLayerTitle ?? ''} / ${target?.layer?.label ?? pendingGeometryEdit.layerKey}`,
+                        summary,
+                        geometry: pendingGeometryEdit.originalGeometry,
+                        properties: captureProps,
+                      });
+                      // Exit geometry-edit mode so the floating bar
+                      // doesn't sit behind the confirm dialog.
+                      setPendingGeometryEdit(null);
+                    }}
+                    disabled={geomEditSaving}
+                    className="ml-2 inline-flex h-7 items-center gap-1 rounded border border-red-300 bg-red-50 px-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                    title="Delete this feature"
+                    aria-label="Delete this feature"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
