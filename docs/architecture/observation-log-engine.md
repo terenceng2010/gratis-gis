@@ -12,6 +12,22 @@ the engine pivot decided on 2026-05-07. It explains what we are
 building, why, and in what order. When in doubt during implementation,
 this doc wins; when this doc is wrong, fix it before fixing the code.
 
+## Decisions log
+
+Resolved choices, in the order they were taken. New decisions append
+here; the corresponding sections below are kept in sync.
+
+| Date       | Decision                                                                                          |
+| ---------- | ------------------------------------------------------------------------------------------------- |
+| 2026-05-07 | Substrate is Postgres + PostGIS. No new datastore in v1.                                          |
+| 2026-05-07 | Engine ships in same repo, on `main`, via strangler-fig migration. No new repo, no long branches. |
+| 2026-05-07 | Project relicensed to AGPL-3.0-or-later (commits `bbd029a` and `23f5d81`).                        |
+| 2026-05-07 | `observation.id` and `entity` are UUIDv7 (Postgres 17 native or `pg_uuidv7` extension).           |
+| 2026-05-07 | Spatial partitioning uses H3 cells, resolution 7 (~5 km). `pgh3` extension.                       |
+| 2026-05-07 | MV refresh: no MV by default; per-lens `cache` hint with `eager`/`lazy`/`scheduled`+TTL modes; scheduled with 60s TTL is the recommended starting point for hot lenses. |
+| 2026-05-07 | Embedding model: `all-MiniLM-L6-v2` (sentence-transformers, Apache 2.0, 384 dims). Run inference via `transformers.js` inside portal-api. No vendor APIs. |
+| 2026-05-07 | No legacy backfill. Existing `feature_v3.*` test data is dropped at Phase 2 cutover; engine is the only path from there forward. |
+
 ## TL;DR
 
 The substrate of GratisGIS is moving from "AGO-shaped CRUD over PostGIS
@@ -103,7 +119,7 @@ geometry G, valid for time interval V, with provenance pointer R.
 // packages/engine/src/types.ts (proposed)
 
 export interface Observation {
-  id: string;            // ULID, monotonically sortable
+  id: string;            // UUIDv7, monotonically sortable
   txTime: Date;          // when we recorded it
   validFrom: Date;       // when the assertion is true in the world
   validTo: Date | null;  // null = still true
@@ -240,7 +256,7 @@ CREATE EXTENSION IF NOT EXISTS pg_partman;
 CREATE EXTENSION IF NOT EXISTS pgvector;
 
 CREATE TABLE observation (
-  id           CHAR(26)    PRIMARY KEY,            -- ULID
+  id           UUID        PRIMARY KEY,            -- UUIDv7
   tx_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
   valid_from   TIMESTAMPTZ NOT NULL,
   valid_to     TIMESTAMPTZ,                        -- null = current
@@ -253,8 +269,8 @@ CREATE TABLE observation (
   cell         CHAR(15),                           -- H3 res 7
   author_sub   TEXT        NOT NULL,
   source       JSONB       NOT NULL,
-  parents      TEXT[]      NOT NULL DEFAULT '{}',
-  embedding    VECTOR(384)                         -- text fields, optional
+  parents      UUID[]      NOT NULL DEFAULT '{}',
+  embedding    VECTOR(384)                         -- all-MiniLM-L6-v2, optional
 ) PARTITION BY RANGE (tx_time);
 
 CREATE INDEX observation_geom_gix
@@ -276,7 +292,12 @@ relevant historical partitions, which are smaller and may live on
 slower storage in the future. This is the most boring partitioning
 choice that works; we can revisit if we hit a real problem.
 
-H3 cell is denormalized for routing of spatially-local queries. We
+H3 cell is denormalized for routing of spatially-local queries. The
+choice of H3 over S2 is recorded in the decisions log: equal-area
+cells and uniform six-neighbor topology line up better with the
+choropleth and proximity workloads our users actually run, and the
+modern open-source spatial stack (Carto, kepler.gl, deck.gl, dbt-spatial)
+has standardized on H3. Resolution 7 is the starting cell size; we
 will add a secondary spatial partitioning scheme only if measurements
 demand it.
 
@@ -294,9 +315,24 @@ subscription               -- live SSE/WS subscribers (in-memory in v1)
 
 `materialized_view` rows are the equivalent of "feature service tile
 caches" today, except each one is a query result with a known refresh
-strategy (eager, lazy, ttl). The engine decides whether a read hits
-an MV or the live log based on freshness requirements declared in
-the lens.
+strategy. New lenses default to **no MV at all**: every read hits the
+live log. A lens opts into caching by setting a `cache` hint with one
+of three modes:
+
+- **`eager`**: refresh on every write that affects the lens. Use for
+  live dashboard tiles where staleness is unacceptable.
+- **`lazy`**: invalidate on write, recompute on the next read. The
+  first reader after a change pays the recompute cost. Use when
+  freshness matters but writes are rare.
+- **`scheduled` with TTL**: refresh on a timer. Use for tile
+  generation, public viewers, and "near real time is fine" cases.
+  Recommended starting TTL is 60 seconds; reports of historical data
+  can use much larger TTLs.
+
+The engine decides whether a read hits an MV or the live log based on
+the lens's cache hint. Reads always have a fast path; the only
+question is who pays the compute cost and how stale the answer can
+be.
 
 `provenance_edge` is a graph of `(observationId, derivedFromId)`
 flattened for `WHERE` joins. It lets us answer "what changes upstream
@@ -481,28 +517,34 @@ independently. `main` is always green and deployable.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test` all green.
 - The legacy data_layer creation flow still works, untouched.
 
-### Phase 2: data_layer migration (target: 3 weeks)
+### Phase 2: data_layer migration (target: 2 weeks)
+
+Shorter than the original plan because we are not running a shadow
+comparator: there is no legacy data to compare against (we ship pre-v1,
+and the existing `feature_v3.*` rows are dev-only test data, dropped
+at cutover). The migration is a one-way swap.
 
 **Deliverables:**
 
-- The data_layer creation flow in portal-api gets a feature-flagged
-  branch that writes through the engine instead of into
-  `feature_v3.<table>`.
-- The data_layer read flow gets a feature-flagged branch that reads
-  through the engine.
-- A shadow-mode comparator: when the flag is half-on (read both, log
-  diffs), we log any divergence between legacy and engine results.
-- After two weeks of clean shadow logs in dev, flip the flag on for
-  new data_layers. Existing layers stay on the legacy path.
+- The data_layer creation flow in portal-api is rewritten to write
+  through the engine instead of into `feature_v3.<table>`.
+- The data_layer read flow is rewritten to read through the engine.
+- A single migration drops the legacy `feature_v3.*` tables and the
+  v3-specific Prisma models. The v3 code paths are deleted from
+  portal-api in the same commit. (No flag, no parallel paths; this
+  is the cutover.)
+- The dev database is reset as part of the cutover. Matt's existing
+  test data is recreated through the engine path so nothing
+  user-visible breaks.
 
 **Acceptance:**
 
-- A new data_layer created with `ENGINE_V2_DATA_LAYER=true` round-trips
-  identically to one created with the flag off, as judged by the
-  shadow comparator across the existing test fixtures.
+- A new data_layer can be created end-to-end through portal-web,
+  written through the engine, and read back through the engine for
+  display in the layer detail page and the map.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test` all green.
-- The portal-web data_layer detail page renders identically against
-  the new code path.
+- `git grep feature_v3` returns zero matches in `apps/portal-api/src`
+  after the cutover commit.
 
 ### Phase 3: map and lens spec (target: 2 weeks)
 
@@ -576,24 +618,15 @@ phase, not punted forever.
 1. **Policy engine choice.** Cedar, OPA, or hand-rolled?
    Cedar is cleaner for our shape (geometry, attributes, principal in
    group). OPA is more battle-tested. Hand-rolled is fastest to ship
-   but accumulates debt. Decide before Phase 2 ends.
-2. **H3 vs. S2 vs. geohash for the cell column.** H3 is the current
-   pick. Empirically test query plans against a 1M-feature dev fixture
-   before committing.
-3. **ULID vs. UUIDv7 for `observation.id`.** Both are sortable. ULID
-   is more widely supported in our existing code; UUIDv7 is more
-   standard. Decide before Phase 1 ships.
-4. **MV refresh strategy.** Eager (on every write), lazy (on next
-   read), or scheduled (every N seconds)? Probably per-lens hint.
-   Pick a default before Phase 2 ships.
-5. **Embedding model.** `pgvector` is the substrate; the embedding
-   model itself (sentence-transformers? OpenAI ada? local Llama?)
-   needs picking when we get to semantic search. Not Phase 1-5.
-6. **Backwards compatibility for the legacy data_layer schema during
-   migration.** The existing `feature_v3.<table>` rows do not migrate
-   into the observation log automatically. We either backfill (one-shot
-   script) or read-through (the engine's read path falls back to the
-   legacy table for unmigrated layers). Decide before Phase 2 ends.
+   but accumulates debt. Decide before Phase 2 ends. Until then, the
+   engine treats `lens.policy` as opaque text and applies a coarse
+   org-membership check from the JWT, matching today's behavior.
+
+Decisions previously open and now resolved (see decisions log at the
+top): spatial cell library (H3 res 7), id type (UUIDv7), MV refresh
+default (no MV; per-lens hint with `eager`/`lazy`/`scheduled+TTL`
+modes), embedding model (`all-MiniLM-L6-v2`), legacy backfill (none;
+hard cutover at Phase 2).
 
 ## Glossary
 
@@ -604,7 +637,7 @@ the engine terms and what they map to:
   edit in an Esri versioned geodatabase. Every change is one of these.
 - **Entity.** A stable identifier for a real-world thing. Closest
   equivalent: an `OBJECTID` that survives across edits, but ours is a
-  ULID rather than an int and survives schema changes.
+  UUIDv7 rather than an int and survives schema changes.
 - **Scope.** The container an entity lives in. Closest equivalent: a
   feature class. `data_layer:abc123` is "the parcels layer."
 - **Lens.** A saved query plus a render spec. Closest equivalents are
