@@ -21,6 +21,7 @@ import {
   Eye,
   Image as ImageIcon,
   Layers as LayersIcon,
+  LayoutGrid,
   ListTree,
   Locate as LocateIcon,
   Loader2,
@@ -118,6 +119,16 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
   // try to render properties for a widget that lives on another page.
   const [activePageIdx, setActivePageIdxRaw] = useState(0);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
+  // #362: per-tabs-widget active tab index. UI state, not persisted
+  // (tabs widget itself doesn't track which tab is "open"; it's a
+  // viewer concern). Drop routing reads from this so dropping a
+  // widget onto a Tabs container goes into the visible tab.
+  const [activeTabIdxByWidget, setActiveTabIdxByWidget] = useState<
+    Record<string, number>
+  >({});
+  const setActiveTabIdx = useCallback((widgetId: string, idx: number) => {
+    setActiveTabIdxByWidget((cur) => ({ ...cur, [widgetId]: idx }));
+  }, []);
   const setActivePageIdx = useCallback((idx: number) => {
     setActivePageIdxRaw(idx);
     setSelectedWidgetId(null);
@@ -340,7 +351,67 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
         row: Math.max(1, Math.round(row)),
       };
       const widget = stampWidget(kind, layout);
+      let routedToTab = false;
       setApp((cur) => {
+        const page = cur.pages[activePageIdx];
+        if (!page) return cur;
+
+        // #362: tabs-container drop routing. If the drop point
+        // (col, row) lands inside a Tabs widget's bounds, route the
+        // new widget into that tab's nested widgets array instead
+        // of the page-level array. Active tab is tracked by widget
+        // id in activeTabIdxByWidget; defaults to 0.
+        const hostTabs = findTabsHostAt(page.widgets, col, row);
+        if (hostTabs && hostTabs.config.kind === 'tabs') {
+          const tabIdx = activeTabIdxByWidget[hostTabs.id] ?? 0;
+          const safeIdx = Math.min(tabIdx, hostTabs.config.tabs.length - 1);
+          // Drop a "child" stamp at (1, 1) so layout coords are
+          // consistent inside the tab. The runtime ignores col/row
+          // for nested widgets and stacks them anyway, but the
+          // values still feed rowSpan-derived min-height.
+          const childLayout = { ...defaultLayoutForKind(kind), col: 1, row: 1 };
+          const childWidget = stampWidget(kind, childLayout);
+          // Auto-bind nested map-followers to the host page's
+          // single Map widget (parent-page scope).
+          const onlyMap =
+            page.widgets.filter((w) => w.kind === 'map').length === 1
+              ? page.widgets.find((w) => w.kind === 'map')
+              : null;
+          const childBound =
+            onlyMap && WIDGETS_BIND_MAP_ID.has(childWidget.kind)
+              ? autoBindMapWidgetId(childWidget, onlyMap.id)
+              : childWidget;
+          routedToTab = true;
+          return {
+            ...cur,
+            pages: cur.pages.map((p, i) =>
+              i !== activePageIdx
+                ? p
+                : {
+                    ...p,
+                    widgets: p.widgets.map((w) =>
+                      w.id !== hostTabs.id || w.config.kind !== 'tabs'
+                        ? w
+                        : {
+                            ...w,
+                            config: {
+                              ...w.config,
+                              tabs: w.config.tabs.map((t, ti) =>
+                                ti !== safeIdx
+                                  ? t
+                                  : {
+                                      ...t,
+                                      widgets: [...t.widgets, childBound],
+                                    },
+                              ),
+                            },
+                          },
+                    ),
+                  },
+            ),
+          };
+        }
+
         // #339: auto-bind a newly-dropped map-following widget to
         // the only Map widget already on the page. Saves the user
         // a manual mapWidgetId pick in the common case (one Map on
@@ -348,9 +419,8 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
         // Select / BasemapGallery dropped alongside it). When there
         // are zero or multiple Map widgets we leave mapWidgetId
         // unset; the user picks via the properties panel.
-        const page = cur.pages[activePageIdx];
         const onlyMap =
-          page && page.widgets.filter((w) => w.kind === 'map').length === 1
+          page.widgets.filter((w) => w.kind === 'map').length === 1
             ? page.widgets.find((w) => w.kind === 'map')
             : null;
         const widgetWithBinding =
@@ -366,10 +436,13 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
           ),
         };
       });
-      setSelectedWidgetId(widget.id);
+      // Select the new widget so the right rail shows it. For tab-
+      // routed drops, select the freshly-added child id; the parent
+      // tabs widget stays the click target on canvas.
+      setSelectedWidgetId(routedToTab ? null : widget.id);
       setDirty(true);
     },
-    [activePageIdx],
+    [activePageIdx, activeTabIdxByWidget],
   );
 
   // ---- Page CRUD (#342) -----------------------------------------------------
@@ -527,6 +600,8 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
             previewMapData={previewMapData}
             previewBasemaps={previewBasemaps}
             widgetMapData={widgetMapData}
+            activeTabIdxByWidget={activeTabIdxByWidget}
+            onSetActiveTabIdx={setActiveTabIdx}
             onSelect={setSelectedWidgetId}
             onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
             onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
@@ -732,7 +807,7 @@ const EMPTY_SELECTION: Record<string, Set<number | string>> = {};
  * target" (Attribute Table, Chart). `page` is static layout content
  * (Text today; Image / Button / Divider / Embed land in #361).
  */
-type PaletteCategory = 'map' | 'data' | 'page';
+type PaletteCategory = 'map' | 'data' | 'page' | 'layout';
 
 const PALETTE_CATEGORIES: Array<{
   id: PaletteCategory;
@@ -753,6 +828,11 @@ const PALETTE_CATEGORIES: Array<{
     id: 'page',
     label: 'Page elements',
     hint: 'Static layout content',
+  },
+  {
+    id: 'layout',
+    label: 'Layout',
+    hint: 'Containers that hold other widgets',
   },
 ];
 
@@ -884,6 +964,14 @@ const PALETTE_TILES: Array<{
     Icon: CodeIcon,
     hint: 'iframe a video, dashboard, or form',
     category: 'page',
+  },
+  // -- Layout containers ----------------------------------------
+  {
+    kind: 'tabs',
+    label: 'Tabs',
+    Icon: LayoutGrid,
+    hint: 'Container with multiple tabs of widgets',
+    category: 'layout',
   },
 ];
 
@@ -1184,6 +1272,8 @@ function Canvas({
   previewMapData,
   previewBasemaps,
   widgetMapData,
+  activeTabIdxByWidget,
+  onSetActiveTabIdx,
   onSelect,
   onCanvasDrop,
   onWidgetLayout,
@@ -1194,6 +1284,8 @@ function Canvas({
   previewMapData: MapData | null;
   previewBasemaps: CustomBasemap[];
   widgetMapData: Record<string, MapData>;
+  activeTabIdxByWidget: Record<string, number>;
+  onSetActiveTabIdx: (widgetId: string, idx: number) => void;
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
   onWidgetLayout: (id: string, layout: CustomLayout) => void;
@@ -1358,6 +1450,8 @@ function Canvas({
               // resolved, else fall through to the app default.
               previewMapData={widgetMapData[w.id] ?? previewMapData}
               previewBasemaps={previewBasemaps}
+              activeTabIdx={activeTabIdxByWidget[w.id] ?? 0}
+              onSetActiveTabIdx={(idx) => onSetActiveTabIdx(w.id, idx)}
               onClick={(e) => {
                 e.stopPropagation();
                 onSelect(w.id);
@@ -1404,6 +1498,8 @@ function WidgetCard({
   anyGesture,
   previewMapData,
   previewBasemaps,
+  activeTabIdx,
+  onSetActiveTabIdx,
   onClick,
   onMoveStart,
   onResizeStart,
@@ -1415,6 +1511,8 @@ function WidgetCard({
   anyGesture: boolean;
   previewMapData: MapData | null;
   previewBasemaps: CustomBasemap[];
+  activeTabIdx: number;
+  onSetActiveTabIdx: (idx: number) => void;
   onClick: (e: React.MouseEvent) => void;
   onMoveStart: (e: ReactMouseEvent<HTMLElement>) => void;
   onResizeStart: (
@@ -1525,6 +1623,15 @@ function WidgetCard({
             {widget.config.label || 'Button'}
           </span>
         </div>
+      ) : widget.config.kind === 'tabs' ? (
+        // #362: tabs container live preview. Renders a real tab
+        // strip + content area so authors see what the runtime will
+        // produce while they're laying it out.
+        <TabsWidgetCanvas
+          widget={widget}
+          activeTabIdx={activeTabIdx}
+          onSetActiveTabIdx={onSetActiveTabIdx}
+        />
       ) : (
         <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted">
           {widgetPlaceholderText(widget.kind, label)}
@@ -1608,6 +1715,8 @@ function widgetPlaceholderText(
       return 'Live cursor lat/lon';
     case 'my-location':
       return 'Show my location';
+    case 'tabs':
+      return 'Tab strip with nested widgets';
     default:
       return `${label} content`;
   }
@@ -1648,6 +1757,14 @@ function summarizeWidget(w: CustomWidget): string {
       return w.config.mapWidgetId
         ? `→ ${w.config.mapWidgetId.slice(0, 6)}`
         : 'pick a map widget';
+    case 'tabs': {
+      const n = w.config.tabs.length;
+      const totalChildren = w.config.tabs.reduce(
+        (acc, t) => acc + t.widgets.length,
+        0,
+      );
+      return `${n} tab${n === 1 ? '' : 's'} · ${totalChildren} widget${totalChildren === 1 ? '' : 's'}`;
+    }
     default:
       return '';
   }
@@ -2232,6 +2349,14 @@ function WidgetConfigForm({
             onChangeConfig={onChangeConfig}
           />
         </>
+      );
+    case 'tabs':
+      return (
+        <TabsWidgetConfig
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
       );
     default: {
       const _exhaustive: never = widget.config;
@@ -2849,6 +2974,215 @@ function MyLocationWidgetConfigBody({
   );
 }
 
+// ---- Tabs container canvas preview (#362) ---------------------------------
+
+function TabsWidgetCanvas({
+  widget,
+  activeTabIdx,
+  onSetActiveTabIdx,
+}: {
+  widget: CustomWidget;
+  activeTabIdx: number;
+  onSetActiveTabIdx: (idx: number) => void;
+}) {
+  if (widget.config.kind !== 'tabs') return null;
+  const tabs = widget.config.tabs;
+  const safeIdx = Math.min(activeTabIdx, tabs.length - 1);
+  const active = tabs[safeIdx];
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-end gap-0 overflow-x-auto border-b border-border bg-surface-1 px-2">
+        {tabs.map((t, i) => {
+          const isActive = i === safeIdx;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSetActiveTabIdx(i);
+              }}
+              className={`relative px-3 py-1.5 text-xs font-medium transition-colors ${
+                isActive
+                  ? 'text-ink-0'
+                  : 'text-muted hover:text-ink-1'
+              }`}
+            >
+              {t.title}
+              {isActive && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-ink-0"
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-1 flex-col gap-1.5 overflow-auto bg-surface-2/30 p-2">
+        {active && active.widgets.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border bg-surface-1/60 p-4 text-center">
+            <p className="text-xs font-medium text-ink-0">{active.title}</p>
+            <p className="text-[11px] text-muted">
+              Drag a widget here to add it to this tab.
+            </p>
+          </div>
+        ) : (
+          active &&
+          active.widgets.map((c) => <NestedWidgetPreview key={c.id} widget={c} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Compact preview card for a widget nested inside a Tabs container.
+ * Doesn't drag / resize / select -- the parent Tabs widget is the
+ * canvas-level interactive unit. Click-through is suppressed so the
+ * preview cards behave like inert thumbnails.
+ */
+function NestedWidgetPreview({ widget }: { widget: CustomWidget }) {
+  const tile = PALETTE_TILES.find((t) => t.kind === widget.kind);
+  const Icon = tile?.Icon ?? Square;
+  const label = tile?.label ?? widget.kind;
+  const summary = summarizeWidget(widget);
+  // Min-height proportional to the widget's intended row span so a
+  // Map widget feels different from a Coordinates widget at a glance.
+  const minHeight = Math.max(36, widget.layout.rowSpan * 24);
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs"
+      style={{ minHeight }}
+    >
+      <Icon className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+      <span className="font-medium text-ink-1">{label}</span>
+      {summary && (
+        <span className="ml-auto truncate text-muted" title={summary}>
+          {summary}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---- Tabs container config (#362) -----------------------------------------
+
+function TabsWidgetConfig({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: { kind: 'tabs'; tabs: Array<{ id: string; title: string; widgets: CustomWidget[] }> };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  function update(idx: number, patch: Partial<(typeof config.tabs)[number]>) {
+    const next = config.tabs.map((t, i) => (i === idx ? { ...t, ...patch } : t));
+    onChangeConfig({ tabs: next });
+  }
+  function move(idx: number, dir: -1 | 1) {
+    const j = idx + dir;
+    if (j < 0 || j >= config.tabs.length) return;
+    const next = config.tabs.slice();
+    const [moved] = next.splice(idx, 1);
+    next.splice(j, 0, moved!);
+    onChangeConfig({ tabs: next });
+  }
+  function remove(idx: number) {
+    if (config.tabs.length <= 1) return; // always one tab minimum
+    if (
+      config.tabs[idx]!.widgets.length > 0 &&
+      !confirm(
+        `Delete tab "${config.tabs[idx]!.title}" and its ${config.tabs[idx]!.widgets.length} widget(s)?`,
+      )
+    ) {
+      return;
+    }
+    onChangeConfig({ tabs: config.tabs.filter((_, i) => i !== idx) });
+  }
+  function add() {
+    onChangeConfig({
+      tabs: [
+        ...config.tabs,
+        {
+          id: `tab_${Math.random().toString(36).slice(2, 8)}`,
+          title: `Tab ${config.tabs.length + 1}`,
+          widgets: [],
+        },
+      ],
+    });
+  }
+  return (
+    <div className="space-y-3">
+      <Field label="Tabs" hint="Each tab holds its own widgets. Drop widgets onto a tab while it's active in the canvas.">
+        <div className="space-y-1.5">
+          {config.tabs.map((t, i) => (
+            <div
+              key={t.id}
+              className="flex items-center gap-1 rounded-md border border-border bg-surface-1 p-1"
+            >
+              <input
+                type="text"
+                value={t.title}
+                disabled={!canEdit}
+                onChange={(e) => update(i, { title: e.target.value })}
+                className="flex-1 rounded border-0 bg-transparent px-1 text-sm focus:outline-none"
+              />
+              <span className="text-[10px] text-muted">
+                {t.widgets.length}w
+              </span>
+              <button
+                type="button"
+                title="Move up"
+                disabled={!canEdit || i === 0}
+                onClick={() => move(i, -1)}
+                className="rounded p-1 text-muted hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronLeft className="h-3.5 w-3.5 rotate-90" strokeWidth={1.75} />
+              </button>
+              <button
+                type="button"
+                title="Move down"
+                disabled={!canEdit || i === config.tabs.length - 1}
+                onClick={() => move(i, 1)}
+                className="rounded p-1 text-muted hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronLeft className="h-3.5 w-3.5 -rotate-90" strokeWidth={1.75} />
+              </button>
+              <button
+                type="button"
+                title="Delete tab"
+                disabled={!canEdit || config.tabs.length === 1}
+                onClick={() => remove(i)}
+                className="rounded p-1 text-muted hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={add}
+              className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-2 py-1.5 text-xs font-medium text-muted hover:border-accent/40 hover:text-ink-1"
+            >
+              <Plus className="h-3 w-3" strokeWidth={1.75} />
+              Add tab
+            </button>
+          )}
+        </div>
+      </Field>
+      <p className="text-xs leading-snug text-muted">
+        To add widgets to a tab: click the tab in the canvas to make
+        it active, then drag a widget from the left palette onto the
+        tab content area.
+      </p>
+    </div>
+  );
+}
+
 // ---- Tool mode + panel arrangement editor (#364) ---------------------------
 
 const ANCHOR_GRID: PanelAnchor[][] = [
@@ -3220,6 +3554,8 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 24, rowSpan: 1 };
     case 'embed':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
+    case 'tabs':
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
@@ -3312,6 +3648,32 @@ function effectiveDisplayMode(widget: CustomWidget): 'panel' | 'tool' {
   if (!TOOL_MODE_KINDS.has(widget.kind)) return 'panel';
   const cfg = widget.config as { displayMode?: 'panel' | 'tool' };
   return cfg.displayMode ?? 'panel';
+}
+
+/**
+ * #362: find a Tabs widget on the page whose grid bounds contain
+ * the (col, row) drop point. Drop routing uses this to send a
+ * widget into a Tabs container's active tab when the user drops
+ * on top of one. Returns the first match (last-on-top would also
+ * be reasonable, but a single Tabs container per cell is the
+ * common case).
+ */
+function findTabsHostAt(
+  widgets: CustomWidget[],
+  col: number,
+  row: number,
+): CustomWidget | null {
+  for (const w of widgets) {
+    if (w.kind !== 'tabs') continue;
+    const c1 = w.layout.col;
+    const c2 = w.layout.col + w.layout.colSpan - 1;
+    const r1 = w.layout.row;
+    const r2 = w.layout.row + w.layout.rowSpan - 1;
+    if (col >= c1 && col <= c2 && row >= r1 && row <= r2) {
+      return w;
+    }
+  }
+  return null;
 }
 
 /**
@@ -3496,6 +3858,22 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           keepMarker: true,
           displayMode: 'tool',
           panelArrangement: defaultPanelArrangement('my-location'),
+        },
+      };
+    case 'tabs':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'tabs',
+          tabs: [
+            {
+              id: `tab_${Math.random().toString(36).slice(2, 8)}`,
+              title: 'Tab 1',
+              widgets: [],
+            },
+          ],
         },
       };
     default: {

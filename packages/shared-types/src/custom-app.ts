@@ -174,7 +174,12 @@ export type CustomWidgetKind =
   // by id (mapWidgetId) and reads or drives that map's state.
   | 'bookmark'
   | 'coordinates'
-  | 'my-location';
+  | 'my-location'
+  // #362: layout container. Holds nested widgets organized into
+  // tabs. Anti-EB: deliberately simpler than EB's Section + Views
+  // pair, just one widget that renders a tab strip and routes
+  // child widgets into the active tab.
+  | 'tabs';
 
 // ---- Tool-mode display (#364) ----------------------------------
 
@@ -258,7 +263,8 @@ export type CustomWidgetConfig =
   | EmbedWidgetConfig
   | BookmarkWidgetConfig
   | CoordinatesWidgetConfig
-  | MyLocationWidgetConfig;
+  | MyLocationWidgetConfig
+  | TabsWidgetConfig;
 
 export interface MapWidgetConfig {
   kind: 'map';
@@ -571,6 +577,40 @@ export interface MyLocationWidgetConfig {
   panelArrangement?: PanelArrangement;
 }
 
+// ---- Tabs container (#362) ------------------------------------
+
+/**
+ * Tabs container. A widget that holds N tabs, each tab holding its
+ * own array of CustomWidgets. Anti-EB: deliberately simpler than
+ * Section + Views. Authors drag the Tabs widget onto the canvas,
+ * pick the active tab, drop child widgets into the content area of
+ * that tab. Each tab can hold any of the standard widget kinds
+ * (Map, Layers, Text, etc.) and they stack vertically inside.
+ *
+ * v1 limitations:
+ *   - Nested widgets stack vertically in the order they were
+ *     dropped. Drag-to-reorder inside a tab is a follow-up.
+ *   - No nested tabs (tabs-inside-tabs). The runtime will render
+ *     them but the designer drop-routing only goes one level deep
+ *     to keep the mental model simple.
+ *   - No EB-style sub-grid (each tab a 12-column grid). Stack
+ *     layout covers most "tabbed info panel" use cases; sub-grid
+ *     can come if real authors miss it.
+ */
+export interface TabsWidgetConfig {
+  kind: 'tabs';
+  /** Ordered list of tabs. Always non-empty in practice; the
+   *  designer initializes a fresh widget with one default tab. */
+  tabs: Array<{
+    /** Stable id; preserved across rename + reorder. */
+    id: string;
+    /** Display name in the tab strip. */
+    title: string;
+    /** Child widgets for this tab. Rendered in document order. */
+    widgets: CustomWidget[];
+  }>;
+}
+
 /**
  * Freshly-created Custom Web App. One blank page with no widgets;
  * the designer prompts the author to drop a widget on first open.
@@ -595,6 +635,9 @@ export const DEFAULT_CUSTOM_APP: CustomAppData = {
  * Idempotent: calling on an already-v2 app is a no-op. Caller should
  * persist the result back to the item on the next save (the
  * designer's setApp(initial) flow handles that automatically).
+ *
+ * Recurses through Tabs widgets (#362) so nested children also pick
+ * up the v2 grid coordinates.
  */
 export function migrateCustomAppData(data: CustomAppData): CustomAppData {
   if (data.version === 2) return data;
@@ -603,17 +646,31 @@ export function migrateCustomAppData(data: CustomAppData): CustomAppData {
     version: 2,
     pages: data.pages.map((p) => ({
       ...p,
-      widgets: p.widgets.map((w) => ({
-        ...w,
-        layout: {
-          // v1 grid was 12 cols x 48px rows; v2 is 24 x 24. Doubling
-          // every coordinate keeps the visual layout identical.
-          col: ((w.layout.col - 1) * 2) + 1,
-          row: ((w.layout.row - 1) * 2) + 1,
-          colSpan: w.layout.colSpan * 2,
-          rowSpan: w.layout.rowSpan * 2,
-        },
-      })),
+      widgets: p.widgets.map(migrateWidgetV1toV2),
     })),
   };
+}
+
+function migrateWidgetV1toV2(w: CustomWidget): CustomWidget {
+  const next: CustomWidget = {
+    ...w,
+    layout: {
+      // v1 grid was 12 cols x 48px rows; v2 is 24 x 24. Doubling
+      // every coordinate keeps the visual layout identical.
+      col: ((w.layout.col - 1) * 2) + 1,
+      row: ((w.layout.row - 1) * 2) + 1,
+      colSpan: w.layout.colSpan * 2,
+      rowSpan: w.layout.rowSpan * 2,
+    },
+  };
+  if (w.kind === 'tabs' && w.config.kind === 'tabs') {
+    next.config = {
+      ...w.config,
+      tabs: w.config.tabs.map((t) => ({
+        ...t,
+        widgets: t.widgets.map(migrateWidgetV1toV2),
+      })),
+    };
+  }
+  return next;
 }

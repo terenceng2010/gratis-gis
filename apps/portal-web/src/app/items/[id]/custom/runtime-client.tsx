@@ -217,19 +217,27 @@ export function CustomRuntimeClient({
   // both work without re-initializing state mid-session.
   const [states, setStates] = useState<Record<string, MapState>>(() => {
     const out: Record<string, MapState> = {};
-    for (const p of app.pages) {
-      for (const w of p.widgets) {
-        if (w.kind === 'map') {
-          // #363: prefer the per-widget MapData when an override is
-          // resolved; fall back to the app-default baseMapData.
-          const seed = widgetMapData[w.id] ?? baseMapData;
-          out[w.id] = {
-            mapData: { ...seed, layers: [...(seed.layers ?? [])] },
-            selection: {},
-            selectTool: 'off',
-          };
+    function visit(widget: CustomWidget) {
+      if (widget.kind === 'map') {
+        // #363: prefer the per-widget MapData when an override is
+        // resolved; fall back to the app-default baseMapData.
+        const seed = widgetMapData[widget.id] ?? baseMapData;
+        out[widget.id] = {
+          mapData: { ...seed, layers: [...(seed.layers ?? [])] },
+          selection: {},
+          selectTool: 'off',
+        };
+      }
+      // #362: recurse into Tabs containers so nested Map widgets
+      // also get state entries.
+      if (widget.kind === 'tabs' && widget.config.kind === 'tabs') {
+        for (const t of widget.config.tabs) {
+          for (const c of t.widgets) visit(c);
         }
       }
+    }
+    for (const p of app.pages) {
+      for (const w of p.widgets) visit(w);
     }
     return out;
   });
@@ -795,6 +803,8 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <CoordinatesWidgetRender widget={widget} />;
     case 'my-location':
       return <MyLocationWidgetRender widget={widget} />;
+    case 'tabs':
+      return <TabsWidgetRender widget={widget} />;
     default: {
       const _exhaustive: never = widget.kind;
       void _exhaustive;
@@ -1831,6 +1841,74 @@ function MyLocationWidgetRender({ widget }: { widget: CustomWidget }) {
   );
 }
 
+// ---- Tabs container (#362) -------------------------------------------------
+
+function TabsWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'tabs') return null;
+  const tabs = widget.config.tabs;
+  const [activeIdx, setActiveIdx] = useState(0);
+  const safeIdx = Math.min(activeIdx, tabs.length - 1);
+  const active = tabs[safeIdx];
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      {tabs.length > 0 && (
+        <nav
+          className="flex shrink-0 items-end gap-0 overflow-x-auto border-b border-border bg-surface-1 px-2"
+          aria-label="Tabs"
+        >
+          {tabs.map((t, i) => {
+            const isActive = i === safeIdx;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setActiveIdx(i)}
+                aria-current={isActive ? 'true' : undefined}
+                className={`relative px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'text-ink-0'
+                    : 'text-muted hover:text-ink-1'
+                }`}
+              >
+                {t.title}
+                {isActive && (
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute -bottom-px left-2 right-2 h-0.5 rounded-full bg-ink-0"
+                  />
+                )}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-2">
+        {active && active.widgets.length === 0 ? (
+          <div className="flex flex-1 items-center justify-center text-xs text-muted">
+            (Empty tab)
+          </div>
+        ) : (
+          active &&
+          active.widgets.map((c) => (
+            <div
+              key={c.id}
+              className="overflow-hidden rounded-md border border-border bg-surface-1"
+              style={{
+                // Min-height proportional to the widget's intended
+                // row span so a Map keeps real estate while a
+                // Coordinates widget stays compact.
+                minHeight: Math.max(64, c.layout.rowSpan * 24),
+              }}
+            >
+              {renderWidget(c)}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- Shared frame ----------------------------------------------------------
 
 function WidgetFrame({
@@ -1881,4 +1959,6 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   bookmark: BookmarkIcon,
   coordinates: CrosshairIcon,
   'my-location': LocateIcon,
+  // #362 layout container.
+  tabs: ChevronRight,
 };
