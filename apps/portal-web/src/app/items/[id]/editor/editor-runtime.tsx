@@ -392,6 +392,14 @@ export function EditorRuntime({
   // newer state.
   const [metadata, setMetadata] = useState<Record<string, LayerMetadata>>({});
   const probeAbortsRef = useRef<Record<string, AbortController>>({});
+  // Per-layer last-probed source key. The probe effect re-fetches a
+  // layer whenever its current source key differs from the entry
+  // here, which captures both initial mount AND
+  // refreshTarget-driven URL bumps (`_ts=` cache-buster). Without
+  // this tracking, the previous "skip if loaded" check would short-
+  // circuit the re-probe after refreshTarget, leaving the
+  // attribute-table cache stale after a save.
+  const probedSourceKeyRef = useRef<Record<string, string>>({});
   const sourceKeysJoined = mapData.layers
     .map((l) => `${l.id}|${JSON.stringify(l.source)}`)
     .join('\n');
@@ -406,10 +414,19 @@ export function EditorRuntime({
       }
       return next;
     });
+    // Drop probed-source-key entries for removed layers too.
+    for (const id of Object.keys(probedSourceKeyRef.current)) {
+      if (!seen.has(id)) delete probedSourceKeyRef.current[id];
+    }
 
     for (const layer of mapData.layers) {
-      const existing = metadata[layer.id];
-      if (existing && !existing.loading && !existing.error) continue;
+      const sourceKey = JSON.stringify(layer.source);
+      // Skip when we've already kicked a probe for this exact
+      // source key. A change here (different URL after
+      // refreshTarget, swapped source kind, etc.) drops through
+      // and re-probes.
+      if (probedSourceKeyRef.current[layer.id] === sourceKey) continue;
+      probedSourceKeyRef.current[layer.id] = sourceKey;
       probeAbortsRef.current[layer.id]?.abort();
       const controller = new AbortController();
       probeAbortsRef.current[layer.id] = controller;
@@ -435,8 +452,10 @@ export function EditorRuntime({
       for (const c of Object.values(probeAbortsRef.current)) c.abort();
     };
     // The joined source-key string changes when a layer is added /
-    // removed / has its source swapped; that's exactly when we want
-    // to re-probe. Including `metadata` in the deps would loop.
+    // removed / has its source swapped (including the _ts=
+    // cache-buster bump from refreshTarget). The per-layer
+    // probedSourceKeyRef captures the "do we already have data for
+    // THIS source URL" check that the effect needs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKeysJoined]);
 
