@@ -2001,7 +2001,15 @@ function syncOverlays(
         maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
         layout: {
-          'icon-image': preferredId,
+          // #78: per-category icon override for unique-value
+          // renderers. The helper builds a match expression on the
+          // renderer field; categories without an override fall
+          // back to the layer-level icon. Reuses the SDF / plain
+          // decision the layer made so a tinted layer keeps its
+          // overrides tinted.
+          'icon-image': rendererIconImage(layer, preferredId, (name) =>
+            useSdf ? iconSdfImageId(name) : iconImageId(name),
+          ),
           // Zoom-interpolated size. Feature-state expressions aren't
           // allowed in layout properties, so the halo circle above
           // carries selected/hover: this property only tracks zoom.
@@ -2288,6 +2296,48 @@ function rendererColor(
   }
 
   return fallback;
+}
+
+/**
+ * #78: build the icon-image MapLibre expression for a layer.
+ * When the renderer is unique-values AND any category carries an
+ * `iconName` override, returns a match expression mapping each
+ * category value to the right registered image id. The category
+ * falls back to the layer-level fallback id if its iconName isn't
+ * a registered image (e.g. typo, icon not yet loaded), and any
+ * value not in the categories list also lands on the fallback.
+ *
+ * Returns the literal fallback id (not an expression) when no
+ * override is in play -- preserves the simple-icon fast path
+ * MapLibre uses for static icon-image properties.
+ *
+ * `imageIdFor` lets the caller pick SDF vs plain variant per
+ * iconName; the layer-level decision (tint enabled + SDF
+ * registered) is reused for each category override.
+ */
+function rendererIconImage(
+  layer: MapLayer,
+  fallbackImageId: string,
+  imageIdFor: (iconName: string) => string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  const r = layer.renderer;
+  if (r.kind !== 'unique-values') return fallbackImageId;
+  if (r.categories.length === 0 || !r.field) return fallbackImageId;
+  const anyOverride = r.categories.some(
+    (c) => typeof c.iconName === 'string' && c.iconName.length > 0,
+  );
+  if (!anyOverride) return fallbackImageId;
+  const matchExpr: unknown[] = ['match', ['to-string', ['get', r.field]]];
+  for (const cat of r.categories) {
+    const id =
+      typeof cat.iconName === 'string' && cat.iconName.length > 0
+        ? imageIdFor(cat.iconName)
+        : fallbackImageId;
+    matchExpr.push(cat.value, id);
+  }
+  matchExpr.push(fallbackImageId); // default
+  return matchExpr;
 }
 
 /**

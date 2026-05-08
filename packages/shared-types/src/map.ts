@@ -312,6 +312,21 @@ export interface MapUniqueValueCategory {
   /** Distinct value of the field, coerced to string. */
   value: string;
   color: string;
+  /**
+   * #78: optional per-category icon override for point geometries.
+   * When set AND the layer's point.symbol is 'icon', the canvas
+   * builds a `match` expression on this field so each category
+   * renders with its own icon (e.g. House values get the house
+   * icon, Garage values get the garage icon). When unset, the
+   * category falls back to the layer-level style.point.iconName so
+   * the existing color-only behavior is preserved -- nothing
+   * changes for renderers that don't opt in.
+   *
+   * Out of scope for v1: per-category overrides on line / polygon
+   * (those are color-only in nearly every product), per-category
+   * icon size / tint.
+   */
+  iconName?: string;
 }
 
 export type MapFilterOp =

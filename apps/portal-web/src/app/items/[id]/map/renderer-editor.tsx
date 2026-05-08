@@ -204,6 +204,45 @@ export function RendererEditor({ value, metadata, onChange }: Props) {
                         placeholder="value"
                         className="h-7 min-w-0 flex-1 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
                       />
+                      {/* #78: optional per-category icon override.
+                          v1 ships as a small text input next to the
+                          color so authors can type a known icon
+                          name (matching what they picked in the
+                          layer-level Style editor below). A picker
+                          dropdown matching the Style editor's grid
+                          is queued as polish; the canvas already
+                          renders whatever value lands here so the
+                          end-to-end works today. Empty string = no
+                          override (falls back to the layer-level
+                          icon). */}
+                      <input
+                        type="text"
+                        value={c.iconName ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          // exactOptionalPropertyTypes: rebuild the
+                          // category from scratch so an empty input
+                          // physically removes the iconName key
+                          // (rather than persisting it as the empty
+                          // string, which the canvas helper would
+                          // treat as "no override" anyway but reads
+                          // sloppily).
+                          if (!isUnique) return;
+                          const next = value.categories.map((c2, ii) => {
+                            if (ii !== i) return c2;
+                            const rebuilt: MapUniqueValueCategory = {
+                              value: c2.value,
+                              color: c2.color,
+                            };
+                            if (v) rebuilt.iconName = v;
+                            return rebuilt;
+                          });
+                          onChange({ ...value, categories: next });
+                        }}
+                        placeholder="icon (optional)"
+                        title="Icon name to render features in this category. Leave empty to inherit the layer's icon."
+                        className="h-7 w-28 shrink-0 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+                      />
                       <button
                         type="button"
                         onClick={() => removeCategory(i)}
