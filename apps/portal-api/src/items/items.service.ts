@@ -742,33 +742,16 @@ export class ItemsService {
       }
       throw err;
     }
-    // v3 feature-service items: provision a PostGIS table per layer
-    // defined in the builder. Safe to run inline because each
-    // $executeRawUnsafe is idempotent; if the item has no layers yet
-    // (empty builder), this is a no-op.
-    //
-    // If reconcile throws, the item row is already in the DB: we
-    // roll back by deleting it so the user doesn't end up with an
-    // orphaned item they can't recover from. The error message is
-    // surfaced back to the caller so they can see WHICH column /
-    // layer / DDL failed instead of a bare 500.
-    const layers = readV3Layers(row.data);
-    if (row.type === 'data_layer' && layers !== null) {
-      try {
-        await this.v3Tables.reconcile(row.id, [], layers);
-      } catch (err) {
-        await this.prisma.item
-          .delete({ where: { id: row.id } })
-          .catch(() => {
-            /* best-effort cleanup; if this fails too we leave the orphan */
-          });
-        throw new BadRequestException(
-          `Could not provision layer tables: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-    }
+    // Phase 2.5: data_layer items no longer pre-provision per-layer
+    // PostGIS tables. The engine substrate writes feature
+    // observations to a shared `observation` table keyed by scope
+    // (`data_layer:<itemId>:<layerId>`), so layer creation is a
+    // pure metadata operation. The pre-engine reconcile pass that
+    // ran here issued raw DDL outside the user transaction and
+    // could leave half-created tables on failure, which is why the
+    // caller cleaned up by deleting the item row. With no DDL to
+    // run, neither concern applies; the item row is the only state
+    // that needs to land.
     return row;
   }
 
@@ -852,33 +835,11 @@ export class ItemsService {
         bbox: [],
       },
     });
-    // Provision the PostGIS table for the submissions sublayer.
-    // null geometry => attribute-only "table" sublayer; reconcile
-    // handles that case (see V3TablesService.provisionLayer).
-    try {
-      await this.v3Tables.reconcile(layerRow.id, [], [
-        {
-          id: layerKey,
-          geometryType: null,
-          fields: [
-            { name: 'submitted_at', type: 'date' },
-            { name: 'submitted_by', type: 'string' },
-            { name: 'schema_version', type: 'number' },
-          ],
-        },
-      ]);
-    } catch (err) {
-      await this.prisma.item
-        .delete({ where: { id: layerRow.id } })
-        .catch(() => {
-          /* best-effort */
-        });
-      throw new BadRequestException(
-        `Could not provision paired submissions layer: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
+    // Phase 2.5: paired submissions layers don't need a per-layer
+    // PostGIS table either. The engine writes form submissions to
+    // the shared observation log under
+    // `data_layer:<layerItemId>:<layerKey>` like any other v3
+    // layer; the metadata in `layerData` is enough on its own.
     return { layerItemId: layerRow.id, layerKey };
   }
 
@@ -1073,18 +1034,16 @@ export class ItemsService {
         ...(nextData !== undefined && { bbox: nextBbox ?? [] }),
       },
     });
-    // v3: reconcile layer tables against the updated schema. prev lets
-    // us drop tables for layers that were removed from the schema;
-    // reconcile is idempotent for layers that stayed.
+    // Phase 2.5: schema edits are pure metadata now. Pre-engine,
+    // this called v3Tables.reconcile to DROP tables for removed
+    // layers and CREATE/ALTER tables for new ones. The engine
+    // substrate keys observations by scope, so a layer that
+    // disappears from the schema simply stops being read; no DDL
+    // is needed and no data is lost. Phase 2.6 will sweep any
+    // orphaned observation rows for layer keys that no item
+    // references; for now they're cheap and harmless.
     const nextLayers =
       updated.type === 'data_layer' ? readV3Layers(updated.data) : null;
-    if (nextLayers !== null) {
-      await this.v3Tables.reconcile(
-        updated.id,
-        prevLayers ?? [],
-        nextLayers,
-      );
-    }
     // #230 Phase A: schema-change notification for live field
     // deployments. If the data_layer save dropped a layer or
     // changed a layer's geometryType, find every data_collection
@@ -1305,16 +1264,16 @@ export class ItemsService {
     // we can still reference the item id to build the table name(s).
     if (item.type === 'data_layer') {
       const data = item.data as { version?: number; storageType?: string } | null;
-      // v2 (single table per item)
+      // v2 (single table per item) -- legacy storage type, predates
+      // the engine cutover. Still has a real per-item table to drop.
       if (data?.storageType === 'postgis' && data?.version !== 3) {
         const tbl = `fs_${id.replace(/-/g, '')}`;
         await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tbl}"`);
       }
-      // v3 (one table per layer)
-      const v3Layers = readV3Layers(item.data);
-      if (v3Layers !== null) {
-        await this.v3Tables.dropAll(id, v3Layers.map((l) => l.id));
-      }
+      // Phase 2.5: v3 layers no longer have per-layer tables to drop.
+      // The observation-log rows for each scope linger as harmless
+      // orphans after the item row is removed; Phase 2.6's migration
+      // sweeps them out alongside the legacy fs_ tables.
     }
     // Cascade folder cleanup: any folder whose data.childItemIds
     // references the now-purged UUID gets that UUID spliced out.
