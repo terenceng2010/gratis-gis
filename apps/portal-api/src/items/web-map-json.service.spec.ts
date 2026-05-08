@@ -176,7 +176,7 @@ describe('WebMapJsonService', () => {
       map: makeMap(),
       portalBaseUrl: 'https://portal.example.org',
     });
-    const bmLayer = wm.baseMap.baseMapLayers[0];
+    const bmLayer = wm.baseMap?.baseMapLayers[0];
     expect(bmLayer?.url).toBe(
       'https://basemaps.example.org/voyager/{z}/{x}/{y}.png',
     );
@@ -186,8 +186,7 @@ describe('WebMapJsonService', () => {
   it('falls back to seeded basemap when reference is missing', async () => {
     const svc = new WebMapJsonService(
       makePrismaMock({
-        // No basemap item resolves for the explicit ref.
-        basemapItem: undefined,
+        // basemapItem omitted: the explicit ref doesn't resolve.
         fallbackBasemap: {
           id: 'basemap-fallback',
           title: 'OSM',
@@ -202,7 +201,7 @@ describe('WebMapJsonService', () => {
       map: makeMap(),
       portalBaseUrl: 'https://portal.example.org',
     });
-    const bmLayer = wm.baseMap.baseMapLayers[0];
+    const bmLayer = wm.baseMap?.baseMapLayers[0];
     expect(bmLayer?.url).toBe('https://tile.openstreetmap.org/{z}/{x}/{y}.png');
   });
 
@@ -212,7 +211,7 @@ describe('WebMapJsonService', () => {
       map: makeMap(),
       portalBaseUrl: 'https://portal.example.org',
     });
-    const bmLayer = wm.baseMap.baseMapLayers[0];
+    const bmLayer = wm.baseMap?.baseMapLayers[0];
     expect(bmLayer?.url).toBe('https://tile.openstreetmap.org/{z}/{x}/{y}.png');
   });
 

@@ -60,14 +60,28 @@ building) and `ROADMAP.md` (when we're building it).
 
 The single authoritative backend. Exposes REST + JSON; modules:
 
-- `auth/`. Keycloak JWT verification guard, user profile sync
-- `users/`. `GET /users/me`, org membership
+- `auth/`: Keycloak JWT verification guard, user profile sync,
+  per-user capability overrides
+- `users/`: `GET /users/me`, org membership
 - `groups/`: groups, memberships, roles
-- `items/`. CRUD + type-specific payload storage
-- `sharing/`: permission model (`self | group | org | public`)
-- `features/`: feature-service endpoints backed by PostGIS tables
-- `forms/`: form schema items + submission endpoint (offline-friendly)
-- `sync/`: delta sync API for the field app
+- `items/`: CRUD + type-specific payload storage,
+  `GET /items/:id/web-map.json` (Esri WebMap export)
+- `policy/`: Cedar (`@cedar-policy/cedar-wasm`) policy evaluator;
+  `SharingService` delegates canRead / canEdit / canDownload /
+  canAdmin to it
+- `engine/`: observation-log substrate (append-only feature store,
+  bitemporal reads, current-truth projection, lens query planner)
+- `data-layer/`: feature CRUD + attachments routed through the
+  engine adapter; per-sublayer endpoints
+- `derived-layers/`: chained PostGIS spatial pipelines
+  (buffer / centroid / dissolve / fishnet / etc.) reading from the
+  engine
+- `forms/`: form schema items + submission endpoint
+  (offline-friendly), paired data\_layer mirror
+- `field-queue/`: per-edit retry queue for the field PWA
+- `notifications/`: SMTP + per-org template editor
+- `backup/`: archive + restore
+- `ingest/`: GDAL-driven file → engine ingest
 
 OpenAPI spec is auto-generated and published at `/docs`.
 
@@ -77,16 +91,21 @@ Consumes portal-api. Uses `next-auth` with a Keycloak provider. Server
 components do data fetching with the user's JWT forwarded; client
 components handle interactive UI (maps, builders).
 
-### notebook-hub (future, JupyterHub)
+### Hosted notebook runtime (deferred to v2)
 
-A JupyterHub instance fronted by Keycloak (OIDC). Each Jupyter notebook is
-registered as an `Item` of type `notebook`. The hub spawns per-user
-single-user servers (Docker containers in dev, Kubernetes pods in prod).
-A small Python client library `gratisgis` (shipped separately) exposes the
-portal-api to notebook code with the current user's token so the same
-sharing rules apply transparently.
+The original architecture proposed a JupyterHub instance fronted by
+Keycloak (OIDC), with each notebook registered as an `Item` of type
+`notebook`. v1 ships without it: the operational cost of running
+multi-user Jupyter doesn't fit a pre-v1 single-developer project. v1
+exposes a read-only data API per data layer instead, and users
+connect their own external Jupyter / VS Code / RStudio with a
+personal access token. Geographic share limits are still enforced
+server-side, so external notebooks only see data the user has access
+to in-portal.
 
-See [docs/notebooks.md](./docs/notebooks.md).
+See [docs/notebooks.md](./docs/notebooks.md) for the BYO-Jupyter
+plan. Re-introducing the hosted runtime is a two-line schema change
+plus a UI surface once user demand justifies the operational cost.
 
 ### tool-builder + tool-runner (future)
 
@@ -138,7 +157,13 @@ Organization 1───* User *───* Group
                                │
 Item *──── ItemShare *── (Group | User | Org | public)
 
-Item.type ∈ { web-map, feature-service, form, web-app, report, dashboard, ... }
+Item.type ∈ {
+  map, data_layer, derived_layer, arcgis_service, form,
+  form_submission_collection, web_app, report_template, dashboard,
+  file, layer_package, tool, widget_package, pick_list,
+  geo_boundary, basemap, wms_service, wfs_service, service, folder,
+  editor, data_collection
+}
 ```
 
 See [docs/data-model.md](./docs/data-model.md) for full detail.
@@ -151,16 +176,58 @@ See [docs/data-model.md](./docs/data-model.md) for full detail.
   shared via `ItemShare` rows.
 - Sharing scopes follow a familiar portal pattern: `private`,
   `shared-with-group(s)`, `org`, `public`.
-- Roles within a group: `member`, `admin`. Org roles: `viewer`, `publisher`,
-  `admin`.
+- Roles within a group: `member`, `admin`. Org roles: `viewer`,
+  `contributor`, `admin`.
+- **Authorization runs through Cedar.** `SharingService.canRead /
+  canEdit / canDownload / canAdmin` delegate to `PolicyService.check`,
+  which evaluates Cedar policy text against a request-scoped entity
+  store (User + Org + Item with entity-typed attributes). The default
+  policy mirrors the imperative behaviour: owner-permits, org-admin-
+  permits, public-read, org-read, plus tiered explicit-share permits
+  (view / download / edit). Cedar's forbid-trumps-permit semantics
+  let lens-level custom policies *subtract* privilege from the
+  platform default in Phase C, never add.
 
-See [docs/auth-model.md](./docs/auth-model.md) for token flow and claims.
+See [docs/auth-model.md](./docs/auth-model.md) for token flow and
+claims, and
+[docs/architecture/cedar-policy-integration.md](./docs/architecture/cedar-policy-integration.md)
+for the policy engine choice + entity model + three-phase rollout.
 
 ## Geospatial Storage
 
-All feature data lives in PostGIS. Each feature collection is a table under
-a tenant-scoped schema (`org_<uuid>.features_<item_uuid>`). Tiles are served
-by pg\_tileserv with a permission-aware proxy layer in `portal-api`.
+All feature data lives in PostGIS. Pre-engine versions of the platform
+used per-layer feature tables (`fs_<itemId>_<layerId>`) keyed by the
+data\_layer item's id. Post-engine the substrate is a single
+append-only `observation` table, scoped by string keys like
+`data_layer:<itemId>:<layerId>`. Each row is one create / update /
+delete observation; "current truth" is computed at read time as
+`DISTINCT ON (entity) ... WHERE valid_to IS NULL AND kind <>
+'delete'`. The bitemporal model (`valid_from` / `valid_to` for world
+time, `tx_time` for system time) is what gives the platform its
+free audit trail and `?asOf=<timestamp>` reads.
+
+Tiles are served by pg\_tileserv with a permission-aware proxy
+layer in `portal-api`. The engine emits the same
+`global_id / geom / properties` projection the legacy fs\_ tables
+exposed, so derived-layer tools and tile generators read it
+unchanged.
+
+See
+[docs/architecture/observation-log-engine.md](./docs/architecture/observation-log-engine.md)
+for the full design.
+
+## Esri WebMap interop
+
+Portal `map` items are consumable by ArcGIS Pro, AGO, QGIS (via the
+WebMap importer plugin), and kepler.gl natively through the
+`GET /items/:id/web-map.json` endpoint. The endpoint walks the map's
+layer list, resolves each layer's source to an engine `Lens` (for
+data\_layer / derived\_layer sources) or to a direct
+`ArcGISFeatureLayer` (for arcgis\_service / external GeoJSON URLs),
+and emits the v1 subset of the Esri WebMap spec. The reverse
+direction (importing an Esri WebMap as a portal map item) is shipped
+in `packages/engine` (`webMapJsonToLens`) but the bulk-import
+controller endpoint is a Phase 8 hardening follow-up.
 
 ## Spatial Reference Policy
 
@@ -219,7 +286,9 @@ Conflicts are surfaced to the user as merge prompts in the app.
 
 ## Non-goals (for now)
 
-- Raster analysis / heavy geoprocessing (addressed via notebooks + tool-runner
-  once phase 6/7 land; we won't build a bespoke geoprocessing engine)
+- Hosted Jupyter (deferred to v2; v1 ships a read-only data API and
+  recommends BYO Jupyter)
+- Raster analysis / heavy geoprocessing (addressed by tool-runner once
+  Phase 6 lands; we won't build a bespoke geoprocessing engine)
 - 3D scene services
 - Native desktop client

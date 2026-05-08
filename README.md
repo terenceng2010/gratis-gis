@@ -23,8 +23,9 @@ third party's cloud.
   storage. Both run inside your firewall. No data egress, no foreign
   jurisdictions, no hidden tenancy boundaries.
 - **Open standards, in and out.** GeoJSON, OGC API Features, CSW / ISO 19115
-  metadata, DCAT catalog, vector tiles. Import without a converter, export
-  without an export window.
+  metadata, DCAT catalog, vector tiles, Esri WebMap JSON. Import without a
+  converter, export without an export window. Portal maps are consumable in
+  ArcGIS Pro, AGO, QGIS, and kepler.gl natively (`GET /items/:id/web-map.json`).
 - **No proprietary file formats.** Your layers live in plain Postgres tables.
   If GratisGIS disappears tomorrow, your data is still queryable with `psql`.
 - **Polished UX, not "engineer-built."** Open-source GIS has a long history of
@@ -35,18 +36,29 @@ third party's cloud.
   installs Docker, generates secrets, obtains a TLS cert, and prints your
   admin password. No license server, no multi-machine dance.
 
-## The Seven Pillars
+## The Six Pillars
 
 1. **Portal**: users, groups, organizations, items, sharing, access control
-2. **Web Maps**: interactive map authoring backed by PostGIS feature services
+2. **Web Maps**: interactive map authoring backed by PostGIS data layers,
+   exportable to Esri WebMap JSON for ArcGIS Pro / AGO / QGIS consumption
 3. **App Builder**: a WYSIWYG, widget-based builder for configurable web apps
 4. **Data Collection**: a single web-and-mobile app with offline support for
    form-based collection, combining survey authoring and field geometry capture
 5. **Reporting**: turn collected data into dashboards and document reports
-6. **Notebooks**: hosted JupyterHub with Keycloak SSO and a Python client
-   library for portal data access
-7. **Tool & Widget Builder**: visual, node-graph authoring of custom
+6. **Tool & Widget Builder**: visual, node-graph authoring of custom
    geospatial tools and web-app widgets, friendly to non-developers
+
+Hosted notebook runtime (JupyterHub) was on the original seven-pillar list
+and has been deferred to v2. v1 ships a read-only portal data API instead so
+users can connect their own Jupyter / VS Code / RStudio with a personal access
+token; share-level geographic limits are still enforced server-side. See
+[docs/notebooks.md](./docs/notebooks.md) for the BYO-Jupyter plan.
+
+Underneath the pillars is the **observation-log engine**: a single
+append-only feature substrate that gives the platform bitemporal time-travel
+reads, free audit trails, and Cedar-based geometry-aware authorization.
+See [docs/architecture/observation-log-engine.md](./docs/architecture/observation-log-engine.md)
+and [docs/architecture/cedar-policy-integration.md](./docs/architecture/cedar-policy-integration.md).
 
 ## Tech Stack
 
@@ -59,11 +71,11 @@ Chosen for long-term sustainability and maximal code sharing across surfaces.
 | Database | PostgreSQL 16 + PostGIS 3 |
 | ORM / migrations | Prisma |
 | Auth / identity | Keycloak (OIDC) |
+| Authorization | Cedar (`@cedar-policy/cedar-wasm`) |
 | Object storage | MinIO (S3-compatible) |
 | Tile / feature serving | pg\_tileserv + PostGIS views |
 | Web frontend | Next.js 14 (App Router) + React 18 |
 | Mobile (field app) | React Native + Expo |
-| Notebooks | JupyterHub + JupyterLab (OIDC via Keycloak) |
 | Node-graph canvas | React Flow (tool + widget builder) |
 | Map rendering | MapLibre GL (web) / MapLibre Native (mobile) |
 | Component kit | shadcn/ui (Radix primitives + Tailwind) |
@@ -158,7 +170,9 @@ Deeper design references:
 - [docs/folders.md](./docs/folders.md): folders + smart folders
 - [docs/web-maps.md](./docs/web-maps.md): map composition + per-layer access matrix
 - [docs/llm-integration.md](./docs/llm-integration.md): local-first LLM features (semantic search, authoring assistant, NL queries, RAG help)
-- [docs/notebooks.md](./docs/notebooks.md): notebook environment integration (planned)
+- [docs/architecture/observation-log-engine.md](./docs/architecture/observation-log-engine.md): the engine substrate (observation log, lenses, bitemporal reads, provenance)
+- [docs/architecture/cedar-policy-integration.md](./docs/architecture/cedar-policy-integration.md): Cedar as the policy engine, entity model, three-phase rollout
+- [docs/notebooks.md](./docs/notebooks.md): bring-your-own Jupyter against the engine read API (deferred v2 candidate)
 - [docs/tool-builder.md](./docs/tool-builder.md): visual tool/widget builder (planned)
 - [docs/design-system.md](./docs/design-system.md): UI principles, tokens, components
 - [docs/deployment.md](./docs/deployment.md): how admins install and operate
