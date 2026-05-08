@@ -48,15 +48,6 @@ interface Props {
    */
   title?: string;
   /**
-   * Render mode. 'modal' (default) wraps the form in a fixed-
-   * position dialog with a dimmed backdrop, anchored bottom-right
-   * on mobile and centered on larger viewports. 'pane' drops the
-   * backdrop and the rounded card chrome and renders the form as
-   * inline content meant to fill an existing container (the editor
-   * pane), so it slots in seamlessly without floating overlays.
-   */
-  variant?: 'modal' | 'pane';
-  /**
    * Optional extra footer content rendered to the LEFT of the
    * Cancel button. The edit flow passes a Delete button here so the
    * destructive action lives on the same surface as the attribute
@@ -66,9 +57,10 @@ interface Props {
 }
 
 /**
- * Inline form generated from a layer's FeatureField list. Used by
- * the Editor's Add tool (and later the Edit tool) to capture or
- * update attribute values for a feature.
+ * Inline form generated from a layer's FeatureField list. Renders
+ * as a flex column meant to fill the editor pane container; the
+ * editor pane supplies the surrounding chrome (right-dock,
+ * absolute positioning, X-to-close).
  *
  * Rules:
  *   - Editable columns get an input of the right type. text -> text,
@@ -96,7 +88,6 @@ export function AttributeForm({
   onSubmit,
   submitLabel = 'Save',
   title = 'New feature attributes',
-  variant = 'modal',
   extraFooter,
 }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>(() => {
@@ -128,18 +119,9 @@ export function AttributeForm({
   }
   const canSubmit = missing.length === 0 && !submitting;
 
-  // Card content: header (title + close), body (fields), footer
-  // (cancel + submit, plus any extra footer slot). Reused by both
-  // variants with slightly different chrome.
-  const card = (
-    <>
-      <div
-        className={
-          variant === 'modal'
-            ? 'flex items-center justify-between border-b border-border px-4 py-3'
-            : 'flex items-center justify-between border-b border-border px-3 py-2'
-        }
-      >
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-surface-1">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-ink-0">{title}</h2>
           <p className="truncate text-xs text-muted">{layerTitle}</p>
@@ -155,13 +137,7 @@ export function AttributeForm({
         </button>
       </div>
 
-      <div
-        className={
-          variant === 'modal'
-            ? 'flex-1 space-y-3 overflow-auto px-4 py-3'
-            : 'flex-1 space-y-3 overflow-auto px-3 py-3'
-        }
-      >
+      <div className="flex-1 space-y-3 overflow-auto px-3 py-3">
         {fields.length === 0 ? (
           <p className="text-sm text-muted">
             This layer has no editable fields. Save to drop a feature with
@@ -195,13 +171,7 @@ export function AttributeForm({
         ) : null}
       </div>
 
-      <div
-        className={
-          variant === 'modal'
-            ? 'flex items-center justify-end gap-2 border-t border-border px-4 py-3'
-            : 'flex items-center justify-end gap-2 border-t border-border px-3 py-2'
-        }
-      >
+      <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2">
         {extraFooter ? (
           <div className="mr-auto flex items-center gap-2">{extraFooter}</div>
         ) : null}
@@ -222,29 +192,6 @@ export function AttributeForm({
           {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           {submitLabel}
         </button>
-      </div>
-    </>
-  );
-
-  if (variant === 'pane') {
-    // Inline rendering: parent (the editor pane) supplies the
-    // surrounding container, header bar, and absolute positioning.
-    // We just render the form chrome as a flex column that fills
-    // available height.
-    return (
-      <div className="flex h-full min-h-0 flex-col bg-surface-1">{card}</div>
-    );
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-30 flex items-end justify-end bg-black/30 p-4 sm:items-center sm:justify-center"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !submitting) onCancel();
-      }}
-    >
-      <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay">
-        {card}
       </div>
     </div>
   );

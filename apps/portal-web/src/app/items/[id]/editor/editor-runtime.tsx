@@ -616,6 +616,23 @@ export function EditorRuntime({
     if (pendingFeature && canEdit) setEditorPaneOpen(true);
   }, [pendingFeature, canEdit]);
 
+  // Cancel an in-flight geometry edit when the user switches to a
+  // different tool. Without this, a user who clicks a feature for
+  // geometry edit and then picks a Create-features template (or
+  // hits the Add / Delete / Select / Measure tools) leaves
+  // pendingGeometryEdit set, which keeps the geometry-edit panel
+  // visible alongside the new tool's UI. The two states aren't
+  // meaningfully composable -- if the user switches tools, they
+  // want out of the geometry edit.
+  useEffect(() => {
+    if (pendingGeometryEdit && activeTool !== 'edit') {
+      cancelGeometryEdit();
+    }
+    // cancelGeometryEdit is stable (defined in this component);
+    // pendingGeometryEdit and activeTool drive the cancel decision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool, pendingGeometryEdit]);
+
   // Index resolvedTargets by key so the picker / panel / submit
   // path can look up O(1).
   const targetByKey = useMemo(() => {
@@ -2773,20 +2790,28 @@ export function EditorRuntime({
                   ? pendingFeature.mode === 'create'
                     ? 'New feature'
                     : 'Edit feature'
-                  : 'Editor'}
+                  : pendingGeometryEdit
+                    ? 'Edit geometry'
+                    : 'Editor'}
               </span>
               <button
                 type="button"
                 onClick={() => {
-                  // If there's a pending attribute edit in flight,
-                  // closing the pane should also cancel it (matches
-                  // how the modal X behaved). Otherwise just hide
+                  // If there's a pending edit in flight, closing the
+                  // pane should also cancel it. Otherwise just hide
                   // the pane.
                   if (pendingFeature) cancelPending();
+                  else if (pendingGeometryEdit) cancelGeometryEdit();
                   else setEditorPaneOpen(false);
                 }}
                 className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
-                aria-label={pendingFeature ? 'Cancel attribute edit' : 'Close editor pane'}
+                aria-label={
+                  pendingFeature
+                    ? 'Cancel attribute edit'
+                    : pendingGeometryEdit
+                      ? 'Cancel geometry edit'
+                      : 'Close editor pane'
+                }
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -2801,7 +2826,6 @@ export function EditorRuntime({
               // (create has nothing to delete).
               <div className="min-h-0 flex-1">
                 <AttributeForm
-                  variant="pane"
                   fields={pendingTarget.layer.fields}
                   editableFieldNames={editableSet}
                   pickLists={pickLists}
@@ -3061,20 +3085,123 @@ export function EditorRuntime({
                   </div>
                 </section>
               ) : null}
-              {/* Contextual help / status, scoped to the active
-                  tool. Replaces the floating "Edit mode: ..." banner
-                  that used to overlay the canvas top-left -- per
-                  user feedback, this kind of contextual instruction
-                  belongs in the pane, not as a floating overlay.
-                  Each branch carries its own X-button to exit the
-                  active tool. */}
-              {activeTool === 'edit' ? (
+              {/* Geometry-edit panel: when the user clicks an
+                  existing feature for geometry editing, the pane
+                  swaps to this view. Replaces the bottom-center
+                  floating bar that used to host these controls.
+                  The Create features section below is suppressed
+                  during this state so the workflow is unambiguous:
+                  finish or cancel the edit before starting
+                  something new. The tools row stays visible so the
+                  user can still toggle snap and use undo/redo
+                  while editing. */}
+              {pendingGeometryEdit ? (
+                <section className="rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-xs text-purple-900">
+                  <div>
+                    <p className="font-medium">
+                      Editing{' '}
+                      {targetByKey.get(pendingGeometryEdit.targetKey)?.layer
+                        ?.label ?? 'feature'}{' '}
+                      geometry
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-purple-700">
+                      {pendingGeometryEdit.geometryType === 'point'
+                        ? 'Drag the point to move it.'
+                        : 'Drag vertices to move them. Click midpoints to add a vertex. Alt-click a vertex to delete it.'}
+                    </p>
+                  </div>
+                  {geomEditError ? (
+                    <p
+                      className="mt-1 text-[11px] text-danger"
+                      role="alert"
+                    >
+                      {geomEditError}
+                    </p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={cancelGeometryEdit}
+                      disabled={geomEditSaving}
+                      className="inline-flex h-7 items-center rounded border border-border bg-white px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void switchToAttributeEdit()}
+                      disabled={geomEditSaving}
+                      className="inline-flex h-7 items-center rounded border border-purple-300 bg-white px-2 text-xs font-medium text-purple-900 hover:bg-purple-100 disabled:opacity-50"
+                    >
+                      Edit attributes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveGeometryEdit()}
+                      disabled={
+                        geomEditSaving ||
+                        JSON.stringify(pendingGeometryEdit.currentGeometry) ===
+                          JSON.stringify(pendingGeometryEdit.originalGeometry)
+                      }
+                      className="inline-flex h-7 items-center gap-1 rounded bg-purple-600 px-3 text-xs font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {geomEditSaving ? 'Saving...' : 'Save geometry'}
+                    </button>
+                    {deletableTargetKeys.has(pendingGeometryEdit.targetKey) ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = targetByKey.get(
+                            pendingGeometryEdit.targetKey,
+                          );
+                          const props = pendingGeometryEdit.properties;
+                          let summary =
+                            pendingGeometryEdit.featureId.slice(0, 8) + '...';
+                          if (target?.layer) {
+                            for (const f of target.layer.fields) {
+                              const v = props[f.name];
+                              if (v === null || v === undefined || v === '')
+                                continue;
+                              summary = String(v);
+                              break;
+                            }
+                          }
+                          const captureProps: Record<string, unknown> = {};
+                          for (const [k, v] of Object.entries(props)) {
+                            if (k.startsWith('_')) continue;
+                            captureProps[k] = v;
+                          }
+                          setPendingDelete({
+                            dataLayerId: pendingGeometryEdit.dataLayerId,
+                            layerKey: pendingGeometryEdit.layerKey,
+                            featureId: pendingGeometryEdit.featureId,
+                            layerTitle: `${target?.dataLayerTitle ?? ''} / ${target?.layer?.label ?? pendingGeometryEdit.layerKey}`,
+                            summary,
+                            geometry: pendingGeometryEdit.originalGeometry,
+                            properties: captureProps,
+                          });
+                          // Exit geometry-edit mode so the confirm
+                          // dialog isn't competing with the panel.
+                          setPendingGeometryEdit(null);
+                        }}
+                        disabled={geomEditSaving}
+                        className="ml-auto inline-flex h-7 items-center gap-1 rounded border border-red-300 bg-red-50 px-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                        title="Delete this feature"
+                        aria-label="Delete this feature"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    ) : null}
+                  </div>
+                </section>
+              ) : activeTool === 'edit' ? (
                 <section className="flex items-start gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-xs text-purple-900">
                   <div className="min-w-0 flex-1">
                     <p className="font-medium">Edit mode</p>
                     <p className="mt-0.5">
-                      Click a feature on the map to edit its geometry,
-                      or open its attributes from the floating bar.
+                      Click a feature on the map to edit its geometry
+                      or attributes.
                     </p>
                   </div>
                   <button
@@ -3105,8 +3232,13 @@ export function EditorRuntime({
                   the layer's plain geometry tool with no preset
                   attributes -- mirrors today's no-template flow.
                   Replaces the previous floating template tray; the
-                  pane is the home for this surface now. */}
-              {eligibleAddTargets.length > 0 ? (
+                  pane is the home for this surface now.
+
+                  Hidden while a geometry edit is in flight so the
+                  user isn't tempted to start a new feature mid-
+                  edit and there's no ambiguity about which workflow
+                  they're in. */}
+              {pendingGeometryEdit ? null : eligibleAddTargets.length > 0 ? (
                 <section>
                   <h3 className="mb-1.5 text-xs font-semibold text-ink-0">
                     Create features
@@ -3309,68 +3441,17 @@ export function EditorRuntime({
             />
           ) : null}
 
-          {/* Active-mode status banner. Add now lives almost entirely
-              in the editor pane (Create features section): the user
-              picks a template there and the cursor goes hot. This
-              floating banner is a compact status indicator only so
-              the user can see at a glance what's armed and exit
-              without hunting for the pane. The dropdown and
-              template tray that used to live here moved into the
-              pane in the Phase B slice. */}
-          {activeTool === 'add' ? (
-            <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs text-purple-900 shadow-card">
-              <span className="font-medium">Click on the map to add:</span>
-              {(() => {
-                if (!activeTargetKey) {
-                  return (
-                    <span className="italic text-purple-700">
-                      pick a feature template from the editor pane
-                    </span>
-                  );
-                }
-                const tplTarget = editor.targets.find(
-                  (t) =>
-                    `${t.dataLayerId}:${t.layerKey}` === activeTargetKey,
-                );
-                const tpl = activeTemplateId
-                  ? tplTarget?.templates.find((t) => t.id === activeTemplateId)
-                  : null;
-                const layerLabel =
-                  activeTarget?.layer?.label ??
-                  activeTarget?.dataLayerTitle ??
-                  'feature';
-                const geomType =
-                  tpl?.geometryTool ??
-                  activeTarget?.layer?.geometryType ??
-                  '';
-                return (
-                  <>
-                    <span className="font-medium text-purple-900">
-                      {tpl?.label ?? `New ${layerLabel}`}
-                    </span>
-                    {geomType ? (
-                      <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
-                        {geomType}
-                      </span>
-                    ) : null}
-                  </>
-                );
-              })()}
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTool('off');
-                  setActiveTargetKey(null);
-                  setActiveTemplateId(null);
-                }}
-                className="rounded-md p-0.5 text-purple-900 hover:bg-purple-100"
-                aria-label="Exit add mode"
-                title="Exit add mode"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : activeTool === 'measure' ? (
+          {/* Active-mode status banners used to live here. Per user
+              feedback (no floating windows for editor flows), the
+              Add and Delete banners are gone -- the pane's
+              highlighted Create-features template plus the
+              crosshair cursor signal "armed" already, and
+              click-to-delete is no longer surfaced. The Measure
+              chip stays because Measure is a top-toolbar tool that
+              works for viewers too, and the chip's distance/area
+              toggle and live readout don't have an obvious pane
+              home. */}
+          {activeTool === 'measure' ? (
             <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs text-sky-900 shadow-card">
               <span className="font-medium">Measure:</span>
               <div
@@ -3434,26 +3515,6 @@ export function EditorRuntime({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-          ) : activeTool === 'delete' ? (
-            <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs text-rose-900 shadow-card">
-              <span className="font-medium">Delete mode:</span>
-              <span>
-                click a feature to remove it (you'll confirm before it's
-                gone)
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTool('off');
-                  setActiveTargetKey(null);
-                }}
-                className="rounded-md p-0.5 text-rose-900 hover:bg-rose-100"
-                aria-label="Exit delete mode"
-                title="Exit delete mode"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
           ) : null}
 
           {toast ? (
@@ -3462,128 +3523,9 @@ export function EditorRuntime({
             </div>
           ) : null}
 
-          {/* Geometry-edit floating action bar. Anchored bottom-
-              center of the canvas so it doesn't fight the toolbar
-              (top-left), the active-mode chip (top), or the
-              attribute-table panel (full-width bottom dock). The
-              "Save" button is enabled only when the geometry has
-              actually changed -- a click without a drag is just
-              feature selection and shouldn't fire a PATCH. */}
-          {pendingGeometryEdit ? (
-            <div className="pointer-events-auto absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 flex-col items-stretch gap-1 rounded-md border border-purple-300 bg-white px-3 py-2 text-xs shadow-overlay">
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-medium text-purple-900">
-                  Editing{' '}
-                  {targetByKey.get(pendingGeometryEdit.targetKey)?.layer
-                    ?.label ?? 'feature'}{' '}
-                  geometry
-                </span>
-                <span className="text-[10px] uppercase tracking-wide text-purple-700">
-                  {pendingGeometryEdit.geometryType === 'point'
-                    ? 'drag the point to move it'
-                    : 'drag vertices · click midpoints to add · alt-click to delete'}
-                </span>
-              </div>
-              {geomEditError ? (
-                <p
-                  className="text-[11px] text-danger"
-                  role="alert"
-                >
-                  {geomEditError}
-                </p>
-              ) : null}
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={cancelGeometryEdit}
-                  disabled={geomEditSaving}
-                  className="inline-flex h-7 items-center rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void switchToAttributeEdit()}
-                  disabled={geomEditSaving}
-                  className="inline-flex h-7 items-center rounded border border-purple-300 bg-purple-50 px-2 text-xs font-medium text-purple-900 hover:bg-purple-100 disabled:opacity-50"
-                >
-                  Edit attributes
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveGeometryEdit()}
-                  disabled={
-                    geomEditSaving ||
-                    JSON.stringify(pendingGeometryEdit.currentGeometry) ===
-                      JSON.stringify(pendingGeometryEdit.originalGeometry)
-                  }
-                  className="inline-flex h-7 items-center gap-1 rounded bg-purple-600 px-3 text-xs font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {geomEditSaving ? 'Saving...' : 'Save geometry'}
-                </button>
-                {/* Delete is reachable from the per-feature flow now
-                    (the Delete tool no longer lives in the editor
-                    pane). Only render the button when the active
-                    target permits delete; routes through the
-                    existing pendingDelete + ConfirmDialog flow so
-                    the safety prompt and undo machinery are
-                    preserved. The button is visually separated and
-                    danger-styled so it's hard to mis-click as a save. */}
-                {deletableTargetKeys.has(pendingGeometryEdit.targetKey) ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const target = targetByKey.get(
-                        pendingGeometryEdit.targetKey,
-                      );
-                      const props = pendingGeometryEdit.properties;
-                      // Mirror the Delete-tool's summary computation
-                      // (pick the first non-empty user-facing field
-                      // value, else a truncated id).
-                      let summary =
-                        pendingGeometryEdit.featureId.slice(0, 8) + '...';
-                      if (target?.layer) {
-                        for (const f of target.layer.fields) {
-                          const v = props[f.name];
-                          if (v === null || v === undefined || v === '')
-                            continue;
-                          summary = String(v);
-                          break;
-                        }
-                      }
-                      // Strip underscore-prefixed system fields
-                      // (matches the existing capture in the click-
-                      // to-delete handler).
-                      const captureProps: Record<string, unknown> = {};
-                      for (const [k, v] of Object.entries(props)) {
-                        if (k.startsWith('_')) continue;
-                        captureProps[k] = v;
-                      }
-                      setPendingDelete({
-                        dataLayerId: pendingGeometryEdit.dataLayerId,
-                        layerKey: pendingGeometryEdit.layerKey,
-                        featureId: pendingGeometryEdit.featureId,
-                        layerTitle: `${target?.dataLayerTitle ?? ''} / ${target?.layer?.label ?? pendingGeometryEdit.layerKey}`,
-                        summary,
-                        geometry: pendingGeometryEdit.originalGeometry,
-                        properties: captureProps,
-                      });
-                      // Exit geometry-edit mode so the floating bar
-                      // doesn't sit behind the confirm dialog.
-                      setPendingGeometryEdit(null);
-                    }}
-                    disabled={geomEditSaving}
-                    className="ml-2 inline-flex h-7 items-center gap-1 rounded border border-red-300 bg-red-50 px-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
-                    title="Delete this feature"
-                    aria-label="Delete this feature"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
+          {/* Geometry-edit controls live inside the editor pane now
+              (see the pane content above). The bottom-center
+              floating bar was removed per user feedback. */}
 
           {/* AttributeTable bottom-overlay. Same component the map
               editor uses; pulls from the same featuresByLayer
