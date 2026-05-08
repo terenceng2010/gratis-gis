@@ -187,6 +187,13 @@ export function AttributeTable({
   // _created_at, _edited_by, _edited_at) the API surfaces alongside
   // the user-defined attributes.
   const [showEditorTracking, setShowEditorTracking] = useState(false);
+  // Show-only-selected toggle. When on, visibleIndexes is restricted
+  // to rows whose key is in activeSelection -- useful when a user has
+  // picked a few features on the map out of thousands of rows and
+  // wants to focus the table on just those. Off by default so the
+  // table opens with everything visible. Resets when the active layer
+  // changes (each layer's selection is independent).
+  const [showOnlySelected, setShowOnlySelected] = useState(false);
 
   // Only layers the viewer is allowed to query belong in the table.
   // `effective.query === false` is the server's signal (from the
@@ -258,6 +265,7 @@ export function AttributeTable({
     setLastPicked(null);
     setSortBy(null);
     setQuery('');
+    setShowOnlySelected(false);
     // Note: we deliberately don't clear the shared selection here
     // switching layers should preserve the picks on other layers.
   }, [open, queryableLayers, activeLayerId, focusLayerId]);
@@ -444,11 +452,26 @@ export function AttributeTable({
     return () => window.clearTimeout(t);
   }, [activeFeatures]);
 
-  // Apply query + sort. Indexes into `activeFeatures`, not flattened,
-  // so selection indices always line up with the source array.
+  // Apply query + sort + selected-only filter. Indexes into
+  // `activeFeatures`, not flattened, so selection indices always
+  // line up with the source array. Selected-only is the toggle
+  // exposed on the toolbar; it filters down to rows whose key is
+  // in activeSelection, which is the natural follow-up to picking
+  // features on the map (especially with thousands of rows).
   const visibleIndexes = useMemo(() => {
     const q = query.trim().toLowerCase();
     let idxs = activeFeatures.map((_, i) => i);
+    if (showOnlySelected && activeSelection.size > 0) {
+      idxs = idxs.filter((i) => {
+        const f = activeFeatures[i];
+        const gid =
+          f && f.properties && typeof f.properties === 'object'
+            ? (f.properties as Record<string, unknown>)['_global_id']
+            : undefined;
+        const key = typeof gid === 'string' ? gid : i;
+        return activeSelection.has(key);
+      });
+    }
     if (q.length > 0) {
       idxs = idxs.filter((i) => {
         const props = (activeFeatures[i]?.properties ?? {}) as Record<
@@ -475,7 +498,7 @@ export function AttributeTable({
       });
     }
     return idxs;
-  }, [activeFeatures, query, sortBy, sortDir]);
+  }, [activeFeatures, query, sortBy, sortDir, showOnlySelected, activeSelection]);
 
   function onHeaderClick(field: string) {
     if (sortBy === field) {
@@ -747,10 +770,14 @@ export function AttributeTable({
             onChange={(e) => {
               setActiveLayerId(e.target.value);
               // Preserve selection across layer switches: picks on
-              // other layers keep their highlight on the map.
+              // other layers keep their highlight on the map. The
+              // show-only-selected and Edit-history toggles, the
+              // search query, and the sort are all per-layer view
+              // state and reset.
               setQuery('');
               setSortBy(null);
               setLastPicked(null);
+              setShowOnlySelected(false);
             }}
             className="h-7 min-w-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           >
@@ -776,6 +803,32 @@ export function AttributeTable({
             {visibleIndexes.length.toLocaleString()} rows
             {activeSelection.size > 0 ? ` · ${activeSelection.size} selected` : ''}
           </span>
+          {/* "Show selected" toggle: when a layer has thousands of
+              rows, finding the few selected ones by scrolling is
+              painful. This filters visibleIndexes down to just the
+              rows whose key is in activeSelection. Disabled when
+              nothing is selected (the toggle would be a no-op). */}
+          <button
+            type="button"
+            onClick={() => setShowOnlySelected((v) => !v)}
+            aria-pressed={showOnlySelected}
+            disabled={activeSelection.size === 0}
+            title={
+              activeSelection.size === 0
+                ? 'Select features on the map first'
+                : showOnlySelected
+                  ? 'Show all rows'
+                  : 'Show only the selected rows'
+            }
+            className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              showOnlySelected
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-border bg-surface-1 text-muted hover:text-ink-1'
+            }`}
+          >
+            <FilterIcon className="h-3 w-3" />
+            Show selected
+          </button>
           {/* "Edit history" toggle: surfaces the who-edited-when
               audit columns (Created / Created by / Edited /
               Edited by) in a properly-formatted view. Hidden in

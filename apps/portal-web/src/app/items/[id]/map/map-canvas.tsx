@@ -1764,7 +1764,18 @@ function syncOverlays(
     // on pan, but those sources are a smaller share of real use and
     // a future slice can extend the per-kind id mapping (OBJECTID
     // for ArcGIS, etc.).
-    const useStableId = layer.source.kind === 'data-layer';
+    //
+    // Editor-target layers are a special case: their source.kind is
+    // 'geojson-url' (the editor builds them as a synthesized URL
+    // pointing at the v3 features endpoint), but the underlying data
+    // is v3 data and carries `_global_id` on every row. Without
+    // promoteId here, the runtime feature.id is a sequential number
+    // and the AttributeTable's _global_id-keyed selection set
+    // can't match the map's selection. Detect by the layer id
+    // prefix and promote to the stable id.
+    const isEditorTarget = layer.id.startsWith('editor-target:');
+    const useStableId =
+      layer.source.kind === 'data-layer' || isEditorTarget;
     m.addSource(sourceId, {
       type: 'geojson',
       data,
