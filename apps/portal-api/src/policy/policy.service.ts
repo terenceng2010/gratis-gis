@@ -177,24 +177,39 @@ export class PolicyService {
 }
 
 /**
- * Baseline policy text. Mirrors today's SharingService behaviour
- * for the cases SharingService gates today: owner-of-resource and
- * same-org access. Explicit per-share grants live in the database
- * (item_share rows) and aren't expressible as a static policy
- * without an entity-store hop, so they get added at check time
- * by the caller via `req.entities` + a per-share `permit` rule.
+ * Baseline policy text. Mirrors SharingService.canRead / canEdit /
+ * canDownload / canAdmin verbatim so Phase B can migrate those
+ * methods onto PolicyService.check without changing any answer.
  *
- * Until Phase A.2 migrates SharingService onto PolicyService.check,
- * this policy is exercised only by tests; runtime authorization
- * still flows through SharingService.
+ * Action vocabulary the portal uses (must match what callers pass
+ * as `req.action.id`):
+ *   - "read"     -- canRead path; gates the visibility surface
+ *                   (item detail, layer features, popups,
+ *                   attribute table reads).
+ *   - "download" -- canDownload path; gates GeoJSON / CSV /
+ *                   GeoPackage bulk extracts.
+ *   - "edit"     -- canEdit path; gates attribute / geometry
+ *                   edits, schema mutations, ingest, share/unshare.
+ *   - "admin"    -- canAdmin path; gates ownership reassignment
+ *                   and purge. Owner / org-admin only; no share
+ *                   grant promotes a recipient into this tier.
+ *
+ * Item entity attributes the EntityStore writes (see entity-store.ts):
+ *   - owner       : User entity ref
+ *   - org         : Org entity ref
+ *   - access      : "private" | "org" | "public"
+ *   - viewers     : Set<User> -- has the calling user iff they
+ *                   match a non-expired share at any tier
+ *   - downloaders : Set<User> -- same, at download tier or higher
+ *   - editors     : Set<User> -- same, at edit tier or higher
  */
 export const DEFAULT_POLICY_TEXT = `
-// Owners can do anything to their own items. The portal's
-// EntityStore writes resource.owner as an entity reference
-// (User::"<uuid>"), not as a plain string, so an entity-ref
-// comparison is what matches; principal.id and similar
-// attribute lookups are NOT available in Cedar (the entity uid
-// is only reachable via == against another entity literal).
+// 1. Owners can do anything to their own items. The portal's
+//    EntityStore writes resource.owner as an entity reference
+//    (User::"<uuid>"), not as a plain string, so an entity-ref
+//    comparison is what matches; principal.id and similar
+//    attribute lookups are NOT available in Cedar (the entity uid
+//    is only reachable via == against another entity literal).
 permit (
   principal,
   action,
@@ -204,10 +219,10 @@ permit (
   principal == resource.owner
 };
 
-// Org admins can do anything to items inside their org. Both
-// principal.org and resource.org are entity refs (Org::"<uuid>")
-// so the equality check is between two entity literals, not
-// between strings.
+// 2. Org admins can do anything to items inside their org. Both
+//    principal.org and resource.org are entity refs
+//    (Org::"<uuid>") so the equality check is between two entity
+//    literals, not between strings.
 permit (
   principal,
   action,
@@ -220,7 +235,7 @@ permit (
   principal.role == "admin"
 };
 
-// Public items are readable by anyone authenticated.
+// 3. Public items are readable by anyone authenticated.
 permit (
   principal,
   action == Action::"read",
@@ -230,7 +245,7 @@ permit (
   resource.access == "public"
 };
 
-// Org-access items are readable by org members.
+// 4. Org-access items are readable by org members.
 permit (
   principal,
   action == Action::"read",
@@ -242,4 +257,63 @@ permit (
   principal has org &&
   principal.org == resource.org
 };
+
+// 5. Public items are downloadable by anyone authenticated.
+permit (
+  principal,
+  action == Action::"download",
+  resource
+) when {
+  resource has access &&
+  resource.access == "public"
+};
+
+// 6. Org-access items are downloadable by org members.
+permit (
+  principal,
+  action == Action::"download",
+  resource
+) when {
+  resource has access &&
+  resource.access == "org" &&
+  resource has org &&
+  principal has org &&
+  principal.org == resource.org
+};
+
+// 7. Explicit view-tier (or higher) share grants read.
+permit (
+  principal,
+  action == Action::"read",
+  resource
+) when {
+  resource has viewers &&
+  resource.viewers.contains(principal)
+};
+
+// 8. Explicit download-tier (or higher) share grants download.
+permit (
+  principal,
+  action == Action::"download",
+  resource
+) when {
+  resource has downloaders &&
+  resource.downloaders.contains(principal)
+};
+
+// 9. Explicit edit-tier (or admin-tier) share grants edit.
+permit (
+  principal,
+  action == Action::"edit",
+  resource
+) when {
+  resource has editors &&
+  resource.editors.contains(principal)
+};
+
+// Note: there is deliberately NO Action::"admin" permit beyond
+// rules 1 and 2. SharingService.canAdmin is owner-/org-admin-
+// only by design; even an "admin"-tier share recipient cannot
+// reassign ownership or purge the item. To grant those, transfer
+// ownership instead.
 `;

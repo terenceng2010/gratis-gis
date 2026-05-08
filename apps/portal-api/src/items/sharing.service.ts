@@ -5,35 +5,40 @@ import { Prisma } from '@prisma/client';
 
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { PolicyService } from '../policy/policy.service.js';
+import { buildEntityStore } from '../policy/entity-store.js';
 
 /**
- * Single source of truth for item access decisions. Mirrors the algorithm
- * in /docs/data-model.md. Everything that reads or writes items must go
- * through one of these methods.
+ * Single source of truth for item access decisions. The four
+ * point-checks (canRead / canEdit / canDownload / canAdmin) delegate
+ * to PolicyService.check (Cedar) since Phase B; the policy text in
+ * `apps/portal-api/src/policy/policy.service.ts:DEFAULT_POLICY_TEXT`
+ * encodes the same behaviour the imperative versions used to
+ * implement, so the public function shapes stay stable for callers.
+ *
+ * The geo-limit / row-scope / list-query helpers
+ * (`geoLimitFor`, `effectiveRowScope`, `visibleWhere`) stay
+ * imperative for v1: they return geometry / set / SQL respectively
+ * and don't have a clean Cedar boolean shape. Phase C
+ * (lens-level custom policies) revisits them once we have the
+ * geometry-aware extension wired in.
+ *
+ * See `docs/architecture/cedar-policy-integration.md` and
+ * `/docs/data-model.md` for the higher-level model.
  */
 @Injectable()
 export class SharingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policy: PolicyService,
+  ) {}
 
   canRead(user: AuthUser, item: Item, shares: ItemShare[] = []): boolean {
-    if (item.ownerId === user.id) return true;
-    // Org admins see everything in their org: including private items
-    // owned by other users. Mirrors the admin behaviour in canEdit /
-    // canAdmin so the read path isn't strictly narrower than the
-    // write path (which would be surprising).
-    if (user.orgRole === 'admin' && item.orgId === user.orgId) return true;
-    if (item.access === 'public') return true;
-    if (item.access === 'org' && item.orgId === user.orgId) return true;
-    return shares.some((s) => this.shareMatches(user, s));
+    return this.policyAllows(user, item, shares, 'read');
   }
 
   canEdit(user: AuthUser, item: Item, shares: ItemShare[] = []): boolean {
-    if (item.ownerId === user.id) return true;
-    if (user.orgRole === 'admin' && item.orgId === user.orgId) return true;
-    return shares.some(
-      (s) =>
-        (s.permission === 'edit' || s.permission === 'admin') && this.shareMatches(user, s),
-    );
+    return this.policyAllows(user, item, shares, 'edit');
   }
 
   /**
@@ -52,22 +57,38 @@ export class SharingService {
    * CSV / Shapefile / GeoPackage exports will share the same gate.
    */
   canDownload(user: AuthUser, item: Item, shares: ItemShare[] = []): boolean {
-    if (item.ownerId === user.id) return true;
-    if (user.orgRole === 'admin' && item.orgId === user.orgId) return true;
-    if (item.access === 'public') return true;
-    if (item.access === 'org' && item.orgId === user.orgId) return true;
-    return shares.some(
-      (s) =>
-        (s.permission === 'download' ||
-          s.permission === 'edit' ||
-          s.permission === 'admin') &&
-        this.shareMatches(user, s),
-    );
+    return this.policyAllows(user, item, shares, 'download');
   }
 
+  /**
+   * Owner / org-admin only. The "admin" share permission tier
+   * deliberately does NOT promote a recipient into canAdmin (which
+   * gates ownership reassignment + purge). To grant those, transfer
+   * ownership instead.
+   */
   canAdmin(user: AuthUser, item: Item): boolean {
-    if (item.ownerId === user.id) return true;
-    return user.orgRole === 'admin' && item.orgId === user.orgId;
+    return this.policyAllows(user, item, [], 'admin');
+  }
+
+  /**
+   * Build the Cedar entity store for this (user, item, shares) tuple
+   * and dispatch the named action through PolicyService. Pulled into
+   * one place so all four canX methods agree on the entity layout
+   * and on how to handle the inevitable Cedar runtime errors.
+   */
+  private policyAllows(
+    user: AuthUser,
+    item: Item,
+    shares: readonly ItemShare[],
+    action: 'read' | 'edit' | 'download' | 'admin',
+  ): boolean {
+    const result = this.policy.check({
+      principal: { type: 'User', id: user.id },
+      action: { type: 'Action', id: action },
+      resource: { type: 'Item', id: item.id },
+      entities: buildEntityStore({ user, item, shares }),
+    });
+    return result.decision === 'allow';
   }
 
   /**

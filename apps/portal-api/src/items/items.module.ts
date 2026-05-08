@@ -12,9 +12,15 @@ import { EditorPolicyService } from './editor-policy.service.js';
 import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
+import { PolicyModule } from '../policy/policy.module.js';
 
 @Module({
-  imports: [DataLayerTablesModule, NotificationsModule, DerivedLayersModule],
+  imports: [
+    DataLayerTablesModule,
+    NotificationsModule,
+    DerivedLayersModule,
+    PolicyModule,
+  ],
   controllers: [
     ItemsController,
     ItemCredentialController,
