@@ -143,6 +143,30 @@ engine foundation forecloses it.
 
 ## Phase 8: Hardening
 
+- [ ] **`pg_partman` monthly partitioning of the `observation` table.**
+      Phase 1 deferred this so the primary key could stay on `id` alone
+      (a partition column requirement would have forced a composite
+      `(id, tx_time)` PK). The deferred work concentrates the engine's
+      operational load on a single growing table: autovacuum work,
+      index size, lock contention, and the cost of any future
+      `ALTER TABLE` all scale linearly with edit history. Land
+      partitioning before observation row count crosses ~10M, or
+      before the table's index footprint affects p95 read latency,
+      whichever comes first. Hot writes go to the current partition
+      (sequential), recent reads hit one or two partitions, time-
+      travel reads of older data hit historical partitions which can
+      eventually live on slower / cheaper storage. Composite PK
+      becomes `(id, tx_time)`; the existing
+      `observation_scope_entity_validfrom_idx` becomes a per-partition
+      index. Migration is non-trivial (Postgres can't `ATTACH
+      PARTITION` an existing table with a single-column PK, so the
+      cutover involves either pg\_partman's swap-and-rename or an
+      offline rebuild); plan accordingly.
+- [ ] Verify Postgres page-level checksums are enabled on the prod
+      cluster. The engine concentrates feature data into one table,
+      so page checksums are now load-bearing for catastrophic-
+      corruption detection. Adding to an existing cluster requires a
+      `pg_checksums --enable` pass, which is offline.
 - [ ] AuthZ policy tests (Cedar Phase B already added 50; more needed
       around lens-level policies in Phase C)
 - [ ] Load tests for tile serving
