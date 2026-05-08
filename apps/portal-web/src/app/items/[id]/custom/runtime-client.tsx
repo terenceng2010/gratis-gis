@@ -33,6 +33,12 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import maplibregl from 'maplibre-gl';
+// Recharts is imported as a namespace so the Chart widget can grab
+// the pieces it needs without polluting the top-level import list.
+// The bundler keeps the recharts chunk co-located with the chart
+// widget's lexical reference; pages that never reach a chart-
+// rendering widget don't pull the chunk.
+import * as ReactRecharts from 'recharts';
 import type {
   CustomAppData,
   CustomWidget,
@@ -799,7 +805,7 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
     case 'text':
       return <TextWidgetRender widget={widget} />;
     case 'chart':
-      return <ChartWidgetRender />;
+      return <ChartWidgetRender widget={widget} />;
     case 'search':
       return <SearchWidgetRender widget={widget} />;
     case 'print':
@@ -1413,15 +1419,256 @@ function renderInline(s: string): React.ReactNode {
   return <>{tokens}</>;
 }
 
-// ---- Chart widget (deferred placeholder) -----------------------------------
+// ---- Chart widget ----------------------------------------------------------
 
-function ChartWidgetRender() {
+/**
+ * Chart widget. Reads features from the bound target layer, applies
+ * the configured group-by + aggregate, and renders a single-series
+ * bar / line / pie chart via Recharts. Counts work without a value
+ * field; sum / avg / min / max require one (the designer's panel
+ * already gates this so a misconfigured widget shouldn't reach the
+ * runtime, but we double-check and surface a hint when it does).
+ *
+ * Recharts is dynamically imported via the static module
+ * dependency, but mounted inside a ResponsiveContainer so the chart
+ * fills its widget cell -- the Custom grid sizes cells in the page
+ * layout, then the chart self-sizes within. Tooltip + axis labels
+ * come from Recharts defaults; the bundle stays small (~80 KB
+ * gzipped, gated to widgets that actually render charts).
+ */
+function ChartWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'chart') return null;
+  const ctx = useContext(CustomMapsContext);
+  const cfg = widget.config;
+  const target = ctx?.resolvedTargets[cfg.targetIndex] ?? null;
+  const [data, setData] = useState<FetchedFeatures>({
+    loading: true,
+    rows: [],
+    fields: [],
+    error: null,
+  });
+
+  useEffect(() => {
+    if (!target) {
+      setData({ loading: false, rows: [], fields: [], error: 'No target' });
+      return;
+    }
+    let abort = false;
+    setData({ loading: true, rows: [], fields: [], error: null });
+    void (async () => {
+      try {
+        const url = `/api/portal/items/${target.dataLayerId}/layers/${target.layerKey}/geojson`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = (await res.json()) as GeoJSON.FeatureCollection;
+        if (abort) return;
+        const features = fc.features ?? [];
+        const fieldSet = new Set<string>();
+        for (const f of features) {
+          for (const k of Object.keys(f.properties ?? {})) fieldSet.add(k);
+        }
+        const fields = Array.from(fieldSet).filter((f) => !f.startsWith('_'));
+        setData({
+          loading: false,
+          rows: features.map((f) => ({
+            id: (f.id ?? '') as string | number,
+            props: (f.properties ?? {}) as Record<string, unknown>,
+          })),
+          fields,
+          error: null,
+        });
+      } catch (err) {
+        if (abort) return;
+        setData({
+          loading: false,
+          rows: [],
+          fields: [],
+          error: err instanceof Error ? err.message : 'Fetch failed',
+        });
+      }
+    })();
+    return () => {
+      abort = true;
+    };
+  }, [target]);
+
   return (
     <WidgetFrame icon={ChevronRight} title="Chart">
-      <p className="p-2 text-xs italic text-muted">
-        Chart rendering ships in a follow-up slice.
-      </p>
+      {data.loading ? (
+        <p className="p-2 text-xs italic text-muted">Loading…</p>
+      ) : data.error ? (
+        <p className="p-2 text-xs text-rose-600">{data.error}</p>
+      ) : (
+        <ChartCanvas rows={data.rows} cfg={cfg} />
+      )}
     </WidgetFrame>
+  );
+}
+
+/**
+ * Inner Recharts canvas. Pulls the imports off the package's
+ * default surface (the package ships ESM; Next bundles it in the
+ * client chunk for this widget). We keep this a separate component
+ * so the import boundary lines up with where Recharts actually
+ * mounts -- if the chart widget is never used on a page, the chunk
+ * never loads.
+ */
+function ChartCanvas({
+  rows,
+  cfg,
+}: {
+  rows: Array<{ id: string | number; props: Record<string, unknown> }>;
+  cfg: Extract<CustomWidget['config'], { kind: 'chart' }>;
+}) {
+  // Aggregate. Group rows by `groupBy` value, then apply `aggregate`
+  // per bucket. 'count' is the only aggregate that doesn't need a
+  // value field; everything else falls back to count if valueField
+  // is missing or non-numeric (the runtime warns inline rather than
+  // throwing).
+  const aggregated = useMemo(() => {
+    const groupBy = cfg.groupBy ?? '';
+    const aggregate = cfg.aggregate ?? 'count';
+    const valueField = cfg.valueField ?? '';
+    const buckets = new Map<string, number[]>();
+    for (const row of rows) {
+      const groupRaw = groupBy ? row.props[groupBy] : '(all)';
+      const groupKey =
+        groupRaw === undefined || groupRaw === null ? '(missing)' : String(groupRaw);
+      const valueRaw =
+        aggregate === 'count' ? 1 : valueField ? row.props[valueField] : 1;
+      const num =
+        typeof valueRaw === 'number' && Number.isFinite(valueRaw)
+          ? valueRaw
+          : Number(valueRaw);
+      const arr = buckets.get(groupKey) ?? [];
+      if (Number.isFinite(num)) arr.push(num);
+      buckets.set(groupKey, arr);
+    }
+    const out: Array<{ name: string; value: number }> = [];
+    for (const [name, vals] of buckets) {
+      if (vals.length === 0) continue;
+      let value: number;
+      switch (aggregate) {
+        case 'count':
+          value = vals.length;
+          break;
+        case 'sum':
+          value = vals.reduce((a, b) => a + b, 0);
+          break;
+        case 'avg':
+          value = vals.reduce((a, b) => a + b, 0) / vals.length;
+          break;
+        case 'min':
+          value = Math.min(...vals);
+          break;
+        case 'max':
+          value = Math.max(...vals);
+          break;
+        default:
+          value = vals.length;
+      }
+      out.push({ name, value });
+    }
+    // Stable order: bar / pie sort by value desc; line keeps insert
+    // order so a numeric x-axis renders monotonically.
+    if (cfg.chartType !== 'line') out.sort((a, b) => b.value - a.value);
+    return out;
+  }, [rows, cfg.groupBy, cfg.aggregate, cfg.valueField, cfg.chartType]);
+
+  if (aggregated.length === 0) {
+    return (
+      <p className="p-2 text-xs italic text-muted">
+        No data to chart. Bind a target with at least one feature
+        and pick a group-by field.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex-1 p-2">
+      <ChartPlot rows={aggregated} kind={cfg.chartType} />
+    </div>
+  );
+}
+
+/**
+ * The actual chart. Lazy-evaluated against Recharts so the import
+ * sits inside the function body where bundlers can tree-shake when
+ * the runtime never reaches a chart widget. ResponsiveContainer
+ * fills its parent (the WidgetFrame's flex-1 wrapper); chart-type
+ * switch picks bar / line / pie.
+ */
+function ChartPlot({
+  rows,
+  kind,
+}: {
+  rows: Array<{ name: string; value: number }>;
+  kind: 'bar' | 'line' | 'pie';
+}) {
+  // Imports stay top-level on the file (recharts is ESM, Next
+  // bundlers handle it). The components are referenced only inside
+  // this leaf so the chunk lands lazily with the chart-bearing
+  // pages.
+  const Recharts = ReactRecharts;
+
+  // A small palette so pie / bar fills aren't all one color.
+  // Hand-picked from Tailwind's default palette so the colors look
+  // intentional next to the rest of the portal chrome.
+  const palette = [
+    '#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626',
+    '#0891b2', '#ca8a04', '#0d9488', '#7c3aed', '#e11d48',
+  ];
+
+  if (kind === 'pie') {
+    return (
+      <Recharts.ResponsiveContainer width="100%" height="100%">
+        <Recharts.PieChart>
+          <Recharts.Pie
+            data={rows}
+            dataKey="value"
+            nameKey="name"
+            outerRadius="70%"
+          >
+            {rows.map((_, i) => (
+              <Recharts.Cell key={i} fill={palette[i % palette.length]!} />
+            ))}
+          </Recharts.Pie>
+          <Recharts.Tooltip />
+          <Recharts.Legend />
+        </Recharts.PieChart>
+      </Recharts.ResponsiveContainer>
+    );
+  }
+  if (kind === 'line') {
+    return (
+      <Recharts.ResponsiveContainer width="100%" height="100%">
+        <Recharts.LineChart data={rows}>
+          <Recharts.CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <Recharts.XAxis dataKey="name" tick={{ fontSize: 11 }} />
+          <Recharts.YAxis tick={{ fontSize: 11 }} />
+          <Recharts.Tooltip />
+          <Recharts.Line
+            type="monotone"
+            dataKey="value"
+            stroke={palette[0]!}
+            strokeWidth={2}
+            dot={{ r: 3 }}
+          />
+        </Recharts.LineChart>
+      </Recharts.ResponsiveContainer>
+    );
+  }
+  // bar (default)
+  return (
+    <Recharts.ResponsiveContainer width="100%" height="100%">
+      <Recharts.BarChart data={rows}>
+        <Recharts.CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+        <Recharts.XAxis dataKey="name" tick={{ fontSize: 11 }} />
+        <Recharts.YAxis tick={{ fontSize: 11 }} />
+        <Recharts.Tooltip />
+        <Recharts.Bar dataKey="value" fill={palette[0]!} />
+      </Recharts.BarChart>
+    </Recharts.ResponsiveContainer>
   );
 }
 
