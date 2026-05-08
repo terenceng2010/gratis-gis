@@ -785,27 +785,41 @@ function LayerRow({
             className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`}
           />
         </button>
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={layer.visible ? 'Hide layer' : 'Show layer'}
-          // Visibility is a session-local view preference, not a
-          // config edit: anyone viewing the map (including share-
-          // viewers and editor-runtime users) can hide layers they
-          // don't want to see in their own session. Persistence is
-          // gated separately by the parent's autosave (markDirty
-          // skips when canEdit is false), so toggling on a view-
-          // only map updates local state without firing a PATCH.
-          // Matches AGO / Esri behavior: viewers can change what
-          // they see, only authors can save it back.
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2"
-        >
-          {layer.visible ? (
-            <Eye className="h-3.5 w-3.5" />
-          ) : (
-            <EyeOff className="h-3.5 w-3.5 text-muted" />
-          )}
-        </button>
+        {/* Visibility eye is meaningless for table-mode sublayers
+            (#77): tables don't render on the map, so hiding them
+            does nothing visible. Render a non-interactive spacer
+            so the row layout stays aligned with non-table siblings
+            but the affordance doesn't lie about being a control.
+            Symbology slot below also hides for tables, for the
+            same reason. */}
+        {isTable ? (
+          <span
+            aria-hidden
+            className="inline-flex h-6 w-6 shrink-0"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label={layer.visible ? 'Hide layer' : 'Show layer'}
+            // Visibility is a session-local view preference, not a
+            // config edit: anyone viewing the map (including share-
+            // viewers and editor-runtime users) can hide layers they
+            // don't want to see in their own session. Persistence is
+            // gated separately by the parent's autosave (markDirty
+            // skips when canEdit is false), so toggling on a view-
+            // only map updates local state without firing a PATCH.
+            // Matches AGO / Esri behavior: viewers can change what
+            // they see, only authors can save it back.
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2"
+          >
+            {layer.visible ? (
+              <Eye className="h-3.5 w-3.5" />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5 text-muted" />
+            )}
+          </button>
+        )}
 
         {/* Symbology swatch (#311). Mirrors what MapCanvas paints
             on the map so users can scan the panel and know what
