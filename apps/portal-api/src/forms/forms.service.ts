@@ -4,8 +4,8 @@ import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
-import { V3FeaturesService } from '../features-v3/v3-features.service.js';
-import { V3AttachmentsService } from '../features-v3/v3-attachments.service.js';
+import { DataLayerFeaturesService } from '../data-layer/features.service.js';
+import { DataLayerAttachmentsService } from '../data-layer/attachments.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 
 /**
@@ -29,8 +29,8 @@ export class FormsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
-    private readonly v3Features: V3FeaturesService,
-    private readonly v3Attachments: V3AttachmentsService,
+    private readonly dataLayerFeatures: DataLayerFeaturesService,
+    private readonly dataLayerAttachments: DataLayerAttachmentsService,
   ) {}
 
   /** Fetch the form item, gating by visibility for the caller. Used
@@ -232,7 +232,7 @@ export class FormsService {
       //   - The non-prefixed names match the typed columns that
       //     createPairedDataLayerForForm provisions on the paired
       //     layer (submitted_at, submitted_by, schema_version).
-      //     v3-features's #294 property-spread populates typed
+      //     data-layer features's #294 property-spread populates typed
       //     columns by matching property keys to column names; the
       //     names have to be identical for that to fire. Without
       //     this duplication, every submitted row showed the three
@@ -280,7 +280,7 @@ export class FormsService {
       }
     }
 
-    await this.v3Features.insertFeatures(
+    await this.dataLayerFeatures.insertFeatures(
       layerId,
       layerKey,
       [
@@ -354,7 +354,7 @@ export class FormsService {
     let attachmentsOk = 0;
     for (const att of attachments) {
       try {
-        await this.v3Attachments.register(
+        await this.dataLayerAttachments.register(
           layerId,
           layerKey,
           args.submissionId,
@@ -391,7 +391,7 @@ export class FormsService {
    * repeat group with column-mapped children when the form is
    * saved (see syncPairedLayerColumns in designer.tsx). At submit
    * time this method walks the same set, iterates each group's
-   * instance array on the response, and calls v3Features.insertFeatures
+   * instance array on the response, and calls dataLayerFeatures.insertFeatures
    * once per instance against the matching sublayer with
    * parent_submission_id pre-stamped on the row.
    *
@@ -499,7 +499,7 @@ export class FormsService {
       // promoted to spatial by the designer (a child geo question
       // was present at save time), pluck the matching value out of
       // each instance and pack it as GeoJSON; otherwise this stays
-      // undefined and v3-features rides the table insert branch.
+      // undefined and data-layer features rides the table insert branch.
       const subGeomType = sublayerGeomTypes.get(q.id) ?? null;
       const isTable = subGeomType === null;
       const childGeoBinding =
@@ -561,7 +561,7 @@ export class FormsService {
       if (inserts.length === 0) continue;
 
       try {
-        await this.v3Features.insertFeatures(
+        await this.dataLayerFeatures.insertFeatures(
           args.layerId,
           q.id,
           inserts,

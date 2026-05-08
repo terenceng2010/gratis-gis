@@ -12,7 +12,7 @@
 // portal-web side keep working unchanged through Phase 2 cutover.
 //
 // Phase 2.1 introduces this adapter as additive surface. The legacy
-// `V3FeaturesService` is unchanged. Phase 2.2 swaps the v3 service's
+// `DataLayerFeaturesService` is unchanged. Phase 2.2 swaps the v3 service's
 // internals to call into this adapter.
 
 import { Injectable } from '@nestjs/common';

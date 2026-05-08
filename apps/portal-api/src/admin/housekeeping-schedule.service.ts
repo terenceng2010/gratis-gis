@@ -7,9 +7,9 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { KeycloakAdminService } from './keycloak-admin.service.js';
 import { KeycloakSyncService } from './keycloak-sync.service.js';
 import {
-  V3TablesService,
-  type V3LayerShape,
-} from '../features-v3/v3-tables.service.js';
+  DataLayerTablesService,
+  type DataLayerLayerShape,
+} from '../data-layer/tables.service.js';
 import { HousekeepingService } from './housekeeping.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
@@ -93,7 +93,7 @@ export class HousekeepingScheduleService {
     private readonly cfg: ConfigService,
     private readonly keycloak: KeycloakAdminService,
     private readonly keycloakSync: KeycloakSyncService,
-    private readonly v3Tables: V3TablesService,
+    private readonly dataLayerTables: DataLayerTablesService,
     private readonly housekeeping: HousekeepingService,
     private readonly notifications: NotificationsService,
   ) {}
@@ -466,7 +466,7 @@ export class HousekeepingScheduleService {
     if (type !== 'data_layer') return null;
     const layers = readV3Layers(data);
     if (layers === null || layers.length === 0) return null;
-    return this.v3Tables.lastDataActivityAt(itemId, layers);
+    return this.dataLayerTables.lastDataActivityAt(itemId, layers);
   }
 
   /**
@@ -612,19 +612,19 @@ export class HousekeepingScheduleService {
  *  avoid a DI cycle (ItemsModule -> AdminModule -> ItemsModule).
  *  Returns the per-layer shape the v3 tables need to query feature
  *  activity. */
-function readV3Layers(data: unknown): V3LayerShape[] | null {
+function readV3Layers(data: unknown): DataLayerLayerShape[] | null {
   if (!data || typeof data !== 'object') return null;
   const v = (data as { version?: unknown }).version;
   if (v !== 3 && v !== '3') return null;
   const layers = (data as { layers?: unknown }).layers;
   if (!Array.isArray(layers)) return null;
-  const out: V3LayerShape[] = [];
+  const out: DataLayerLayerShape[] = [];
   for (const l of layers) {
     if (!l || typeof l !== 'object') continue;
     const id = (l as { id?: unknown }).id;
     if (typeof id !== 'string' || id.length === 0) continue;
     const gt = (l as { geometryType?: unknown }).geometryType;
-    const geometryType: V3LayerShape['geometryType'] =
+    const geometryType: DataLayerLayerShape['geometryType'] =
       gt === 'point' || gt === 'line' || gt === 'polygon' ? gt : null;
     out.push({ id, geometryType });
   }

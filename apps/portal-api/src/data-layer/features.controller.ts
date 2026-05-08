@@ -31,7 +31,7 @@ import { ItemsService } from '../items/items.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { EditorPolicyService } from '../items/editor-policy.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { V3FeaturesService } from './v3-features.service.js';
+import { DataLayerFeaturesService } from './features.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 
 class AppendFeatureDto {
@@ -66,11 +66,11 @@ class UpdateFeatureBodyDto {
 @ApiTags('features', 'v3')
 @ApiBearerAuth()
 @Controller('items/:id/layers/:layerId')
-export class V3FeaturesController {
+export class DataLayerFeaturesController {
   constructor(
     private readonly items: ItemsService,
     private readonly sharing: SharingService,
-    private readonly v3: V3FeaturesService,
+    private readonly v3: DataLayerFeaturesService,
     private readonly prisma: PrismaService,
     private readonly editorPolicy: EditorPolicyService,
     private readonly notifications: NotificationsService,
@@ -572,7 +572,7 @@ export class V3FeaturesController {
       shares,
       layerPolicy,
     );
-    // Match v3-tables.service's convention: null geometryType means
+    // Match tables.service's convention: null geometryType means
     // a table sublayer (no geom column was provisioned). undefined
     // shouldn't happen in well-formed v3 data but if it does we err
     // toward "spatial layer" so the historic codepath that selects

@@ -23,7 +23,7 @@ export interface RegisterAttachmentInput {
 }
 
 @Injectable()
-export class V3AttachmentsService {
+export class DataLayerAttachmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,

@@ -44,13 +44,13 @@ import {
  *   anyway.
  */
 
-export interface V3FeatureInsert {
+export interface DataLayerFeatureInsert {
   globalId?: string;
   geometry?: unknown;
   properties?: Record<string, unknown> | undefined;
 }
 
-export interface V3FeatureOut {
+export interface DataLayerFeatureOut {
   type: 'Feature';
   id: string;
   geometry: unknown;
@@ -58,8 +58,8 @@ export interface V3FeatureOut {
 }
 
 @Injectable()
-export class V3FeaturesService {
-  private readonly log = new Logger(V3FeaturesService.name);
+export class DataLayerFeaturesService {
+  private readonly log = new Logger(DataLayerFeaturesService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -84,7 +84,7 @@ export class V3FeaturesService {
       isTable?: boolean;
       parentFkFilter?: { column: string; parentId: string };
     } = {},
-  ): Promise<{ type: 'FeatureCollection'; features: V3FeatureOut[] }> {
+  ): Promise<{ type: 'FeatureCollection'; features: DataLayerFeatureOut[] }> {
     const result = await this.dataLayer.listFeatures({
       itemId,
       layerId,
@@ -119,7 +119,7 @@ export class V3FeaturesService {
   async insertFeatures(
     itemId: string,
     layerId: string,
-    inputs: V3FeatureInsert[],
+    inputs: DataLayerFeatureInsert[],
     user: AuthUser,
     _opts: { isTable?: boolean } = {},
   ): Promise<{ inserted: number }> {
@@ -168,7 +168,7 @@ export class V3FeaturesService {
     patch: { geometry?: unknown; properties?: Record<string, unknown> },
     user: AuthUser,
     opts: { ownRowsOnly?: boolean; isTable?: boolean } = {},
-  ): Promise<V3FeatureOut> {
+  ): Promise<DataLayerFeatureOut> {
     const isTable = opts.isTable === true;
 
     // Look up the current state. The candidate-entities CTE inside

@@ -15,7 +15,7 @@ import { IsInt, IsString, MaxLength, Min } from 'class-validator';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { ItemsService } from '../items/items.service.js';
-import { V3AttachmentsService } from './v3-attachments.service.js';
+import { DataLayerAttachmentsService } from './attachments.service.js';
 
 class RegisterAttachmentDto {
   @IsString() @MaxLength(500) fileName!: string;
@@ -42,10 +42,10 @@ class RegisterAttachmentDto {
 @ApiTags('features', 'v3', 'attachments')
 @ApiBearerAuth()
 @Controller('items/:id/layers/:layerId/features/:fid/attachments')
-export class V3AttachmentsController {
+export class DataLayerAttachmentsController {
   constructor(
     private readonly items: ItemsService,
-    private readonly attachments: V3AttachmentsService,
+    private readonly attachments: DataLayerAttachmentsService,
   ) {}
 
   @Get()

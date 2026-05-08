@@ -9,12 +9,12 @@ import { ItemCredentialController } from './credential.controller.js';
 import { ItemProxyController } from './item-proxy.controller.js';
 import { ServiceProbeController } from './service-probe.controller.js';
 import { EditorPolicyService } from './editor-policy.service.js';
-import { V3TablesModule } from '../features-v3/v3-tables.module.js';
+import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
 
 @Module({
-  imports: [V3TablesModule, NotificationsModule, DerivedLayersModule],
+  imports: [DataLayerTablesModule, NotificationsModule, DerivedLayersModule],
   controllers: [
     ItemsController,
     ItemCredentialController,

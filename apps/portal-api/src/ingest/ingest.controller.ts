@@ -20,11 +20,11 @@ import { ItemsService } from '../items/items.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { FeaturesService } from '../features/features.service.js';
-import { V3FeaturesService } from '../features-v3/v3-features.service.js';
+import { DataLayerFeaturesService } from '../data-layer/features.service.js';
 import {
-  V3TablesService,
-  type V3LayerShape,
-} from '../features-v3/v3-tables.service.js';
+  DataLayerTablesService,
+  type DataLayerLayerShape,
+} from '../data-layer/tables.service.js';
 import { IngestService } from './ingest.service.js';
 
 /**
@@ -46,8 +46,8 @@ export class IngestController {
     private readonly sharing: SharingService,
     private readonly prisma: PrismaService,
     private readonly features: FeaturesService,
-    private readonly v3Features: V3FeaturesService,
-    private readonly v3Tables: V3TablesService,
+    private readonly dataLayerFeatures: DataLayerFeaturesService,
+    private readonly dataLayerTables: DataLayerTablesService,
   ) {}
 
   /**
@@ -216,7 +216,7 @@ export class IngestController {
     }
     const data = item.data as {
       version?: number;
-      layers?: Array<V3LayerShape>;
+      layers?: Array<DataLayerLayerShape>;
     } | null;
     if (data?.version !== 3) {
       throw new BadRequestException(
@@ -249,8 +249,8 @@ export class IngestController {
       // response so the UI can show "Replaced N rows with M".
       // Engine-side count: distinct entities with no tombstone
       // and an open valid_to.
-      truncated = await this.v3Tables.countLiveEntities(itemId, layer.id);
-      await this.v3Tables.truncateLayer(itemId, layerId);
+      truncated = await this.dataLayerTables.countLiveEntities(itemId, layer.id);
+      await this.dataLayerTables.truncateLayer(itemId, layerId);
     }
 
     const { geojson, driver, layerName, sourceSrs } = await this.ingest.fileLayerToGeoJson(
@@ -281,7 +281,7 @@ export class IngestController {
       return out;
     };
 
-    const { inserted } = await this.v3Features.insertFeatures(
+    const { inserted } = await this.dataLayerFeatures.insertFeatures(
       itemId,
       layerId,
       geojson.features.map((f) => {
@@ -328,10 +328,10 @@ export class IngestController {
         where: { id: itemId },
         select: { data: true },
       });
-      const layers = ((fresh?.data ?? null) as { layers?: V3LayerShape[] } | null)
+      const layers = ((fresh?.data ?? null) as { layers?: DataLayerLayerShape[] } | null)
         ?.layers;
       if (Array.isArray(layers)) {
-        const bbox = await this.v3Tables.aggregateBbox(itemId, layers);
+        const bbox = await this.dataLayerTables.aggregateBbox(itemId, layers);
         await this.prisma.item.update({
           where: { id: itemId },
           data: { bbox: bbox ?? [] },

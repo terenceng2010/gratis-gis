@@ -30,9 +30,9 @@ import {
   REFERENCER_TYPES,
 } from './dependency-extractor.js';
 import {
-  V3TablesService,
-  type V3LayerShape,
-} from '../features-v3/v3-tables.service.js';
+  DataLayerTablesService,
+  type DataLayerLayerShape,
+} from '../data-layer/tables.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { DerivedLayersService } from '../derived-layers/derived-layers.service.js';
 
@@ -104,7 +104,7 @@ export class ItemsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sharing: SharingService,
-    private readonly v3Tables: V3TablesService,
+    private readonly dataLayerTables: DataLayerTablesService,
     private readonly snapshots: DataSnapshotService,
     private readonly notifications: NotificationsService,
     private readonly derivedLayers: DerivedLayersService,
@@ -689,7 +689,7 @@ export class ItemsService {
     // where submissions go.
     //
     // Created-then-cleanup pattern (not a Prisma transaction)
-    // because v3Tables.reconcile fires raw DDL outside the user
+    // because dataLayerTables.reconcile fires raw DDL outside the user
     // transaction. If the form persist fails after the layer was
     // created, we delete the orphan layer.
     let pairedLayerId: string | null = null;
@@ -1035,7 +1035,7 @@ export class ItemsService {
       },
     });
     // Phase 2.5: schema edits are pure metadata now. Pre-engine,
-    // this called v3Tables.reconcile to DROP tables for removed
+    // this called dataLayerTables.reconcile to DROP tables for removed
     // layers and CREATE/ALTER tables for new ones. The engine
     // substrate keys observations by scope, so a layer that
     // disappears from the schema simply stops being read; no DDL
@@ -1421,7 +1421,7 @@ export class ItemsService {
 
     // Resolve the boundary clip once up front so both v1 and v2
     // branches can use it. Bypasses per-user authz on the boundary
-    // (see V3FeaturesController.resolveBoundaryGeometry for the
+    // (see DataLayerFeaturesController.resolveBoundaryGeometry for the
     // rationale).
     let boundaryGeom: unknown | null = null;
     if (opts.boundaryClipId) {
@@ -2407,7 +2407,7 @@ export class ItemsService {
  * the v3 reconcile path) or when the payload doesn't look like a
  * valid v3 shape.
  */
-function readV3Layers(data: unknown): V3LayerShape[] | null {
+function readV3Layers(data: unknown): DataLayerLayerShape[] | null {
   if (!data || typeof data !== 'object') return null;
   const d = data as { version?: unknown; layers?: unknown };
   if (d.version !== 3) return null;
@@ -2419,9 +2419,9 @@ function readV3Layers(data: unknown): V3LayerShape[] | null {
       const id = typeof l.id === 'string' ? l.id : '';
       if (!id) return null;
       const gt = l.geometryType;
-      const geometryType: V3LayerShape['geometryType'] =
+      const geometryType: DataLayerLayerShape['geometryType'] =
         gt === 'point' || gt === 'line' || gt === 'polygon' ? gt : null;
-      const fields: NonNullable<V3LayerShape['fields']> = Array.isArray(
+      const fields: NonNullable<DataLayerLayerShape['fields']> = Array.isArray(
         l.fields,
       )
         ? (l.fields as Array<Record<string, unknown>>)
@@ -2440,7 +2440,7 @@ function readV3Layers(data: unknown): V3LayerShape[] | null {
             })
             .filter((f) => f.name.length > 0)
         : [];
-      const out: V3LayerShape = {
+      const out: DataLayerLayerShape = {
         id,
         geometryType,
         fields,
@@ -2450,7 +2450,7 @@ function readV3Layers(data: unknown): V3LayerShape[] | null {
       }
       return out;
     })
-    .filter((l): l is V3LayerShape => l !== null);
+    .filter((l): l is DataLayerLayerShape => l !== null);
 }
 
 /**
@@ -2472,8 +2472,8 @@ function readV3Layers(data: unknown): V3LayerShape[] | null {
  * if we see real breakage in the wild.
  */
 function computeSchemaBreaks(
-  prev: V3LayerShape[],
-  next: V3LayerShape[],
+  prev: DataLayerLayerShape[],
+  next: DataLayerLayerShape[],
 ): { dropped: string[]; geometryChanged: string[] } {
   const nextById = new Map(next.map((l) => [l.id, l] as const));
   const dropped: string[] = [];

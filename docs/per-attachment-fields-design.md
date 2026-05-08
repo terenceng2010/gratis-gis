@@ -216,7 +216,7 @@ table abstraction (v3 feature tables). Reusing that pattern means:
   list. No client-side derivation; the schema already segments
   them.
 - Existing v3 reconcile-on-save logic
-  (`V3TablesService.reconcile`) extends to attachment-field
+  (`DataLayerTablesService.reconcile`) extends to attachment-field
   tables with the same CREATE / ADD COLUMN / DROP COLUMN
   vocabulary.
 
@@ -240,11 +240,11 @@ export interface DataLayerSublayer {
 `apps/portal-api/prisma/schema.prisma`: add nothing - the
 attachment-fields table is dynamic, like fs_*.
 
-`apps/portal-api/src/features-v3/v3-tables.service.ts`: extend
+`apps/portal-api/src/data-layer/tables.service.ts`: extend
 reconcile() to also handle the attachment-fields table for any
 layer with `attachmentsEnabled === true && attachmentFields.length > 0`.
 
-`apps/portal-api/src/features-v3/v3-attachments.service.ts`:
+`apps/portal-api/src/data-layer/attachments.service.ts`:
 
 - Extend `register()` to accept `customFields: Record<string, unknown>`
   and write a row to the attachment-fields table in the same
@@ -290,7 +290,7 @@ Once Option C ships:
 ## Phasing
 
 - **Phase 1 - schema**: Add `attachmentFields` to the
-  shared-types, extend V3TablesService.reconcile to provision the
+  shared-types, extend DataLayerTablesService.reconcile to provision the
   `fa_*` table, no UI yet. Sub-shippable; the table sits empty
   until something writes to it.
 - **Phase 2 - runtime**: Form runtime persists attachment-scoped

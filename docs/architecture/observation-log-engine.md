@@ -520,7 +520,7 @@ independently. `main` is always green and deployable.
 
 ### Phase 2: data_layer migration (target: 2 weeks)
 
-The legacy `V3FeaturesService` plus `V3TablesService` already store
+The legacy `DataLayerFeaturesService` plus `DataLayerTablesService` already store
 features in a half-bitemporal shape (`valid_to IS NULL` for current
 truth, "insert new on update" for history, soft-delete via
 `valid_to = now`, denormalized `created_by`/`edited_by`). This makes
@@ -544,7 +544,7 @@ Add `apps/portal-api/src/engine/data-layer.ts` (and tests) with:
   helpers that wrap `EngineService.write` with the right `kind` and
   populate `attrs` and `geom` from feature input.
 - `listFeatures` helper that wraps `EngineService.read` and renders
-  the same shape `V3FeaturesService.listFeatures` returns today
+  the same shape `DataLayerFeaturesService.listFeatures` returns today
   (GeoJSON FeatureCollection, editor-tracking properties surfaced as
   `_created_by` / `_created_at` / `_edited_by` / `_edited_at`).
 - Unit tests for each helper using the existing fake-prisma pattern.
@@ -556,12 +556,12 @@ No wiring yet. Pure additive surface.
 Originally split into 2.2 (write) and 2.3 (read). Merged: shipping
 the write rewire without the read rewire would put the system in a
 state where new features land in the observation log while
-`V3FeaturesService.listFeatures` still reads the per-layer tables,
+`DataLayerFeaturesService.listFeatures` still reads the per-layer tables,
 hiding them from the layer detail page. The dev DB is throwaway test
 data, but a half-rewired main is the kind of state we explicitly do
 not want during strangler-fig migration.
 
-Replace the SQL inside `V3FeaturesService` (`insertFeatures`,
+Replace the SQL inside `DataLayerFeaturesService` (`insertFeatures`,
 `updateFeature`, `deleteFeature`, `listFeatures`) with calls into the
 adapter from 2.1. The v3 service collapses into a thin wrapper that
 preserves the controller-facing interface (DTOs, response shapes,
@@ -588,21 +588,21 @@ green.
 
 #### 2.4 Wire ingest and bbox aggregation
 
-`ingest.controller` already calls `V3FeaturesService.insertFeatures`,
-so 2.2 carries it. `V3TablesService.aggregateBbox` and
+`ingest.controller` already calls `DataLayerFeaturesService.insertFeatures`,
+so 2.2 carries it. `DataLayerTablesService.aggregateBbox` and
 `lastDataActivityAt` get rewritten to query the observation log.
-`V3TablesService.truncateLayer` becomes a delete-by-scope on the log.
+`DataLayerTablesService.truncateLayer` becomes a delete-by-scope on the log.
 
 #### 2.5 Stop creating per-layer tables on item create
 
-`ItemsService.create` no longer calls `V3TablesService.reconcile`. The
+`ItemsService.create` no longer calls `DataLayerTablesService.reconcile`. The
 schema continues to live on `item.data_json`. Existing per-layer
 tables stay (orphaned) until 2.6.
 
 #### 2.6 Drop legacy and rename
 
 A single migration drops every `fs_*` per-layer table (script-driven,
-introspect by name pattern). The `apps/portal-api/src/features-v3/`
+introspect by name pattern). The `apps/portal-api/src/data-layer/`
 module is removed; the controller routes are reattached to a new
 `data-layer` module that delegates to the engine adapter. After this
 commit, `git grep feature_v3` returns zero matches in

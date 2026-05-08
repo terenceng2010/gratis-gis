@@ -19,7 +19,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
  * the orphans via migration, and retire the V3-prefixed names.
  */
 
-export interface V3LayerShape {
+export interface DataLayerLayerShape {
   id: string;
   geometryType: 'point' | 'line' | 'polygon' | null;
   fields?: Array<{
@@ -38,8 +38,8 @@ export interface V3LayerShape {
 }
 
 @Injectable()
-export class V3TablesService {
-  private readonly log = new Logger(V3TablesService.name);
+export class DataLayerTablesService {
+  private readonly log = new Logger(DataLayerTablesService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -54,7 +54,7 @@ export class V3TablesService {
    */
   async aggregateBbox(
     itemId: string,
-    layers: V3LayerShape[],
+    layers: DataLayerLayerShape[],
   ): Promise<[number, number, number, number] | null> {
     let w = Infinity;
     let s = Infinity;
@@ -124,7 +124,7 @@ export class V3TablesService {
    */
   async lastDataActivityAt(
     itemId: string,
-    layers: V3LayerShape[],
+    layers: DataLayerLayerShape[],
   ): Promise<Date | null> {
     let max: Date | null = null;
     for (const layer of layers) {

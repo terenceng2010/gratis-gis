@@ -11,7 +11,7 @@ import { HousekeepingScheduleService } from './housekeeping-schedule.service.js'
 import { HousekeepingCronService } from './housekeeping-cron.service.js';
 import { KeycloakAdminService } from './keycloak-admin.service.js';
 import { KeycloakSyncService } from './keycloak-sync.service.js';
-import { V3TablesModule } from '../features-v3/v3-tables.module.js';
+import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { ItemsModule } from '../items/items.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { NotificationsAdminController } from '../notifications/admin.controller.js';
@@ -33,7 +33,7 @@ import { FieldQueueAdminController } from '../field-queue/field-queue-admin.cont
  */
 @Module({
   imports: [
-    V3TablesModule,
+    DataLayerTablesModule,
     ItemsModule,
     NotificationsModule,
     StorageModule,

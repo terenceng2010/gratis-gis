@@ -12,7 +12,7 @@ import type { Request } from 'express';
 
 import { Public } from '../auth/public.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { V3FeaturesService } from '../features-v3/v3-features.service.js';
+import { DataLayerFeaturesService } from '../data-layer/features.service.js';
 
 /**
  * Unauthenticated surface area for the portal. Anything here is
@@ -30,7 +30,7 @@ import { V3FeaturesService } from '../features-v3/v3-features.service.js';
 export class PublicController {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly v3: V3FeaturesService,
+    private readonly v3: DataLayerFeaturesService,
   ) {}
 
   /**

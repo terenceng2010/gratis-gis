@@ -12,7 +12,7 @@ import { DerivedLayerCacheRefreshService } from './cache-refresh.service.js';
  * so:
  *   - items.service can call DerivedLayersService for validation on
  *     save and read routing on getGeoJson.
- *   - features-v3 / features modules can call
+ *   - data-layer / features modules can call
  *     DerivedLayerCacheRefreshService.notifySourceWrite from their
  *     write paths so a feature edit that exceeds the cached
  *     buffer-by-field cap grows the cap lazily.

@@ -7,9 +7,9 @@ import type { ItemType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { itemBbox } from '../items/item-bbox.js';
 import {
-  V3TablesService,
-  type V3LayerShape,
-} from '../features-v3/v3-tables.service.js';
+  DataLayerTablesService,
+  type DataLayerLayerShape,
+} from '../data-layer/tables.service.js';
 import {
   CredentialService,
   type CredentialPayload,
@@ -47,7 +47,7 @@ export class HousekeepingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cfg: ConfigService,
-    private readonly v3Tables: V3TablesService,
+    private readonly dataLayerTables: DataLayerTablesService,
     private readonly credentials: CredentialService,
     private readonly storage: StorageService,
   ) {}
@@ -231,7 +231,7 @@ export class HousekeepingService {
     if (type !== 'data_layer') return null;
     const layers = readV3Layers(data);
     if (layers === null || layers.length === 0) return null;
-    return this.v3Tables.lastDataActivityAt(itemId, layers);
+    return this.dataLayerTables.lastDataActivityAt(itemId, layers);
   }
 
   /**
@@ -841,7 +841,7 @@ export class HousekeepingService {
       if (it.type === 'data_layer') {
         const layers = readV3Layers(it.data);
         if (layers !== null) {
-          next = await this.v3Tables.aggregateBbox(it.id, layers);
+          next = await this.dataLayerTables.aggregateBbox(it.id, layers);
         }
         // Fall back paths in priority order:
         //   1) the raw stored data.bbox / data.layers[].bbox
@@ -1067,19 +1067,19 @@ function bboxEqual(
  *  ItemsService here (would create a DI cycle). Mirrors the
  *  behaviour of items.service.readV3Layers for the fields we
  *  actually need. */
-function readV3Layers(data: unknown): V3LayerShape[] | null {
+function readV3Layers(data: unknown): DataLayerLayerShape[] | null {
   if (!data || typeof data !== 'object') return null;
   const v = (data as { version?: unknown; layers?: unknown }).version;
   if (v !== 3 && v !== '3') return null;
   const layers = (data as { layers?: unknown }).layers;
   if (!Array.isArray(layers)) return null;
-  const out: V3LayerShape[] = [];
+  const out: DataLayerLayerShape[] = [];
   for (const l of layers) {
     if (!l || typeof l !== 'object') continue;
     const id = (l as { id?: unknown }).id;
     if (typeof id !== 'string' || id.length === 0) continue;
     const gt = (l as { geometryType?: unknown }).geometryType;
-    const geometryType: V3LayerShape['geometryType'] =
+    const geometryType: DataLayerLayerShape['geometryType'] =
       gt === 'point' || gt === 'line' || gt === 'polygon' ? gt : null;
     out.push({ id, geometryType });
   }
