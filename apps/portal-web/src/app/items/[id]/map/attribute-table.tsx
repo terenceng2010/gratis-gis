@@ -18,8 +18,10 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  FeatureField,
   MapLayer,
   MapLayerFilter,
+  PickListData,
 } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
 import { getCachedUserName, prefetchUserNames } from '@/lib/user-name-cache';
@@ -95,6 +97,23 @@ interface Props {
    * editable regardless of what's in here.
    */
   editableFieldsByLayer?: Record<string, Set<string>>;
+  /**
+   * Per-layer field schema. When provided, the inline cell editor
+   * uses each field's `domain` (coded-value or coded-value-ref) to
+   * render a `<select>` of permitted values rather than a freeform
+   * text input. When omitted (the map editor doesn't thread this
+   * through yet), the editor falls back to plain text. Indexed by
+   * layer id; missing layers render text inputs.
+   */
+  fieldsByLayer?: Record<string, FeatureField[]>;
+  /**
+   * Resolved pick lists keyed by pick_list item id. Used to
+   * resolve `coded-value-ref` field domains in the inline editor.
+   * Same shape AttributeForm consumes; the editor runtime already
+   * fetches these server-side so wiring them through here is just
+   * a prop passthrough.
+   */
+  pickLists?: Record<string, PickListData>;
 }
 
 type SortDir = 'asc' | 'desc';
@@ -127,6 +146,8 @@ export function AttributeTable({
   onPatchFeature,
   editableLayerIds,
   editableFieldsByLayer,
+  fieldsByLayer,
+  pickLists,
 }: Props) {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [lastPicked, setLastPicked] = useState<number | null>(null);
@@ -154,7 +175,11 @@ export function AttributeTable({
     field: string;
   } | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
-  const editInputRef = useRef<HTMLInputElement | null>(null);
+  // Editor ref. The cell editor is sometimes a text <input> and
+  // sometimes a <select> (when the field has a coded-value or
+  // coded-value-ref domain). HTMLElement covers both for focus and
+  // selection-on-mount.
+  const editInputRef = useRef<HTMLInputElement | HTMLSelectElement | null>(null);
   // Editor tracking columns toggle (#39). Off by default so the
   // table reads as the layer's actual schema; flip on when the
   // author wants to audit who-touched-what. The four columns are
@@ -354,12 +379,48 @@ export function AttributeTable({
     };
   }, [attachmentDrawer, attachmentsItemId, attachmentsLayerKey]);
 
-  const activeFields =
-    activeLayer && metadata[activeLayer.id]?.fields.length
-      ? metadata[activeLayer.id]!.fields
-      : [];
+  // Filter the underscore-prefixed editor-tracking fields out of
+  // the default render. They're system metadata and the "Edit
+  // history" toggle below surfaces them in a properly-formatted
+  // view (resolved usernames, locale-formatted timestamps, real
+  // labels) so showing them raw here was pure duplication. Other
+  // underscore-prefixed fields (notably _global_id) stay because
+  // they're not duplicated by anything.
+  const activeFields = useMemo(() => {
+    const all =
+      activeLayer && metadata[activeLayer.id]?.fields.length
+        ? metadata[activeLayer.id]!.fields
+        : [];
+    return all.filter((f) => !EDITOR_TRACKING_FIELDS.has(f));
+  }, [activeLayer, metadata]);
   const activeFeatures =
     (activeLayer ? featuresByLayer[activeLayer.id] : null)?.features ?? [];
+
+  // Field-domain lookup. Returns the configured options when the
+  // field for the active layer carries a coded-value or
+  // coded-value-ref domain. Used by the inline cell editor to
+  // render a `<select>` of permitted values rather than a freeform
+  // text input. Returns null when the field has no domain or when
+  // fieldsByLayer wasn't threaded through (e.g. the map editor's
+  // attribute-table use).
+  function resolveFieldDomainOptions(
+    fieldName: string,
+  ): Array<{ code: string | number; label: string }> | null {
+    if (!activeLayer || !fieldsByLayer) return null;
+    const fields = fieldsByLayer[activeLayer.id];
+    if (!fields) return null;
+    const f = fields.find((x) => x.name === fieldName);
+    if (!f || !f.domain) return null;
+    if (f.domain.type === 'coded-value') {
+      return f.domain.values.map((v) => ({ code: v.code, label: v.label }));
+    }
+    if (f.domain.type === 'coded-value-ref') {
+      const list = pickLists?.[f.domain.pickListItemId];
+      if (!list) return null;
+      return list.entries.map((e) => ({ code: e.code, label: e.label }));
+    }
+    return null;
+  }
 
   // #355: prefetch display names for every UUID-shaped value in the
   // user-id columns, then nudge a re-render once the cache is warm.
@@ -611,7 +672,11 @@ export function AttributeTable({
       if (el) {
         el.focus();
         try {
-          el.select();
+          // .select() exists on text inputs but not on selects. Cast
+          // and feature-detect; on a select this is a no-op.
+          if ('select' in el && typeof (el as HTMLInputElement).select === 'function') {
+            (el as HTMLInputElement).select();
+          }
         } catch {
           /* hidden inputs can throw on select; ignore */
         }
@@ -714,12 +779,16 @@ export function AttributeTable({
             {visibleIndexes.length.toLocaleString()} rows
             {activeSelection.size > 0 ? ` · ${activeSelection.size} selected` : ''}
           </span>
-          {/* Track edits toggle exposes the who-edited-when audit
-              columns. Hidden in read-only contexts (the Viewer /
-              Survey templates pass canEdit=false): viewers have
-              no editing surface so the audit trail is internal
-              metadata they don't need to see. Authors and field
-              users keep the toggle. */}
+          {/* "Edit history" toggle: surfaces the who-edited-when
+              audit columns (Created / Created by / Edited /
+              Edited by) in a properly-formatted view. Hidden in
+              read-only contexts (Viewer / Survey templates pass
+              canEdit=false). The button is a display toggle; the
+              underlying tracking data is always being captured by
+              the API regardless of whether this is on. The label
+              used to read "Track edits" but that read as a verb
+              that turned tracking on/off; "Edit history" reads
+              correctly as a display affordance. */}
           {canEdit ? (
             <button
               type="button"
@@ -727,8 +796,8 @@ export function AttributeTable({
               aria-pressed={showEditorTracking}
               title={
                 showEditorTracking
-                  ? 'Hide who-edited-when columns'
-                  : 'Show who-edited-when columns'
+                  ? 'Hide edit history columns'
+                  : 'Show edit history columns (who created / edited each row)'
               }
               className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] transition-colors ${
                 showEditorTracking
@@ -737,7 +806,7 @@ export function AttributeTable({
               }`}
             >
               <History className="h-3 w-3" />
-              Track edits
+              Edit history
             </button>
           ) : null}
         </div>
@@ -908,40 +977,96 @@ export function AttributeTable({
                               : ''
                           } ${isEditing ? 'bg-accent/10 p-0' : ''}`}
                         >
-                          {isEditing ? (
-                            <input
-                              ref={editInputRef}
-                              type="text"
-                              value={draftValue}
-                              disabled={isSaving}
-                              onChange={(e) => setDraftValue(e.target.value)}
-                              // Stop propagation so typing space etc
-                              // doesn't toggle the row's selection.
-                              onClick={(e) => e.stopPropagation()}
-                              onKeyDown={(e) => {
-                                e.stopPropagation();
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  void commitEditCell();
-                                } else if (e.key === 'Escape') {
-                                  e.preventDefault();
-                                  cancelEditCell();
+                          {isEditing
+                            ? (() => {
+                                const domainOpts =
+                                  resolveFieldDomainOptions(field);
+                                if (domainOpts) {
+                                  // Pick-list / coded-value field:
+                                  // render a <select> of the
+                                  // configured choices so the user
+                                  // can't type an arbitrary value
+                                  // that wouldn't match the domain.
+                                  return (
+                                    <select
+                                      ref={editInputRef as React.Ref<HTMLSelectElement>}
+                                      value={draftValue}
+                                      disabled={isSaving}
+                                      onChange={(e) => {
+                                        setDraftValue(e.target.value);
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => {
+                                        e.stopPropagation();
+                                        if (e.key === 'Enter') {
+                                          e.preventDefault();
+                                          void commitEditCell();
+                                        } else if (e.key === 'Escape') {
+                                          e.preventDefault();
+                                          cancelEditCell();
+                                        }
+                                      }}
+                                      onBlur={() => {
+                                        if (savingCell) return;
+                                        void commitEditCell();
+                                      }}
+                                      className="w-full rounded border border-accent bg-surface-1 px-2 py-0.5 text-xs text-ink-1 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                                    >
+                                      {/* Empty option lets the user
+                                          clear the field without
+                                          having to retype. The
+                                          server treats an empty
+                                          string as null on
+                                          coerce. */}
+                                      <option value="">(none)</option>
+                                      {domainOpts.map((o) => (
+                                        <option
+                                          key={String(o.code)}
+                                          value={String(o.code)}
+                                        >
+                                          {o.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  );
                                 }
-                              }}
-                              onBlur={() => {
-                                // Commit on blur unless we're
-                                // already saving (avoids the second
-                                // commit when Enter both fires
-                                // commit + blur). The save handler
-                                // is idempotent on a no-op anyway.
-                                if (savingCell) return;
-                                void commitEditCell();
-                              }}
-                              className="w-full rounded border border-accent bg-surface-1 px-2 py-0.5 text-xs text-ink-1 focus:outline-none focus:ring-1 focus:ring-accent/40"
-                            />
-                          ) : (
-                            formatCell(v, field)
-                          )}
+                                return (
+                                  <input
+                                    ref={editInputRef as React.Ref<HTMLInputElement>}
+                                    type="text"
+                                    value={draftValue}
+                                    disabled={isSaving}
+                                    onChange={(e) => setDraftValue(e.target.value)}
+                                    // Stop propagation so typing
+                                    // space etc doesn't toggle the
+                                    // row's selection.
+                                    onClick={(e) => e.stopPropagation()}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        void commitEditCell();
+                                      } else if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        cancelEditCell();
+                                      }
+                                    }}
+                                    onBlur={() => {
+                                      // Commit on blur unless
+                                      // we're already saving
+                                      // (avoids the second commit
+                                      // when Enter both fires
+                                      // commit + blur). The save
+                                      // handler is idempotent on a
+                                      // no-op anyway.
+                                      if (savingCell) return;
+                                      void commitEditCell();
+                                    }}
+                                    className="w-full rounded border border-accent bg-surface-1 px-2 py-0.5 text-xs text-ink-1 focus:outline-none focus:ring-1 focus:ring-accent/40"
+                                  />
+                                );
+                              })()
+                            : formatCell(v, field)}
                         </td>
                       );
                     })}
@@ -1256,7 +1381,20 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Optional columns rendered when the user toggles "Track edits".
+ * Field names that the default attribute-table view filters out.
+ * Their content is exposed (formatted) via the "Edit history"
+ * toggle below, so showing both the raw and formatted versions
+ * was pure duplication.
+ */
+const EDITOR_TRACKING_FIELDS = new Set([
+  '_created_at',
+  '_created_by',
+  '_edited_at',
+  '_edited_by',
+]);
+
+/**
+ * Optional columns rendered when the user toggles "Edit history".
  * Sourced from underscore-prefixed properties the API surfaces on
  * every PostGIS-backed feature (#39). When the layer is not backed
  * by PostGIS (raw GeoJSON, ArcGIS service), these cells render

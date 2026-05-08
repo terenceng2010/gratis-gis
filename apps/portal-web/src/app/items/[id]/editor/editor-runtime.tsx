@@ -2149,6 +2149,25 @@ export function EditorRuntime({
     return out;
   }, [editor.targets]);
 
+  // Per-layer FeatureField list for AttributeTable's domain-aware
+  // inline editor. When a field has a coded-value (or
+  // coded-value-ref) domain, the table renders a <select> of the
+  // configured options instead of a freeform text input. Built
+  // once from resolvedTargets so the table's editor doesn't have
+  // to fetch schema on its own.
+  const inlineFieldsByLayer = useMemo(() => {
+    const out: Record<
+      string,
+      NonNullable<ResolvedTarget['layer']>['fields']
+    > = {};
+    for (const t of resolvedTargets) {
+      if (!t.layer) continue;
+      const id = editorTargetLayerId(t.dataLayerId, t.layerKey);
+      out[id] = t.layer.fields;
+    }
+    return out;
+  }, [resolvedTargets]);
+
   // PATCH a single feature's properties from the AttributeTable's
   // inline-edit cell. Resolves the synthetic editor-target layer id
   // back to its (dataLayerId, layerKey) pair, hits the v3 PATCH
@@ -3511,6 +3530,8 @@ export function EditorRuntime({
             {...(canEdit ? { onPatchFeature: onInlineEditFeature } : {})}
             editableLayerIds={inlineEditableLayerIds}
             editableFieldsByLayer={inlineEditableFieldsByLayer}
+            fieldsByLayer={inlineFieldsByLayer}
+            pickLists={pickLists}
           />
         </div>
       </div>
