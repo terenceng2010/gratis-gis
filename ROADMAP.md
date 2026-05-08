@@ -143,25 +143,22 @@ engine foundation forecloses it.
 
 ## Phase 8: Hardening
 
-- [ ] **`pg_partman` monthly partitioning of the `observation` table.**
-      Phase 1 deferred this so the primary key could stay on `id` alone
-      (a partition column requirement would have forced a composite
-      `(id, tx_time)` PK). The deferred work concentrates the engine's
-      operational load on a single growing table: autovacuum work,
-      index size, lock contention, and the cost of any future
-      `ALTER TABLE` all scale linearly with edit history. Land
-      partitioning before observation row count crosses ~10M, or
-      before the table's index footprint affects p95 read latency,
-      whichever comes first. Hot writes go to the current partition
-      (sequential), recent reads hit one or two partitions, time-
-      travel reads of older data hit historical partitions which can
-      eventually live on slower / cheaper storage. Composite PK
-      becomes `(id, tx_time)`; the existing
-      `observation_scope_entity_validfrom_idx` becomes a per-partition
-      index. Migration is non-trivial (Postgres can't `ATTACH
-      PARTITION` an existing table with a single-column PK, so the
-      cutover involves either pg\_partman's swap-and-rename or an
-      offline rebuild); plan accordingly.
+- [x] **`pg_partman` monthly partitioning of the `observation` table.**
+      Landed 2026-05-08 (migration
+      `20260508081000_partition_observation_table`). The infra
+      postgres image extends `postgis/postgis:16-3.4` with
+      `postgresql-16-partman`; the migration installs the extension,
+      renames the unpartitioned table out of the way, recreates
+      `observation` with composite `(id, tx_time)` PK partitioned
+      by range on `tx_time`, registers it with pg_partman (monthly
+      interval, premake=24, retention=NULL), copies the existing
+      rows into the appropriate month partitions, and drops the
+      old table. Future-partition rollover and old-partition
+      pruning run via `partman.run_maintenance_proc()`; v1 doesn't
+      schedule that yet because the 24-month premake covers two
+      years of forward writes -- wire a daily cron via the
+      existing scheduled-tasks framework before the trailing edge
+      approaches.
 - [ ] Verify Postgres page-level checksums are enabled on the prod
       cluster. The engine concentrates feature data into one table,
       so page checksums are now load-bearing for catastrophic-
