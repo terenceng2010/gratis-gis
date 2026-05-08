@@ -86,27 +86,83 @@ permit (
 };
 ```
 
-### Phase C (after dashboards / lens MVP)
+### Phase C (lens-level custom policies, infrastructure shipped)
 
-Lens-level custom policies. A lens has an optional
-`Lens.policy` Cedar text field. At read time, the engine prepends
-`DEFAULT_POLICY_TEXT` and appends the lens policy, evaluating the
-combined set against the request. This is the surface that
-unblocks the geometry-aware demo policies in
-`observation-log-engine.md`:
+`apps/portal-api/src/policy/lens-policy.service.ts` adds the
+row-level evaluator that runs lens-attached Cedar policies against
+per-feature inputs. The lens carries an optional
+`Lens.policy` Cedar text field; at read time the engine combines
+it with an implicit feature-level baseline (the Item gate already
+ran upstream, so the baseline permits) and runs the evaluator per
+row. forbid rules in the lens text *narrow* visibility from the
+baseline; permit rules in the lens text are redundant but
+harmless.
+
+**Geometry predicates: pre-resolved in PostGIS, evaluated as set
+membership in Cedar.** Cedar's published WASM bundle (4.x) ships
+`decimal`, `datetime`, and `ipaddr` extension types but **not**
+geometry. Custom extensions require building Cedar from source,
+which the published WASM doesn't expose. The architectural
+workaround keeps PostGIS doing the spatial math (where it belongs;
+it's fast and we already use it) and feeds the result into Cedar
+as a `Set<string>` attribute on the Feature entity:
 
 ```cedar
-permit (
+forbid (
   principal,
   action == Action::"read",
-  resource is Lens
+  resource is Feature
 ) when {
-  resource.feature.geom in principal.assignedPolygon
+  !resource.spatial.contains("assigned_area")
 };
 ```
 
-Geometry-in-polygon needs Cedar set / extension types; the WASM
-binding ships an `extensions` block we wire up in Phase C.
+The read pipeline is responsible for computing
+`resource.spatial` per feature: typically a `ST_Within(geom,
+$polygon)` against the principal's assigned area or a
+geo\_boundary item. Convention: keys are lower-snake-case
+identifiers chosen by the lens author (`assigned_area`,
+`service_area:fire`, `boundary:abc123`). The resulting set goes
+into the `Feature` entity's attributes; Cedar evaluates the
+`.contains(...)` membership check natively.
+
+**Attribute predicates** work the same way they would for any
+Cedar policy:
+
+```cedar
+forbid (
+  principal,
+  action == Action::"read",
+  resource is Feature
+) when {
+  resource.attrs has cost &&
+  resource.attrs.cost > 10000
+};
+```
+
+The `has` guard is important: a missing attribute on the feature
+makes the bare `> 10000` comparison error inside Cedar, which
+trips `LensPolicyService`'s evaluation-error path and denies the
+row. That's safe-by-default (an unannotated row that should have
+been classified is hidden), but lens authors writing intentional
+"hide if cost is high *and we know what cost is*" rules should
+guard their attribute access.
+
+**API:** `LensPolicyService.checkFeature({ user, lens, feature })`
+returns a single boolean per row. It short-circuits on a missing
+or whitespace-only `lens.policy` (the read pipeline gets the same
+speed as before for unpolicied lenses). Parse errors and runtime
+errors fail closed and log so authoring mistakes surface in the
+operator log instead of silently leaking data.
+
+**Read-path integration (deferred):** wiring `LensPolicyService`
+into the engine's actual feature read paths is a Phase D task.
+The infrastructure ships in Phase C with comprehensive tests
+(12 specs covering passthrough, attribute forbid, spatial-set
+forbid, multi-key spatial, forbid-trumps-permit, parse errors).
+Phase D plumbs it through `DataLayerEngine.listFeatures` and the
+data-layer features service so a lens with a policy actually
+filters its read output.
 
 ## Entity model
 

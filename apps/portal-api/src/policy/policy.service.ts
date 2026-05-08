@@ -153,10 +153,7 @@ export class PolicyService {
       >[0]['entities'],
     });
     if (result.type === 'failure') {
-      const messages = (result.errors ?? []).map((e) => {
-        const m = (e as unknown as { message?: unknown }).message;
-        return typeof m === 'string' ? m : JSON.stringify(e);
-      });
+      const messages = (result.errors ?? []).map((e) => cedarErrorMessage(e));
       this.log.warn(
         `Cedar check failed for ${req.principal.type}::${req.principal.id} ` +
           `${req.action.type}::${req.action.id} ` +
@@ -168,12 +165,34 @@ export class PolicyService {
     return {
       decision: response.decision === 'allow' ? 'allow' : 'deny',
       reasons: response.diagnostics?.reason ?? [],
-      errors: (response.diagnostics?.errors ?? []).map((e) => {
-        const m = (e as unknown as { message?: unknown }).message;
-        return typeof m === 'string' ? m : String(e);
-      }),
+      errors: (response.diagnostics?.errors ?? []).map((e) =>
+        cedarErrorMessage(e),
+      ),
     };
   }
+}
+
+/**
+ * Pull a human-readable string out of one of Cedar's diagnostic
+ * error shapes. The published TypeScript types model errors as
+ * a discriminated union with a top-level `message`; the runtime
+ * shape Cedar emits for evaluation diagnostics actually nests
+ * `message` one level deeper under `error.message` (the outer
+ * object is `{policyId, error: AuthorizationError}`). We probe
+ * both shapes plus a `text` fallback so misauthored policies
+ * surface useful logs instead of "[object Object]".
+ */
+function cedarErrorMessage(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (!raw || typeof raw !== 'object') return String(raw);
+  const obj = raw as Record<string, unknown>;
+  const direct = obj.message;
+  if (typeof direct === 'string') return direct;
+  const nested = (obj.error as { message?: unknown } | undefined)?.message;
+  if (typeof nested === 'string') return nested;
+  const text = obj.text;
+  if (typeof text === 'string') return text;
+  return JSON.stringify(raw);
 }
 
 /**
