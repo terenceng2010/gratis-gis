@@ -212,34 +212,47 @@ export default async function ItemsPage({ searchParams }: Props) {
             </nav>
           ) : null}
           {items.length === 0 ? (
-            <EmptyState
-              icon={<Layers className="h-5 w-5" />}
-              title={
-                activeFolder
-                  ? `${activeFolder.title} is empty`
-                  : isMine
-                    ? 'No items yet'
-                    : 'Nothing shared with you yet'
-              }
-              description={
-                activeFolder
-                  ? 'Use "Add items" on the folder details page or drag items here from the all-items view.'
-                  : isMine
-                    ? 'Create your first web map, form, or feature service to get started.'
-                    : 'When a teammate shares content with you or your group, it will show up here.'
-              }
-              action={
-                isMine && !activeFolder ? (
-                  <Link
-                    href="/items/new"
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Create an item
-                  </Link>
-                ) : null
-              }
-            />
+            // A non-empty search that returns zero rows wins the
+            // copy decision: "no items yet" / "nothing shared with
+            // you yet" reads as "you have no content" which is
+            // wrong (and confusing) when the user just typed
+            // "boggedy boggedy" into the search box.
+            searchParams.q && searchParams.q.trim().length > 0 ? (
+              <EmptyState
+                icon={<Layers className="h-5 w-5" />}
+                title="No items match your search"
+                description={`Nothing in ${activeFolder ? `"${activeFolder.title}"` : isMine ? 'your items' : 'items shared with you'} matches "${searchParams.q}". Try a different term or clear the search.`}
+              />
+            ) : (
+              <EmptyState
+                icon={<Layers className="h-5 w-5" />}
+                title={
+                  activeFolder
+                    ? `${activeFolder.title} is empty`
+                    : isMine
+                      ? 'No items yet'
+                      : 'Nothing shared with you yet'
+                }
+                description={
+                  activeFolder
+                    ? 'Use "Add items" on the folder details page or drag items here from the all-items view.'
+                    : isMine
+                      ? 'Create your first web map, form, or feature service to get started.'
+                      : 'When a teammate shares content with you or your group, it will show up here.'
+                }
+                action={
+                  isMine && !activeFolder ? (
+                    <Link
+                      href="/items/new"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Create an item
+                    </Link>
+                  ) : null
+                }
+              />
+            )
           ) : (
             <ItemsView
               items={items}
