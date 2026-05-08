@@ -199,7 +199,26 @@ export default async function EditorRuntimePage({ params }: Props) {
     if (it && it.data) pickLists[it.id] = it.data as PickListData;
   }
 
-  const canEdit = me.id === editorItem.ownerId || me.orgRole === 'admin';
+  // #81: previously hardcoded to owner-or-admin which silently hid
+  // the entire write-side toolbar for any explicit-share recipient
+  // (a contributor sharing the editor with edit perms saw a viewer-
+  // only experience). Ask the API for the effective permission set
+  // so per-share grants land correctly. Failure here is a 404 (the
+  // user can't see the editor at all) -- bounce to the standard
+  // not-found path so we don't render a broken half-state.
+  let canEdit = false;
+  try {
+    const perms = await apiFetch<{
+      canRead: boolean;
+      canEdit: boolean;
+      canDownload: boolean;
+      canAdmin: boolean;
+    }>(`/api/items/${params.id}/permissions`);
+    canEdit = perms.canEdit;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('404')) notFound();
+    throw err;
+  }
 
   return (
     <EditorRuntime

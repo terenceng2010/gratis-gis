@@ -35,6 +35,7 @@ import { ItemsService } from './items.service.js';
 import { DataSnapshotService } from './data-snapshot.service.js';
 import { WebMapJsonService } from './web-map-json.service.js';
 import { WebMapJsonImportService } from './web-map-json-import.service.js';
+import { SharingService } from './sharing.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 class CreateItemDto {
@@ -161,6 +162,7 @@ export class ItemsController {
     private readonly snapshots: DataSnapshotService,
     private readonly webMapJsonService: WebMapJsonService,
     private readonly webMapJsonImport: WebMapJsonImportService,
+    private readonly sharing: SharingService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -274,6 +276,34 @@ export class ItemsController {
         });
     }
     return item;
+  }
+
+  /**
+   * Effective permissions for the current user against this item.
+   * Surfaces the same canRead / canEdit / canDownload / canAdmin
+   * decisions SharingService computes server-side, so client surfaces
+   * (editor runtime, map editor, attribute table) can gate write
+   * affordances without re-implementing the policy. #81: editor
+   * runtime previously hardcoded canEdit to owner-or-admin which
+   * silently hid the toolbar for explicit-share recipients; this
+   * endpoint is the supported way to ask the question.
+   */
+  @Get(':id/permissions')
+  async permissions(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ) {
+    // get() throws 404 when the user can't see the item at all, which
+    // is the right behavior here -- if you can't read it, the answer
+    // to "what can you do with it?" is "nothing" and a 404 keeps the
+    // existence of unreachable items invisible.
+    const item = await this.items.get(user, id);
+    return {
+      canRead: this.sharing.canRead(user, item, item.shares ?? []),
+      canEdit: this.sharing.canEdit(user, item, item.shares ?? []),
+      canDownload: this.sharing.canDownload(user, item, item.shares ?? []),
+      canAdmin: this.sharing.canAdmin(user, item),
+    };
   }
 
   /** Items that THIS item references (e.g. feature services powering
