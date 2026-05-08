@@ -355,6 +355,14 @@ export function EditorRuntime({
   const activeTargetKeyRef = useRef(activeTargetKey);
   activeTargetKeyRef.current = activeTargetKey;
 
+  // Terra-draw id of the in-flight Add sketch. Set when the user
+  // finishes a draw and we capture its geometry into pendingFeature;
+  // cleared when the user submits or cancels. Keeping the sketch in
+  // terra-draw's store while the attribute form is open lets the
+  // user see where the point/line/polygon will land before they
+  // commit, so they can decide whether to cancel and re-place.
+  const pendingDrawFeatureIdRef = useRef<string | number | null>(null);
+
   // Active feature template (#121). When the chosen target has
   // templates configured, picking one overrides the geometry tool
   // for the next draw and prefills the attribute form with the
@@ -1167,6 +1175,7 @@ export function EditorRuntime({
           }>;
           clear: () => void;
           setMode: (m: string) => void;
+          removeFeatures: (ids: Array<string | number>) => void;
         }
       | null;
     if (!draw) return;
@@ -1206,10 +1215,15 @@ export function EditorRuntime({
           initialProperties = { ...tpl.presetAttributes };
         }
       }
-      // Snapshot the geometry, then drop it from terra-draw's
-      // internal store so the sketch doesn't linger after the
-      // attribute form opens. The real feature lands on the layer's
-      // geojson source after submit + refresh.
+      // Capture the geometry into pendingFeature and KEEP the sketch
+      // in terra-draw's store. The user can see where the new
+      // feature is going to land while filling out the attribute
+      // form, and decide whether to cancel and re-place. The sketch
+      // is removed in submitPending (after the real feature lands
+      // on the layer source) or cancelPending (the user backed out).
+      // Park terra-draw in select mode so subsequent canvas clicks
+      // don't keep adding new sketches while the form is up.
+      pendingDrawFeatureIdRef.current = f.id;
       setPendingFeature({
         mode: 'create',
         geometry: f.geometry,
@@ -1217,9 +1231,6 @@ export function EditorRuntime({
         featureId: null,
         initialProperties,
       });
-      draw.clear();
-      // Park the draw in select mode so click events go back to
-      // MapCanvas's popup handler while the attribute form is up.
       draw.setMode('select');
     };
     draw.on('finish', handleFinish);
@@ -1307,6 +1318,36 @@ export function EditorRuntime({
     editor.targets,
     measureMode,
   ]);
+
+  // Map canvas cursor override. The pan default (grab) reads as
+  // "drag the map" and offers no precision affordance for placing a
+  // feature. When the user is in Add mode (or Edit / Delete /
+  // Measure, which also expect precise click placement), force the
+  // canvas cursor to 'crosshair' so the user has a clear target for
+  // dropping the next click. terra-draw sets cursors on its draw
+  // modes but we override here so the behaviour is consistent
+  // across our tools and matches the field PWA's drop-a-point
+  // expectation.
+  useEffect(() => {
+    if (!mapInstance) return;
+    const canvas = mapInstance.getCanvas();
+    if (!canvas) return;
+    const wantCrosshair =
+      (activeTool === 'add' && activeTargetKey !== null) ||
+      activeTool === 'edit' ||
+      activeTool === 'delete' ||
+      activeTool === 'measure';
+    if (wantCrosshair) {
+      canvas.style.cursor = 'crosshair';
+    } else {
+      canvas.style.cursor = '';
+    }
+    return () => {
+      // Reset when the effect tears down so we don't strand the
+      // cursor in a non-default state if the map remounts.
+      canvas.style.cursor = '';
+    };
+  }, [mapInstance, activeTool, activeTargetKey]);
 
   // Eligible-edit predicate. A target is editable when its resolved
   // layer is non-null, the layer is editingEnabled, and the editor
@@ -2057,6 +2098,11 @@ export function EditorRuntime({
       // Success: clear pending, refresh layer, return to select.
       setPendingFeature(null);
       setActiveTool('off');
+      // Drop the in-flight Add sketch from terra-draw now that the
+      // real feature is about to land on the layer source. If we
+      // skipped this, the user would briefly see two copies of the
+      // feature (the sketch + the freshly-loaded source row).
+      clearPendingDrawSketch();
       refreshTarget(target.dataLayerId, target.layerKey);
     } catch (err) {
       setSubmitError(
@@ -2071,10 +2117,34 @@ export function EditorRuntime({
     if (submitting) return;
     setPendingFeature(null);
     setSubmitError(null);
+    // Drop the in-flight Add sketch -- the user backed out and
+    // doesn't want it. If they re-enter Add mode the next click
+    // starts a fresh draw cleanly.
+    clearPendingDrawSketch();
     // Keep the Add tool active so the user can immediately try
     // again rather than re-clicking through the toolbar. Drop the
     // chosen target only if we auto-selected it; respecting the
     // user's manual pick keeps things less surprising.
+  }
+
+  // Helper for the create-flow: removes the sketch we kept visible
+  // while the attribute form was open. Safe to call when the ref is
+  // null (no-ops). Tolerates the case where terra-draw has already
+  // dropped the feature for some other reason (mode switch, draw
+  // restart, etc.).
+  function clearPendingDrawSketch() {
+    const id = pendingDrawFeatureIdRef.current;
+    pendingDrawFeatureIdRef.current = null;
+    if (id == null) return;
+    const draw = drawRef.current as
+      | { removeFeatures: (ids: Array<string | number>) => void }
+      | null;
+    if (!draw) return;
+    try {
+      draw.removeFeatures([id]);
+    } catch {
+      /* feature already gone or terra-draw unmounting */
+    }
   }
 
   const activeTarget = activeTargetKey ? targetByKey.get(activeTargetKey) : undefined;
