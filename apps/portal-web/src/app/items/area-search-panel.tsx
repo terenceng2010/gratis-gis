@@ -85,7 +85,31 @@ export function AreaSearchPanel({
       });
     }
 
+    // #86: live area filter. As the user pans / zooms, fire onApply
+    // with the new viewport so the items list updates without a
+    // separate "Use this area" click. Debounced ~350ms so a drag
+    // settles before the parent fetches; the existing parent-side
+    // logic cancels in-flight requests when a newer apply
+    // supersedes them, so out-of-order responses can't paint stale
+    // results.
+    let debounceHandle: number | null = null;
+    const onMoveEnd = () => {
+      if (debounceHandle !== null) window.clearTimeout(debounceHandle);
+      debounceHandle = window.setTimeout(() => {
+        const m = mapRef.current;
+        if (!m) return;
+        const b = m.getBounds();
+        liveApplyRef.current?.(
+          [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+          bufferKmRef.current,
+        );
+      }, 350);
+    };
+    map.on('moveend', onMoveEnd);
+
     return () => {
+      if (debounceHandle !== null) window.clearTimeout(debounceHandle);
+      map.off('moveend', onMoveEnd);
       map.remove();
       mapRef.current = null;
     };
@@ -94,6 +118,17 @@ export function AreaSearchPanel({
     // stale parent prop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * #86: ref-shadowed copies of the live-apply callback + buffer so
+   * the moveend listener bound at mount can read fresh values
+   * without re-binding (which would re-attach to maplibre on every
+   * render and miss the early move events).
+   */
+  const liveApplyRef = useRef<typeof onApply | null>(onApply);
+  liveApplyRef.current = onApply;
+  const bufferKmRef = useRef<number>(bufferKm);
+  bufferKmRef.current = bufferKm;
 
   function flyToMyLocation() {
     const map = mapRef.current;
@@ -143,7 +178,7 @@ export function AreaSearchPanel({
           <Crosshair className="h-4 w-4 text-accent" />
           <span className="font-medium">Search by area</span>
           <span className="text-xs text-muted">
-            Pan and zoom to an area, then apply.
+            Pan and zoom; the list updates automatically.
           </span>
         </div>
         <button
@@ -191,13 +226,19 @@ export function AreaSearchPanel({
           >
             Cancel
           </button>
+          {/* #86: the area filter is live (debounced moveend pushes
+              the new bbox to onApply). The button is kept as a
+              "force a refetch right now" affordance for users who
+              want to skip the debounce, and as a fallback when
+              JS-side moveend somehow doesn't fire. Disabled state
+              shows the live in-flight refetch. */}
           <button
             type="button"
             onClick={handleApply}
             disabled={busy}
             className="inline-flex h-7 items-center rounded-md border border-accent bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {busy ? 'Searching...' : 'Use this area'}
+            {busy ? 'Searching...' : 'Refresh now'}
           </button>
         </div>
       </div>
