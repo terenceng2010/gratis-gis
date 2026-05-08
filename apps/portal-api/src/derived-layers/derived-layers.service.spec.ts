@@ -91,6 +91,8 @@ function makeDerivedItem(data: DerivedLayerData): Item {
     deletedAt: null,
     bbox: data.bbox,
     bboxSrs: 'EPSG:4326',
+    publicGeoBoundaryId: null,
+    orgGeoBoundaryId: null,
     lastUsageAt: null,
   };
 }

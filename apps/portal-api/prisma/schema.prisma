@@ -343,6 +343,19 @@ model Item {
   /// feature tables on every list query.
   bbox         Float[]    @default([])
   bboxSrs      String?    @default("EPSG:4326") @map("bbox_srs")
+  /// #80: tier-level geo limits. When the access tier is 'public'
+  /// (publicGeoBoundaryId) or 'org' (orgGeoBoundaryId), the read
+  /// path resolves the referenced geo_boundary item and intersects
+  /// the polygon into the predicate stack for that tier. Distinct
+  /// from per-share geoBoundaryId on item_share rows: those are
+  /// per-user / per-group; these are per-access-tier so a public
+  /// data_layer can be clipped to a region for everyone on the
+  /// internet without needing an explicit share row. No DB-level
+  /// FK because `item` is polymorphic; the read path treats a
+  /// missing / wrong-typed target as "no clip" so a broken ref
+  /// cannot silently widen access.
+  publicGeoBoundaryId String? @map("public_geo_boundary_id") @db.Uuid
+  orgGeoBoundaryId    String? @map("org_geo_boundary_id") @db.Uuid
   /// Most recent user-initiated request through the item proxy
   /// (#96). Stamped by ItemProxyController on every successful
   /// fetch (with a 60s in-process throttle so we don't write on

@@ -706,12 +706,21 @@ export class HousekeepingService {
   async buildReferencedItemSet(orgId: string): Promise<Set<string>> {
     const rows = await this.prisma.item.findMany({
       where: { orgId, deletedAt: null },
-      select: { id: true, type: true, data: true },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+        // #80: tier-level boundary refs count toward "this item is
+        // depended on, don't flag it as stale" so a geo_boundary
+        // attached as a public/org tier clip stays fresh.
+        publicGeoBoundaryId: true,
+        orgGeoBoundaryId: true,
+      },
     });
     const referencedIds = new Set<string>();
     const referencedUrlKeys = new Set<string>();
     for (const r of rows) {
-      const deps = extractDependencies({ type: r.type, data: r.data });
+      const deps = extractDependencies(r);
       for (const id of deps.itemIds) referencedIds.add(id);
       for (const u of deps.urls) referencedUrlKeys.add(u);
     }

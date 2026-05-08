@@ -35,12 +35,34 @@ export interface Dependencies {
 }
 
 export function extractDependencies(
-  item: { type: ItemType; data: unknown },
+  item: {
+    type: ItemType;
+    data: unknown;
+    /// #80: tier-level geo limits live as columns on `item`, not in
+    /// data_json, but they're real dependency edges (the boundary
+    /// must exist for the clip to apply, and the cascade-share /
+    /// dependency UI needs to show them). Callers that have the row
+    /// shape pass these through; callers that don't (older code paths
+    /// constructing a synthetic { type, data } shape) leave them
+    /// undefined and the helper degrades to data-only extraction.
+    publicGeoBoundaryId?: string | null;
+    orgGeoBoundaryId?: string | null;
+  },
 ): Dependencies {
   const data = item.data as Record<string, unknown> | null;
   const itemIds = new Set<string>();
   const urls = new Set<string>();
-  if (!data) return { itemIds: [], urls: [] };
+  // Tier-level geo-boundary refs apply to every item type, not just
+  // data_layer, so they're collected before the per-type branches.
+  // Non-data_layer items can carry them too (a public map clipped to
+  // a region; future feature) without code changes here.
+  if (typeof item.publicGeoBoundaryId === 'string' && item.publicGeoBoundaryId.length > 0) {
+    itemIds.add(item.publicGeoBoundaryId);
+  }
+  if (typeof item.orgGeoBoundaryId === 'string' && item.orgGeoBoundaryId.length > 0) {
+    itemIds.add(item.orgGeoBoundaryId);
+  }
+  if (!data) return { itemIds: Array.from(itemIds), urls: [] };
 
   if (item.type === 'map') {
     // The map's basemap is a basemap item (since #21 / Phase 1c, the

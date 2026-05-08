@@ -1111,13 +1111,24 @@ export class ItemsService {
           type: { in: REFERENCER_TYPES },
           deletedAt: null,
         },
-        select: { id: true, type: true, title: true, ownerId: true, data: true },
+        select: {
+          id: true,
+          type: true,
+          title: true,
+          ownerId: true,
+          data: true,
+          // #80: include tier-level boundary refs so a tier-clipped
+          // data_layer's "data_collection that depends on it" walk
+          // doesn't silently miss edges that go through the boundary.
+          publicGeoBoundaryId: true,
+          orgGeoBoundaryId: true,
+        },
       });
       const reverse = new Map<string, string[]>();
       const byId = new Map<string, (typeof referencers)[number]>();
       for (const r of referencers) {
         byId.set(r.id, r);
-        const deps = extractDependencies({ type: r.type, data: r.data });
+        const deps = extractDependencies(r);
         for (const d of deps.itemIds) {
           const arr = reverse.get(d) ?? [];
           arr.push(r.id);
@@ -2154,10 +2165,19 @@ export class ItemsService {
         const batch = frontier.splice(0, frontier.length);
         const rows = await this.prisma.item.findMany({
           where: { id: { in: batch }, deletedAt: null },
-          select: { id: true, type: true, data: true },
+          select: {
+            id: true,
+            type: true,
+            data: true,
+            // #80: tier-level geo-boundary refs are real edges. Pull
+            // them so a public-tier-clipped data_layer surfaces its
+            // boundary in dependency walks (cascade prompts, used-by).
+            publicGeoBoundaryId: true,
+            orgGeoBoundaryId: true,
+          },
         });
         for (const r of rows) {
-          const deps = extractDependencies({ type: r.type, data: r.data });
+          const deps = extractDependencies(r);
           const urlIds = await resolveUrls(deps.urls);
           enqueue([...deps.itemIds, ...urlIds]);
         }
@@ -2234,7 +2254,13 @@ export class ItemsService {
         deletedAt: null,
         id: { not: id },
       },
-      select: { id: true, type: true, data: true },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+        publicGeoBoundaryId: true,
+        orgGeoBoundaryId: true,
+      },
     });
 
     // 3. Walk every other public item's transitive deps, union the
@@ -2243,7 +2269,7 @@ export class ItemsService {
     const stillNeeded = new Set<string>();
     for (const op of otherPublics) {
       // Direct hop: the ids the item explicitly names.
-      const seed = extractDependencies({ type: op.type, data: op.data });
+      const seed = extractDependencies(op);
       const collected = new Set<string>(seed.itemIds);
       const frontier: string[] = [...seed.itemIds];
       // BFS for transitive coverage. Same shape as listDependencies's
@@ -2255,10 +2281,16 @@ export class ItemsService {
         const batch = frontier.splice(0, frontier.length);
         const rows = await this.prisma.item.findMany({
           where: { id: { in: batch }, deletedAt: null },
-          select: { id: true, type: true, data: true },
+          select: {
+            id: true,
+            type: true,
+            data: true,
+            publicGeoBoundaryId: true,
+            orgGeoBoundaryId: true,
+          },
         });
         for (const r of rows) {
-          const deps = extractDependencies({ type: r.type, data: r.data });
+          const deps = extractDependencies(r);
           for (const nid of deps.itemIds) {
             if (!collected.has(nid)) {
               collected.add(nid);
@@ -2328,6 +2360,12 @@ export class ItemsService {
         access: true,
         data: true,
         ownerId: true,
+        // #80: tier-level boundary refs participate in the reverse
+        // index, so a geo_boundary's "Used by" panel surfaces every
+        // item that's clipped to it (not just data_layers/maps that
+        // mention it via data_json).
+        publicGeoBoundaryId: true,
+        orgGeoBoundaryId: true,
       },
     });
 
@@ -2337,7 +2375,7 @@ export class ItemsService {
     // map so BFS stays simple.
     const reverse = new Map<string, string[]>();
     for (const r of referencers) {
-      const deps = extractDependencies({ type: r.type, data: r.data });
+      const deps = extractDependencies(r);
       for (const d of deps.itemIds) {
         const key = `id:${d}`;
         const arr = reverse.get(key) ?? [];
