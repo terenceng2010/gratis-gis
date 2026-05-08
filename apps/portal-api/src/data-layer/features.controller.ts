@@ -642,13 +642,16 @@ export class DataLayerFeaturesController {
     // delete to features the caller created. Owner / admin / public
     // / org-public bypass the scope inside SharingService. The
     // layer-level editingPolicy (#41) tightens every matching share
-    // when set to 'own-rows-only'.
+    // when set to 'own-rows-only'. #83: when the request is a write
+    // (mode='write'), pull the share's editRowScope override; reads
+    // use rowScope as before. Same composition rules either way.
     const layerPolicy = layer.editingPolicy ?? 'all-rows';
     const rowScope = this.sharing.effectiveRowScope(
       user,
       item,
       shares,
       layerPolicy,
+      mode === 'write' ? 'edit' : 'read',
     );
     // Match tables.service's convention: null geometryType means
     // a table sublayer (no geom column was provisioned). undefined

@@ -256,10 +256,20 @@ export class SharingService {
   /**
    * Compute the effective row scope for a caller against an item's
    * features (#40). Returns `'all'` when the caller is the owner, an
-   * org admin, or holds at least one matching share with rowScope
-   * 'all'; returns `'own'` only when every matching share narrows to
-   * the caller's own rows. Pairs with the layer-level
-   * `editingPolicy` (#41) which can tighten further but never loosen.
+   * org admin, or holds at least one matching share with the
+   * action's row scope = 'all'; returns `'own'` only when every
+   * matching share narrows to the caller's own rows. Pairs with the
+   * layer-level `editingPolicy` (#41) which can tighten further but
+   * never loosen.
+   *
+   * #83: the optional `action` arg picks which row-scope column to
+   * read for each share -- 'read' uses `rowScope` (the historical
+   * single column), 'edit' uses `editRowScope` if non-null and
+   * falls back to `rowScope`. So a share at rowScope='all' /
+   * editRowScope='own' lets the grantee see every row but only
+   * edit their own. Default 'read' keeps callers that don't care
+   * about the distinction (read-time only) on the historical
+   * behavior with no change.
    *
    * The semantics are deliberately permissive: any single 'all'
    * grant beats every 'own' grant the user might also have, so a
@@ -274,6 +284,7 @@ export class SharingService {
     item: Item,
     shares: ItemShare[] = [],
     layerPolicy: 'all-rows' | 'own-rows-only' = 'all-rows',
+    action: 'read' | 'edit' = 'read',
   ): 'all' | 'own' {
     // Owner / admin / public / org-public all bypass row scoping
     // entirely. This matches the geoLimitFor exemptions and keeps
@@ -287,7 +298,9 @@ export class SharingService {
 
     // Layer-level baseline (#41). 'own-rows-only' tightens every
     // matching share regardless of its own rowScope; per-share
-    // rowScope can never loosen the layer baseline.
+    // rowScope can never loosen the layer baseline. Applies to both
+    // read and edit -- a layer marked own-rows-only narrows every
+    // grantee on both axes.
     if (layerPolicy === 'own-rows-only') return 'own';
 
     const matching = shares.filter((s) => this.shareMatches(user, s));
@@ -299,10 +312,19 @@ export class SharingService {
       // caller-id mismatch.
       return 'own';
     }
-    // Any single matching share with rowScope 'all' (default)
-    // upgrades the effective scope to 'all'.
+    // Any single matching share with the action's row scope = 'all'
+    // (default) upgrades the effective scope to 'all'. For 'edit',
+    // a null editRowScope falls back to the share's rowScope so
+    // the historical behavior is preserved on every existing row.
     for (const s of matching) {
-      const sc = (s as ItemShare & { rowScope?: 'all' | 'own' }).rowScope;
+      const row = s as ItemShare & {
+        rowScope?: 'all' | 'own';
+        editRowScope?: 'all' | 'own' | null;
+      };
+      const sc =
+        action === 'edit'
+          ? (row.editRowScope ?? row.rowScope)
+          : row.rowScope;
       if (!sc || sc === 'all') return 'all';
     }
     return 'own';

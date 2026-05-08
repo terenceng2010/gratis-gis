@@ -695,6 +695,18 @@ model ItemShare {
   /// in your county" in one indexed query.
   rowScope ShareRowScope @default(all) @map("row_scope")
 
+  /// #83: optional override of the read row-scope on writes. When
+  /// null (default), `rowScope` applies to BOTH reads and writes
+  /// -- the historical pre-#83 behavior. When set, `rowScope` is
+  /// the read scope only and this column is the edit scope. Common
+  /// use case: read='all' / edit='own' lets a field surveyor see
+  /// every neighbor's capture for context but only edit their own
+  /// records (preventing accidental stomp). Same composition rules
+  /// as rowScope: union most-permissive across matching shares;
+  /// owner / org admin always bypass; layer-level editingPolicy
+  /// can tighten further but never loosen.
+  editRowScope ShareRowScope? @map("edit_row_scope")
+
   /// Optional expiry timestamp (#84). When non-null and in the
   /// past, the share no longer grants access -- enforced at
   /// request time in sharing.service.ts and cleaned up by the
