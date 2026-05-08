@@ -28,7 +28,10 @@ name: gratis-gis-prod
 
 services:
   postgres:
-    image: postgis/postgis:16-3.4
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    image: gratis-gis-postgres:prod
     container_name: gratis-gis-prod-postgres
     restart: unless-stopped
     environment:
