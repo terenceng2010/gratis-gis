@@ -6,6 +6,7 @@ import {
   Check,
   List,
   Loader2,
+  Map as MapBaseIcon,
   Save,
   ShieldCheck,
   Table,
@@ -255,6 +256,23 @@ export function MapEditor({
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  // Basemap popover (#74). Mirrors the editor-runtime pattern: an
+  // icon button that opens a small menu listing every basemap with
+  // an active-tick marker. Replaces the verbose labeled <select> so
+  // the map and editor toolbars share the same visual rhythm.
+  const [basemapMenuOpen, setBasemapMenuOpen] = useState(false);
+  const basemapMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!basemapMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (basemapMenuRef.current && !basemapMenuRef.current.contains(t)) {
+        setBasemapMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [basemapMenuOpen]);
   const [legendOpen, setLegendOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
   // Layer id chosen by the per-layer kebab's "Open attribute table"
@@ -689,28 +707,7 @@ export function MapEditor({
     <div className="flex flex-col gap-3">
       {canEdit ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-1 p-3 shadow-card">
-          <label className="text-xs font-medium uppercase tracking-wide text-muted">
-            Basemap
-          </label>
-          <select
-            value={pickerValue}
-            onChange={(e) => setBasemap(e.target.value)}
-            className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-          >
-            {basemaps.length === 0 ? (
-              <option value="">No basemaps available</option>
-            ) : null}
-            {basemaps.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.label}
-              </option>
-            ))}
-          </select>
-          <span className="hidden text-xs text-muted sm:inline">
-            {selectedBasemap?.description ?? ''}
-          </span>
-
-          <label className="ml-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
+          <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
             Default extent
             <select
               value={extentPickerValue}
@@ -737,30 +734,99 @@ export function MapEditor({
           </label>
 
           <div className="ml-auto flex items-center gap-2">
-            <ToolbarToggle
-              Icon={List}
-              label="Legend"
-              active={legendOpen}
-              onClick={() => setLegendOpen((v) => !v)}
-            />
-            <ToolbarToggle
-              Icon={Table}
-              label="Attributes"
-              active={tableOpen}
-              onClick={() => {
-              // Toolbar toggle is the unfocused path: clear any
-              // per-layer focus so the table defaults to the
-              // first-visible queryable layer. (#73)
-              setTableFocusLayerId(null);
-              setTableOpen((v) => !v);
-            }}
-            />
-            <ToolbarToggle
-              Icon={ShieldCheck}
-              label="Layer access"
-              active={matrixOpen}
-              onClick={() => setMatrixOpen((v) => !v)}
-            />
+            {/* #74: icon-only pill matching the Editor App runtime
+                toolbar. Basemap, Legend, Attributes, Layer access
+                are all single-glance toggles; labels were noisy and
+                made the map editor look out of family with the
+                Editor / Viewer / Survey runtimes. Tooltips preserve
+                discoverability; aria-pressed / aria-expanded keep
+                accessibility intact. */}
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
+              <div ref={basemapMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setBasemapMenuOpen((v) => !v)}
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                    basemapMenuOpen ? 'bg-purple-100 text-purple-800' : ''
+                  }`}
+                  title={`Basemap${selectedBasemap ? `: ${selectedBasemap.label}` : ''}`}
+                  aria-label="Basemap"
+                  aria-haspopup="menu"
+                  aria-expanded={basemapMenuOpen}
+                >
+                  <MapBaseIcon className="h-5 w-5" />
+                </button>
+                {basemapMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                  >
+                    <div className="border-b border-border bg-surface-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                      Basemap
+                    </div>
+                    {basemaps.length === 0 ? (
+                      <div className="px-3 py-2 italic text-muted">
+                        No basemaps available
+                      </div>
+                    ) : (
+                      <ul className="max-h-72 overflow-auto py-1">
+                        {basemaps.map((b) => {
+                          const active = pickerValue === b.id;
+                          return (
+                            <li key={b.id}>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setBasemap(b.id);
+                                  setBasemapMenuOpen(false);
+                                }}
+                                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
+                                  active
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : 'text-ink-1'
+                                }`}
+                              >
+                                <span className="truncate">{b.label}</span>
+                                {active ? (
+                                  <span className="ml-auto text-[10px] uppercase tracking-wide">
+                                    active
+                                  </span>
+                                ) : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <ToolbarIconToggle
+                Icon={List}
+                label="Legend"
+                active={legendOpen}
+                onClick={() => setLegendOpen((v) => !v)}
+              />
+              <ToolbarIconToggle
+                Icon={Table}
+                label="Attribute table"
+                active={tableOpen}
+                onClick={() => {
+                  // Toolbar toggle is the unfocused path: clear any
+                  // per-layer focus so the table defaults to the
+                  // first-visible queryable layer. (#73)
+                  setTableFocusLayerId(null);
+                  setTableOpen((v) => !v);
+                }}
+              />
+              <ToolbarIconToggle
+                Icon={ShieldCheck}
+                label="Layer access"
+                active={matrixOpen}
+                onClick={() => setMatrixOpen((v) => !v)}
+              />
+            </div>
             {saved ? (
               <span className="inline-flex items-center gap-1 text-xs text-success">
                 <Check className="h-3.5 w-3.5" />
@@ -783,26 +849,30 @@ export function MapEditor({
           </div>
         </div>
       ) : (
-        /* Non-edit toolbar still needs the viewer tools. */
+        /* Non-edit (viewer) toolbar -- icon-only pill, same style as
+           the canEdit path so the read view doesn't grow labels back
+           when admin rights are missing. */
         <div className="flex items-center justify-end gap-2">
-          <ToolbarToggle
-            Icon={List}
-            label="Legend"
-            active={legendOpen}
-            onClick={() => setLegendOpen((v) => !v)}
-          />
-          <ToolbarToggle
-            Icon={Table}
-            label="Attributes"
-            active={tableOpen}
-            onClick={() => {
-              // Toolbar toggle is the unfocused path: clear any
-              // per-layer focus so the table defaults to the
-              // first-visible queryable layer. (#73)
-              setTableFocusLayerId(null);
-              setTableOpen((v) => !v);
-            }}
-          />
+          <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
+            <ToolbarIconToggle
+              Icon={List}
+              label="Legend"
+              active={legendOpen}
+              onClick={() => setLegendOpen((v) => !v)}
+            />
+            <ToolbarIconToggle
+              Icon={Table}
+              label="Attribute table"
+              active={tableOpen}
+              onClick={() => {
+                // Toolbar toggle is the unfocused path: clear any
+                // per-layer focus so the table defaults to the
+                // first-visible queryable layer. (#73)
+                setTableFocusLayerId(null);
+                setTableOpen((v) => !v);
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -984,7 +1054,14 @@ function hydrateLabels(
   return merged;
 }
 
-function ToolbarToggle({
+/**
+ * Icon-only toolbar toggle. Used inside the right-side toolbar pill
+ * along with the basemap popover to give the map editor the same
+ * visual rhythm as the editor / viewer / survey runtimes (#74).
+ * Label is preserved as title + aria-label for tooltips and screen
+ * readers.
+ */
+function ToolbarIconToggle({
   Icon,
   label,
   active,
@@ -1000,14 +1077,13 @@ function ToolbarToggle({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-card ${
-        active
-          ? 'border-accent bg-accent/10 text-accent'
-          : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+      title={label}
+      aria-label={label}
+      className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+        active ? 'bg-purple-100 text-purple-800' : ''
       }`}
     >
-      <Icon className="h-4 w-4" />
-      {label}
+      <Icon className="h-5 w-5" />
     </button>
   );
 }
