@@ -1319,33 +1319,37 @@ export function EditorRuntime({
     measureMode,
   ]);
 
-  // Map canvas cursor override. The pan default (grab) reads as
-  // "drag the map" and offers no precision affordance for placing a
-  // feature. When the user is in Add mode (or Edit / Delete /
-  // Measure, which also expect precise click placement), force the
-  // canvas cursor to 'crosshair' so the user has a clear target for
-  // dropping the next click. terra-draw sets cursors on its draw
-  // modes but we override here so the behaviour is consistent
-  // across our tools and matches the field PWA's drop-a-point
-  // expectation.
+  // Map cursor override. MapLibre's pan default (grab/grabbing
+  // hand) reads as "drag the map" and offers no precision
+  // affordance for placing a feature. When the user is in Add mode
+  // (or Edit / Delete / Measure, which also expect precise click
+  // placement), force the cursor to 'crosshair' so the user has a
+  // clear target for dropping the next click.
+  //
+  // The cursor has to be set on the canvas-container (not the
+  // canvas itself): MapLibre styles `.maplibregl-canvas-container.maplibregl-interactive`
+  // with `cursor: grab` directly, so inheritance shows grab on the
+  // child canvas regardless of what the canvas's own cursor style
+  // says. Setting cursor inline on the container wins over the
+  // class-level rule.
   useEffect(() => {
     if (!mapInstance) return;
-    const canvas = mapInstance.getCanvas();
-    if (!canvas) return;
+    const container = mapInstance.getCanvasContainer();
+    if (!container) return;
     const wantCrosshair =
       (activeTool === 'add' && activeTargetKey !== null) ||
       activeTool === 'edit' ||
       activeTool === 'delete' ||
       activeTool === 'measure';
     if (wantCrosshair) {
-      canvas.style.cursor = 'crosshair';
+      container.style.cursor = 'crosshair';
     } else {
-      canvas.style.cursor = '';
+      container.style.cursor = '';
     }
     return () => {
       // Reset when the effect tears down so we don't strand the
       // cursor in a non-default state if the map remounts.
-      canvas.style.cursor = '';
+      container.style.cursor = '';
     };
   }, [mapInstance, activeTool, activeTargetKey]);
 
