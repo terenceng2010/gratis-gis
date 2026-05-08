@@ -135,6 +135,13 @@ export function ItemsView({
   const [templateFilter, setTemplateFilter] = useState<Set<WebAppTemplate>>(
     new Set(),
   );
+  // #87: owner filter. Empty Set means "all owners" (no narrowing).
+  // Multi-select unions ("show items owned by alice OR bob"); same
+  // semantics as the existing type / template filters. Only useful
+  // when scope='all' (the My-items scope inherently restricts to
+  // the current user); the popover hides the section when scope is
+  // mine to keep the panel quiet.
+  const [ownerFilter, setOwnerFilter] = useState<Set<string>>(new Set());
   // Bulk-select state: ids of items the current user has ticked for
   // ownership reassignment. Kept as a Set so toggles are O(1). Only
   // items the user can manage (their own + all for admins) can land
@@ -362,6 +369,46 @@ export function ItemsView({
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [sourceItems]);
 
+  // #87: owner facet. Build counts from sourceItems so the filter
+  // popover only shows owners actually present in the list (matches
+  // how the type / template facets work). Map ownerId -> count.
+  const ownerCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const it of sourceItems) {
+      counts.set(it.ownerId, (counts.get(it.ownerId) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [sourceItems]);
+  // #87: build owner labels from whatever the parent payload happens
+  // to embed (item.owner is included on the items-list response when
+  // available; falls back to a short uuid prefix). Avoids a separate
+  // /api/users round-trip just to populate the filter chips.
+  const ownerLabels = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const it of sourceItems) {
+      if (out[it.ownerId]) continue;
+      const ownerInfo = (
+        it as unknown as {
+          owner?: { fullName?: string | null; username?: string | null };
+        }
+      ).owner;
+      const label =
+        ownerInfo?.fullName?.trim() ||
+        ownerInfo?.username?.trim() ||
+        `${it.ownerId.slice(0, 8)}...`;
+      out[it.ownerId] = label;
+    }
+    return out;
+  }, [sourceItems]);
+  function onToggleOwner(userId: string) {
+    setOwnerFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  }
+
   const filteredItems = useMemo(() => {
     let pool =
       typeFilter.size === 0
@@ -378,12 +425,16 @@ export function ItemsView({
         return t ? templateFilter.has(t) : false;
       });
     }
+    // #87: owner facet. Multi-select unions (alice OR bob).
+    if (ownerFilter.size > 0) {
+      pool = pool.filter((it) => ownerFilter.has(it.ownerId));
+    }
     // Sort on every filter/sort change. copyWithin keeps the original
     // array intact (it's the server prop).
     const sorted = [...pool];
     sorted.sort((a, b) => compareItems(a, b, sortBy));
     return sorted;
-  }, [sourceItems, typeFilter, templateFilter, sortBy]);
+  }, [sourceItems, typeFilter, templateFilter, ownerFilter, sortBy]);
 
   function toggleType(t: ItemType) {
     setTypeFilter((prev) => {
@@ -852,6 +903,10 @@ export function ItemsView({
         areaPanelOpen={areaPanelOpen}
         onToggleAreaPanel={() => setAreaPanelOpen((v) => !v)}
         onClearAreaSearch={clearAreaSearch}
+        ownerFilter={ownerFilter}
+        ownerCounts={ownerCounts}
+        ownerLabels={ownerLabels}
+        onToggleOwner={onToggleOwner}
       />
       {areaPanelOpen ? (
         <AreaSearchPanel
@@ -1564,6 +1619,11 @@ interface ToolbarProps {
   areaPanelOpen: boolean;
   onToggleAreaPanel: () => void;
   onClearAreaSearch: () => void;
+  /** #87: owner facet props plumbed through from ItemsView. */
+  ownerFilter: Set<string>;
+  ownerCounts: Array<[string, number]>;
+  ownerLabels: Record<string, string>;
+  onToggleOwner: (userId: string) => void;
 }
 
 function Toolbar({
@@ -1587,6 +1647,10 @@ function Toolbar({
   areaPanelOpen,
   onToggleAreaPanel,
   onClearAreaSearch,
+  ownerFilter,
+  ownerCounts,
+  ownerLabels,
+  onToggleOwner,
 }: ToolbarProps) {
   // Active-filter labels for the inline summary chip below the
   // toolbar. Type labels resolve through getItemTypeLabel so the
@@ -1678,6 +1742,10 @@ function Toolbar({
           areaPanelOpen={areaPanelOpen}
           onToggleAreaPanel={onToggleAreaPanel}
           onClearAreaSearch={onClearAreaSearch}
+          ownerFilter={ownerFilter}
+          ownerCounts={ownerCounts}
+          ownerLabels={ownerLabels}
+          onToggleOwner={onToggleOwner}
         />
 
         <label className="inline-flex items-center gap-1.5 text-xs text-muted">

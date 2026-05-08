@@ -57,6 +57,18 @@ interface Props {
   areaPanelOpen: boolean;
   onToggleAreaPanel: () => void;
   onClearAreaSearch: () => void;
+  /** #87: owner facet. Empty Set means "all owners"; multi-select
+   *  unions ("show items owned by alice OR bob"). Only shown when
+   *  more than one distinct owner appears in the visible item set
+   *  (a single-owner list has nothing to narrow). Counts come from
+   *  the visible items so a chip's number always matches a row in
+   *  the grid. ownerLabels maps userId -> human label (fullName
+   *  first, then username, then short uuid prefix); the popover
+   *  doesn't fetch the user list itself. */
+  ownerFilter?: Set<string>;
+  ownerCounts?: Array<[string, number]>;
+  ownerLabels?: Record<string, string>;
+  onToggleOwner?: (userId: string) => void;
 }
 
 /**
@@ -83,12 +95,19 @@ export function FilterPopover({
   areaPanelOpen,
   onToggleAreaPanel,
   onClearAreaSearch,
+  ownerFilter,
+  ownerCounts,
+  ownerLabels,
+  onToggleOwner,
 }: Props) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   const activeCount =
-    typeFilter.size + templateFilter.size + (areaActive ? 1 : 0);
+    typeFilter.size +
+    templateFilter.size +
+    (areaActive ? 1 : 0) +
+    (ownerFilter?.size ?? 0);
 
   // Close on outside click + Escape. Same pattern as folder-row-menu.
   useEffect(() => {
@@ -237,6 +256,45 @@ export function FilterPopover({
                     >
                       <Icon className={`h-3 w-3 ${active ? '' : accent}`} />
                       {TEMPLATE_LABELS[t] ?? t}
+                      <span className="text-muted">({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
+
+          {/* #87: Owner facet. Renders only when more than one
+              distinct owner appears in the visible items -- a
+              single-owner list has nothing to narrow, so showing
+              the section would be noise. The chip count comes from
+              the visible items so a chip's number always matches a
+              row in the grid. */}
+          {ownerCounts && ownerCounts.length > 1 && onToggleOwner ? (
+            <>
+              <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
+                  Owner
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {ownerCounts.map(([userId, count]) => {
+                  const active = ownerFilter?.has(userId) ?? false;
+                  const label =
+                    ownerLabels?.[userId] ?? `${userId.slice(0, 8)}...`;
+                  return (
+                    <button
+                      key={userId}
+                      type="button"
+                      onClick={() => onToggleOwner(userId)}
+                      aria-pressed={active}
+                      className={`inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors ${
+                        active
+                          ? 'border-accent bg-accent/10 text-accent'
+                          : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+                      }`}
+                    >
+                      {label}
                       <span className="text-muted">({count})</span>
                     </button>
                   );
