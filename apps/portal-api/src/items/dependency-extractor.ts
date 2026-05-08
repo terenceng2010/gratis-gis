@@ -75,6 +75,19 @@ export function extractDependencies(
     if (typeof basemapRef === 'string' && basemapRef.length > 0) {
       itemIds.add(basemapRef);
     }
+    // #79: defaultExtentBoundaryId (camera frame) and clipBoundaryId
+    // (runtime view scope) both reference geo_boundary items. Treat
+    // both as hard refs so a boundary used by either knob shows up
+    // in "Used by" and isn't quietly orphaned.
+    const extentRef = (data as { defaultExtentBoundaryId?: unknown })
+      .defaultExtentBoundaryId;
+    if (typeof extentRef === 'string' && extentRef.length > 0) {
+      itemIds.add(extentRef);
+    }
+    const clipRef = (data as { clipBoundaryId?: unknown }).clipBoundaryId;
+    if (typeof clipRef === 'string' && clipRef.length > 0) {
+      itemIds.add(clipRef);
+    }
 
     const layers = Array.isArray((data as { layers?: unknown }).layers)
       ? ((data as { layers: unknown[] }).layers as Array<Record<string, unknown>>)

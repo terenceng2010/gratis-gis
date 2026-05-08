@@ -634,6 +634,25 @@ export function MapEditor({
    *  empty string for "no default extent". */
   const extentPickerValue = map.defaultExtentBoundaryId ?? '';
 
+  /**
+   * #79: clip-boundary picker. Distinct from defaultExtent: this
+   * scopes the data the runtime SHOWS (every layer's read clipped
+   * to the polygon), not just the camera. Trust posture explicitly
+   * NOT access control: see help text rendered below the picker.
+   */
+  function setClipBoundaryId(value: string) {
+    setMap((m) => {
+      if (!value) {
+        const next = { ...m };
+        delete (next as Partial<MapData>).clipBoundaryId;
+        return next as MapData;
+      }
+      return { ...m, clipBoundaryId: value };
+    });
+    markDirty();
+  }
+  const clipPickerValue = map.clipBoundaryId ?? '';
+
   function setLayers(next: MapLayer[]) {
     setMap((m) => ({ ...m, layers: next }));
     markDirty();
@@ -707,6 +726,30 @@ export function MapEditor({
     <div className="flex flex-col gap-3">
       {canEdit ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-1 p-3 shadow-card">
+          <label
+            className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted"
+            title="View scope: layers in this map only show features inside the boundary. NOT access control -- the underlying layers still serve their full data. Use share geo limits or tier-level limits on the layer item to actually lock data down."
+          >
+            View scope
+            <select
+              value={clipPickerValue}
+              onChange={(e) => setClipBoundaryId(e.target.value)}
+              disabled={geoBoundaries.length === 0}
+              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm text-ink-1 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {/* #79: "View scope" intentionally not "Restrict to" /
+                  "Lock to" -- the clip is a UX convenience, not access
+                  control (the layer's data is still readable through
+                  the layer item). Authors who want real scoping use
+                  share or tier-level geo limits on the layer. */}
+              <option value="">{'(no clip)'}</option>
+              {geoBoundaries.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
             Default extent
             <select

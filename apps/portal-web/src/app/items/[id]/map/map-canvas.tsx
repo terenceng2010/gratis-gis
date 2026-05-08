@@ -193,6 +193,12 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // list without re-running their setup effect on every prop update.
   const layersRef = useRef<typeof map.layers>(map.layers);
   layersRef.current = map.layers;
+  // #79: ref-shadowed copy of the map-level clip boundary so the
+  // sourceData() callsites inside imperative refs and viewport-
+  // driven refetches read the live value without remounting effects
+  // when only the clip changes.
+  const clipBoundaryRef = useRef<string | undefined>(map.clipBoundaryId);
+  clipBoundaryRef.current = map.clipBoundaryId;
   // Refs the selection handlers read so we don't have to re-wire
   // mouse listeners every time the selection or tool changes.
   const selectionRef = useRef(selection);
@@ -270,7 +276,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         // every prop update.
         const layer = (layersRef.current ?? []).find((l) => l.id === layerId);
         if (!layer) return;
-        const data = sourceData(layer);
+        const data = sourceData(layer, clipBoundaryRef.current);
         if (data === null) return;
         // GeoJSONSource.setData accepts URL or inline FC. Calling it
         // with the source's current URL forces MapLibre to refetch,
@@ -535,7 +541,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       m.jumpTo({ center: [c.lng, c.lat], zoom: z, bearing: b, pitch: p });
       await loadAllIcons(m);
       if (cancelled) return;
-      syncOverlays(m, layersRef.current, hoveredRef);
+      syncOverlays(m, layersRef.current, hoveredRef, clipBoundaryRef.current);
       setIconsTick((t) => t + 1);
     };
 
@@ -590,15 +596,18 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const once = () => {
         if (!m.isStyleLoaded()) return;
         m.off('styledata', once);
-        syncOverlays(m, map.layers, hoveredRef);
+        syncOverlays(m, map.layers, hoveredRef, map.clipBoundaryId);
       };
       m.on('styledata', once);
       return () => {
         m.off('styledata', once);
       };
     }
-    syncOverlays(m, map.layers, hoveredRef);
-  }, [map.layers, iconsTick]);
+    syncOverlays(m, map.layers, hoveredRef, map.clipBoundaryId);
+    // Also re-sync when the map-level clip changes so existing
+    // overlay sources pick up / drop the ?clip query param without
+    // the user needing to reload (#79).
+  }, [map.layers, map.clipBoundaryId, iconsTick]);
 
   // Live bbox-driven refetch for ArcGIS REST layers. Runs after
   // syncOverlays (same dep array, later in the file), so the sources
@@ -1719,6 +1728,13 @@ function syncOverlays(
   m: maplibregl.Map,
   layers: MapLayer[],
   hoveredRef: React.MutableRefObject<{ sourceId: string; featureId: string | number } | null>,
+  /**
+   * #79: optional map-level clip boundary that applies to every
+   * data-layer source unless the layer carries its own
+   * boundaryFilterItemId. UX-level scope only; the trust posture
+   * lives on MapData.clipBoundaryId.
+   */
+  mapClipBoundaryId?: string,
 ) {
   // Remove previously-added overlay layers. Everything we own starts
   // with `gg:` so we can distinguish from basemap layers.
@@ -1744,7 +1760,7 @@ function syncOverlays(
   for (const layer of layers) {
     if (!layer.visible) continue;
     const sourceId = `gg:${layer.id}`;
-    const data = sourceData(layer);
+    const data = sourceData(layer, mapClipBoundaryId);
     if (!data) continue;
     // #318: v3 data-layer sources use `promoteId: '_global_id'` so
     // MapLibre's runtime feature.id pulls from the row's stable UUID
@@ -2286,7 +2302,17 @@ function rendererColor(
  * (and its own cache / cancellation). The API route passes through
  * our auth, so no credentials juggling client-side.
  */
-function sourceData(layer: MapLayer): GeoJSON.FeatureCollection | string | null {
+function sourceData(
+  layer: MapLayer,
+  /**
+   * #79: optional map-level clip boundary that applies to every
+   * layer in the map when the layer doesn't already carry its own
+   * `boundaryFilterItemId`. UX-level scope (not access control); see
+   * MapData.clipBoundaryId for the trust posture. The per-layer
+   * boundary still wins so a layer can opt into a tighter scope.
+   */
+  mapClipBoundaryId?: string,
+): GeoJSON.FeatureCollection | string | null {
   if (layer.source.kind === 'geojson-url') return layer.source.url;
   if (layer.source.kind === 'geojson-inline') {
     return layer.source.geojson as GeoJSON.FeatureCollection;
@@ -2311,8 +2337,13 @@ function sourceData(layer: MapLayer): GeoJSON.FeatureCollection | string | null 
     const base = layer.source.layerKey
       ? `/api/portal/items/${layer.source.itemId}/layers/${encodeURIComponent(layer.source.layerKey)}/geojson`
       : `/api/portal/items/${layer.source.itemId}/geojson`;
-    if (layer.boundaryFilterItemId) {
-      const qs = new URLSearchParams({ clip: layer.boundaryFilterItemId });
+    // #79: per-layer boundary wins over the map-level clip; if the
+    // layer didn't set one, fall back to the map's clipBoundaryId
+    // so every layer reads through the same view-scope polygon.
+    const effectiveClip =
+      layer.boundaryFilterItemId ?? mapClipBoundaryId ?? null;
+    if (effectiveClip) {
+      const qs = new URLSearchParams({ clip: effectiveClip });
       return `${base}?${qs}`;
     }
     return base;

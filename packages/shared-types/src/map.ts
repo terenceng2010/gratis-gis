@@ -113,6 +113,28 @@ export interface MapData {
    * boundary's footprint.
    */
   defaultExtentBoundaryId?: string;
+  /**
+   * #79: optional reference to a geo_boundary item that scopes the
+   * VIEW of every layer in this map to features intersecting the
+   * polygon. Distinct from `defaultExtentBoundaryId` (which only
+   * frames the camera): this clips data the runtime sees.
+   *
+   * **Trust posture: this is NOT access control.** The clip is a
+   * UX-level "default view scope" that the runtime applies on the
+   * read path. The underlying layers still serve their full data
+   * through their own URLs; anyone who can read those layers
+   * directly will see the unclipped data. For real access control
+   * use share geo limits on each layer (per-share polygon) or
+   * tier-level geo limits on the layer item (#80) -- those are
+   * enforced at the API layer for that access path.
+   *
+   * Used for city / county sandbox maps, demo / public landing
+   * maps clipped to one region, and partner-org iframe embeds.
+   * The label in the map editor reads "Default view scope" rather
+   * than "Restrict to" so authors aren't tempted to treat it as
+   * a security primitive.
+   */
+  clipBoundaryId?: string;
   center: [number, number];
   zoom: number;
   bearing: number;
