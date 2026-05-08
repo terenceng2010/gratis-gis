@@ -379,19 +379,16 @@ export function AttributeTable({
     };
   }, [attachmentDrawer, attachmentsItemId, attachmentsLayerKey]);
 
-  // Filter the underscore-prefixed editor-tracking fields out of
-  // the default render. They're system metadata and the "Edit
-  // history" toggle below surfaces them in a properly-formatted
-  // view (resolved usernames, locale-formatted timestamps, real
-  // labels) so showing them raw here was pure duplication. Other
-  // underscore-prefixed fields (notably _global_id) stay because
-  // they're not duplicated by anything.
+  // Filter the underscore-prefixed system fields out of the
+  // default render. Editor-tracking fields are surfaced (formatted)
+  // by the "Edit history" toggle; _global_id is a system UUID with
+  // no user-facing purpose. Both are HIDDEN_SYSTEM_FIELDS.
   const activeFields = useMemo(() => {
     const all =
       activeLayer && metadata[activeLayer.id]?.fields.length
         ? metadata[activeLayer.id]!.fields
         : [];
-    return all.filter((f) => !EDITOR_TRACKING_FIELDS.has(f));
+    return all.filter((f) => !HIDDEN_SYSTEM_FIELDS.has(f));
   }, [activeLayer, metadata]);
   const activeFeatures =
     (activeLayer ? featuresByLayer[activeLayer.id] : null)?.features ?? [];
@@ -1381,16 +1378,21 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Field names that the default attribute-table view filters out.
- * Their content is exposed (formatted) via the "Edit history"
- * toggle below, so showing both the raw and formatted versions
- * was pure duplication.
+ * Underscore-prefixed system fields that the default
+ * attribute-table view filters out. The four editor-tracking
+ * fields (_created_at, _created_by, _edited_at, _edited_by) are
+ * surfaced in the formatted "Edit history" toggle when the user
+ * wants them. _global_id is a UUID we use internally for PATCH /
+ * DELETE keying and has no user-facing meaning, so it's hidden
+ * unconditionally; the popup and (later) the field-app surface
+ * the same row through more meaningful identifiers.
  */
-const EDITOR_TRACKING_FIELDS = new Set([
+const HIDDEN_SYSTEM_FIELDS = new Set([
   '_created_at',
   '_created_by',
   '_edited_at',
   '_edited_by',
+  '_global_id',
 ]);
 
 /**
