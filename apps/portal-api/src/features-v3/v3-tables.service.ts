@@ -64,8 +64,12 @@ export class V3TablesService {
     let any = false;
     for (const layer of layers) {
       if (layer.geometryType === null) continue;
-      const tbl = toV3TableName(itemId, layer.id);
+      const scope = `data_layer:${itemId}:${layer.id}`;
       try {
+        // Phase 2.4: aggregate over the engine's current-truth
+        // projection (latest observation per entity, not deleted)
+        // instead of the legacy fs_ table. After Phase 2.2 stopped
+        // populating fs_ tables, the old query returned stale data.
         const rows = await this.prisma.$queryRawUnsafe<
           Array<{
             minx: number | null;
@@ -79,8 +83,15 @@ export class V3TablesService {
              ST_YMin(ST_Extent(geom))::float8 AS miny,
              ST_XMax(ST_Extent(geom))::float8 AS maxx,
              ST_YMax(ST_Extent(geom))::float8 AS maxy
-           FROM "${tbl}"
-           WHERE valid_to IS NULL`,
+           FROM (
+             SELECT DISTINCT ON (entity) entity, geom, kind
+             FROM observation
+             WHERE scope = $1
+               AND valid_to IS NULL
+             ORDER BY entity, valid_from DESC, tx_time DESC
+           ) latest
+           WHERE kind <> 'delete' AND geom IS NOT NULL`,
+          scope,
         );
         const r = rows[0];
         if (
@@ -96,11 +107,8 @@ export class V3TablesService {
           any = true;
         }
       } catch (err) {
-        // Table missing or unreadable -- log but continue. Most often
-        // means the layer has been declared but never provisioned;
-        // that's fine for "compute the extent of what we have".
         this.log.debug(
-          `aggregateBbox: could not read ${tbl}: ${
+          `aggregateBbox: could not read scope ${scope}: ${
             err instanceof Error ? err.message : err
           }`,
         );
@@ -124,22 +132,26 @@ export class V3TablesService {
   ): Promise<Date | null> {
     let max: Date | null = null;
     for (const layer of layers) {
-      const tbl = toV3TableName(itemId, layer.id);
+      const scope = `data_layer:${itemId}:${layer.id}`;
       try {
+        // Phase 2.4: latest tx_time over every observation in the
+        // scope. Each create/update/delete writes a new row, so
+        // MAX(tx_time) == "most recent activity at the feature
+        // level," which is exactly what the housekeeping
+        // stale-item heuristic needs.
         const rows = await this.prisma.$queryRawUnsafe<
           Array<{ ts: Date | null }>
         >(
-          `SELECT MAX(GREATEST(edited_at, COALESCE(valid_to, edited_at))) AS ts
-             FROM "${tbl}"`,
+          `SELECT MAX(tx_time) AS ts FROM observation WHERE scope = $1`,
+          scope,
         );
         const ts = rows[0]?.ts;
         if (ts && (!max || ts > max)) {
           max = ts;
         }
       } catch {
-        // Missing / unreadable table -- treat as no activity. The
-        // create flow's reconcile() runs DDL idempotently so a
-        // missing table is genuinely a "never populated" signal.
+        // No observations for this scope yet -- treat as no
+        // activity. Genuinely a "never populated" signal.
       }
     }
     return max;
@@ -308,15 +320,20 @@ export class V3TablesService {
    * table before this is called).
    */
   async truncateLayer(itemId: string, layerId: string): Promise<void> {
-    const tbl = toV3TableName(itemId, layerId);
-    // RESTART IDENTITY isn't strictly needed (we use UUIDs not serials)
-    // but it's defensive against future schema changes that add a
-    // serial column. CASCADE is required if anything FKs into this
-    // table; nothing does today, but cheap to keep correct.
+    // Phase 2.4: replace-semantics on the engine. The "replace"
+    // ingest path writes "this is the data now, forget what was
+    // there before," which conflicts with the engine's
+    // append-only history. We honour the historical TRUNCATE
+    // contract by deleting every observation in the scope; the
+    // alternative (writing a delete-tombstone per entity)
+    // preserves history but would balloon the log and isn't what
+    // the ingest replace flow asked for.
+    const scope = `data_layer:${itemId}:${layerId}`;
     await this.prisma.$executeRawUnsafe(
-      `TRUNCATE TABLE "${tbl}" RESTART IDENTITY CASCADE`,
+      `DELETE FROM observation WHERE scope = $1`,
+      scope,
     );
-    this.log.log(`Truncated v3 layer table ${tbl}`);
+    this.log.log(`Wiped engine scope ${scope} (replace ingest)`);
   }
 
   /**
