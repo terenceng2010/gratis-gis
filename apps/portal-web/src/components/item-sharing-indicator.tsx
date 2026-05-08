@@ -182,6 +182,11 @@ export function ItemSharingIndicator({
   // server filters out deps still needed by another public item.
   const [revertOpen, setRevertOpen] = useState(false);
   const [revertTarget, setRevertTarget] = useState<ItemAccess>('org');
+  // #84: pre-public tier captured at flip time so the cascade
+  // dialog's Cancel button can revert the parent if the author
+  // changes their mind after reading the dependency list.
+  const [preCascadeAccess, setPreCascadeAccess] =
+    useState<ItemAccess>('private');
   const [principalMeta, setPrincipalMeta] = useState<{
     users: Record<string, PrincipalMeta>;
     groups: Record<string, PrincipalMeta>;
@@ -308,6 +313,10 @@ export function ItemSharingIndicator({
       // non-public starting tier so picking 'public' twice in a
       // row doesn't re-prompt unnecessarily.
       if (next === 'public' && prev !== 'public') {
+        // #84: snapshot the prior tier so the cascade dialog's
+        // Cancel button can revert if the author changes their
+        // mind after seeing the dep list.
+        setPreCascadeAccess(prev);
         setCascadeOpen(true);
       }
       // #334: inverse cascade. Transitioning OUT of public is the
@@ -517,6 +526,13 @@ export function ItemSharingIndicator({
         onClose={() => {
           setCascadeOpen(false);
           router.refresh();
+        }}
+        onCancel={() => {
+          // #84: revert the parent flip back to its pre-public
+          // tier. Reuse setAccess so the optimistic-flip-and-
+          // revert handling is identical to a manual change.
+          setCascadeOpen(false);
+          void setAccess(preCascadeAccess);
         }}
       />
       {/* #334 cascade-revert prompt. Same self-dismissing pattern

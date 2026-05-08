@@ -33,6 +33,17 @@ interface Props {
    *  dismisses (no cascades). The parent stays at access='public'
    *  on the parent regardless; the cascade is purely additive. */
   onClose: () => void;
+  /**
+   * Optional revert callback. When provided, a third "Cancel" button
+   * appears that asks the parent to flip the source item back to
+   * whatever tier it was on before going public, AND closes the
+   * dialog without firing any cascades. Useful when seeing the
+   * dependency list changes the author's mind ("oh I don't actually
+   * want this public after all"). When omitted, only Skip + the
+   * primary cascade button render -- existing call sites that don't
+   * yet plumb the revert path keep working unchanged.
+   */
+  onCancel?: () => void;
 }
 
 /**
@@ -58,6 +69,7 @@ export function PublicCascadeDialog({
   open,
   parentId,
   onClose,
+  onCancel,
 }: Props) {
   const [deps, setDeps] = useState<DepRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -217,25 +229,46 @@ export function PublicCascadeDialog({
           <p className="mt-3 text-xs text-rose-700">{error}</p>
         ) : null}
 
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
-          >
-            Skip
-          </button>
-          <button
-            type="button"
-            onClick={() => void confirm()}
-            disabled={busy || deps === null || selected.size === 0}
-            className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Make {selected.size} item
-            {selected.size === 1 ? '' : 's'} public
-          </button>
+        <div className="mt-5 flex items-center justify-between gap-2">
+          {/* Cancel reverts the parent's flip to public when the
+              caller wires it up; otherwise it's hidden so existing
+              callers don't grow a button that does nothing. Lives
+              on the left so the destructive-ish action is visually
+              separated from the Skip / primary affordances. */}
+          <div>
+            {onCancel ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onCancel();
+                }}
+                disabled={busy}
+                className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              onClick={() => void confirm()}
+              disabled={busy || deps === null || selected.size === 0}
+              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Make {selected.size} item
+              {selected.size === 1 ? '' : 's'} public
+            </button>
+          </div>
         </div>
       </div>
     </div>

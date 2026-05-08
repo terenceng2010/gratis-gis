@@ -145,6 +145,11 @@ export function SharingPanel({
   const [cascadeOpen, setCascadeOpen] = useState(false);
   const [revertOpen, setRevertOpen] = useState(false);
   const [revertTarget, setRevertTarget] = useState<ItemAccess>('org');
+  // #84: pre-public tier so the cascade dialog's Cancel button can
+  // flip back to where we were if the author changes their mind
+  // after seeing the dependency list.
+  const [preCascadeAccess, setPreCascadeAccess] =
+    useState<ItemAccess>('private');
 
   async function updateAccess(next: ItemAccess) {
     if (next === access) return;
@@ -172,6 +177,12 @@ export function SharingPanel({
     // trigger on transitions, not no-ops; the dialog itself
     // self-dismisses if there are no candidate items to flip.
     if (next === 'public' && prev !== 'public') {
+      // Capture the previous tier so the dialog's Cancel can revert
+      // (#84). Different from `prev` above because that's used for
+      // the local optimistic-revert; this is for the deferred user
+      // decision that may arrive seconds later after they read the
+      // dep list.
+      setPreCascadeAccess(prev);
       setCascadeOpen(true);
     }
     if (prev === 'public' && next !== 'public') {
@@ -1489,7 +1500,9 @@ export function SharingPanel({
       {/* #310 cascade prompt: when the author flips this item to
           public, offer to flip every transitively-referenced
           private/org dep to public in one click. The dialog
-          self-dismisses when there are no candidates. */}
+          self-dismisses when there are no candidates. #84: Cancel
+          reverts the parent flip when the author changes their
+          mind after reading the dep list. */}
       <PublicCascadeDialog
         open={cascadeOpen}
         parentId={itemId}
@@ -1497,6 +1510,13 @@ export function SharingPanel({
         onClose={() => {
           setCascadeOpen(false);
           router.refresh();
+        }}
+        onCancel={() => {
+          setCascadeOpen(false);
+          // Revert the parent flip back to its pre-public tier.
+          // updateAccess fires the same PATCH path the original
+          // flip used; revert handling is identical.
+          void updateAccess(preCascadeAccess);
         }}
       />
       {/* #334 inverse cascade: when the author flips OUT of public,
