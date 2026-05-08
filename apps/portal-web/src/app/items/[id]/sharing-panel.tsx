@@ -46,9 +46,17 @@ import {
 } from '@/lib/editor-dependencies';
 import { getItemTypeLabel } from '@/lib/item-type-icon';
 import { ItemAccessMatrix } from '@/components/item-access-matrix';
+import { PublicCascadeDialog } from '@/components/public-cascade-dialog';
+import { PublicCascadeRevertDialog } from '@/components/public-cascade-revert-dialog';
 
 interface Props {
   itemId: string;
+  /**
+   * Item title. Used as the parent label in the public-cascade
+   * prompt that fires when the access tier flips to / from
+   * public, mirroring the items-list sharing pill (#310 / #334).
+   */
+  itemTitle: string;
   /**
    * Item type. Composite types (today: editor) trigger a
    * dependency-access pre-check before each share is created --
@@ -83,6 +91,7 @@ type RowSaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 export function SharingPanel({
   itemId,
+  itemTitle,
   itemType,
   initialAccess,
   initialShares,
@@ -95,6 +104,18 @@ export function SharingPanel({
   const [shares, setShares] = useState(initialShares);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // #310 / #334: cascade prompts on access transitions to / from
+  // public. The items-list sharing pill (item-sharing-indicator)
+  // already wires these; this panel is the other entry point for
+  // changing visibility from the item detail page, and prior to
+  // this it silently flipped without prompting -- so a public map
+  // referencing a private data_layer would render broken to
+  // anonymous viewers with no warning. Same self-dismiss pattern
+  // as the indicator: dialog mounts unconditionally and decides
+  // whether to render based on its own dependency walk.
+  const [cascadeOpen, setCascadeOpen] = useState(false);
+  const [revertOpen, setRevertOpen] = useState(false);
+  const [revertTarget, setRevertTarget] = useState<ItemAccess>('org');
 
   async function updateAccess(next: ItemAccess) {
     if (next === access) return;
@@ -118,6 +139,16 @@ export function SharingPanel({
         setAccessSaveState((s) => (s === 'saved' ? 'idle' : s)),
       1500,
     );
+    // Cascade prompts mirror item-sharing-indicator's logic. Only
+    // trigger on transitions, not no-ops; the dialog itself
+    // self-dismisses if there are no candidate items to flip.
+    if (next === 'public' && prev !== 'public') {
+      setCascadeOpen(true);
+    }
+    if (prev === 'public' && next !== 'public') {
+      setRevertTarget(next);
+      setRevertOpen(true);
+    }
     startTransition(() => router.refresh());
   }
 
@@ -1317,6 +1348,33 @@ export function SharingPanel({
           </div>
         </div>
       ) : null}
+
+      {/* #310 cascade prompt: when the author flips this item to
+          public, offer to flip every transitively-referenced
+          private/org dep to public in one click. The dialog
+          self-dismisses when there are no candidates. */}
+      <PublicCascadeDialog
+        open={cascadeOpen}
+        parentId={itemId}
+        parentTitle={itemTitle}
+        onClose={() => {
+          setCascadeOpen(false);
+          router.refresh();
+        }}
+      />
+      {/* #334 inverse cascade: when the author flips OUT of public,
+          offer to revert deps that were only public because of
+          this parent. */}
+      <PublicCascadeRevertDialog
+        open={revertOpen}
+        parentId={itemId}
+        parentTitle={itemTitle}
+        downgradeTo={revertTarget}
+        onClose={() => {
+          setRevertOpen(false);
+          router.refresh();
+        }}
+      />
     </div>
   );
 }

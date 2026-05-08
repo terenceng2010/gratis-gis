@@ -890,6 +890,7 @@ export default async function ItemDetailPage({ params }: Props) {
           </h2>
           <SharingPanel
             itemId={item.id}
+            itemTitle={item.title}
             // #258: editor-templated web_apps need the same
             // dep-chain pre-share audit the legacy 'editor' type
             // gets. Pass 'editor' for either shape so SharingPanel's
