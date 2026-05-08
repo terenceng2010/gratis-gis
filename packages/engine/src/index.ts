@@ -15,6 +15,30 @@ export type {
   ReadFeature,
 } from './types.js';
 
+export type {
+  Lens,
+  LensQuery,
+  LensRender,
+  LensRenderGeoJson,
+  LensRenderGeoJsonTable,
+  LensRenderMvt,
+  LensRenderScalar,
+  LensCacheHint,
+  LensView,
+  LensAttrFilter,
+  BBox,
+} from './lens.js';
+export { isLens, bboxFromGeometry } from './lens.js';
+
+export type {
+  EsriWebMap,
+  EsriOperationalLayer,
+  EsriBaseMap,
+  EsriInitialState,
+  WebMapJsonContext,
+} from './web-map-json.js';
+export { lensToWebMapJson, webMapJsonToLens } from './web-map-json.js';
+
 export { uuidv7, uuidv7Timestamp, isUuid } from './uuid.js';
 export { cellForGeometry, representativePoint, H3_RESOLUTION } from './cell.js';
 export { validateObservation, ObservationValidationError } from './validate.js';
