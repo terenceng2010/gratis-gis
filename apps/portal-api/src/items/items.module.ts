@@ -11,6 +11,7 @@ import { ServiceProbeController } from './service-probe.controller.js';
 import { EditorPolicyService } from './editor-policy.service.js';
 import { WebMapJsonService } from './web-map-json.service.js';
 import { WebMapJsonImportService } from './web-map-json-import.service.js';
+import { ItemBboxRefreshService } from './item-bbox-refresh.service.js';
 import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
@@ -37,6 +38,7 @@ import { PolicyModule } from '../policy/policy.module.js';
     EditorPolicyService,
     WebMapJsonService,
     WebMapJsonImportService,
+    ItemBboxRefreshService,
   ],
   exports: [
     ItemsService,
@@ -46,6 +48,7 @@ import { PolicyModule } from '../policy/policy.module.js';
     EditorPolicyService,
     WebMapJsonService,
     WebMapJsonImportService,
+    ItemBboxRefreshService,
   ],
 })
 export class ItemsModule {}

@@ -6,6 +6,7 @@ import type { GeoJsonGeometry } from '@gratis-gis/engine';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { DerivedLayerCacheRefreshService } from '../derived-layers/cache-refresh.service.js';
+import { ItemBboxRefreshService } from '../items/item-bbox-refresh.service.js';
 import {
   DataLayerEngine,
   type CreateFeatureArgs,
@@ -65,7 +66,24 @@ export class DataLayerFeaturesService {
     private readonly prisma: PrismaService,
     private readonly cacheRefresh: DerivedLayerCacheRefreshService,
     private readonly dataLayer: DataLayerEngine,
+    private readonly bboxRefresh: ItemBboxRefreshService,
   ) {}
+
+  /**
+   * Fire-and-forget bbox refresh after a feature mutation (#85).
+   * The cached `item.bbox` only gets stamped on data_json saves;
+   * post-engine-pivot feature writes don't touch data_json, so a
+   * data_layer / map / editor that just received feature mutations
+   * keeps stale bbox info and silently disappears from the area
+   * filter. This kicks off an async refresh after every successful
+   * write. Throttled per-item inside the service so a busy field-
+   * app sync doesn't write the bbox row on every observation.
+   * Errors are swallowed (logged inside the service) because a
+   * stamper failure must not break the user's save.
+   */
+  private scheduleBboxRefresh(itemId: string): void {
+    void this.bboxRefresh.refreshItemBbox(itemId);
+  }
 
   /** Current-state feature collection for a layer. Supports bbox
    *  filter + point-in-time (`at`), per-share `geoLimit`, layer
@@ -151,6 +169,7 @@ export class DataLayerFeaturesService {
       layerId,
       inputs.map((f) => f.properties),
     );
+    this.scheduleBboxRefresh(itemId);
 
     return { inserted: written.length };
   }
@@ -236,6 +255,7 @@ export class DataLayerFeaturesService {
     }
 
     void this.cacheRefresh.notifySourceWrite(itemId, layerId, [nextProps]);
+    this.scheduleBboxRefresh(itemId);
     return result;
   }
 
@@ -269,5 +289,6 @@ export class DataLayerFeaturesService {
       globalId: featureId,
       principal,
     });
+    this.scheduleBboxRefresh(itemId);
   }
 }
