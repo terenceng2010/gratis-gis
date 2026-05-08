@@ -34,6 +34,7 @@ import type { CreateItemInput, UpdateItemInput } from './items.service.js';
 import { ItemsService } from './items.service.js';
 import { DataSnapshotService } from './data-snapshot.service.js';
 import { WebMapJsonService } from './web-map-json.service.js';
+import { WebMapJsonImportService } from './web-map-json-import.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 class CreateItemDto {
@@ -84,6 +85,15 @@ class BulkReassignDto {
   @IsOptional()
   @IsEnum(['view', 'download', 'edit', 'admin'])
   keepPreviousOwnerAccess?: 'view' | 'download' | 'edit' | 'admin' | null;
+}
+
+class WebMapJsonImportDto {
+  // The full Esri WebMap JSON document. Validated structurally by
+  // the engine's webMapJsonToLenses; we just enforce "an object"
+  // here so a stray string body fails fast with a 400.
+  @IsObject() webMap!: Record<string, unknown>;
+  @IsOptional() @IsString() @MaxLength(200) title?: string;
+  @IsOptional() @IsString() @MaxLength(5000) description?: string;
 }
 
 class ShareDto {
@@ -150,6 +160,7 @@ export class ItemsController {
     private readonly items: ItemsService,
     private readonly snapshots: DataSnapshotService,
     private readonly webMapJsonService: WebMapJsonService,
+    private readonly webMapJsonImport: WebMapJsonImportService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -404,6 +415,42 @@ export class ItemsController {
     const resolvedHost = forwardedHost?.split(',')[0]?.trim() || host || '';
     const portalBaseUrl = resolvedHost ? `${proto}://${resolvedHost}` : '';
     return this.webMapJsonService.buildForMap({ map, portalBaseUrl });
+  }
+
+  /**
+   * Import an Esri WebMap JSON document. Reverse direction of
+   * `GET /items/:id/web-map.json`. Body: `{ webMap, title?,
+   * description? }`. Walks operationalLayers and produces a
+   * portal `map` item with one MapLayer per recognisable
+   * operationalLayer (FeatureServer / MapServer / GeoJSON URL);
+   * unrecognised entries surface in the response `warnings`
+   * list. The endpoint is idempotent only by what the caller
+   * sends -- it always creates a new map item, never merges with
+   * an existing one.
+   *
+   * The body uses `application/json` and is bounded by the
+   * default Nest body-parser limit (~100 KB by default; large
+   * WebMaps with hundreds of layers may need a higher cap if
+   * they ever land in the wild).
+   */
+  @Post('web-map-json:import')
+  async importWebMapJson(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: WebMapJsonImportDto,
+  ) {
+    if (!dto.webMap || typeof dto.webMap !== 'object') {
+      throw new BadRequestException(
+        'Request body must include a `webMap` object.',
+      );
+    }
+    return this.webMapJsonImport.import({
+      user,
+      webMap: dto.webMap as unknown as Parameters<
+        typeof this.webMapJsonImport.import
+      >[0]['webMap'],
+      ...(dto.title !== undefined && { title: dto.title }),
+      ...(dto.description !== undefined && { description: dto.description }),
+    });
   }
 
   @Post()

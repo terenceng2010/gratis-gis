@@ -42,6 +42,7 @@ export {
   lensesToWebMapJson,
   operationalLayerForLens,
   webMapJsonToLens,
+  webMapJsonToLenses,
 } from './web-map-json.js';
 
 export { uuidv7, uuidv7Timestamp, isUuid } from './uuid.js';

@@ -239,68 +239,94 @@ export function webMapJsonToLens(json: EsriWebMap): {
   lens: Omit<Lens, 'id'>;
   warnings: string[];
 } {
-  const warnings: string[] = [];
-  if (typeof json.version !== 'string' || json.version.length === 0) {
-    throw new Error('webMapJsonToLens: missing or empty `version`');
-  }
-
-  const layer = (json.operationalLayers ?? []).find(
-    (l) =>
-      l.layerType === 'ArcGISFeatureLayer' || l.layerType === 'VectorTileLayer',
-  );
-  if (!layer) {
+  const all = webMapJsonToLenses(json);
+  if (all.lenses.length === 0) {
     throw new Error(
       'webMapJsonToLens: no ArcGISFeatureLayer or VectorTileLayer found',
     );
   }
-  if ((json.operationalLayers ?? []).length > 1) {
+  // Single-lens convenience: surface the first usable layer plus
+  // any extras as a warning. Callers that want every layer should
+  // use webMapJsonToLenses directly.
+  const warnings = [...all.warnings];
+  if (all.lenses.length > 1) {
     warnings.push(
-      `Only the first usable operational layer was imported (${
-        json.operationalLayers!.length
-      } total in source).`,
+      `Only the first usable operational layer was imported (${all.lenses.length} total).`,
     );
   }
-  if (layer.layerType === 'WebTiledLayer') {
-    warnings.push(
-      'WebTiledLayer entries cannot be modelled as a Lens; they were skipped.',
-    );
-  }
-
-  const view = json.initialState?.viewpoint
-    ? lensViewFromViewpoint(json.initialState.viewpoint)
-    : undefined;
-
-  // Parse the Esri definitionExpression upfront so we can decide
-  // whether to set attrFilter at all. A null result means we
-  // couldn't make sense of it; we already pushed a warning, and
-  // skipping the field keeps `attrFilter` strictly undefined
-  // (matching `Omit<Lens, 'id'>['query']['attrFilter']`).
-  const parsedAttrFilter = layer.layerDefinition?.definitionExpression
-    ? attrFilterFromEsriDefinition(
-        layer.layerDefinition.definitionExpression,
-        warnings,
-      )
-    : null;
-
-  const lens: Omit<Lens, 'id'> = {
-    name: layer.title || 'Imported lens',
-    query: {
-      // Resolved by the caller against the URL -> data_layer mapping.
-      scopes: [],
-      ...(parsedAttrFilter !== null && { attrFilter: parsedAttrFilter }),
-    },
-    render:
-      layer.layerType === 'VectorTileLayer'
-        ? { kind: 'mvt' }
-        : { kind: 'geojson' },
-    ...(view !== undefined && { view }),
+  const first = all.lenses[0]!;
+  return {
+    lens: all.view !== undefined ? { ...first, view: all.view } : first,
+    warnings,
   };
-  if (layer.url) {
-    // Stash the source URL so the resolver pass has something to
-    // match. The engine ignores unknown attrs in lens shapes.
-    (lens.query as { sourceUrl?: string }).sourceUrl = layer.url;
+}
+
+/**
+ * Multi-layer reverse converter. Walks every operationalLayer in
+ * the WebMap, produces one Omit<Lens, 'id'> per recognisable
+ * layer, plus a shared LensView from initialState (the WebMap has
+ * one saved camera, not one per layer). Returns warnings for
+ * anything skipped or partially translated.
+ *
+ * The lens scopes array is left empty: the caller has to walk each
+ * lens's stashed `query.sourceUrl` and resolve it to a portal
+ * data_layer (or to an external arcgis_service item) before
+ * persisting. The bulk import service does this by matching URLs
+ * against the org's existing arcgis_service items first, then
+ * falling back to a fresh `arcgis-rest` MapLayer for unknown URLs.
+ */
+export function webMapJsonToLenses(json: EsriWebMap): {
+  lenses: Array<Omit<Lens, 'id'>>;
+  view?: LensView;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  if (typeof json.version !== 'string' || json.version.length === 0) {
+    throw new Error('webMapJsonToLenses: missing or empty `version`');
   }
-  return { lens, warnings };
+  const view =
+    json.initialState?.viewpoint !== undefined
+      ? lensViewFromViewpoint(json.initialState.viewpoint)
+      : undefined;
+  const lenses: Array<Omit<Lens, 'id'>> = [];
+  for (const layer of json.operationalLayers ?? []) {
+    if (
+      layer.layerType !== 'ArcGISFeatureLayer' &&
+      layer.layerType !== 'VectorTileLayer'
+    ) {
+      warnings.push(
+        `Layer "${layer.title ?? layer.id}" has unsupported layerType ${
+          layer.layerType
+        }; skipped.`,
+      );
+      continue;
+    }
+    const parsedAttrFilter = layer.layerDefinition?.definitionExpression
+      ? attrFilterFromEsriDefinition(
+          layer.layerDefinition.definitionExpression,
+          warnings,
+        )
+      : null;
+    const lens: Omit<Lens, 'id'> = {
+      name: layer.title || 'Imported lens',
+      query: {
+        scopes: [],
+        ...(parsedAttrFilter !== null && { attrFilter: parsedAttrFilter }),
+      },
+      render:
+        layer.layerType === 'VectorTileLayer'
+          ? { kind: 'mvt' }
+          : { kind: 'geojson' },
+    };
+    if (layer.url) {
+      // Stash the source URL so the import resolver can match it
+      // against existing portal items. Unknown attrs on the query
+      // shape are preserved by the engine read path.
+      (lens.query as { sourceUrl?: string }).sourceUrl = layer.url;
+    }
+    lenses.push(lens);
+  }
+  return view !== undefined ? { lenses, view, warnings } : { lenses, warnings };
 }
 
 // ---------------------------------------------------------------------------
