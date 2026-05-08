@@ -110,3 +110,113 @@ export function formatArea(sqMeters: number): string {
   }
   return `${(sqMeters / 1_000_000).toFixed(2)} km²`;
 }
+
+// Distance unit catalogue for the measure pane. The user picks one;
+// the readout converts the raw meters into the chosen unit.
+export type DistanceUnit = 'meters' | 'kilometers' | 'feet' | 'miles';
+export const DISTANCE_UNIT_LABELS: Record<DistanceUnit, string> = {
+  meters: 'Meters',
+  kilometers: 'Kilometers',
+  feet: 'Feet',
+  miles: 'Miles',
+};
+const DISTANCE_UNIT_SUFFIX: Record<DistanceUnit, string> = {
+  meters: 'm',
+  kilometers: 'km',
+  feet: 'ft',
+  miles: 'mi',
+};
+
+// Area unit catalogue for the measure pane. Acres + sq mi cover the
+// US imperial side; sq m / ha / sq km cover metric. Sq ft is rare
+// at portal scales but cheap to include.
+export type AreaUnit =
+  | 'square-meters'
+  | 'hectares'
+  | 'square-kilometers'
+  | 'square-feet'
+  | 'acres'
+  | 'square-miles';
+export const AREA_UNIT_LABELS: Record<AreaUnit, string> = {
+  'square-meters': 'Square meters',
+  hectares: 'Hectares',
+  'square-kilometers': 'Square kilometers',
+  'square-feet': 'Square feet',
+  acres: 'Acres',
+  'square-miles': 'Square miles',
+};
+const AREA_UNIT_SUFFIX: Record<AreaUnit, string> = {
+  'square-meters': 'm²',
+  hectares: 'ha',
+  'square-kilometers': 'km²',
+  'square-feet': 'ft²',
+  acres: 'ac',
+  'square-miles': 'mi²',
+};
+
+const METERS_PER_FOOT = 0.3048;
+const METERS_PER_MILE = 1609.344;
+const SQM_PER_SQFT = METERS_PER_FOOT * METERS_PER_FOOT; // 0.09290304
+const SQM_PER_ACRE = 4046.8564224;
+const SQM_PER_SQMI = METERS_PER_MILE * METERS_PER_MILE; // 2_589_988.110336
+
+/**
+ * Convert + format a length (in meters) into the requested unit.
+ * Number of decimals adjusts with magnitude so big values stay
+ * readable and small ones don't lose precision.
+ */
+export function formatLengthIn(meters: number, unit: DistanceUnit): string {
+  if (!Number.isFinite(meters) || meters < 0) {
+    return `0 ${DISTANCE_UNIT_SUFFIX[unit]}`;
+  }
+  let value: number;
+  switch (unit) {
+    case 'meters':
+      value = meters;
+      break;
+    case 'kilometers':
+      value = meters / 1000;
+      break;
+    case 'feet':
+      value = meters / METERS_PER_FOOT;
+      break;
+    case 'miles':
+      value = meters / METERS_PER_MILE;
+      break;
+  }
+  const decimals = value < 1 ? 3 : value < 100 ? 2 : 1;
+  return `${value.toFixed(decimals)} ${DISTANCE_UNIT_SUFFIX[unit]}`;
+}
+
+/**
+ * Convert + format an area (in square meters) into the requested
+ * unit. Same magnitude-aware decimals tuning as formatLengthIn.
+ */
+export function formatAreaIn(sqMeters: number, unit: AreaUnit): string {
+  if (!Number.isFinite(sqMeters) || sqMeters < 0) {
+    return `0 ${AREA_UNIT_SUFFIX[unit]}`;
+  }
+  let value: number;
+  switch (unit) {
+    case 'square-meters':
+      value = sqMeters;
+      break;
+    case 'hectares':
+      value = sqMeters / 10_000;
+      break;
+    case 'square-kilometers':
+      value = sqMeters / 1_000_000;
+      break;
+    case 'square-feet':
+      value = sqMeters / SQM_PER_SQFT;
+      break;
+    case 'acres':
+      value = sqMeters / SQM_PER_ACRE;
+      break;
+    case 'square-miles':
+      value = sqMeters / SQM_PER_SQMI;
+      break;
+  }
+  const decimals = value < 1 ? 3 : value < 100 ? 2 : 1;
+  return `${value.toFixed(decimals)} ${AREA_UNIT_SUFFIX[unit]}`;
+}

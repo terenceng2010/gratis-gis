@@ -53,11 +53,14 @@ import {
 import { AttributeForm } from './attribute-form';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import {
-  formatArea,
-  formatLength,
+  AREA_UNIT_LABELS,
+  DISTANCE_UNIT_LABELS,
+  formatAreaIn,
+  formatLengthIn,
   lineLengthMeters,
   ringAreaSquareMeters,
 } from '@/lib/measure';
+import type { AreaUnit, DistanceUnit } from '@/lib/measure';
 
 interface Props {
   /** The Editor item id (used for the back link and POST URLs). */
@@ -544,13 +547,26 @@ export function EditorRuntime({
 
   // Measure tool state (#122). The measure tool is its own
   // activeTool path: when on, terra-draw enters linestring or
-  // polygon mode (depending on the sub-mode) and the runtime
-  // shows a floating readout that updates as the user clicks.
-  // The measurement is local; nothing persists to a layer.
+  // polygon mode (depending on the sub-mode), the right-docked
+  // Measure pane opens, and the runtime shows the live readout
+  // there. The measurement is local; nothing persists to a layer.
   const [measureMode, setMeasureMode] = useState<'distance' | 'area'>(
     'distance',
   );
-  const [measureReadout, setMeasureReadout] = useState<string | null>(null);
+  // Raw measurements in meters / square meters. The pane formats
+  // these on render based on the user's chosen unit, so unit
+  // changes don't require re-clicking on the map.
+  const [measureLengthMeters, setMeasureLengthMeters] = useState<
+    number | null
+  >(null);
+  const [measureAreaSqm, setMeasureAreaSqm] = useState<number | null>(null);
+  // Per-mode unit pick. Defaults track AGO's US-friendly imperial
+  // defaults; the user can flip via the dropdown and the readout
+  // re-formats live.
+  const [measureDistanceUnit, setMeasureDistanceUnit] =
+    useState<DistanceUnit>('miles');
+  const [measureAreaUnit, setMeasureAreaUnit] =
+    useState<AreaUnit>('square-miles');
   // Internal terra-draw id for the in-progress measurement feature.
   const measureFeatureIdRef = useRef<string | null>(null);
 
@@ -901,7 +917,7 @@ export function EditorRuntime({
         const len = lineLengthMeters(
           g.coordinates as Array<[number, number]>,
         );
-        setMeasureReadout(formatLength(len));
+        setMeasureLengthMeters(len);
       } else if (
         measureMode === 'area' &&
         g.type === 'Polygon' &&
@@ -911,7 +927,7 @@ export function EditorRuntime({
         const a = ringAreaSquareMeters(
           g.coordinates[0] as Array<[number, number]>,
         );
-        setMeasureReadout(formatArea(a));
+        setMeasureAreaSqm(a);
       }
     };
     draw.on('change', handleChange);
@@ -937,7 +953,8 @@ export function EditorRuntime({
       /* ignore */
     }
     measureFeatureIdRef.current = null;
-    setMeasureReadout(null);
+    setMeasureLengthMeters(null);
+    setMeasureAreaSqm(null);
   }
 
   // Switch sub-mode without exiting the tool. Clears the existing
@@ -1514,13 +1531,14 @@ export function EditorRuntime({
       // Measure takes over the canvas the same way Add does, but
       // has nothing to do with editor targets: it's a sketch
       // overlay that reports length / area without persisting.
-      // We default to distance; the floating chip lets the user
-      // toggle to area without exiting and re-entering the tool.
+      // We default to distance; the right-docked Measure pane
+      // lets the user toggle to area without exiting the tool.
       setActiveTool('measure');
       setActiveTargetKey(null);
       setActiveTemplateId(null);
       setMeasureMode('distance');
-      setMeasureReadout(null);
+      setMeasureLengthMeters(null);
+      setMeasureAreaSqm(null);
       return;
     }
     setToast(`${TOOL_LABELS[tool]} lands in a follow-up slice.`);
@@ -2389,18 +2407,133 @@ export function EditorRuntime({
               Active panel / active tool both highlight in purple to
               match. */}
           <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
-            {canEdit ? (
+            {/* Order (per user request): Basemap, Layers, Attribute
+                Table, Form View (survey only), Measure, Select,
+                Edit. Reading left to right: "what map am I looking
+                at?" then "what's on it?" then read-side interaction
+                tools, then write-side editor entry. */}
+            {/* Basemap switcher (#313): icon + popover. Listed
+                first because "what background am I looking at?" is
+                the most foundational question. */}
+            <div ref={basemapMenuRef} className="relative">
               <button
                 type="button"
-                onClick={() => setEditorPaneOpen((v) => !v)}
+                onClick={() => setBasemapMenuOpen((v) => !v)}
                 className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                  editorPaneOpen ? 'bg-purple-100 text-purple-800' : ''
+                  basemapMenuOpen ? 'bg-purple-100 text-purple-800' : ''
                 }`}
-                title={editorPaneOpen ? 'Close editor pane' : 'Open editor pane'}
-                aria-label="Editor pane"
-                aria-pressed={editorPaneOpen}
+                title="Basemap"
+                aria-label="Basemap"
+                aria-haspopup="menu"
+                aria-expanded={basemapMenuOpen}
               >
-                <PencilLine className="h-5 w-5" />
+                <MapBaseIcon className="h-5 w-5" />
+              </button>
+              {basemapMenuOpen ? (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+                >
+                  <div className="border-b border-border bg-surface-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    Basemap
+                  </div>
+                  {basemaps.length === 0 ? (
+                    <div className="px-3 py-2 italic text-muted">
+                      No basemaps available
+                    </div>
+                  ) : (
+                    <ul className="max-h-72 overflow-auto py-1">
+                      {basemaps.map((b) => {
+                        const active = (mapData.basemap || '') === b.id;
+                        return (
+                          <li key={b.id}>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                onBasemapChange(b.id);
+                                setBasemapMenuOpen(false);
+                              }}
+                              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
+                                active
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'text-ink-1'
+                              }`}
+                            >
+                              <span className="truncate">{b.label}</span>
+                              {active ? (
+                                <span className="ml-auto text-[10px] uppercase tracking-wide">
+                                  active
+                                </span>
+                              ) : null}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLayersOpen((v) => !v)}
+              className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                layersOpen ? 'bg-purple-100 text-purple-800' : ''
+              }`}
+              title="Layers"
+              aria-label="Layers"
+              aria-pressed={layersOpen}
+            >
+              <LayersIcon className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTableOpen((v) => !v);
+                if (!tableOpen) setTableFocusLayerId(null);
+              }}
+              className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                tableOpen ? 'bg-purple-100 text-purple-800' : ''
+              }`}
+              title="Attribute table"
+              aria-label="Attribute table"
+              aria-pressed={tableOpen}
+            >
+              <TableIcon className="h-5 w-5" />
+            </button>
+            {/* #320: Form view side panel toggle. Only renders for the
+                Survey runtime (formViewSchema + surveyTargetLayerId).
+                Editor / Viewer don't pass these props so the toggle
+                is hidden on those surfaces. */}
+            {formViewSchema && surveyTargetLayerId ? (
+              <button
+                type="button"
+                onClick={() => setFormViewOpen((v) => !v)}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                  formViewOpen ? 'bg-purple-100 text-purple-800' : ''
+                }`}
+                title="Form view"
+                aria-label="Form view"
+                aria-pressed={formViewOpen}
+              >
+                <ClipboardList className="h-5 w-5" />
+              </button>
+            ) : null}
+            {editor.tools.includes('measure') ? (
+              <button
+                type="button"
+                onClick={() => onToolClick('measure')}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+                  activeTool === 'measure'
+                    ? 'bg-purple-100 text-purple-800'
+                    : ''
+                }`}
+                title="Measure"
+                aria-label="Measure"
+                aria-pressed={activeTool === 'measure'}
+              >
+                <Ruler className="h-5 w-5" />
               </button>
             ) : null}
             {editor.tools.includes('select') ? (() => {
@@ -2494,131 +2627,24 @@ export function EditorRuntime({
                 </div>
               );
             })() : null}
-            {editor.tools.includes('measure') ? (
+            {/* Editor pane toggle: write-side entry. Last in the
+                pill so the order reads "what's on the map" first,
+                then the editor as the action affordance. canEdit
+                only. */}
+            {canEdit ? (
               <button
                 type="button"
-                onClick={() => onToolClick('measure')}
+                onClick={() => setEditorPaneOpen((v) => !v)}
                 className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                  activeTool === 'measure'
-                    ? 'bg-purple-100 text-purple-800'
-                    : ''
+                  editorPaneOpen ? 'bg-purple-100 text-purple-800' : ''
                 }`}
-                title="Measure"
-                aria-label="Measure"
-                aria-pressed={activeTool === 'measure'}
+                title={editorPaneOpen ? 'Close editor pane' : 'Open editor pane'}
+                aria-label="Editor pane"
+                aria-pressed={editorPaneOpen}
               >
-                <Ruler className="h-5 w-5" />
+                <PencilLine className="h-5 w-5" />
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setLayersOpen((v) => !v)}
-              className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                layersOpen ? 'bg-purple-100 text-purple-800' : ''
-              }`}
-              title="Layers"
-              aria-label="Layers"
-              aria-pressed={layersOpen}
-            >
-              <LayersIcon className="h-5 w-5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setTableOpen((v) => !v);
-                if (!tableOpen) setTableFocusLayerId(null);
-              }}
-              className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                tableOpen ? 'bg-purple-100 text-purple-800' : ''
-              }`}
-              title="Attribute table"
-              aria-label="Attribute table"
-              aria-pressed={tableOpen}
-            >
-              <TableIcon className="h-5 w-5" />
-            </button>
-            {/* #320: Form view side panel toggle. Only renders for the
-                Survey runtime (formViewSchema + surveyTargetLayerId).
-                Editor / Viewer don't pass these props so the toggle
-                is hidden on those surfaces. */}
-            {formViewSchema && surveyTargetLayerId ? (
-              <button
-                type="button"
-                onClick={() => setFormViewOpen((v) => !v)}
-                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                  formViewOpen ? 'bg-purple-100 text-purple-800' : ''
-                }`}
-                title="Form view"
-                aria-label="Form view"
-                aria-pressed={formViewOpen}
-              >
-                <ClipboardList className="h-5 w-5" />
-              </button>
-            ) : null}
-            {/* #313: Basemap switcher collapsed to an icon + popover.
-                AGOL-style; cleaner than the inline <select>. The
-                popover lists the org's basemaps with a check on the
-                active one and switches on click. */}
-            <div ref={basemapMenuRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setBasemapMenuOpen((v) => !v)}
-                className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                  basemapMenuOpen ? 'bg-purple-100 text-purple-800' : ''
-                }`}
-                title="Basemap"
-                aria-label="Basemap"
-                aria-haspopup="menu"
-                aria-expanded={basemapMenuOpen}
-              >
-                <MapBaseIcon className="h-5 w-5" />
-              </button>
-              {basemapMenuOpen ? (
-                <div
-                  role="menu"
-                  className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
-                >
-                  <div className="border-b border-border bg-surface-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                    Basemap
-                  </div>
-                  {basemaps.length === 0 ? (
-                    <div className="px-3 py-2 italic text-muted">
-                      No basemaps available
-                    </div>
-                  ) : (
-                    <ul className="max-h-72 overflow-auto py-1">
-                      {basemaps.map((b) => {
-                        const active = (mapData.basemap || '') === b.id;
-                        return (
-                          <li key={b.id}>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                onBasemapChange(b.id);
-                                setBasemapMenuOpen(false);
-                              }}
-                              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
-                                active
-                                  ? 'bg-purple-100 text-purple-800'
-                                  : 'text-ink-1'
-                              }`}
-                            >
-                              <span className="truncate">{b.label}</span>
-                              {active ? (
-                                <span className="ml-auto text-[10px] uppercase tracking-wide">
-                                  active
-                                </span>
-                              ) : null}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-              ) : null}
-            </div>
           </div>
           {/* Editable-layers count is meaningless in the read-only
               viewer (always 0) and clutters the public-share header.
@@ -3352,6 +3378,159 @@ export function EditorRuntime({
           </div>
         ) : null}
 
+        {/* Measure pane. Right-docked, opens when activeTool ===
+            'measure'. Replaces the wide floating chip that used to
+            sit at top-left and overlap the search bar. Pane is
+            available to viewers as well as editors (Measure is a
+            read-side tool), so it's NOT gated on canEdit and lives
+            as its own surface independent of the editor pane.
+            z-30 sits above the editor pane (z-25) so the user can
+            be on the editor and pop the Measure tool without
+            having to close the editor pane first. */}
+        {activeTool === 'measure' ? (
+          <div
+            className="absolute right-0 top-0 flex h-full w-80 shrink-0 flex-col border-l border-border bg-surface-1 shadow-overlay"
+            style={{ zIndex: 30 }}
+          >
+            <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-surface-1 px-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Measure
+              </span>
+              <button
+                type="button"
+                onClick={exitMeasure}
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0"
+                aria-label="Exit measure"
+                title="Exit measure"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
+              {/* Mode toggle: Distance vs Area as a small icon row.
+                  Switching clears the in-canvas sketch (the existing
+                  switchMeasureMode does this) so the new mode starts
+                  with no stale geometry. */}
+              <div
+                role="radiogroup"
+                aria-label="Measure mode"
+                className="inline-flex overflow-hidden rounded-md border border-border bg-surface-0"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={measureMode === 'distance'}
+                  onClick={() => switchMeasureMode('distance')}
+                  className={`inline-flex items-center gap-1 px-3 py-1 text-xs ${
+                    measureMode === 'distance'
+                      ? 'bg-purple-100 text-purple-900'
+                      : 'text-muted hover:bg-surface-2'
+                  }`}
+                  title="Distance"
+                >
+                  <Ruler className="h-3.5 w-3.5" />
+                  Distance
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={measureMode === 'area'}
+                  onClick={() => switchMeasureMode('area')}
+                  className={`inline-flex items-center gap-1 border-l border-border px-3 py-1 text-xs ${
+                    measureMode === 'area'
+                      ? 'bg-purple-100 text-purple-900'
+                      : 'text-muted hover:bg-surface-2'
+                  }`}
+                  title="Area"
+                >
+                  <Pentagon className="h-3.5 w-3.5" />
+                  Area
+                </button>
+              </div>
+
+              {/* Unit picker. Distance / area lists differ by mode.
+                  Defaults are imperial-friendly (mi / sq mi); the
+                  user can flip and the readout re-formats live
+                  without re-clicking on the map. */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-1">
+                  Unit
+                </label>
+                {measureMode === 'distance' ? (
+                  <select
+                    value={measureDistanceUnit}
+                    onChange={(e) =>
+                      setMeasureDistanceUnit(e.target.value as DistanceUnit)
+                    }
+                    className="h-8 w-full rounded border border-border bg-surface-0 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+                  >
+                    {(Object.keys(DISTANCE_UNIT_LABELS) as DistanceUnit[]).map(
+                      (u) => (
+                        <option key={u} value={u}>
+                          {DISTANCE_UNIT_LABELS[u]}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                ) : (
+                  <select
+                    value={measureAreaUnit}
+                    onChange={(e) =>
+                      setMeasureAreaUnit(e.target.value as AreaUnit)
+                    }
+                    className="h-8 w-full rounded border border-border bg-surface-0 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+                  >
+                    {(Object.keys(AREA_UNIT_LABELS) as AreaUnit[]).map((u) => (
+                      <option key={u} value={u}>
+                        {AREA_UNIT_LABELS[u]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Live readout. Big enough to read at a glance; mono
+                  font so digits line up while the user is dragging
+                  vertices around. Empty placeholder before the user
+                  has clicked on the map so the pane doesn't look
+                  half-rendered. */}
+              <div>
+                <p className="mb-1 text-xs font-medium text-ink-1">
+                  {measureMode === 'distance' ? 'Distance' : 'Area'}
+                </p>
+                <p className="font-mono text-base font-semibold text-ink-0">
+                  {measureMode === 'distance'
+                    ? measureLengthMeters !== null
+                      ? formatLengthIn(
+                          measureLengthMeters,
+                          measureDistanceUnit,
+                        )
+                      : '—'
+                    : measureAreaSqm !== null
+                      ? formatAreaIn(measureAreaSqm, measureAreaUnit)
+                      : '—'}
+                </p>
+                <p className="mt-1 text-[11px] text-muted">
+                  {measureMode === 'area'
+                    ? 'Click to add vertices on the map. Double-click to finish.'
+                    : 'Click to add points on the map. Double-click to finish.'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={clearMeasurement}
+                disabled={
+                  measureLengthMeters === null && measureAreaSqm === null
+                }
+                className="inline-flex h-8 w-full items-center justify-center gap-1 rounded-md bg-purple-600 px-3 text-xs font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                New measurement
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="relative min-w-0 flex-1">
           <MapCanvas
             ref={canvasRef}
@@ -3428,71 +3607,10 @@ export function EditorRuntime({
               works for viewers too, and the chip's distance/area
               toggle and live readout don't have an obvious pane
               home. */}
-          {activeTool === 'measure' ? (
-            <div className="pointer-events-auto absolute left-16 top-3 z-10 flex items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs text-sky-900 shadow-card">
-              <span className="font-medium">Measure:</span>
-              <div
-                role="radiogroup"
-                aria-label="Measure mode"
-                className="inline-flex overflow-hidden rounded border border-sky-300 bg-white"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={measureMode === 'distance'}
-                  onClick={() => switchMeasureMode('distance')}
-                  className={`px-2 py-0.5 ${
-                    measureMode === 'distance'
-                      ? 'bg-sky-100 text-sky-900'
-                      : 'text-sky-700 hover:bg-sky-50'
-                  }`}
-                >
-                  Distance
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={measureMode === 'area'}
-                  onClick={() => switchMeasureMode('area')}
-                  className={`border-l border-sky-300 px-2 py-0.5 ${
-                    measureMode === 'area'
-                      ? 'bg-sky-100 text-sky-900'
-                      : 'text-sky-700 hover:bg-sky-50'
-                  }`}
-                >
-                  Area
-                </button>
-              </div>
-              <span className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
-                {measureMode === 'area'
-                  ? 'click to add vertices, double-click to finish'
-                  : 'click to add points, double-click to finish'}
-              </span>
-              {measureReadout ? (
-                <span className="rounded-md bg-white px-2 py-0.5 font-mono text-xs font-medium text-sky-900 ring-1 ring-sky-300">
-                  {measureReadout}
-                </span>
-              ) : null}
-              <button
-                type="button"
-                onClick={clearMeasurement}
-                className="rounded border border-sky-300 bg-white px-1.5 py-0.5 text-[11px] text-sky-800 hover:bg-sky-100"
-                title="Clear measurement"
-                disabled={measureReadout === null}
-              >
-                Clear
-              </button>
-              <button
-                type="button"
-                onClick={exitMeasure}
-                className="rounded-md p-0.5 text-sky-900 hover:bg-sky-100"
-                aria-label="Exit measure"
-                title="Exit measure"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : null}
+          {/* Measure tool used to live in a wide floating chip at
+              top-left that overlapped the search bar and other map
+              controls. Replaced by the right-docked Measure pane
+              below the canvas div. */}
 
           {toast ? (
             <div className="pointer-events-auto absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-surface-1 px-3 py-1.5 text-xs text-ink-1 shadow-card">
