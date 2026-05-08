@@ -150,6 +150,60 @@ export function dataLayerScope(itemId: string, layerId: string): string {
   return `data_layer:${itemId}:${layerId}`;
 }
 
+/**
+ * Build a SQL `SELECT` that materialises the data_layer's current
+ * truth from the observation log, exposing the same column shape
+ * that the legacy v3 per-layer table did: `global_id`, `geom`,
+ * `properties`. Used by callers that compose raw SQL pipelines
+ * around a data_layer source (DerivedLayersService is the main
+ * one).
+ *
+ * The scope is embedded as a single-quoted literal because it's
+ * built from internal item/layer ids (UUID + identifier shape, no
+ * user-supplied content) and the consumers use positional params
+ * for their own filters; embedding keeps the param numbering clean
+ * for them. We still escape any single quotes defensively.
+ *
+ * Optional `extraConditions` are AND-joined after the scope filter
+ * so each entry must already be a complete `column op value`
+ * clause (e.g. `valid_from <= $1`, `geom && ST_MakeEnvelope(...)`).
+ *
+ * Returns the SELECT body without surrounding parens or alias.
+ * Callers wrap as appropriate:
+ *   - As a CTE:           `source AS (${fragment})`
+ *   - As a FROM source:   `FROM (${fragment}) AS s`
+ */
+export function dataLayerSourceSqlFragment(
+  scope: string,
+  opts: {
+    extraConditions?: string[];
+  } = {},
+): string {
+  const escapedScope = scope.replace(/'/g, "''");
+  const extras =
+    opts.extraConditions && opts.extraConditions.length > 0
+      ? ` AND ${opts.extraConditions.join(' AND ')}`
+      : '';
+  // DISTINCT ON entity + ORDER BY valid_from DESC, tx_time DESC
+  // gives us the most recent observation per entity within the
+  // filter window. Outer WHERE drops entities whose latest is a
+  // tombstone (kind = 'delete'), so deleted features fall out.
+  return `
+    SELECT
+      entity AS global_id,
+      geom,
+      attrs AS properties
+    FROM (
+      SELECT DISTINCT ON (entity)
+        entity, geom, attrs, kind, valid_from, valid_to
+      FROM observation
+      WHERE scope = '${escapedScope}'${extras}
+      ORDER BY entity, valid_from DESC, tx_time DESC
+    ) latest
+    WHERE kind <> 'delete'
+  `;
+}
+
 @Injectable()
 export class DataLayerEngine {
   constructor(

@@ -399,10 +399,14 @@ describe('DerivedLayersService.buildReadSql', () => {
     };
     const item = makeDerivedItem(data);
     const { sql, params } = service.buildReadSql(item, source);
-    // Source CTE references the well-known table name.
+    // Phase 2.7: source CTE reads from the engine's observation log
+    // for the layer's canonical scope, not the legacy fs_ table.
+    expect(sql).toMatch(/FROM observation/);
     expect(sql).toMatch(
-      /"fs_11111111111111111111111111111111"/,
+      /scope = 'data_layer:11111111-1111-1111-1111-111111111111:default'/,
     );
+    expect(sql).toMatch(/DISTINCT ON \(entity\)/);
+    expect(sql).toMatch(/kind <> 'delete'/);
     // Pipeline produces step_1.
     expect(sql).toMatch(/step_1 AS \(/);
     // Final SELECT consumes the last step.
@@ -413,7 +417,7 @@ describe('DerivedLayersService.buildReadSql', () => {
     expect(params).toEqual([250, 1000]);
   });
 
-  it('uses the v3 per-sublayer table name when source.layerKey is set', () => {
+  it('uses the v3 sublayer scope when source.layerKey is set', () => {
     const source = makeV3Source('sites');
     const data: DerivedLayerData = {
       version: 1,
@@ -435,7 +439,7 @@ describe('DerivedLayersService.buildReadSql', () => {
     const item = makeDerivedItem(data);
     const { sql } = service.buildReadSql(item, source);
     expect(sql).toMatch(
-      /"fs_22222222222222222222222222222222_sites"/,
+      /scope = 'data_layer:22222222-2222-2222-2222-222222222222:sites'/,
     );
   });
 

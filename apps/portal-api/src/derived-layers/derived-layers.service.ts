@@ -9,7 +9,10 @@ import {
 } from '@gratis-gis/shared-types';
 
 import { PrismaService } from '../prisma/prisma.service.js';
-import { toV3TableName } from '../features-v3/v3-tables.service.js';
+import {
+  dataLayerScope,
+  dataLayerSourceSqlFragment,
+} from '../engine/data-layer.js';
 import { getGeneratorForStep } from './tools/registry.js';
 
 /**
@@ -163,13 +166,21 @@ export class DerivedLayersService {
     const sourceSchema = sublayer
       ? sublayer.fields
       : readSourceSchema(sourceItem.data);
-    // Source feature table, pre-quoted, for any tool's `enrich` hook
-    // that needs to query against it (buffer's field-mode max
-    // computation is the only consumer in v1). v3 uses the per-
-    // sublayer table; v2 uses the single fs_<itemId> table.
-    const sourceTable = sublayer
-      ? `"${toV3TableName(sourceItem.id, sublayer.id)}"`
-      : `"fs_${sourceItem.id.replace(/-/g, '')}"`;
+    // Source feature surface for any tool's `enrich` hook that
+    // needs to query against the source (buffer's field-mode max
+    // computation is the only consumer in v1). After Phase 2.7,
+    // this is a SQL subquery that materialises the data_layer's
+    // current truth from the observation log, aliased so callers
+    // can drop it into a `FROM ${sourceTable}` clause unchanged.
+    // Tools see the same column names they did against the legacy
+    // fs_ table: global_id, geom, properties.
+    const sourceScope = sublayer
+      ? dataLayerScope(sourceItem.id, sublayer.id)
+      : dataLayerScope(sourceItem.id, 'default');
+    // Parenthesise the engine SELECT and alias so tools can do
+    // `FROM ${sourceTable}` and reference `properties`, `geom`,
+    // `global_id` exactly as they did against the legacy fs_ table.
+    const sourceTable = `(${dataLayerSourceSqlFragment(sourceScope)}) AS source_features`;
     let schema: FeatureField[] = sourceSchema;
     let totalReachMeters = 0;
     const validatedPipeline: ToolStep[] = [];
@@ -283,9 +294,16 @@ export class DerivedLayersService {
       );
     }
 
-    const tbl = data.source.layerKey
-      ? toV3TableName(data.source.itemId, data.source.layerKey)
-      : `fs_${data.source.itemId.replace(/-/g, '')}`;
+    // Phase 2.7: read the source from the engine's observation log
+    // instead of the legacy `fs_<itemId>_<layerId>` per-layer table.
+    // The engine's "current truth" projection (DISTINCT ON entity,
+    // latest valid observation, kind <> 'delete') stands in for the
+    // table; our temporal / bbox / boundary filters become
+    // pre-DISTINCT predicates on the observation rows so the latest
+    // pick already respects them.
+    const sourceScope = data.source.layerKey
+      ? dataLayerScope(data.source.itemId, data.source.layerKey)
+      : dataLayerScope(data.source.itemId, 'default');
     const queryParams: unknown[] = [];
     const sourceConditions: string[] = [];
 
@@ -350,16 +368,13 @@ export class DerivedLayersService {
 
     // Build the full chained CTE. Step CTE names are 1-indexed so a
     // glance at the SQL maps directly to user-facing step ordering.
-    const sourceWhere =
-      sourceConditions.length > 0
-        ? `WHERE ${sourceConditions.join(' AND ')}`
-        : '';
+    // The `source` CTE is the engine's current-truth projection;
+    // tool-step CTEs reference it as `FROM source` exactly as they
+    // did against the legacy fs_ source.
     const ctes: string[] = [
-      `source AS (
-        SELECT global_id, geom, properties
-        FROM "${tbl}"
-        ${sourceWhere}
-      )`,
+      `source AS (${dataLayerSourceSqlFragment(sourceScope, {
+        extraConditions: sourceConditions,
+      })})`,
     ];
     let inputAlias = 'source';
     for (let i = 0; i < data.pipeline.length; i++) {
@@ -432,9 +447,9 @@ export class DerivedLayersService {
         generator.validate(step.params),
       );
     }
-    const tbl = data.source.layerKey
-      ? toV3TableName(sourceItem.id, data.source.layerKey)
-      : `fs_${sourceItem.id.replace(/-/g, '')}`;
+    const sourceScope = data.source.layerKey
+      ? dataLayerScope(sourceItem.id, data.source.layerKey)
+      : dataLayerScope(sourceItem.id, 'default');
     const queryParams: unknown[] = [];
     const sourceConditions: string[] = [];
 
@@ -463,16 +478,10 @@ export class DerivedLayersService {
       );
     }
 
-    const sourceWhere =
-      sourceConditions.length > 0
-        ? `WHERE ${sourceConditions.join(' AND ')}`
-        : '';
     const ctes: string[] = [
-      `source AS (
-        SELECT global_id, geom, properties
-        FROM "${tbl}"
-        ${sourceWhere}
-      )`,
+      `source AS (${dataLayerSourceSqlFragment(sourceScope, {
+        extraConditions: sourceConditions,
+      })})`,
     ];
     let inputAlias = 'source';
     for (let i = 0; i < data.pipeline.length; i++) {
