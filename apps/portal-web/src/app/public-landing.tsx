@@ -91,17 +91,15 @@ export function PublicLanding({
   forceProjectSection,
   isAuthenticated,
 }: Props) {
-  const { org } = data;
-  // #75: only items with an anonymous-friendly URL surface (today:
-  // editor/viewer/survey/custom runtimes, data_collection field PWA,
-  // form respondent flow) belong on the public landing. Maps,
-  // data_layers, and basemaps marked public have no anonymous detail
-  // page yet, so a card click for those would land on /items/:id and
-  // bounce through Keycloak. Filter them out at render time so the
-  // grid only ever shows items the visitor can actually open. #76
-  // tracks adding the missing public surfaces; once those land this
-  // filter can relax accordingly.
-  const items = data.items.filter((item) => hasRuntime(item));
+  const { org, items } = data;
+  // #75 was filtering this to hasRuntime-only items (so a card
+  // click never bounced to Keycloak), but that hid maps /
+  // data_layers / basemaps the author had explicitly shared
+  // public. Showing-but-broken-click is preferable to the user's
+  // expectation -- they shared it, they want to see it on the
+  // landing. The click-redirect issue stays tracked under #76;
+  // once anonymous detail surfaces ship for those types, the click
+  // path stops bouncing and we don't need the filter at all.
   const ctaHref = isAuthenticated ? '/items' : '/signin';
   const ctaLabel = isAuthenticated ? 'Open my items' : 'Sign in';
 
@@ -123,15 +121,7 @@ export function PublicLanding({
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          // Pass the filtered item set so the structured-data graph
-          // matches what's actually on the page; aggregators that
-          // try to crawl an item URL we omit would 401 / redirect,
-          // which is worse than not advertising it at all.
-          __html: JSON.stringify(
-            buildLandingJsonLd({ ...data, items }),
-            null,
-            0,
-          ),
+          __html: JSON.stringify(buildLandingJsonLd(data), null, 0),
         }}
       />
 
