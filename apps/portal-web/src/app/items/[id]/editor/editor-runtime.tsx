@@ -1356,7 +1356,6 @@ export function EditorRuntime({
     const wantCrosshair =
       (activeTool === 'add' && activeTargetKey !== null) ||
       activeTool === 'edit' ||
-      activeTool === 'delete' ||
       activeTool === 'measure';
     if (wantCrosshair) {
       container.style.cursor = 'crosshair';
@@ -1451,18 +1450,6 @@ export function EditorRuntime({
       setActiveTargetKey(null);
       return;
     }
-    if (tool === 'delete') {
-      if (deletableTargetKeys.size === 0) {
-        setToast(
-          'No targets allow delete. Turn on Delete on a target in the config.',
-        );
-        scheduleToastClear();
-        return;
-      }
-      setActiveTool('delete');
-      setActiveTargetKey(null);
-      return;
-    }
     if (tool === 'select') {
       // Toggle: clicking Select again drops back to off (default
       // pan + click-to-popup). When 'select' is active, MapCanvas's
@@ -1532,7 +1519,7 @@ export function EditorRuntime({
   useEffect(() => {
     const m = mapInstance;
     if (!m) return;
-    if (activeTool !== 'edit' && activeTool !== 'delete') return;
+    if (activeTool !== 'edit') return;
     const handler = (e: maplibregl.MapMouseEvent) => {
       const features = m.queryRenderedFeatures(e.point);
       const hit = features.find((f) => {
@@ -1563,110 +1550,66 @@ export function EditorRuntime({
         return;
       }
 
-      if (activeTool === 'edit') {
-        if (!editableTargetKeys.has(targetKey)) {
-          setToast('That layer is not editable in this editor.');
-          scheduleToastClear();
-          return;
-        }
-        const initialProps: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(props)) {
-          if (k.startsWith('_')) continue;
-          initialProps[k] = v;
-        }
-        // Branch on what the target permits. When the target allows
-        // geometry editing AND the clicked feature has geometry,
-        // first enter geometry-edit mode -- vertex handles appear,
-        // a floating toolbar lets the user save / cancel / hop into
-        // attribute editing. Attribute-only targets (or features
-        // without geometry, e.g. a related-table row that snuck
-        // into the click handler) skip straight to the form.
-        const editorTarget = editor.targets.find(
-          (t) =>
-            t.dataLayerId === dataLayerId && t.layerKey === layerKey,
-        );
-        const canEditGeom =
-          editorTarget?.canEditGeometry === true &&
-          targetByKey.get(targetKey)?.layer?.geometryType !== null;
-        if (canEditGeom && hit.geometry) {
-          setActiveTargetKey(targetKey);
-          const layerGeomType =
-            targetByKey.get(targetKey)?.layer?.geometryType ?? 'point';
-          // hit.geometry from queryRenderedFeatures is already a
-          // GeoJSON.Geometry. Clone via JSON to break MapLibre's
-          // internal references, then round coordinates to terra-
-          // draw's configured precision -- PostGIS returns 15-digit
-          // doubles, terra-draw rejects anything past
-          // EDITOR_COORD_PRECISION. The rounded geometry is what
-          // both originalGeometry and currentGeometry start as, so
-          // the change-detection comparison still round-trips
-          // cleanly when the user drags a vertex.
-          const cloned = roundCoordsToPrecision(
-            JSON.parse(JSON.stringify(hit.geometry)) as GeoJSON.Geometry,
-            EDITOR_COORD_PRECISION,
-          );
-          setGeomEditError(null);
-          setPendingGeometryEdit({
-            dataLayerId,
-            layerKey,
-            targetKey,
-            featureId,
-            geometryType: layerGeomType as 'point' | 'line' | 'polygon',
-            originalGeometry: cloned,
-            currentGeometry: cloned,
-            properties: initialProps,
-          });
-          return;
-        }
-        setActiveTargetKey(targetKey);
-        setPendingFeature({
-          mode: 'update',
-          geometry: hit.geometry as unknown,
-          targetKey,
-          featureId,
-          initialProperties: initialProps,
-        });
-        return;
-      }
-
-      // delete tool
-      if (!deletableTargetKeys.has(targetKey)) {
-        setToast('That layer cannot be deleted from in this editor.');
+      if (!editableTargetKeys.has(targetKey)) {
+        setToast('That layer is not editable in this editor.');
         scheduleToastClear();
         return;
       }
-      // Build a short user-facing summary for the dialog. Pick the
-      // first non-underscore string-ish property (so users see e.g.
-      // "Building #4127" rather than the raw uuid). Fall back to a
-      // truncated global_id when the row has no obvious display
-      // field.
-      let summary = featureId.slice(0, 8) + '...';
-      const target = targetByKey.get(targetKey);
-      if (target?.layer) {
-        for (const f of target.layer.fields) {
-          const v = props[f.name];
-          if (v === null || v === undefined || v === '') continue;
-          summary = String(v);
-          break;
-        }
-      }
-      setActiveTargetKey(targetKey);
-      // Capture the row's geometry + non-underscore properties so
-      // the undo stack can reinsert it. Same shape we use for the
-      // create flow's globalId path.
-      const captureProps: Record<string, unknown> = {};
+      const initialProps: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(props)) {
         if (k.startsWith('_')) continue;
-        captureProps[k] = v;
+        initialProps[k] = v;
       }
-      setPendingDelete({
-        dataLayerId,
-        layerKey,
+      // Branch on what the target permits. When the target allows
+      // geometry editing AND the clicked feature has geometry,
+      // first enter geometry-edit mode: vertex handles appear and
+      // the pane shows the geometry-edit panel (cancel / edit attrs
+      // / save / delete). Attribute-only targets (or features
+      // without geometry, e.g. a related-table row that snuck into
+      // the click handler) skip straight to the attribute form.
+      const editorTarget = editor.targets.find(
+        (t) => t.dataLayerId === dataLayerId && t.layerKey === layerKey,
+      );
+      const canEditGeom =
+        editorTarget?.canEditGeometry === true &&
+        targetByKey.get(targetKey)?.layer?.geometryType !== null;
+      if (canEditGeom && hit.geometry) {
+        setActiveTargetKey(targetKey);
+        const layerGeomType =
+          targetByKey.get(targetKey)?.layer?.geometryType ?? 'point';
+        // hit.geometry from queryRenderedFeatures is already a
+        // GeoJSON.Geometry. Clone via JSON to break MapLibre's
+        // internal references, then round coordinates to terra-
+        // draw's configured precision: PostGIS returns 15-digit
+        // doubles, terra-draw rejects anything past
+        // EDITOR_COORD_PRECISION. The rounded geometry is what
+        // both originalGeometry and currentGeometry start as, so
+        // the change-detection comparison still round-trips
+        // cleanly when the user drags a vertex.
+        const cloned = roundCoordsToPrecision(
+          JSON.parse(JSON.stringify(hit.geometry)) as GeoJSON.Geometry,
+          EDITOR_COORD_PRECISION,
+        );
+        setGeomEditError(null);
+        setPendingGeometryEdit({
+          dataLayerId,
+          layerKey,
+          targetKey,
+          featureId,
+          geometryType: layerGeomType as 'point' | 'line' | 'polygon',
+          originalGeometry: cloned,
+          currentGeometry: cloned,
+          properties: initialProps,
+        });
+        return;
+      }
+      setActiveTargetKey(targetKey);
+      setPendingFeature({
+        mode: 'update',
+        geometry: hit.geometry as unknown,
+        targetKey,
         featureId,
-        layerTitle: `${target?.dataLayerTitle ?? ''} / ${target?.layer?.label ?? layerKey}`,
-        summary,
-        geometry: hit.geometry as GeoJSON.Geometry,
-        properties: captureProps,
+        initialProperties: initialProps,
       });
     };
     m.on('click', handler);
@@ -1681,7 +1624,6 @@ export function EditorRuntime({
     mapInstance,
     activeTool,
     editableTargetKeys,
-    deletableTargetKeys,
     targetByKey,
     editor.targets,
   ]);
@@ -2913,16 +2855,15 @@ export function EditorRuntime({
                   editing workflow (Add, Edit, Snap, Undo, Redo).
                   Select and Measure live in the top toolbar instead
                   because they are also useful in viewer mode and are
-                  not edit-specific. Delete is reached from the
-                  per-feature floating bar (next to Edit attributes /
-                  Save geometry) rather than as a click-to-delete
-                  tool, so it is filtered out here too. */}
+                  not edit-specific. Delete is no longer a tool at
+                  all (was pruned along with the EditorTool union);
+                  the per-feature panels carry the destructive
+                  action where it belongs. */}
               {ALL_TOOLS.filter(
                 (t) =>
                   editor.tools.includes(t.key) &&
                   t.key !== 'select' &&
-                  t.key !== 'measure' &&
-                  t.key !== 'delete',
+                  t.key !== 'measure',
               ).length > 0 ? (
                 <section>
                   <h3 className="mb-1.5 text-xs font-semibold text-ink-0">
@@ -2933,8 +2874,7 @@ export function EditorRuntime({
                       (t) =>
                         editor.tools.includes(t.key) &&
                         t.key !== 'select' &&
-                        t.key !== 'measure' &&
-                        t.key !== 'delete',
+                        t.key !== 'measure',
                     ).map((t) => {
                       const isToggle = t.key === 'snap';
                       const isActive = isToggle
@@ -3395,18 +3335,17 @@ export function EditorRuntime({
             // Suppress the canvas's default click-to-popup behavior
             // only while a tool that fully owns the click is active.
             // Measure uses terra-draw to place vertices, and add /
-            // edit / delete use clicks to start their own modal
-            // flows; popups would compete. Select is the exception:
-            // it WANTS the popup so the user gets feature info
-            // alongside the selection highlight (AGOL-style
-            // Select / Identify behavior). The MapCanvas 'click'
-            // branch falls through to the popup logic so a single
-            // click both highlights and pops.
+            // edit use clicks to start their own pane flows; popups
+            // would compete. Select is the exception: it WANTS the
+            // popup so the user gets feature info alongside the
+            // selection highlight (AGOL-style Select / Identify
+            // behavior). The MapCanvas 'click' branch falls through
+            // to the popup logic so a single click both highlights
+            // and pops.
             suppressPopup={
               activeTool === 'measure' ||
               activeTool === 'add' ||
-              activeTool === 'edit' ||
-              activeTool === 'delete'
+              activeTool === 'edit'
             }
             onSelectionChange={setSelection}
             onMapReady={(m) => setMapInstance(m)}
@@ -3658,7 +3597,6 @@ const TOOL_LABELS: Record<EditorTool, string> = {
   select: 'Select',
   add: 'Add',
   edit: 'Edit',
-  delete: 'Delete',
   snap: 'Snap toggle',
   measure: 'Measure',
   undo: 'Undo',
@@ -3673,7 +3611,6 @@ const ALL_TOOLS: Array<{
   { key: 'select', label: 'Select', Icon: MousePointer2 },
   { key: 'add', label: 'Add', Icon: Plus },
   { key: 'edit', label: 'Edit', Icon: PencilRuler },
-  { key: 'delete', label: 'Delete', Icon: Trash2 },
   { key: 'snap', label: 'Snap', Icon: Wand2 },
   { key: 'measure', label: 'Measure', Icon: Ruler },
   { key: 'undo', label: 'Undo', Icon: Undo2 },

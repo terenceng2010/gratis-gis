@@ -136,12 +136,17 @@ export interface EditorFeatureTemplate {
  * tools in the active `tools` list. Adding a tool here costs nothing
  * if the runtime ignores unknown values, but every option introduces
  * UI surface so we keep the list narrow.
+ *
+ * `delete` used to be a tool here (click-to-delete on the map) but
+ * was removed in the editor-pane redesign: Delete is reachable only
+ * from the per-feature controls (geometry edit panel and attribute
+ * form footer) so the destructive action is always in context with
+ * a specific feature, not a click-anywhere mode.
  */
 export type EditorTool =
   | 'select'
   | 'add'
   | 'edit'
-  | 'delete'
   | 'snap'
   | 'measure'
   | 'undo'
@@ -170,7 +175,6 @@ export const DEFAULT_EDITOR_TOOLS: EditorTool[] = [
   'select',
   'add',
   'edit',
-  'delete',
   'snap',
   'undo',
   'redo',

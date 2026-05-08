@@ -729,7 +729,6 @@ const ALL_TOOLS: Array<{ key: EditorTool; label: string; hint: string }> = [
   { key: 'select', label: 'Select', hint: 'Pick features to inspect or act on.' },
   { key: 'add', label: 'Add', hint: 'Create new features.' },
   { key: 'edit', label: 'Edit', hint: 'Modify geometry or attributes.' },
-  { key: 'delete', label: 'Delete', hint: 'Remove features.' },
   { key: 'snap', label: 'Snap toggle', hint: 'Surface a snap on/off button.' },
   { key: 'measure', label: 'Measure', hint: 'Distance and area readouts.' },
   { key: 'undo', label: 'Undo', hint: 'Revert the last edit.' },
