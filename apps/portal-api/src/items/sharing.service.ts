@@ -98,20 +98,33 @@ export class SharingService {
    * `null` when they have unrestricted access.
    *
    * Semantics (matches the product-level design in docs/data-model.md):
-   *   - Owners, admins, and anyone reading via `access: public` or
-   *     `access: org` bypass geo limits entirely; those access paths
-   *     are not share rows, so there's nothing to attach a polygon to.
+   *   - Owners and admins bypass geo limits entirely.
+   *   - A user reaching the item via `access: public` is subject to
+   *     the item's `publicGeoBoundaryId` if set (#80); same for
+   *     same-org viewers reaching via `access: org` and
+   *     `orgGeoBoundaryId`. Tier limits are real access control: the
+   *     read path actually clips features to the polygon, distinct
+   *     from the map-level "default view scope" tracked under #79.
+   *     A tier with no boundary attached is unrestricted (pre-#80
+   *     semantics).
    *   - When reading via an explicit `ItemShare`, the user's effective
-   *     access is the UNION of every matching share's geo polygon. If
-   *     any matching share has no polygon, the user has full access
-   *     (the unrestricted share wins).
+   *     access through that path is the share's geo polygon (or
+   *     unrestricted if the share has no polygon).
+   *   - A user reachable through MORE THAN ONE access path (e.g. an
+   *     org viewer who also has an explicit per-user share) gets the
+   *     UNION of every reachable path's polygon. If any reachable
+   *     path is unrestricted, the user has full access; the more
+   *     permissive path wins. This matches how Cedar policy grants
+   *     compose -- multiple "allow" decisions don't cancel each
+   *     other out.
    *   - A matching share's clip is whichever of its two columns is
    *     populated: the inline `geoLimit` GeoJSON, or the geometry of
    *     the `geoBoundaryId` it references. If the referenced boundary
    *     no longer exists (or is the wrong item type, or has no
    *     geometry yet), that share is treated as unrestricted so a
    *     deleted boundary cannot silently expand access through some
-   *     other matching share's polygon.
+   *     other matching share's polygon. Tier boundaries follow the
+   *     same rule.
    *
    * Callers compose the result into SQL via `ST_GeomFromGeoJSON` +
    * `ST_Intersects`. Result is GeoJSON in EPSG:4326 so no coordinate
@@ -126,19 +139,53 @@ export class SharingService {
   ): Promise<unknown | null> {
     if (item.ownerId === user.id) return null;
     if (user.orgRole === 'admin' && item.orgId === user.orgId) return null;
-    if (item.access === 'public') return null;
-    if (item.access === 'org' && item.orgId === user.orgId) return null;
+
+    // Each access path the user reaches the item through contributes
+    // either a polygon or "unrestricted." If any contributes
+    // unrestricted, the union is unrestricted (more permissive path
+    // wins). Otherwise the union of polygons is the effective limit.
+    let hasUnrestrictedPath = false;
+    const polygons: unknown[] = [];
+
+    // #80: tier-level path. Anonymous viewers reach via 'public';
+    // signed-in same-org viewers reach via 'org'. Each tier may
+    // have its own boundary item attached. If the tier has no
+    // boundary, this path is unrestricted (matches pre-#80 semantics
+    // exactly; the early-return-null lines this replaces are now
+    // expressed as "tier path with no boundary => unrestricted").
+    let tierBoundaryId: string | null = null;
+    let reachedViaTier = false;
+    if (item.access === 'public') {
+      reachedViaTier = true;
+      tierBoundaryId =
+        (item as Item & { publicGeoBoundaryId?: string | null })
+          .publicGeoBoundaryId ?? null;
+    } else if (item.access === 'org' && item.orgId === user.orgId) {
+      reachedViaTier = true;
+      tierBoundaryId =
+        (item as Item & { orgGeoBoundaryId?: string | null })
+          .orgGeoBoundaryId ?? null;
+    }
+    if (reachedViaTier && tierBoundaryId === null) {
+      hasUnrestrictedPath = true;
+    }
 
     const matching = shares.filter((s) => this.shareMatches(user, s));
-    if (matching.length === 0) return null;
+    if (!reachedViaTier && matching.length === 0) {
+      // No reachable path at all; canRead has already gated the
+      // request. Returning null is safe -- an empty predicate stack
+      // is still gated by canRead.
+      return null;
+    }
 
     // Look up every distinct geoBoundary referenced by any matching
-    // share in a single round-trip; per-share resolution then reads
-    // from this map. A boundary that doesn't exist (or isn't a
-    // geo_boundary item, or has no geometry yet) just doesn't end
-    // up in the map and the share that referenced it is treated as
-    // unrestricted below.
+    // share AND the tier boundary in a single round-trip; per-share
+    // and per-tier resolution then reads from this map. A boundary
+    // that doesn't exist (or isn't a geo_boundary item, or has no
+    // geometry yet) just doesn't end up in the map and the path that
+    // referenced it is treated as unrestricted below.
     const boundaryIds = new Set<string>();
+    if (tierBoundaryId !== null) boundaryIds.add(tierBoundaryId);
     for (const s of matching) {
       const ref = (s as ItemShare & { geoBoundaryId?: string | null })
         .geoBoundaryId;
@@ -160,22 +207,26 @@ export class SharingService {
       }
     }
 
-    let hasUnrestricted = false;
-    const polygons: unknown[] = [];
+    if (tierBoundaryId !== null) {
+      const geom = boundaryGeoms.get(tierBoundaryId);
+      if (geom) polygons.push(geom);
+      else hasUnrestrictedPath = true; // missing / wrong type / empty
+    }
+
     for (const s of matching) {
       const ref = (s as ItemShare & { geoBoundaryId?: string | null })
         .geoBoundaryId;
       if (typeof ref === 'string' && ref.length > 0) {
         const geom = boundaryGeoms.get(ref);
         if (geom) polygons.push(geom);
-        else hasUnrestricted = true; // boundary missing / wrong type / no geometry
+        else hasUnrestrictedPath = true;
         continue;
       }
       const inline = (s as ItemShare & { geoLimit?: unknown }).geoLimit;
       if (inline && typeof inline === 'object') polygons.push(inline);
-      else hasUnrestricted = true;
+      else hasUnrestrictedPath = true;
     }
-    if (hasUnrestricted) return null;
+    if (hasUnrestrictedPath) return null;
     if (polygons.length === 0) return null;
     if (polygons.length === 1) return polygons[0];
     return { type: 'GeometryCollection', geometries: polygons };
