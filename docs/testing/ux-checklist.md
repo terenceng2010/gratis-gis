@@ -36,15 +36,15 @@ section explicitly tests mobile-portrait.
 
 ## 0. Pre-flight
 
-- [ ] `pnpm infra:up` brings up postgres / keycloak / minio / pg_tileserv / nominatim cleanly
-- [ ] `pnpm dev` starts portal-api (port 4000) + portal-web (port 3000) without errors
-- [ ] Local URL `http://localhost:3000` loads the public landing page
-- [ ] Local URL `http://localhost:4000/health` returns `{ "status": "ok" }`
-- [ ] Local URL `http://localhost:8081` loads Keycloak admin console
-- [ ] Local URL `http://localhost:9001` loads MinIO console
-- [ ] At least two test users exist in the gratis-gis realm with passwords you know
-- [ ] At least one user has the `admin` org role; the other has `contributor`
-- [ ] The dev DB has the latest migrations applied (`pnpm --filter @gratis-gis/portal-api exec prisma migrate status` shows clean)
+- [x] `pnpm infra:up` brings up postgres / keycloak / minio / pg_tileserv / nominatim cleanly
+- [x] `pnpm dev` starts portal-api (port 4000) + portal-web (port 3000) without errors
+- [x] Local URL `http://localhost:3000` loads the public landing page
+- [x] Local URL `http://localhost:4000/health` returns `{ "status": "ok" }`
+- [x] Local URL `http://localhost:8081` loads Keycloak admin console
+- [x] Local URL `http://localhost:9001` loads MinIO console
+- [x] At least two test users exist in the gratis-gis realm with passwords you know
+- [x] At least one user has the `admin` org role; the other has `contributor`
+- [x] The dev DB has the latest migrations applied (`pnpm --filter @gratis-gis/portal-api exec prisma migrate status` shows clean)
 
 ---
 
@@ -52,14 +52,14 @@ section explicitly tests mobile-portrait.
 
 ### 1.1 Sign-in flow
 
-- [ ] **Public landing renders without a session.** Open an incognito window. The landing page should show the org name, hero band, and (if `landingShowPublicItems` is on) public items. No sidebar, no admin chrome.
-- [ ] **Sign-in CTA navigates to Keycloak.** Click "Sign in" in the top bar; lands on Keycloak's login form.
-- [ ] **Successful login redirects back to portal.** Sign in as your contributor user; lands on `/items` (or wherever you came from).
-- [ ] **Bad password shows Keycloak error.** Try wrong password; Keycloak shows error inline, doesn't crash the portal.
-- [ ] **Session persists across page reload.** After signing in, hard reload — still authenticated.
-- [ ] **Sign-out works.** Click your avatar -> Sign out -> lands on the public landing again, no session.
-- [ ] **callbackUrl preserved.** While signed out, navigate directly to `/items/<some-id>`. After sign-in, lands on that item page (not `/items`).
-- [ ] **Token refresh is silent.** Leave a tab open for >5 minutes and click around. No "session expired" dialogs (Keycloak's refresh-token flow runs in background).
+- [x] **Public landing renders without a session.** Open an incognito window. The landing page should show the org name, hero band, and (if `landingShowPublicItems` is on) public items. No sidebar, no admin chrome.
+- [x] **Sign-in CTA navigates to Keycloak.** Click "Sign in" in the top bar; lands on Keycloak's login form.
+- [x] **Successful login redirects back to portal.** Sign in as your contributor user; lands on `/items` (or wherever you came from).
+- [x] **Bad password shows Keycloak error.** Try wrong password; Keycloak shows error inline, doesn't crash the portal.
+- [x] **Session persists across page reload.** After signing in, hard reload — still authenticated.
+- [x] **Sign-out works.** Click your avatar -> Sign out -> lands on the public landing again, no session.
+- [x] **callbackUrl preserved.** While signed out, navigate directly to `/items/<some-id>`. After sign-in, lands on that item page (not `/items`).
+- [x] **Token refresh is silent.** Leave a tab open for >5 minutes and click around. No "session expired" dialogs (Keycloak's refresh-token flow runs in background).
 
 ### 1.2 Edge cases
 
@@ -71,14 +71,14 @@ section explicitly tests mobile-portrait.
 
 ## 2. Public landing page
 
-- [ ] **Org name + hero render.** Configured branding (title, subtitle, hero image) appears.
-- [ ] **Public items grid populates.** If at least one `access: public` item exists, it shows in the grid.
-- [ ] **Item card click opens runtime.** Clicking a card opens the runtime (e.g. viewer for a viewer web_app, in a new tab via `target="_blank"`).
+- [x] **Org name + hero render.** Configured branding (title, subtitle, hero image) appears.
+- [x] **Public items grid populates.** If at least one `access: public` item exists, it shows in the grid.
+- [x] **Item card click opens runtime.** Clicking a card opens the runtime (e.g. viewer for a viewer web_app, in a new tab via `target="_blank"`).
 - [ ] **`landingShowPublicItems = false` hides the grid.** Admin toggles this in `/admin/branding`; public landing now shows just the hero + sign-in CTA.
-- [ ] **Empty-state copy.** With no public items, the grid section shows "Nothing has been shared publicly yet" instead of crashing.
-- [ ] **Schema.org JSON-LD is present.** View source; `<script type="application/ld+json">` tag exists with `CollectionPage` + `ItemList`.
-- [ ] **Project marketing section.** With `NEXT_PUBLIC_PROJECT_LANDING=1` (or `?preview=project` query param), the open-source project section renders below the hero.
-- [ ] **Authenticated user lands but sees public CTA become "Open my items".** Sign in, navigate to apex domain again; CTA now says "Open my items" and links to `/items`.
+- [x] **Empty-state copy.** With no public items, the grid section shows "Nothing has been shared publicly yet" instead of crashing.
+- [x] **Schema.org JSON-LD is present.** View source; `<script type="application/ld+json">` tag exists with `CollectionPage` + `ItemList`.
+- [x] **Project marketing section.** With `NEXT_PUBLIC_PROJECT_LANDING=1` (or `?preview=project` query param), the open-source project section renders below the hero.
+- [x] **Authenticated user lands but sees public CTA become "Open my items".** Sign in, navigate to apex domain again; CTA now says "Open my items" and links to `/items`.
 
 ---
 
@@ -86,10 +86,10 @@ section explicitly tests mobile-portrait.
 
 ### 3.1 Browse and filter
 
-- [ ] **Default scope is "My items".** Lands on `/items`; only items owned by the current user appear.
-- [ ] **All items toggle.** Click "All items"; visible item set expands to include items shared with the user / org / public.
-- [ ] **Search bar filters.** Type partial title; grid narrows; clears on backspace.
-- [ ] **Type filter chip.** Click a type chip (e.g. "Maps"); grid narrows to that type. Multiple type chips combine OR.
+- [x] **Default scope is "My items".** Lands on `/items`; only items owned by the current user appear.
+- [x] **All items toggle.** Click "All items"; visible item set expands to include items shared with the user / org / public.
+- [x] **Search bar filters.** Type partial title; grid narrows; clears on backspace.
+- [x] **Type filter chip.** Click a type chip (e.g. "Maps"); grid narrows to that type. Multiple type chips combine OR.
 - [ ] **Owner filter.** As admin viewing "All items", filter by another user's id; grid narrows.
 - [ ] **Bbox filter ("In this area").** Toggle the area filter; only items whose bbox intersects the current map extent show.
 - [ ] **Tag click filters by tag.** Clicking a tag chip on an item card narrows to all items with that tag.
@@ -132,8 +132,8 @@ section explicitly tests mobile-portrait.
 
 ### 3.5 Empty states
 
-- [ ] **No items at all.** New user with zero items sees a "Create your first item" CTA.
-- [ ] **No items in a folder.** Empty folder shows "This folder is empty".
+- [x] **No items at all.** New user with zero items sees a "Create your first item" CTA.
+- [x] **No items in a folder.** Empty folder shows "This folder is empty".
 - [ ] **No items match search.** Search for nonsense; "No items match" copy renders.
 
 ---
@@ -145,9 +145,9 @@ one), then run through the per-type checks below.
 
 ### 4.1 Map item
 
-- [ ] **Map detail page renders.** Header (title, badge), MapEditor canvas, sharing panel.
-- [ ] **MapLibre canvas loads.** Basemap tiles render.
-- [ ] **Add layer dialog.** Right-rail "Add layer" button -> dialog with three source kinds: Data layer (portal item picker), GeoJSON URL, ArcGIS REST URL.
+- [x] **Map detail page renders.** Header (title, badge), MapEditor canvas, sharing panel.
+- [x] **MapLibre canvas loads.** Basemap tiles render.
+- [x] **Add layer dialog.** Right-rail "Add layer" button opens a dialog with five source tabs: Portal (with Items / Groups / Folders sub-tabs and search), File, Paste, URL, ArcGIS.
 - [ ] **Pick a data_layer.** Layer is added to the map; renders with default style.
 - [ ] **Pick a v3 multi-sublayer data_layer.** Per-sublayer fan-out: each sublayer becomes its own MapLayer entry.
 - [ ] **Layer panel toggle visibility.** Click eye icon; layer hides/shows.
