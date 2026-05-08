@@ -82,10 +82,11 @@ export const BUILTIN_BASEMAP_SEEDS: BuiltinBasemapSeed[] = [
   {
     seededKey: 'satellite',
     title: 'Satellite',
-    description: 'ESA / ArcGIS Online World Imagery.',
+    description:
+      'USGS National Map aerial imagery. US coverage only; orgs serving other regions should add their own basemap item.',
     tileUrl:
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Imagery (c) ESA WorldCover',
+      'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Imagery (c) U.S. Geological Survey, The National Map',
   },
 ];
 
