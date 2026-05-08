@@ -51,7 +51,6 @@ const typeTileBg: Record<string, string> = {
   dashboard: 'bg-indigo-500/90 text-white',
   file: 'bg-slate-500/90 text-white',
   layer_package: 'bg-emerald-600/90 text-white',
-  notebook: 'bg-fuchsia-500/90 text-white',
   tool: 'bg-teal-500/90 text-white',
   widget_package: 'bg-teal-600/90 text-white',
 };
@@ -68,7 +67,6 @@ const typeBadgeColor: Record<string, string> = {
   dashboard: 'bg-indigo-100 text-indigo-800',
   file: 'bg-slate-100 text-slate-800',
   layer_package: 'bg-emerald-100 text-emerald-800',
-  notebook: 'bg-fuchsia-100 text-fuchsia-800',
   tool: 'bg-teal-100 text-teal-800',
   widget_package: 'bg-teal-100 text-teal-800',
 };
@@ -95,7 +93,6 @@ const typeLabel: Record<string, string> = {
   dashboard: 'Dashboard',
   file: 'File',
   layer_package: 'Layer package',
-  notebook: 'Notebook',
   tool: 'Tool',
   widget_package: 'Widget package',
   pick_list: 'Pick list',

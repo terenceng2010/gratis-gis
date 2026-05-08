@@ -407,7 +407,6 @@ function prettyType(t: ItemType): string {
     report_template: 'Report template',
     dashboard: 'Dashboard',
     file: 'File',
-    notebook: 'Notebook',
     tool: 'Tool',
     pick_list: 'Pick list',
     geo_boundary: 'Boundary',

@@ -2,7 +2,7 @@
   "name": "gratis-gis",
   "version": "0.0.0",
   "private": true,
-  "description": "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and a visual tool builder. Inspired by modern cloud GIS platforms, built on Postgres + PostGIS + MapLibre.",
+  "description": "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, and a visual tool builder. Inspired by modern cloud GIS platforms, built on Postgres + PostGIS + MapLibre.",
   "keywords": [
     "gis",
     "geospatial",
@@ -17,7 +17,6 @@
     "field-data-collection",
     "form-builder",
     "survey",
-    "jupyter",
     "keycloak",
     "typescript",
     "nextjs",

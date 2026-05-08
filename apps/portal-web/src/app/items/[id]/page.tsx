@@ -158,7 +158,6 @@ const typeBadge: Record<string, string> = {
   report_template: 'bg-rose-100 text-rose-800',
   dashboard: 'bg-indigo-100 text-indigo-800',
   file: 'bg-slate-100 text-slate-800',
-  notebook: 'bg-fuchsia-100 text-fuchsia-800',
   tool: 'bg-teal-100 text-teal-800',
   editor: 'bg-purple-100 text-purple-800',
 };

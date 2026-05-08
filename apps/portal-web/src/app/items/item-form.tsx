@@ -126,11 +126,6 @@ const ITEM_TYPE_OPTIONS: Array<{ value: ItemType; label: string; desc: string }>
     desc: 'Live panels showing feature data.',
   },
   {
-    value: 'notebook' as ItemType,
-    label: 'Notebook',
-    desc: 'A Jupyter notebook hosted in the portal.',
-  },
-  {
     value: 'file' as ItemType,
     label: 'File',
     desc: 'Any uploaded file (PDF, image, zip, etc.).',

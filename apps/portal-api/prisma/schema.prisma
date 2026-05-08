@@ -141,7 +141,6 @@ enum ItemType {
   dashboard
   file
   layer_package              @map("layer-package")
-  notebook
   tool
   widget_package             @map("widget-package")
   pick_list                  @map("pick-list")

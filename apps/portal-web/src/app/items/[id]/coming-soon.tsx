@@ -52,12 +52,6 @@ const PILLARS: Partial<Record<ItemType, PillarInfo>> = {
       'Live panels powered by your feature services: charts, counters, maps, filters.',
     doc: 'docs/app-builder.md',
   },
-  notebook: {
-    label: 'Notebook',
-    blurb:
-      'A hosted Jupyter notebook wired to the portal: read your items, write to feature services, share results.',
-    doc: 'docs/notebooks.md',
-  },
   tool: {
     label: 'Tool',
     blurb:

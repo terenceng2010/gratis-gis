@@ -21,7 +21,6 @@ export const ITEM_TYPES = [
   'dashboard',
   'file',
   'layer_package',
-  'notebook',
   'tool',
   'widget_package',
   'pick_list',
