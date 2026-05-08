@@ -5,6 +5,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -32,6 +33,7 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import type { CreateItemInput, UpdateItemInput } from './items.service.js';
 import { ItemsService } from './items.service.js';
 import { DataSnapshotService } from './data-snapshot.service.js';
+import { WebMapJsonService } from './web-map-json.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 class CreateItemDto {
@@ -147,6 +149,7 @@ export class ItemsController {
   constructor(
     private readonly items: ItemsService,
     private readonly snapshots: DataSnapshotService,
+    private readonly webMapJsonService: WebMapJsonService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -364,6 +367,43 @@ export class ItemsController {
     // / wrong-type / no-geometry is treated as no clip.
     if (clip) opts.boundaryClipId = clip;
     return this.items.getGeoJson(user, id, opts);
+  }
+
+  /**
+   * Esri WebMapJSON view of a `map` item. Lets ArcGIS Pro / AGO /
+   * QGIS WebMap importers consume a portal map natively without
+   * needing a portal-specific adapter. Walks
+   * `MapData.layers[]`, builds a Lens per data-layer source,
+   * passes the bag through `lensesToWebMapJson`, and merges in
+   * the map's saved camera + basemap reference.
+   *
+   * Authorization: requires canRead on the map item itself.
+   * Per-layer ACL on referenced data_layers is NOT re-checked
+   * here (the response is a static reference document, not a
+   * data extract). External clients fetching a layer URL still
+   * hit the real per-layer auth check.
+   */
+  @Get(':id/web-map.json')
+  async webMapJson(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Headers('host') host?: string,
+    @Headers('x-forwarded-host') forwardedHost?: string,
+    @Headers('x-forwarded-proto') forwardedProto?: string,
+  ) {
+    // Resolve the item via the existing items.get gate (canRead +
+    // not-trashed + visible-to-user). 404 / 403 the same way the
+    // detail page does so the WebMap endpoint can't probe for
+    // hidden ids.
+    const map = await this.items.get(user, id);
+    // Build the absolute portal base URL from the request headers.
+    // Behind a load balancer the X-Forwarded-* pair is the source
+    // of truth; in dev, fall back to the raw Host header. Default
+    // to https since we never serve plaintext in prod.
+    const proto = forwardedProto?.split(',')[0]?.trim() || 'https';
+    const resolvedHost = forwardedHost?.split(',')[0]?.trim() || host || '';
+    const portalBaseUrl = resolvedHost ? `${proto}://${resolvedHost}` : '';
+    return this.webMapJsonService.buildForMap({ map, portalBaseUrl });
   }
 
   @Post()

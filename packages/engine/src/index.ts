@@ -37,7 +37,12 @@ export type {
   EsriInitialState,
   WebMapJsonContext,
 } from './web-map-json.js';
-export { lensToWebMapJson, webMapJsonToLens } from './web-map-json.js';
+export {
+  lensToWebMapJson,
+  lensesToWebMapJson,
+  operationalLayerForLens,
+  webMapJsonToLens,
+} from './web-map-json.js';
 
 export { uuidv7, uuidv7Timestamp, isUuid } from './uuid.js';
 export { cellForGeometry, representativePoint, H3_RESOLUTION } from './cell.js';

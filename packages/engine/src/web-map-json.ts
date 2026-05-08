@@ -112,10 +112,11 @@ const AUTHORING_APP = 'GratisGIS';
 const AUTHORING_APP_VERSION = '1.0';
 
 /**
- * Convert a Lens (with optional view + basemap) into an Esri
- * WebMapJSON object. The output is JSON-serializable and meant to
- * be returned as the body of a `GET /items/<mapId>/web-map.json`
- * endpoint or written to disk for offline distribution.
+ * Convert a single Lens (with optional view + basemap) into an
+ * Esri WebMapJSON object. The output is JSON-serializable and is
+ * meant to be returned as the body of a
+ * `GET /items/<mapId>/web-map.json` endpoint or written to disk
+ * for offline distribution.
  *
  * Emission rules:
  *   - LensRenderGeoJson  -> ArcGISFeatureLayer
@@ -123,42 +124,44 @@ const AUTHORING_APP_VERSION = '1.0';
  *   - LensRenderGeoJsonTable / LensRenderScalar -> skipped (not
  *     map-shaped); the caller can detect this by looking at the
  *     returned operationalLayers length.
+ *
+ * For map items with multiple operational layers, prefer
+ * `lensesToWebMapJson` so all the layers ride a single basemap +
+ * viewpoint document.
  */
 export function lensToWebMapJson(
   lens: Lens,
   ctx: WebMapJsonContext,
 ): EsriWebMap {
+  return lensesToWebMapJson(
+    lens.view !== undefined ? { lenses: [lens], view: lens.view } : { lenses: [lens] },
+    ctx,
+  );
+}
+
+/**
+ * Convert a list of lenses into one Esri WebMapJSON document.
+ * Walks each lens through the same per-lens emit rules as
+ * `lensToWebMapJson` and concatenates the resulting
+ * operationalLayers in order. The basemap + viewpoint come from
+ * `args.view` (typically the source map item's saved camera
+ * state); a missing view omits initialState entirely.
+ *
+ * Skipped lenses (table-shaped or scalar) leave a gap in the
+ * output -- the operationalLayers length may be smaller than
+ * `args.lenses.length`. Caller can compare lengths to detect.
+ */
+export function lensesToWebMapJson(
+  args: { lenses: Lens[]; view?: import('./lens.js').LensView },
+  ctx: WebMapJsonContext,
+): EsriWebMap {
   const operationalLayers: EsriOperationalLayer[] = [];
-
-  if (lens.render.kind === 'geojson') {
-    operationalLayers.push({
-      id: lens.id,
-      title: lens.name,
-      url: `${ctx.lensUrlPrefix}/${lens.id}/features`,
-      layerType: 'ArcGISFeatureLayer',
-      visibility: true,
-      opacity: 1,
-      ...(esriDefinitionFromAttrFilter(lens) && {
-        layerDefinition: {
-          definitionExpression: esriDefinitionFromAttrFilter(lens) as string,
-        },
-      }),
-    });
-  } else if (lens.render.kind === 'mvt') {
-    operationalLayers.push({
-      id: lens.id,
-      title: lens.name,
-      url: `${ctx.lensUrlPrefix}/${lens.id}/tiles/{z}/{y}/{x}.pbf`,
-      layerType: 'VectorTileLayer',
-      visibility: true,
-      opacity: 1,
-    });
+  for (const lens of args.lenses) {
+    const layer = operationalLayerForLens(lens, ctx);
+    if (layer) operationalLayers.push(layer);
   }
-  // geojson_table and scalar_json have no map representation; skip.
-
   const initialState =
-    lens.view !== undefined ? viewportFromLensView(lens.view) : undefined;
-
+    args.view !== undefined ? viewportFromLensView(args.view) : undefined;
   return {
     version: WEB_MAP_VERSION,
     authoringApp: AUTHORING_APP,
@@ -180,6 +183,44 @@ export function lensToWebMapJson(
     },
     ...(initialState !== undefined && { initialState }),
   };
+}
+
+/**
+ * Translate a single Lens to its EsriOperationalLayer. Returns
+ * undefined for non-map renderers (geojson_table / scalar_json).
+ * Exposed so callers that build a WebMap from non-Lens sources
+ * (e.g. an arcgis-rest map layer that points straight at an
+ * external FeatureService) can mix lens-shaped and bare-URL
+ * layers in one document.
+ */
+export function operationalLayerForLens(
+  lens: Lens,
+  ctx: WebMapJsonContext,
+): EsriOperationalLayer | undefined {
+  if (lens.render.kind === 'geojson') {
+    const def = esriDefinitionFromAttrFilter(lens);
+    return {
+      id: lens.id,
+      title: lens.name,
+      url: `${ctx.lensUrlPrefix}/${lens.id}/features`,
+      layerType: 'ArcGISFeatureLayer',
+      visibility: true,
+      opacity: 1,
+      ...(def && { layerDefinition: { definitionExpression: def } }),
+    };
+  }
+  if (lens.render.kind === 'mvt') {
+    return {
+      id: lens.id,
+      title: lens.name,
+      url: `${ctx.lensUrlPrefix}/${lens.id}/tiles/{z}/{y}/{x}.pbf`,
+      layerType: 'VectorTileLayer',
+      visibility: true,
+      opacity: 1,
+    };
+  }
+  // geojson_table and scalar_json have no map representation.
+  return undefined;
 }
 
 /**

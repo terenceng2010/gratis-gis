@@ -59,7 +59,6 @@ function makeItem(overrides: Partial<Item> = {}): Item {
 
 function makeShare(overrides: Partial<ItemShare> = {}): ItemShare {
   return {
-    id: 'share-1',
     itemId: 'item-1',
     principalType: 'user',
     principalId: 'user-1',
@@ -379,13 +378,11 @@ describe('SharingService', () => {
     const u = makeUser({ id: 'u-1', groupIds: ['g-1'] });
     const item = makeItem({ ownerId: 'someone-else', access: 'private' });
     const lowShare = makeShare({
-      id: 'share-low',
       principalType: 'user',
       principalId: 'u-1',
       permission: 'view',
     });
     const highShare = makeShare({
-      id: 'share-high',
       principalType: 'group',
       principalId: 'g-1',
       permission: 'edit',

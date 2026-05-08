@@ -9,6 +9,7 @@ import { ItemCredentialController } from './credential.controller.js';
 import { ItemProxyController } from './item-proxy.controller.js';
 import { ServiceProbeController } from './service-probe.controller.js';
 import { EditorPolicyService } from './editor-policy.service.js';
+import { WebMapJsonService } from './web-map-json.service.js';
 import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
@@ -33,6 +34,7 @@ import { PolicyModule } from '../policy/policy.module.js';
     DataSnapshotService,
     CredentialService,
     EditorPolicyService,
+    WebMapJsonService,
   ],
   exports: [
     ItemsService,
@@ -40,6 +42,7 @@ import { PolicyModule } from '../policy/policy.module.js';
     DataSnapshotService,
     CredentialService,
     EditorPolicyService,
+    WebMapJsonService,
   ],
 })
 export class ItemsModule {}
