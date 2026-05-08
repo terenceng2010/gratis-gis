@@ -62,6 +62,14 @@ export interface UpdateItemInput {
   thumbnailUrl?: string | null | undefined;
   /** Pass null to clear a previously-set license. */
   license?: string | null | undefined;
+  /**
+   * #80: tier-level geo limits. UUID of a geo_boundary item, or
+   * null to clear. Read path treats missing / wrong-typed targets
+   * as no-clip; this DTO does not validate the target is a real
+   * geo_boundary so an honest typo doesn't 4xx the save.
+   */
+  publicGeoBoundaryId?: string | null | undefined;
+  orgGeoBoundaryId?: string | null | undefined;
 }
 
 export interface ShareItemInput {
@@ -1031,6 +1039,16 @@ export class ItemsService {
         ...(input.access !== undefined && { access: input.access }),
         ...(input.thumbnailUrl !== undefined && { thumbnailUrl: input.thumbnailUrl }),
         ...(input.license !== undefined && { license: input.license }),
+        // #80: tier-level geo limits. Null clears, undefined leaves
+        // unchanged. The columns are nullable in Prisma so passing
+        // null directly is the right way to clear; we don't need a
+        // separate disconnect path.
+        ...(input.publicGeoBoundaryId !== undefined && {
+          publicGeoBoundaryId: input.publicGeoBoundaryId,
+        }),
+        ...(input.orgGeoBoundaryId !== undefined && {
+          orgGeoBoundaryId: input.orgGeoBoundaryId,
+        }),
         ...(nextData !== undefined && { bbox: nextBbox ?? [] }),
       },
     });

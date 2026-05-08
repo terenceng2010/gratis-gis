@@ -68,6 +68,13 @@ class UpdateItemDto {
   // Open-data license. SPDX id (CC-BY-4.0), URL, or free-form.
   // Pass null to clear a previously-set license.
   @IsOptional() @IsString() @MaxLength(500) license?: string | null;
+  // #80: tier-level geo limits. UUID of a geo_boundary item, or null
+  // to clear. The read path treats a missing / wrong-typed target
+  // as "no clip" so a broken ref cannot widen access; this DTO does
+  // not validate the target is actually a geo_boundary -- the read-
+  // time dereference is the source of truth.
+  @IsOptional() @IsUUID('loose') publicGeoBoundaryId?: string | null;
+  @IsOptional() @IsUUID('loose') orgGeoBoundaryId?: string | null;
 }
 
 class ReassignOwnerDto {

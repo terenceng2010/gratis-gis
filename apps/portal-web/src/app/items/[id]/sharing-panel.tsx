@@ -71,6 +71,22 @@ interface Props {
   initialShares: ItemShare[];
   groups: Pick<Group, 'id' | 'title'>[];
   /**
+   * #80: tier-level geo limits. Optional pointers to a geo_boundary
+   * item that clips reads at the public / org access tier. Distinct
+   * from per-share geoLimit (those live on individual ItemShare
+   * rows further down the page). The picker only renders when the
+   * matching tier is currently selected.
+   */
+  initialPublicGeoBoundaryId?: string | null;
+  initialOrgGeoBoundaryId?: string | null;
+  /**
+   * #80: list of geo_boundary items in the org for the picker
+   * dropdown. Loaded once by the parent page; the SharingPanel
+   * passes them through unchanged. Empty array is fine -- the
+   * picker shows a "(none, no boundaries available)" hint.
+   */
+  geoBoundaryItems?: Array<{ id: string; title: string }>;
+  /**
    * Name or slug of the owning org; used to label the "everyone in your org"
    * visibility option. Pass 'Your organization' as a safe default.
    */
@@ -96,11 +112,24 @@ export function SharingPanel({
   initialAccess,
   initialShares,
   groups,
+  initialPublicGeoBoundaryId = null,
+  initialOrgGeoBoundaryId = null,
+  geoBoundaryItems = [],
   orgLabel = 'Your organization',
 }: Props) {
   const router = useRouter();
   const [access, setAccess] = useState<ItemAccess>(initialAccess);
   const [accessSaveState, setAccessSaveState] = useState<RowSaveState>('idle');
+  // #80: tier-level boundary state. Each tier owns its own boundary;
+  // switching access does not auto-clear the OTHER tier's boundary so
+  // toggling Public -> Org -> Public preserves both selections.
+  const [publicBoundaryId, setPublicBoundaryId] = useState<string | null>(
+    initialPublicGeoBoundaryId,
+  );
+  const [orgBoundaryId, setOrgBoundaryId] = useState<string | null>(
+    initialOrgGeoBoundaryId,
+  );
+  const [boundarySaveState, setBoundarySaveState] = useState<RowSaveState>('idle');
   const [shares, setShares] = useState(initialShares);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +178,48 @@ export function SharingPanel({
       setRevertTarget(next);
       setRevertOpen(true);
     }
+    startTransition(() => router.refresh());
+  }
+
+  /**
+   * #80: tier-level boundary save. `tier` selects which column to
+   * update; passing null clears the boundary so the tier becomes
+   * unrestricted again. Optimistic + revert on failure, same shape
+   * as updateAccess. The PATCH body is shaped so an honest typo
+   * doesn't accidentally clear the OTHER tier (only the named field
+   * is included).
+   */
+  async function updateBoundary(
+    tier: 'public' | 'org',
+    next: string | null,
+  ) {
+    setError(null);
+    const prev = tier === 'public' ? publicBoundaryId : orgBoundaryId;
+    if (prev === next) return;
+    if (tier === 'public') setPublicBoundaryId(next);
+    else setOrgBoundaryId(next);
+    setBoundarySaveState('saving');
+    const body =
+      tier === 'public'
+        ? { publicGeoBoundaryId: next }
+        : { orgGeoBoundaryId: next };
+    const res = await fetch(`/api/portal/items/${itemId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      if (tier === 'public') setPublicBoundaryId(prev);
+      else setOrgBoundaryId(prev);
+      setBoundarySaveState('error');
+      setError(`Boundary update failed: ${res.status} ${await res.text()}`);
+      return;
+    }
+    setBoundarySaveState('saved');
+    setTimeout(
+      () => setBoundarySaveState((s) => (s === 'saved' ? 'idle' : s)),
+      1500,
+    );
     startTransition(() => router.refresh());
   }
 
@@ -1029,6 +1100,72 @@ export function SharingPanel({
               ? 'can already see this item. Shares below only matter for granting edit or admin permission on top of that.'
               : 'means anyone on the internet can view this. Shares below only matter for granting edit or admin permission.'}
           </p>
+        ) : null}
+        {/* #80: tier-level geographic scope. Renders only for the
+            active non-private tier so the picker stays out of sight
+            when the item is private (no anonymous / org reads to
+            scope). Distinct from per-share geo limits below: those
+            apply to specific user / group rows, this applies to the
+            access tier itself. The help-text spells out that this IS
+            access control (engine clips at read time) so authors
+            don't confuse it with the map-level "default view scope"
+            tracked under #79. */}
+        {access === 'public' || access === 'org' ? (
+          <div className="mt-3 rounded-md border border-border bg-surface-1 px-3 py-3">
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor={`tier-boundary-${access}`}
+                className="text-xs font-medium uppercase tracking-wide text-muted"
+              >
+                Geographic scope
+              </label>
+              <span
+                className="inline-flex h-5 w-5 items-center justify-center"
+                aria-live="polite"
+              >
+                {boundarySaveState === 'saving' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+                ) : boundarySaveState === 'saved' ? (
+                  <Check className="h-3.5 w-3.5 text-success" />
+                ) : null}
+              </span>
+            </div>
+            <select
+              id={`tier-boundary-${access}`}
+              value={
+                access === 'public'
+                  ? publicBoundaryId ?? ''
+                  : orgBoundaryId ?? ''
+              }
+              onChange={(e) =>
+                updateBoundary(access, e.target.value || null)
+              }
+              disabled={pending || geoBoundaryItems.length === 0}
+              className="mt-2 h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-sm text-ink-1 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">
+                {geoBoundaryItems.length === 0
+                  ? 'No boundary items in this org yet'
+                  : 'No scope (unrestricted)'}
+              </option>
+              {geoBoundaryItems.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.title}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-muted">
+              When set, viewers reaching this item via{' '}
+              <strong className="font-medium text-ink-1">
+                {access === 'public' ? 'public access' : `${orgLabel}`}
+              </strong>{' '}
+              only see features inside the boundary. The clip is
+              enforced at the API layer; data outside the boundary is
+              not returned. Per-user / per-group shares below have
+              their own geo limits which compose with this one (the
+              more permissive path wins).
+            </p>
+          </div>
         ) : null}
       </div>
 

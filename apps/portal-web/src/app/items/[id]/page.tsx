@@ -254,8 +254,12 @@ export default async function ItemDetailPage({ params }: Props) {
           () => [] as ItemWithShares[],
         )
       : Promise.resolve([] as ItemWithShares[]),
-    // Geo-boundary library for the map editor's "Default extent" picker.
-    isMap
+    // Geo-boundary library. Map editors use it for the Default
+    // Extent picker; SharingPanel (#80) uses it for the tier-level
+    // boundary picker that scopes public / org reads. Fetch when
+    // either surface needs it -- everyone who can manage the
+    // sharing surface (canManage) needs the list.
+    isMap || canManage
       ? apiFetch<Array<Item<GeoBoundaryData>>>(
           '/api/items?type=geo_boundary',
         ).catch(() => [] as Array<Item<GeoBoundaryData>>)
@@ -902,6 +906,23 @@ export default async function ItemDetailPage({ params }: Props) {
             itemType={isEditorItem(item) ? 'editor' : item.type}
             initialAccess={item.access}
             initialShares={item.shares}
+            // #80: tier-level geo-boundary refs surface in
+            // SharingPanel's tier-scope picker. The fields are
+            // optional on the Item type since slice 1 added them as
+            // nullable columns; defaulting to null keeps callers
+            // pre-#80 deploy compatible during the rolling deploy.
+            initialPublicGeoBoundaryId={
+              (item as { publicGeoBoundaryId?: string | null })
+                .publicGeoBoundaryId ?? null
+            }
+            initialOrgGeoBoundaryId={
+              (item as { orgGeoBoundaryId?: string | null })
+                .orgGeoBoundaryId ?? null
+            }
+            geoBoundaryItems={geoBoundaries.map((b) => ({
+              id: b.id,
+              title: b.title,
+            }))}
             groups={groups}
             orgLabel="Your organization"
           />
