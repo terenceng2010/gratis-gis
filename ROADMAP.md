@@ -67,38 +67,106 @@ data collection and field geometry capture into one experience.
 - [x] Schema-break notifications fan out to deployment owners + field
       downloaders before next sync
 
-## Phase 4: App Builder (pillar 3) 🚧
+## Phase 4: App Builder (pillar 3) ✅
 
 - [x] Web-app template framework (Editor / Viewer / Survey templates)
 - [x] Convert-to-Custom escape hatch
-- [ ] Custom-app grid runtime (CSS-grid layout engine + per-widget renderers)
-- [ ] Drag-drop visual designer for the Custom template
-- [ ] Real chart widget (Recharts data adapter)
-- [ ] Map / List / Filter / Text / Image / Attribute Table widget kit
+- [x] Custom-app grid runtime (24-column CSS grid + per-widget
+      renderers; 18 widget kinds: map / legend / layer-list /
+      attribute-table / text / chart / search / print / select /
+      basemap-gallery / image / button / divider / embed / bookmark /
+      coordinates / my-location / tabs)
+- [x] Drag-drop visual designer for the Custom template (three-pane
+      layout: palette / canvas / inspector; native HTML5 DnD with
+      `x-widget-kind` MIME, drag-place + resize gestures, tabs
+      drop routing, auto-bind on drop)
+- [x] Chart widget (Recharts; bar / line / pie with count / sum /
+      avg / min / max aggregates over the bound target)
+- [x] Per-widget tool-mode rendering (icon button + popover panel
+      for map-following widgets like layer-list, search, select)
 
-**Exit criteria:** configure a 3-widget app (map + list + filter) against
-a data layer without writing code, and publish it.
+**Status:** shipped. A 3-widget app (map + layer-list + chart)
+against a data layer takes minutes to author and publishes via
+the existing item-share + access flow. Possible follow-ups
+(none of these are gating v1):
+- Cross-widget filtering (clicking a chart slice filters the
+  bound map; clicking a row in the attribute table flies the
+  bound map). The plumbing is there per-widget; what's missing
+  is a shared "current selection" context that propagates.
+- Multi-page app navigation chrome (today the runtime renders
+  page[0]; the schema already supports multi-page).
+- Theme tokens beyond accent + background.
 
-## Phase 5: Reports + Dashboards (pillar 5) 🚧
+## Phase 5: Reports + Dashboards (pillar 5) 🟦 not started
 
-- [ ] Report template item type (markup + placeholders + chart specs)
-- [ ] Report runner (render to HTML, PDF, docx)
-- [ ] Scheduled report delivery via email
-- [ ] Dashboard item type (live charts over feature data)
+The `report_template` and `dashboard` item types exist in the
+ITEM_TYPES list but neither has a `Data` shape, a detail page,
+a runtime, or any rendering surface yet. A user creating one
+gets the generic "coming soon" placeholder.
 
-## Phase 6: Tool & Widget Builder (pillar 6) 🚧
+- [ ] Report template item type (markup + placeholders + chart
+      specs). Needs a `ReportTemplateData` shape in
+      `packages/shared-types`, a designer page in portal-web,
+      and a runtime that walks the template against real data.
+- [ ] Report runner (render to HTML, PDF, docx). Realistic
+      stack: a server-side renderer using something like
+      Puppeteer-PDF for PDF, mammoth + docx-templater for docx,
+      and a static HTML emit for the cheap path.
+- [ ] Scheduled report delivery via email. The
+      scheduled-tasks framework + notifications platform are in
+      place; what's missing is a "render-and-email-report" job
+      type that consumes a `report_template` item.
+- [ ] Dashboard item type (live charts over feature data). The
+      Custom Web App template covers most of the
+      "single-page dashboard" use case today (Map + Chart +
+      AttributeTable widgets in a grid); the gap is a
+      *named* dashboard surface with a refresh policy and the
+      ability to embed in a portal homepage.
+
+**Decision pending:** does Dashboard live as a separate item
+type, or as a Custom-app preset with stricter chrome? The
+Custom-app runtime already handles the visual surface; a thin
+"this is a dashboard" wrapper that refuses non-display widgets
++ defaults a refresh interval may be the smallest possible
+shape.
+
+## Phase 6: Tool & Widget Builder (pillar 6) 🟨 partial
+
+The derived-layer pillar half is solid. The general "node-graph
+authoring + executor" half is design-stage only; the design doc
+(`docs/tool-builder.md`) specifies the React Flow stack and
+node taxonomy, but no app code exists.
 
 - [x] Derived-layer item type (chained PostGIS spatial pipelines)
 - [x] Tool catalog: buffer, centroid, convex-hull, dissolve, fishnet,
       simplify, densify, vertices, calculate-geometry, nearest-neighbor,
-      random-sample, top-n, bbox
-- [ ] React Flow node-graph authoring canvas (`apps/tool-builder`)
-- [ ] Tool item type runtime (`apps/tool-runner` worker)
-- [ ] Tools as draggable widgets in the App Builder
+      random-sample, top-n, bbox (~300 lines per tool, all engine-
+      backed via the v3 cutover)
+- [ ] `apps/tool-builder`: React Flow node-graph canvas. New app
+      workspace; not started. The design doc has the node
+      taxonomy worked out; what's missing is the React Flow UI +
+      a `tool` item-type editor + the typed-port plumbing.
+- [ ] `apps/tool-runner`: server-side executor. New app workspace;
+      not started. The expected pattern is a worker that picks
+      jobs off a queue, materialises the node graph into a series
+      of PostGIS / turf.js / HTTP-fetch operations, and writes
+      results back as a new `derived_layer` or `data_layer`.
+- [ ] Tools as draggable widgets in the App Builder. Adds a
+      `tool-runner-button` widget kind to CustomWidgetKind that
+      points at a `tool` item; clicking the widget triggers a
+      run (with the user's auth) and surfaces progress + the
+      output reference in a sibling widget.
 
-**Exit criteria:** visually build a "buffer + intersect" analysis that
-takes two data\_layer inputs, saves results to a new derived\_layer, and
-publishes the same graph as a draggable widget in the app builder.
+**Decision pending:** how much of the "general node-graph
+executor" actually needs to exist for v1? The derived-layer
+pipelines already cover the most common spatial workflows
+(buffer + intersect, dissolve, fishnet, etc.) and they're
+authored through the derived-layer item's existing form-shaped
+editor. The argument for shipping a full tool-builder is "users
+want to chain non-spatial steps too" (HTTP fetch, attribute
+joins, conditional branches). The argument against is "that's
+v2 territory; ship the pillar through derived-layers and revisit
+when real workflows need it."
 
 ## Engine Substrate (foundational, ✅)
 
@@ -118,10 +186,19 @@ in pre-v1.
 - [x] Cedar policy engine wired (`@cedar-policy/cedar-wasm`); SharingService
       delegates canRead / canEdit / canDownload / canAdmin to PolicyService
       (Cedar Phase A + B)
-- [ ] Cedar Phase C: lens-level custom policies + geometry-aware predicates
-      (e.g. "contractors only see parcels inside their assigned polygon")
-- [ ] WebMap JSON import (reverse direction): ingest an Esri WebMap as
-      a portal `map` item
+- [x] Cedar Phase C: lens-level custom policies (`LensPolicyService`).
+      Geometry predicates work via a pre-resolved `Set<string>` on the
+      Feature entity since Cedar's WASM ships no geometry extension;
+      callers compute spatial containment in PostGIS upstream and hand
+      the engine a string-keyed set the policy checks via `.contains(...)`.
+- [x] Cedar Phase D: row-level filter wired into
+      `DataLayerEngine.listFeatures`. Lens with policy text
+      filters its read output; lens without is a passthrough
+      (no Cedar invocation, Phase B speed).
+- [x] WebMap JSON import (reverse direction):
+      `POST /items/web-map-json:import` walks an Esri WebMap,
+      classifies each operationalLayer URL, builds a portal `map`
+      item with one MapLayer per recognised source.
 
 ## Phase 7: Hosted Jupyter (deferred to v2)
 
@@ -164,11 +241,30 @@ engine foundation forecloses it.
       so page checksums are now load-bearing for catastrophic-
       corruption detection. Adding to an existing cluster requires a
       `pg_checksums --enable` pass, which is offline.
-- [ ] AuthZ policy tests (Cedar Phase B already added 50; more needed
-      around lens-level policies in Phase C)
-- [ ] Load tests for tile serving
-- [ ] Backup / restore tooling (basic landed; HA story TBD)
-- [ ] Migration guides from common cloud-GIS export formats
+- [x] AuthZ policy tests. ~55 tests across `policy.service.spec.ts`,
+      `lens-policy.service.spec.ts`, and `sharing.service.spec.ts`
+      cover every default-policy branch + lens-level forbids
+      (attribute, spatial-set, multi-clause stack, parse error,
+      forbid-trumps-permit). Phase B pinned the 50 minimum;
+      we're past it.
+- [x] Backup / restore tooling: `apps/portal-api/src/backup/`
+      ships scheduled runs (daily / weekly / monthly / custom
+      cron), retention policy, archive manifests, a maintenance-
+      mode gate, and admin restore flow. HA story is the future
+      work item if we ever multi-host.
+- [ ] Load tests for tile serving. The pg_tileserv path is
+      unbenchmarked under realistic concurrency. Target: 100+
+      concurrent tile fetches against a 100k-feature data\_layer
+      with the cell index path engaged. No tooling yet; would
+      use k6 or vegeta against `/api/portal/items/:id/tiles/...`.
+- [ ] Migration guides from common cloud-GIS export formats. AGO
+      and ArcGIS Pro export to Esri WebMap JSON; the
+      `POST /items/web-map-json:import` endpoint already covers
+      the runtime side. Missing is a step-by-step how-to in
+      `docs/migration/from-arcgis-online.md` and equivalents
+      for shapefile zip / GeoPackage / KML bulk import (the
+      ingest controller handles each format individually but
+      we don't document the full migration story).
 
 ---
 
