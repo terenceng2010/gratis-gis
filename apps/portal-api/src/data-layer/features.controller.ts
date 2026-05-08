@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Query,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
@@ -217,6 +218,62 @@ export class DataLayerFeaturesController {
     return geom;
   }
 
+  /**
+   * #82: assert every supplied geometry intersects the caller's
+   * effective geo limit. ST_Intersects (not ST_Within) so a line /
+   * polygon that crosses the boundary is accepted -- the read clip
+   * trims the visible result to the inside. Throws 422 with a
+   * structured payload that includes the offending row indices so
+   * the field-app sync flush can flag them in the queue without
+   * reparsing free-form messages. No-op when the caller is owner /
+   * admin / unscoped (geoLimit = null) and for table-mode sublayers
+   * that don't carry a geom column.
+   */
+  private async assertGeometriesInsideLimit(
+    geoLimit: unknown | null,
+    isTable: boolean,
+    geoms: Array<unknown | null | undefined>,
+  ): Promise<void> {
+    if (!geoLimit || isTable) return;
+    if (geoms.length === 0) return;
+    // Filter to indices that have a geometry to check; absent /
+    // null geometries pass (a write with no geom can't violate a
+    // spatial limit -- editors of attribute-only fields hit this).
+    const candidates: Array<{ index: number; geom: unknown }> = [];
+    for (let i = 0; i < geoms.length; i++) {
+      const g = geoms[i];
+      if (g && typeof g === 'object') candidates.push({ index: i, geom: g });
+    }
+    if (candidates.length === 0) return;
+    const limitJson = JSON.stringify(geoLimit);
+    const offending: number[] = [];
+    // One round-trip per candidate. Bulk batch sizes in normal
+    // traffic stay small (a field-app sync flush is on the order
+    // of dozens, not thousands). If we ever need thousand-row
+    // imports to gate fast, fold this into a single unnest+ANY
+    // query; for v1 the loop keeps the error-reporting trivial.
+    for (const { index, geom } of candidates) {
+      const rows = await this.prisma.$queryRaw<Array<{ ok: boolean }>>`
+        SELECT ST_Intersects(
+          ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(geom)}::text), 4326),
+          ST_SetSRID(ST_GeomFromGeoJSON(${limitJson}::text), 4326)
+        ) AS ok
+      `;
+      const ok = rows[0]?.ok === true;
+      if (!ok) offending.push(index);
+    }
+    if (offending.length > 0) {
+      throw new UnprocessableEntityException({
+        message:
+          offending.length === 1
+            ? "This feature is outside the area you're allowed to edit. Move the feature inside the boundary or ask the layer owner to grant access to a wider area."
+            : `${offending.length} features are outside the area you're allowed to edit. Move them inside the boundary or ask the layer owner to grant access to a wider area.`,
+        code: 'feature_outside_write_scope',
+        offendingIndices: offending,
+      });
+    }
+  }
+
   @Post('features')
   async append(
     @CurrentUser() user: AuthUser,
@@ -226,7 +283,17 @@ export class DataLayerFeaturesController {
     @Headers('x-editor-id') editorId?: string,
     @Headers('x-data-collection-id') dataCollectionId?: string,
   ) {
-    const { isTable } = await this.assertV3Layer(user, itemId, layerId, 'write');
+    const { isTable, geoLimit } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'write',
+    );
+    await this.assertGeometriesInsideLimit(
+      geoLimit,
+      isTable,
+      body.features.map((f) => f.geometry),
+    );
     if (editorId) {
       await this.editorPolicy.assertAllows({
         user,
@@ -420,7 +487,7 @@ export class DataLayerFeaturesController {
     @Body() body: UpdateFeatureBodyDto,
     @Headers('x-editor-id') editorId?: string,
   ) {
-    const { rowScope, isTable } = await this.assertV3Layer(
+    const { rowScope, isTable, geoLimit } = await this.assertV3Layer(
       user,
       itemId,
       layerId,
@@ -441,6 +508,15 @@ export class DataLayerFeaturesController {
               : [],
         },
       });
+    }
+    // #82: gate geometry edits the same way appends are gated. An
+    // attribute-only PATCH (no geometry in the body) bypasses the
+    // check because a row already accepted yesterday shouldn't fail
+    // an attribute edit today even if the boundary tightened.
+    if (body.geometry !== undefined) {
+      await this.assertGeometriesInsideLimit(geoLimit, isTable, [
+        body.geometry,
+      ]);
     }
     const patch: { geometry?: unknown; properties?: Record<string, unknown> } = {};
     if (body.geometry !== undefined) patch.geometry = body.geometry;
@@ -548,17 +624,19 @@ export class DataLayerFeaturesController {
       // Authoritative edit gate: same helper update() uses.
       await this.items.assertCanEdit(user, itemId);
     }
-    // Geo-limit is only meaningful on read: writes go through
-    // canEdit which doesn't use a polygon today (the share either
-    // grants edit or doesn't). For reads, consult every matching
-    // share's polygon to build the union. Owners / admins return
-    // null (no restriction).
-    let geoLimit: unknown | null = null;
+    // #82: geo-limit applies on BOTH reads and writes. Reads narrow
+    // the SELECT to the polygon (existing behavior). Writes use the
+    // same polygon to gate incoming feature geometries: a write
+    // outside the caller's effective geo limit is rejected up-front
+    // so the data integrity story stays honest. Without this gate a
+    // contributor could add a feature outside their boundary, watch
+    // it disappear from their next read (silently clipped), and
+    // wonder where their work went; meanwhile the row would still
+    // be visible to owners / admins. Owners and admins return null
+    // here (no restriction) inside SharingService.
     const withShares = item as typeof item & { shares?: ItemShare[] };
     const shares = withShares.shares ?? [];
-    if (mode === 'read') {
-      geoLimit = await this.sharing.geoLimitFor(user, item, shares);
-    }
+    const geoLimit = await this.sharing.geoLimitFor(user, item, shares);
     // Row-scope applies to BOTH reads and writes (#40). On reads it
     // narrows the SELECT; on writes it gates the per-row update /
     // delete to features the caller created. Owner / admin / public
