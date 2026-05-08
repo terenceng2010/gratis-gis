@@ -10,6 +10,7 @@ import {
 } from './data-layer.js';
 import type { EngineService } from './engine.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import type { LensPolicyService } from '../policy/lens-policy.service.js';
 
 const PRINCIPAL = { sub: 'user-1', displayName: 'User One' };
 const ITEM_ID = '11111111-1111-7111-8111-111111111111';
@@ -74,6 +75,23 @@ function makeFakePrisma() {
   };
 }
 
+/**
+ * Fake LensPolicyService for tests that don't exercise the lens
+ * filter (the existing pre-Phase-D suite). The default no-op
+ * `checkFeature` returns true so passthrough is identical to the
+ * pre-Phase-D shape; tests that DO want to drive policy filtering
+ * supply their own checker via `makeFakeLensPolicy({ checkFeature })`.
+ */
+function makeFakeLensPolicy(
+  override: Partial<{
+    checkFeature: LensPolicyService['checkFeature'];
+  }> = {},
+): LensPolicyService {
+  return {
+    checkFeature: override.checkFeature ?? (() => true),
+  } as unknown as LensPolicyService;
+}
+
 function createArgs(overrides: Partial<CreateFeatureArgs> = {}): CreateFeatureArgs {
   return {
     itemId: ITEM_ID,
@@ -116,7 +134,7 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
   it('writes a kind=create observation with a fresh entity id', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     const result = await adapter.writeFeatureCreate(createArgs());
 
@@ -132,7 +150,7 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
   it('passes properties through as attrs and geometry through as geom', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     await adapter.writeFeatureCreate(createArgs());
 
@@ -144,7 +162,7 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
   it('defaults source.kind to data_layer:write when not given', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     await adapter.writeFeatureCreate(createArgs());
 
@@ -154,7 +172,7 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
   it('respects an explicit source override', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     await adapter.writeFeatureCreate(
       createArgs({ source: { kind: 'ingest:shapefile' } }),
@@ -166,7 +184,7 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
   it('handles missing properties and geometry as null', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     await adapter.writeFeatureCreate({
       itemId: ITEM_ID,
@@ -182,7 +200,7 @@ describe('DataLayerEngine.writeFeatureCreate', () => {
   it('uses an explicit globalId as the entity id when provided', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     const globalId = uuidv7();
 
     const result = await adapter.writeFeatureCreate(createArgs({ globalId }));
@@ -196,7 +214,7 @@ describe('DataLayerEngine.writeFeaturesCreate', () => {
   it('returns an empty array on empty input', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     const out = await adapter.writeFeaturesCreate([]);
     expect(out).toEqual([]);
@@ -206,7 +224,7 @@ describe('DataLayerEngine.writeFeaturesCreate', () => {
   it('writes one create observation per input and returns aligned ids', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     const inputs = [
       createArgs({ properties: { i: 0 } }),
@@ -228,7 +246,7 @@ describe('DataLayerEngine.writeFeaturesCreate', () => {
   it('every entity id is unique', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
 
     const inputs = Array.from({ length: 20 }, () => createArgs());
     const out = await adapter.writeFeaturesCreate(inputs);
@@ -239,7 +257,7 @@ describe('DataLayerEngine.writeFeaturesCreate', () => {
   it('honors per-input globalId when provided, generates fresh ones otherwise', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     const supplied = uuidv7();
 
     const out = await adapter.writeFeaturesCreate([
@@ -257,7 +275,7 @@ describe('DataLayerEngine.writeFeatureUpdate', () => {
   it('writes a kind=update observation that preserves the entity id', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     const args = updateArgs();
 
     await adapter.writeFeatureUpdate(args);
@@ -273,7 +291,7 @@ describe('DataLayerEngine.writeFeatureDelete', () => {
   it('writes a kind=delete observation with null attrs and geom', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     const args = deleteArgs();
 
     await adapter.writeFeatureDelete(args);
@@ -307,7 +325,7 @@ describe('DataLayerEngine.listFeatures', () => {
   it('returns an empty FeatureCollection when the query returns no rows', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     prisma.setRows([]);
 
     const out = await adapter.listFeatures({ itemId: ITEM_ID, layerId: LAYER_ID });
@@ -317,7 +335,7 @@ describe('DataLayerEngine.listFeatures', () => {
   it('returns a FeatureCollection with surfaced editor tracking', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     const entity = uuidv7();
     prisma.setRows([row(entity)]);
 
@@ -341,7 +359,7 @@ describe('DataLayerEngine.listFeatures', () => {
   it('passes through null geometry and null attrs without crashing', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     const entity = uuidv7();
     prisma.setRows([row(entity, { attrs: null, geom_geojson: null })]);
 
@@ -353,7 +371,7 @@ describe('DataLayerEngine.listFeatures', () => {
   it('honors a limit override', async () => {
     const engine = makeFakeEngine();
     const prisma = makeFakePrisma();
-    const adapter = new DataLayerEngine(engine.fake, prisma.fake);
+    const adapter = new DataLayerEngine(engine.fake, prisma.fake, makeFakeLensPolicy());
     prisma.setRows([row(uuidv7())]);
 
     // Just verify the call shape; the SQL contains LIMIT but we are
@@ -366,5 +384,164 @@ describe('DataLayerEngine.listFeatures', () => {
       limit: 50,
     });
     expect(out.features).toHaveLength(1);
+  });
+
+  // -----------------------------------------------------------------
+  // Phase D: lens-policy filtering. The fake LensPolicyService is
+  // the load-bearing piece here; we drive its `checkFeature` to
+  // simulate a Cedar-evaluated allow / deny per row and confirm the
+  // engine's filter wiring respects the decision.
+  // -----------------------------------------------------------------
+  describe('lens-policy filtering (Phase D)', () => {
+    // Minimal AuthUser-shaped fixture for the policy fake. The
+    // engine's lensPolicy parameter forwards this verbatim to
+    // LensPolicyService; the fake checker we install ignores the
+    // user, so the only invariant is that the engine doesn't
+    // crash building the entity store reference.
+    const FAKE_USER = {
+      id: 'user-1',
+      orgId: 'org-1',
+      orgSlug: 'org-1',
+      username: 'alice',
+      email: 'alice@example.com',
+      orgRole: 'contributor',
+      groupIds: [],
+      capabilities: new Set(),
+    } as unknown as import('../auth/auth-sync.service.js').AuthUser;
+
+    it('passes through every row when no lensPolicy is supplied', async () => {
+      const engine = makeFakeEngine();
+      const prisma = makeFakePrisma();
+      let calls = 0;
+      const policy = makeFakeLensPolicy({
+        checkFeature: () => {
+          calls += 1;
+          return false; // would-deny if invoked
+        },
+      });
+      const adapter = new DataLayerEngine(engine.fake, prisma.fake, policy);
+      prisma.setRows([row(uuidv7()), row(uuidv7())]);
+
+      const out = await adapter.listFeatures({
+        itemId: ITEM_ID,
+        layerId: LAYER_ID,
+      });
+      expect(out.features).toHaveLength(2);
+      expect(calls).toBe(0); // never consulted when lensPolicy is absent
+    });
+
+    it('passes through every row when lens.policy is empty', async () => {
+      const engine = makeFakeEngine();
+      const prisma = makeFakePrisma();
+      let calls = 0;
+      const policy = makeFakeLensPolicy({
+        checkFeature: () => {
+          calls += 1;
+          return false;
+        },
+      });
+      const adapter = new DataLayerEngine(engine.fake, prisma.fake, policy);
+      prisma.setRows([row(uuidv7())]);
+
+      const out = await adapter.listFeatures({
+        itemId: ITEM_ID,
+        layerId: LAYER_ID,
+        lensPolicy: {
+          lens: { id: 'lens-1', policy: '' },
+          user: FAKE_USER,
+        },
+      });
+      expect(out.features).toHaveLength(1);
+      expect(calls).toBe(0);
+    });
+
+    it('drops rows that fail the policy check', async () => {
+      const engine = makeFakeEngine();
+      const prisma = makeFakePrisma();
+      const allowList = new Set<string>();
+      const policy = makeFakeLensPolicy({
+        checkFeature: ({ feature }) => allowList.has(feature.entityId),
+      });
+      const adapter = new DataLayerEngine(engine.fake, prisma.fake, policy);
+      const e1 = uuidv7();
+      const e2 = uuidv7();
+      const e3 = uuidv7();
+      allowList.add(e1);
+      allowList.add(e3);
+      prisma.setRows([row(e1), row(e2), row(e3)]);
+
+      const out = await adapter.listFeatures({
+        itemId: ITEM_ID,
+        layerId: LAYER_ID,
+        lensPolicy: {
+          lens: { id: 'lens-1', policy: 'forbid (...);' },
+          user: FAKE_USER,
+        },
+      });
+      expect(out.features.map((f) => f.id)).toEqual([e1, e3]);
+    });
+
+    it('passes spatial keys from spatialKeysFor through to the policy', async () => {
+      const engine = makeFakeEngine();
+      const prisma = makeFakePrisma();
+      const seenSpatial: string[][] = [];
+      const policy = makeFakeLensPolicy({
+        checkFeature: ({ feature }) => {
+          seenSpatial.push([...feature.spatial]);
+          return true;
+        },
+      });
+      const adapter = new DataLayerEngine(engine.fake, prisma.fake, policy);
+      const e1 = uuidv7();
+      const e2 = uuidv7();
+      prisma.setRows([row(e1), row(e2)]);
+
+      await adapter.listFeatures({
+        itemId: ITEM_ID,
+        layerId: LAYER_ID,
+        lensPolicy: {
+          lens: { id: 'lens-spatial', policy: 'forbid (...);' },
+          user: FAKE_USER,
+          spatialKeysFor: (f) =>
+            f.id === e1 ? ['assigned_area'] : [],
+        },
+      });
+      expect(seenSpatial).toEqual([['assigned_area'], []]);
+    });
+
+    it('forwards the feature\'s attrs payload (sans tracking fields are still present)', async () => {
+      const engine = makeFakeEngine();
+      const prisma = makeFakePrisma();
+      const seenAttrs: Record<string, unknown>[] = [];
+      const policy = makeFakeLensPolicy({
+        checkFeature: ({ feature }) => {
+          seenAttrs.push(feature.attrs);
+          return true;
+        },
+      });
+      const adapter = new DataLayerEngine(engine.fake, prisma.fake, policy);
+      const e1 = uuidv7();
+      prisma.setRows([
+        row(e1, { attrs: { cost: 99, classification: 'A' } }),
+      ]);
+
+      await adapter.listFeatures({
+        itemId: ITEM_ID,
+        layerId: LAYER_ID,
+        lensPolicy: {
+          lens: { id: 'lens-attrs', policy: 'forbid (...);' },
+          user: FAKE_USER,
+        },
+      });
+      expect(seenAttrs).toHaveLength(1);
+      // Engine forwards the full properties bag (caller-attrs +
+      // editor-tracking underscore fields). Lens authors who only
+      // care about user-set attrs reach for `resource.attrs.cost`
+      // (the unprefixed names); the engine fields are namespaced
+      // under `_*` and don't collide.
+      expect(seenAttrs[0]?.cost).toBe(99);
+      expect(seenAttrs[0]?.classification).toBe('A');
+      expect(seenAttrs[0]?._global_id).toBe(e1);
+    });
   });
 });

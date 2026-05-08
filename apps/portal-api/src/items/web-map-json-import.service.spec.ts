@@ -237,10 +237,7 @@ describe('WebMapJsonImportService', () => {
   it('uses default center+zoom when initialState is missing', async () => {
     const items = makeItemsMock();
     const svc = new WebMapJsonImportService(makePrismaMock(), items.service);
-    const noView: EsriWebMap = {
-      ...baseWebMap,
-      initialState: undefined,
-    };
+    const noView = { ...baseWebMap } as EsriWebMap;
     delete (noView as { initialState?: unknown }).initialState;
     await svc.import({ user: makeUser(), webMap: noView });
     const args = items.lastCreate.args as {

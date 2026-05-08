@@ -155,14 +155,47 @@ speed as before for unpolicied lenses). Parse errors and runtime
 errors fail closed and log so authoring mistakes surface in the
 operator log instead of silently leaking data.
 
-**Read-path integration (deferred):** wiring `LensPolicyService`
-into the engine's actual feature read paths is a Phase D task.
-The infrastructure ships in Phase C with comprehensive tests
-(12 specs covering passthrough, attribute forbid, spatial-set
-forbid, multi-key spatial, forbid-trumps-permit, parse errors).
-Phase D plumbs it through `DataLayerEngine.listFeatures` and the
-data-layer features service so a lens with a policy actually
-filters its read output.
+### Phase D (read-path wiring)
+
+`DataLayerEngine.listFeatures` now accepts an optional
+`lensPolicy: { lens, user, spatialKeysFor? }` argument. When
+present, every feature returned by the SQL query is run through
+`LensPolicyService.checkFeature`; rows that fail are dropped from
+the resulting FeatureCollection. Absent or empty `lens.policy`
+short-circuits to passthrough so the unpolicied path stays at
+Phase B speed.
+
+Spatial keys are caller-provided. Cedar's WASM has no geometry
+extension, so the engine doesn't auto-compute "is this feature
+inside the principal's assigned polygon" itself. Callers that
+want spatial rules pass a `spatialKeysFor: (feature) => string[]`
+function that runs the PostGIS containment check (or otherwise
+resolves named keys) per feature; the lens policy then references
+the same keys via `resource.spatial.contains("assigned_area")`.
+
+The most common shape for that resolver: query PostGIS once for
+"every entity whose geom is inside the principal's assigned
+polygon," cache the resulting Set<entityId>, and return
+`["assigned_area"]` from the resolver iff the feature's id is in
+the cache. That keeps per-feature cost at O(1) hash lookup.
+
+End-to-end tests live in
+`apps/portal-api/src/engine/data-layer.spec.ts` under
+`DataLayerEngine.listFeatures > lens-policy filtering (Phase D)`:
+
+- Passthrough on absent / empty policy (no Cedar invocation, no
+  perf cost)
+- Per-row deny based on `checkFeature` decision
+- Spatial keys from `spatialKeysFor` reach the policy verbatim
+- Feature attrs (caller-set + engine-tracking underscore fields)
+  forwarded to the policy intact
+
+Wiring the resolver from real PostGIS queries (e.g. the
+`SharingService.geoLimitFor` polygon as the assigned area) is the
+next concrete user-facing slice. With Phase D landed, it's a
+matter of constructing a `spatialKeysFor` callback that wraps an
+`ST_Contains(polygon, feature.geom)` query and threading the
+resulting set through; the engine plumbing is in place.
 
 ## Entity model
 

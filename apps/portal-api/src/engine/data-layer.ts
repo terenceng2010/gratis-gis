@@ -28,6 +28,8 @@ import {
 
 import { EngineService } from './engine.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LensPolicyService } from '../policy/lens-policy.service.js';
+import type { AuthUser } from '../auth/auth-sync.service.js';
 
 /** Argument bag shared by every write helper. */
 interface WriteCommon {
@@ -123,6 +125,34 @@ export interface ListFeaturesArgs {
    * non-spatial layers pass through cleanly.
    */
   isTable?: boolean;
+  /**
+   * Optional row-level policy filter (Cedar Phase D). When set,
+   * every feature returned by the SQL query is evaluated against
+   * `lensPolicy.policy` via LensPolicyService.checkFeature; rows
+   * that fail are dropped from the FeatureCollection.
+   *
+   * Pass `lens` with both an `id` and a `policy` text. Empty /
+   * absent policy text short-circuits to passthrough; same for
+   * an absent `lensPolicy` argument entirely (Phase B behaviour).
+   *
+   * `user` is the principal the policy evaluates against. Required
+   * when `lens.policy` is set; ignored otherwise.
+   *
+   * `spatialKeysFor` pre-resolves spatial predicates per feature.
+   * Cedar's WASM has no geometry extension, so callers that want
+   * spatial rules ("inside assigned polygon") compute the
+   * containment in PostGIS upstream and hand the engine the
+   * resulting `Set<string>` of qualifying keys per feature. Lens
+   * policies reference the same keys via
+   * `resource.spatial.contains("assigned_area")`. When omitted,
+   * every feature passes an empty spatial set; non-spatial
+   * policies (attribute predicates, role checks) work unchanged.
+   */
+  lensPolicy?: {
+    lens: { id: string; policy?: string };
+    user: AuthUser;
+    spatialKeysFor?: (feature: DataLayerFeature) => string[];
+  };
 }
 
 export interface DataLayerFeature {
@@ -209,6 +239,7 @@ export class DataLayerEngine {
   constructor(
     private readonly engine: EngineService,
     private readonly prisma: PrismaService,
+    private readonly lensPolicy: LensPolicyService,
   ) {}
 
   scope(itemId: string, layerId: string): string {
@@ -484,7 +515,47 @@ export class DataLayerEngine {
       },
     }));
 
-    return { type: 'FeatureCollection', features };
+    // Phase D: row-level filter through LensPolicyService when the
+    // caller attached a lens with policy text. The service short-
+    // circuits on absent / whitespace policy so the unpolicied
+    // path stays at Phase B speed.
+    const filtered = this.applyLensPolicy(features, args.lensPolicy);
+
+    return { type: 'FeatureCollection', features: filtered };
+  }
+
+  /**
+   * Apply a Cedar-evaluated row filter to the engine's read output.
+   * Pulled into its own method so the spec for Phase D can drive
+   * it directly without rebuilding a full PostGIS query path.
+   *
+   * Honours the caller-supplied `spatialKeysFor` to resolve spatial
+   * predicates upstream of the policy check; the policy then sees
+   * a Set<string> of keys the feature qualifies for and evaluates
+   * `.contains("assigned_area")` natively.
+   */
+  private applyLensPolicy(
+    features: DataLayerFeature[],
+    spec: ListFeaturesArgs['lensPolicy'],
+  ): DataLayerFeature[] {
+    if (!spec) return features;
+    if (!spec.lens.policy || spec.lens.policy.trim().length === 0) {
+      return features;
+    }
+    return features.filter((feature) => {
+      const spatial = spec.spatialKeysFor
+        ? spec.spatialKeysFor(feature)
+        : [];
+      return this.lensPolicy.checkFeature({
+        user: spec.user,
+        lens: spec.lens,
+        feature: {
+          entityId: feature.id,
+          attrs: feature.properties as Record<string, unknown>,
+          spatial,
+        },
+      });
+    });
   }
 }
 
