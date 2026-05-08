@@ -21,6 +21,7 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { FormsModule } from './forms/forms.module.js';
 import { FieldQueueModule } from './field-queue/field-queue.module.js';
 import { EngineModule } from './engine/engine.module.js';
+import { PolicyModule } from './policy/policy.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 
 @Module({
@@ -43,6 +44,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     FormsModule,
     FieldQueueModule,
     EngineModule,
+    PolicyModule,
   ],
   controllers: [HealthController],
   providers: [
