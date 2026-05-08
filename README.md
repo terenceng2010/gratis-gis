@@ -26,8 +26,10 @@ third party's cloud.
   metadata, DCAT catalog, vector tiles, Esri WebMap JSON. Import without a
   converter, export without an export window. Portal maps are consumable in
   ArcGIS Pro, AGO, QGIS, and kepler.gl natively (`GET /items/:id/web-map.json`).
-- **No proprietary file formats.** Your layers live in plain Postgres tables.
-  If GratisGIS disappears tomorrow, your data is still queryable with `psql`.
+- **No proprietary file formats.** Your data lives in a documented
+  Postgres + PostGIS schema with no opaque binary blobs. If GratisGIS
+  disappears tomorrow, your data is still queryable with `psql` and
+  dumpable with `pg_dump`.
 - **Polished UX, not "engineer-built."** Open-source GIS has a long history of
   dated interfaces. GratisGIS targets the look and feel of modern consumer
   SaaS: considered typography, accessible components, motion that respects
