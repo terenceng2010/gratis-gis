@@ -54,6 +54,16 @@ import type {
 interface Props {
   value: DataLayerDataV3;
   onChange: (next: DataLayerDataV3) => void;
+  /**
+   * When the user imports a server-staged spatial file (one upload
+   * via /ingest/stage), the builder collects per-layer mappings of
+   * { layerId -> sourceLayerName } against the returned stagingId so
+   * the wizard's Create-item handler can fan out per-layer ingest
+   * without re-uploading. Builder state is reset on remount, so the
+   * wizard mirrors these into its own state to survive across the
+   * Create-item async boundary.
+   */
+  onPendingFileImport?: (entry: PendingFileImport) => void;
 }
 
 const FIELD_TYPE_OPTIONS: Array<{ value: FeatureFieldType; label: string }> = [
@@ -118,7 +128,11 @@ function newField(): FeatureField {
   };
 }
 
-export function DataLayerBuilder({ value, onChange }: Props) {
+export function DataLayerBuilder({
+  value,
+  onChange,
+  onPendingFileImport,
+}: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   // Monotonic counters that LayerCard observes to force-collapse /
@@ -267,11 +281,19 @@ export function DataLayerBuilder({ value, onChange }: Props) {
       {importOpen ? (
         <ImportPanel
           onClose={() => setImportOpen(false)}
-          onImport={(imported) => {
+          onImport={(imported, pending) => {
             // Append rather than replace: authors can import into an
             // already-seeded builder without losing manually-defined
             // layers.
             updateLayers([...layers, ...imported]);
+            // Forward the pending-file-import record (if any) up to
+            // the wizard so it can fire per-layer ingest after the
+            // item is created. Server-staged uploads always carry a
+            // stagingId; client-side GeoJSON parses don't, hence the
+            // optionality.
+            if (pending && onPendingFileImport) {
+              onPendingFileImport(pending);
+            }
             setImportOpen(false);
           }}
         />
@@ -1649,9 +1671,26 @@ function ParentLinkRow({
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Pending feature import surfaced to the parent wizard so it can fan
+ * out per-layer ingest from a single staged file after Create item.
+ * One entry per uploaded file (maybe several per wizard session if
+ * the user imports more than one source); each entry lists the
+ * layer ids that came from it plus the GDAL source-layer name we
+ * need to pass at ingest time.
+ */
+export interface PendingFileImport {
+  stagingId: string;
+  fileName: string;
+  layers: Array<{ layerId: string; sourceLayerName: string }>;
+}
+
 interface ImportPanelProps {
   onClose: () => void;
-  onImport: (layers: DataLayerSublayer[]) => void;
+  onImport: (
+    layers: DataLayerSublayer[],
+    pending?: PendingFileImport,
+  ) => void;
 }
 
 /**
@@ -1680,14 +1719,6 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
   // ref is also how the abort path knows whether anything is actually
   // in flight (handles double-clicks on Cancel gracefully).
   const xhrRef = useRef<XMLHttpRequest | null>(null);
-  const [probed, setProbed] = useState<{
-    fileName: string;
-    driver: string;
-    layers: ProbedLayer[];
-    /** Which probed-layer names the author wants to import. */
-    selected: Set<string>;
-  } | null>(null);
-
   function cancelUpload() {
     xhrRef.current?.abort();
     xhrRef.current = null;
@@ -1697,7 +1728,6 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
 
   async function handleFile(file: File) {
     setError(null);
-    setProbed(null);
     const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
     // GeoJSON stays client-side: it's small and parses quickly.
     if (ext === 'geojson' || ext === 'json') {
@@ -1740,23 +1770,28 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
       return;
     }
 
-    // KML / KMZ / shapefile zip / GDB / anything OGR-readable: send to
-    // the server's probe endpoint. Returns layer metadata without the
-    // geometry: we just need to seed the builder schema here.
+    // KML / KMZ / shapefile zip / GDB / GeoPackage / anything
+    // OGR-readable: send to /ingest/stage. The server parks the file
+    // under /tmp/gg-staging/<id>/ and returns a stagingId plus the
+    // schema preview. After Create item the wizard fans out per-layer
+    // ingest using ?stagingId=... so a 503 MB GDB only travels the
+    // wire once. Stagings expire after an hour; if the user idles
+    // longer the per-layer ingest fails and they re-upload.
     //
     // We use XMLHttpRequest instead of fetch() because fetch has no
     // upload-progress hook. For a 200 MB+ shapefile zip the user would
-    // otherwise stare at a tiny "Probing on the server..." string for
-    // a minute and assume the dialog was hung. XHR's
-    // upload.onprogress lets us paint a real bar from 0 to 100, then
-    // flip the label to "Reading on the server..." once the upload
-    // finishes and the GDAL probe runs.
+    // otherwise stare at a tiny "Uploading..." string for a minute
+    // and assume the dialog was hung. XHR's upload.onprogress lets
+    // us paint a real bar from 0 to 100, then flip the label to
+    // "Reading on the server..." once the upload finishes and the
+    // GDAL probe runs.
     try {
       const out = await uploadWithProgress<{
+        stagingId: string;
         driver: string;
         layers: ProbedLayer[];
       }>(
-        '/api/portal/ingest/probe',
+        '/api/portal/ingest/stage',
         file,
         (e) => {
           setBusy((prev) =>
@@ -1777,17 +1812,15 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
         xhrRef,
       );
       xhrRef.current = null;
-      if (out.layers.length === 1) {
-        // Single-layer file: add it straight away, no picker needed.
-        addProbedLayers(file.name, out.layers, out.layers[0]!.name);
-        return;
-      }
-      setProbed({
-        fileName: file.name,
-        driver: out.driver,
-        layers: out.layers,
-        selected: new Set(out.layers.map((l) => l.name)),
-      });
+      // Auto-attach every detected layer instead of dropping the user
+      // into a "pick which layers" picker. The picker was confusing
+      // ("I clicked Import, why do I have another button to click?")
+      // and almost everyone wanted everything in the file anyway. If
+      // a user genuinely wants to drop a layer they can remove it
+      // from the wizard list below before clicking Create item. Same
+      // behaviour the single-layer branch has always had, extended to
+      // multi-layer files.
+      addProbedLayers(file.name, out.layers, undefined, out.stagingId);
     } catch (err) {
       // Cancellations come through here too; don't show "Probe failed"
       // in that case since the user explicitly aborted.
@@ -1806,11 +1839,22 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
     fileName: string,
     layers: ProbedLayer[],
     pickName?: string,
+    stagingId?: string,
   ) {
     const toAdd = pickName
       ? layers.filter((l) => l.name === pickName)
       : layers;
-    const built: DataLayerSublayer[] = toAdd.map((pl) => {
+    // Build layers in tandem with their layerId<->sourceLayerName
+    // mapping so the wizard can later fan out per-layer ingest from
+    // the staging without losing track of which layer came from
+    // which source name (matters for multi-layer GDBs where the
+    // sourceLayer query parameter is required).
+    const built: DataLayerSublayer[] = [];
+    const pendingLayers: Array<{
+      layerId: string;
+      sourceLayerName: string;
+    }> = [];
+    for (const pl of toAdd) {
       const label = pl.name || fileName;
       const layer = newLayer(pl.geometryType);
       layer.label = label;
@@ -1822,33 +1866,16 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
         nullable: true,
       }));
       layer.featureCount = pl.featureCount;
-      return layer;
-    });
-    onImport(built);
-  }
-
-  function commitSelected() {
-    if (!probed) return;
-    const chosen = probed.layers.filter((l) => probed.selected.has(l.name));
-    if (chosen.length === 0) return;
-    addProbedLayers(probed.fileName, chosen);
-    setProbed(null);
-  }
-
-  function toggleSelected(name: string) {
-    setProbed((p) =>
-      p
-        ? {
-            ...p,
-            selected: (() => {
-              const next = new Set(p.selected);
-              if (next.has(name)) next.delete(name);
-              else next.add(name);
-              return next;
-            })(),
-          }
-        : p,
-    );
+      built.push(layer);
+      if (stagingId) {
+        pendingLayers.push({ layerId: layer.id, sourceLayerName: pl.name });
+      }
+    }
+    if (stagingId && pendingLayers.length > 0) {
+      onImport(built, { stagingId, fileName, layers: pendingLayers });
+    } else {
+      onImport(built);
+    }
   }
 
   return (
@@ -1864,86 +1891,47 @@ function ImportPanel({ onClose, onImport }: ImportPanelProps) {
         </button>
       </div>
 
-      {probed ? (
-        <div>
-          <p className="mb-2 text-[11px] text-muted">
-            <span className="font-medium text-ink-1">{probed.fileName}</span>{' '}
-           : {probed.driver} · {probed.layers.length} layer
-            {probed.layers.length === 1 ? '' : 's'}. Pick which to add:
-          </p>
-          <ul className="mb-2 max-h-60 space-y-0.5 overflow-y-auto rounded border border-border bg-surface-1 p-1">
-            {probed.layers.map((l) => {
-              const sel = probed.selected.has(l.name);
-              return (
-                <li key={l.name}>
-                  <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-surface-2">
-                    <input
-                      type="checkbox"
-                      checked={sel}
-                      onChange={() => toggleSelected(l.name)}
-                      className="h-3.5 w-3.5 rounded border-border"
-                    />
-                    <span className="min-w-0 flex-1 truncate">{l.name}</span>
-                    <span className="text-[10px] uppercase text-muted">
-                      {l.geometryType ?? 'table'}
-                    </span>
-                    <span className="text-[10px] text-muted">
-                      {l.featureCount.toLocaleString()} feat ·{' '}
-                      {l.fields.length} field{l.fields.length === 1 ? '' : 's'}
-                    </span>
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setProbed(null)}
-              className="h-7 rounded border border-border bg-surface-1 px-2 text-[11px] text-muted hover:bg-surface-2 hover:text-ink-1"
-            >
-              Discard
-            </button>
-            <button
-              type="button"
-              onClick={commitSelected}
-              disabled={probed.selected.size === 0}
-              className="inline-flex h-7 items-center gap-1 rounded bg-accent px-2 text-[11px] font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              <Plus className="h-3 w-3" />
-              Add {probed.selected.size} layer
-              {probed.selected.size === 1 ? '' : 's'}
-            </button>
-          </div>
-          <p className="mt-2 text-[10px] text-muted">
-            Only the schema is added here. After you create the item, import
-            feature data per layer from the detail page.
-          </p>
-        </div>
-      ) : busy ? (
+      {busy ? (
         <UploadProgressPanel busy={busy} onCancel={cancelUpload} />
       ) : (
-        <label
-          htmlFor="fs-builder-import"
-          className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed border-border bg-surface-1 px-3 py-4 text-xs text-muted hover:bg-surface-2"
-        >
-          <Upload className="h-4 w-4" />
-          <span>Drop a spatial file or click to pick one.</span>
-          <span className="text-[10px]">
-            GeoJSON · KML / KMZ · Shapefile (.zip) · File Geodatabase (.gdb.zip)
-          </span>
-          <input
-            id="fs-builder-import"
-            type="file"
-            accept=".geojson,.json,.kml,.kmz,.zip,.gdb"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void handleFile(f);
-              e.target.value = '';
-            }}
-          />
-        </label>
+        <>
+          <label
+            htmlFor="fs-builder-import"
+            className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed border-border bg-surface-1 px-3 py-4 text-xs text-muted hover:bg-surface-2"
+          >
+            <Upload className="h-4 w-4" />
+            <span>Drop a spatial file or click to pick one.</span>
+            <span className="text-[10px]">
+              GeoJSON · KML / KMZ · GeoPackage (.gpkg, vector tables only) ·
+              Shapefile (.zip) · File Geodatabase (.gdb.zip)
+            </span>
+            <input
+              id="fs-builder-import"
+              type="file"
+              accept=".geojson,.json,.kml,.kmz,.gpkg,.zip,.gdb"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleFile(f);
+                e.target.value = '';
+              }}
+            />
+          </label>
+          {/*
+            Hint about the two-step nature of multi-layer import. The
+            wizard auto-attaches every layer it detects in the file
+            (point/line/polygon and any related tables); the schema
+            lands but the rows do not. After Create item, each layer
+            shows its own Import features button on the detail page
+            for the actual feature load. A future change will fold
+            that into Create item itself (#98).
+          */}
+          <p className="mt-2 text-[10px] text-muted">
+            All layers in the file will attach automatically. Schema lands
+            on Create item; load feature rows per layer afterwards from
+            the detail page.
+          </p>
+        </>
       )}
 
       {error ? (

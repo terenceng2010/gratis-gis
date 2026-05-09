@@ -187,15 +187,41 @@ export class IngestService {
         `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
       );
     }
-    const gdal = await this.loadGdal();
     const dirPath = join(tmpdir(), `gg-probe-${randomUUID()}`);
     await mkdir(dirPath, { recursive: true });
     const filePath = join(dirPath, safeFilename(originalName));
     await writeFile(filePath, buffer);
+    try {
+      return await this.probeFileFromPath(filePath);
+    } finally {
+      await rm(dirPath, { recursive: true, force: true }).catch(() => {
+        this.log.warn(`Failed to remove temp dir ${dirPath}`);
+      });
+    }
+  }
+
+  /**
+   * Path variant of probeFile. Used by the staged-upload path: the
+   * file already lives on disk under /tmp/gg-staging/<id>/, so we
+   * skip the buffer-write step entirely. The cleanup of the staging
+   * dir is the staging service's problem, not this method's.
+   */
+  async probeFileFromPath(filePath: string): Promise<{
+    driver: string;
+    layers: Array<{
+      name: string;
+      geometryType: 'point' | 'line' | 'polygon' | null;
+      fields: Array<{
+        name: string;
+        type: 'string' | 'number' | 'boolean' | 'date';
+      }>;
+      featureCount: number;
+    }>;
+  }> {
+    const gdal = await this.loadGdal();
     const openPath = filePath.toLowerCase().endsWith('.zip')
       ? `/vsizip/${filePath}`
       : filePath;
-
     try {
       const ds = gdal.open(openPath);
       try {
@@ -241,10 +267,6 @@ export class IngestService {
       if (err instanceof BadRequestException) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       throw new BadRequestException(`GDAL could not read that file: ${msg}`);
-    } finally {
-      await rm(dirPath, { recursive: true, force: true }).catch(() => {
-        this.log.warn(`Failed to remove temp dir ${dirPath}`);
-      });
     }
   }
 
@@ -275,15 +297,40 @@ export class IngestService {
         `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
       );
     }
-    const gdal = await this.loadGdal();
     const dirPath = join(tmpdir(), `gg-ingest-${randomUUID()}`);
     await mkdir(dirPath, { recursive: true });
     const filePath = join(dirPath, safeFilename(originalName));
     await writeFile(filePath, buffer);
+    try {
+      return await this.fileLayerToGeoJsonFromPath(filePath, sourceLayer);
+    } finally {
+      await rm(dirPath, { recursive: true, force: true }).catch(() => {
+        this.log.warn(`Failed to remove temp dir ${dirPath}`);
+      });
+    }
+  }
+
+  /**
+   * Path variant of fileLayerToGeoJson. Used by the staged-upload
+   * path: the file is already on disk under the staging dir, so we
+   * skip the buffer-write step. Cleanup of the staging dir is the
+   * staging service's problem; callers must NOT delete `filePath` --
+   * a single staging is consumed by N per-layer ingests.
+   */
+  async fileLayerToGeoJsonFromPath(
+    filePath: string,
+    sourceLayer: string | undefined,
+  ): Promise<{
+    geojson: { type: 'FeatureCollection'; features: unknown[] };
+    fields: Array<{ name: string; type: 'string' | 'number' | 'boolean' | 'date' }>;
+    driver: string;
+    layerName: string;
+    sourceSrs: string | null;
+  }> {
+    const gdal = await this.loadGdal();
     const openPath = filePath.toLowerCase().endsWith('.zip')
       ? `/vsizip/${filePath}`
       : filePath;
-
     try {
       const ds = gdal.open(openPath);
       try {
@@ -353,10 +400,6 @@ export class IngestService {
       if (err instanceof BadRequestException) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       throw new BadRequestException(`GDAL could not read that file: ${msg}`);
-    } finally {
-      await rm(dirPath, { recursive: true, force: true }).catch(() => {
-        this.log.warn(`Failed to remove temp dir ${dirPath}`);
-      });
     }
   }
 

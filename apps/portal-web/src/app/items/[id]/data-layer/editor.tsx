@@ -535,7 +535,7 @@ function FileDropZone({
       <input
         ref={inputRef}
         type="file"
-        accept=".kml,.kmz,.geojson,.json,.zip,.gdb,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz,application/geo+json,application/json,application/zip"
+        accept=".kml,.kmz,.geojson,.json,.gpkg,.zip,.gdb,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz,application/geo+json,application/json,application/zip"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];

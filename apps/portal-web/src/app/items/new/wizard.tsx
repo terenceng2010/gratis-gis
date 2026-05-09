@@ -77,7 +77,10 @@ import {
   type ServiceProbeResult,
 } from '@/lib/service-probe';
 import { DataCollectionBuilder } from './data-collection-builder';
-import { DataLayerBuilder } from './data-layer-builder';
+import {
+  DataLayerBuilder,
+  type PendingFileImport,
+} from './data-layer-builder';
 import { DerivedLayerBuilder } from './derived-layer-builder';
 import { MetadataXmlImporter } from './metadata-xml-importer';
 
@@ -393,6 +396,18 @@ export function NewItemWizard() {
   // empty, then upload" two-step. Null until the user picks a file
   // and the upload completes; submit() blocks on it.
   const [fileItemUpload, setFileItemUpload] = useState<FileData | null>(null);
+
+  // Pending file ingests for data_layer create. The DataLayerBuilder
+  // calls /ingest/stage when the user uploads a multi-layer file
+  // (GDB, shapefile-zip, GeoPackage); the server keeps the bytes
+  // under /tmp/gg-staging/<id>/ and we hold the stagingId here so
+  // submit() can fan out POST /items/:id/layers/:layerId/import
+  // for each detected layer AFTER the item is created. Cleared on
+  // type switch so a half-typed wizard doesn't carry a stale
+  // staging across to a different item type.
+  const [pendingFileImports, setPendingFileImports] = useState<
+    PendingFileImport[]
+  >([]);
 
   // #298: basemap draft state. Captured up front so the wizard
   // writes a fully-configured item (kind + URL + WMS layer list)
@@ -1209,6 +1224,63 @@ export function NewItemWizard() {
         return;
       }
 
+      // data_layer with staged file uploads: fan out per-layer ingest
+      // using ?stagingId=...&sourceLayer=... so the file uploaded
+      // ONCE during the builder's Import flow gets reused for every
+      // detected layer without re-uploading. We do this in series
+      // (not parallel) so a 500 MB GDB doesn't trigger N concurrent
+      // GDAL opens on the api process. mode=replace because the
+      // freshly-created layer's table is empty -- there's nothing to
+      // append to and the semantics match "load the file's data
+      // into this layer". Failures here are NOT fatal: the item
+      // exists, every layer's schema is right, and the user lands
+      // on the detail page where they can retry per-layer Import
+      // manually. We surface a banner-level error so they know.
+      const ingestErrors: string[] = [];
+      if (type === 'data_layer' && pendingFileImports.length > 0) {
+        for (const entry of pendingFileImports) {
+          for (const layer of entry.layers) {
+            try {
+              const ingestUrl =
+                `/api/portal/items/${saved.id}/layers/${layer.layerId}/import` +
+                `?stagingId=${encodeURIComponent(entry.stagingId)}` +
+                `&sourceLayer=${encodeURIComponent(layer.sourceLayerName)}` +
+                `&mode=replace`;
+              const ingestRes = await fetch(ingestUrl, { method: 'POST' });
+              if (!ingestRes.ok) {
+                const text = await ingestRes.text().catch(() => '');
+                ingestErrors.push(
+                  `${layer.sourceLayerName}: ${ingestRes.status} ${text.slice(0, 200)}`,
+                );
+              }
+            } catch (ingestErr) {
+              console.error(
+                `Auto-ingest failed for ${layer.sourceLayerName}:`,
+                ingestErr,
+              );
+              ingestErrors.push(
+                `${layer.sourceLayerName}: ${
+                  ingestErr instanceof Error
+                    ? ingestErr.message
+                    : 'network error'
+                }`,
+              );
+            }
+          }
+        }
+        // Done with the staging client-side. Server-side cleanup is
+        // handled by the staging cleanup cron in IngestStagingService;
+        // we don't bother with an explicit drop endpoint.
+        setPendingFileImports([]);
+      }
+      if (ingestErrors.length > 0) {
+        setError(
+          `Item created, but feature import failed for ${ingestErrors.length} layer(s). ` +
+            `Use the per-layer Import button on the detail page to retry. Details: ` +
+            ingestErrors.join('; ').slice(0, 500),
+        );
+      }
+
       // data_layer still wants the ingest panel front and centre.
       // arcgis_service no longer needs #configure-arcgis because we baked
       // the probed config into dataJson above.
@@ -1472,6 +1544,9 @@ export function NewItemWizard() {
         <DataLayerBuilder
           value={featureServiceData}
           onChange={setDataLayerData}
+          onPendingFileImport={(entry) =>
+            setPendingFileImports((prev) => [...prev, entry])
+          }
         />
       ) : null}
 

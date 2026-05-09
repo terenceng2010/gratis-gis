@@ -26,6 +26,7 @@ import {
   type DataLayerLayerShape,
 } from '../data-layer/tables.service.js';
 import { IngestService } from './ingest.service.js';
+import { IngestStagingService } from './ingest-staging.service.js';
 
 /**
  * Server-side ingest endpoint. Accepts a multipart upload of an
@@ -48,6 +49,7 @@ export class IngestController {
     private readonly features: FeaturesService,
     private readonly dataLayerFeatures: DataLayerFeaturesService,
     private readonly dataLayerTables: DataLayerTablesService,
+    private readonly staging: IngestStagingService,
   ) {}
 
   /**
@@ -70,6 +72,56 @@ export class IngestController {
       );
     }
     return this.ingest.probeFile(file.buffer, file.originalname);
+  }
+
+  /**
+   * Stage an upload for later ingest AND return the schema preview.
+   * Combines /ingest/probe + a server-side hold so the wizard can do
+   * one upload, get the schema, let the user edit details, and then
+   * fan out per-layer ingest from the stagingId without re-uploading
+   * the bytes. Used by the data_layer create wizard.
+   *
+   * Returns the same probe shape as /ingest/probe with a stagingId
+   * tacked on. Stagings expire after one hour (see
+   * IngestStagingService); a wizard that idles longer than that has
+   * to re-upload, which we accept as the trade for bounded disk.
+   */
+  @Post('ingest/stage')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 1024 * 1024 * 1024 },
+    }),
+  )
+  async stage(
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new BadRequestException(
+        'No file uploaded; field name must be "file".',
+      );
+    }
+    // Stage first so the file is on disk under a stable path. probe
+    // can then read it from there without re-buffering. If the probe
+    // fails (corrupt zip, etc.) we drop the staging to keep disk
+    // tidy; the user gets an inline error and re-uploads.
+    const staged = await this.staging.stage({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      ownerId: user.id,
+    });
+    try {
+      const probe = await this.ingest.probeFileFromPath(staged.filePath);
+      return {
+        stagingId: staged.stagingId,
+        driver: probe.driver,
+        layers: probe.layers,
+      };
+    } catch (err) {
+      // Probe rejected: don't keep a staged file we can't ingest.
+      await this.staging.dropStaging(staged.stagingId).catch(() => {});
+      throw err;
+    }
   }
 
   @Post('items/:id/ingest')
@@ -196,10 +248,16 @@ export class IngestController {
     // scripts assume); the UI's primary Import button passes
     // mode=replace explicitly.
     @Query('mode') mode?: 'replace' | 'append',
+    // Staging integration: when stagingId is provided the file body
+    // is optional, and we read the bytes from /tmp/gg-staging/<id>/
+    // instead. The wizard's Create-item flow uses this so a 503 MB
+    // GDB uploaded once at probe time gets re-used for N per-layer
+    // ingests without N more uploads.
+    @Query('stagingId') stagingId?: string,
   ) {
-    if (!file) {
+    if (!file && !stagingId) {
       throw new BadRequestException(
-        'No file uploaded; field name must be "file".',
+        'No file uploaded; provide a multipart "file" field or a "stagingId" query parameter.',
       );
     }
     if (mode !== undefined && mode !== 'replace' && mode !== 'append') {
@@ -253,11 +311,48 @@ export class IngestController {
       await this.dataLayerTables.truncateLayer(itemId, layerId);
     }
 
-    const { geojson, driver, layerName, sourceSrs } = await this.ingest.fileLayerToGeoJson(
-      file.buffer,
-      file.originalname,
-      sourceLayer,
-    );
+    // Resolve the source bytes. Two modes:
+    //   1. Staging: we look up the staged file by id, verify it
+    //      belongs to the caller, and read straight off disk via
+    //      fileLayerToGeoJsonFromPath. The staging is not deleted
+    //      here -- a single staging is consumed by N per-layer
+    //      ingests, and the staging cleanup cron handles eviction.
+    //   2. Multipart: legacy path where the caller PUTs the file in
+    //      the request body. Still supported for direct API users
+    //      and the detail-page Import button.
+    let geojson: { type: 'FeatureCollection'; features: unknown[] };
+    let driver: string;
+    let layerName: string;
+    let sourceSrs: string | null;
+    let provenanceFileName: string;
+    let provenanceSizeBytes: number;
+    if (stagingId) {
+      const staged = await this.staging.getStaging(stagingId, user.id);
+      const out = await this.ingest.fileLayerToGeoJsonFromPath(
+        staged.filePath,
+        sourceLayer,
+      );
+      geojson = out.geojson;
+      driver = out.driver;
+      layerName = out.layerName;
+      sourceSrs = out.sourceSrs;
+      provenanceFileName = staged.originalName;
+      provenanceSizeBytes = staged.sizeBytes;
+    } else {
+      // file is guaranteed non-null here by the guard above.
+      const f = file!;
+      const out = await this.ingest.fileLayerToGeoJson(
+        f.buffer,
+        f.originalname,
+        sourceLayer,
+      );
+      geojson = out.geojson;
+      driver = out.driver;
+      layerName = out.layerName;
+      sourceSrs = out.sourceSrs;
+      provenanceFileName = f.originalname;
+      provenanceSizeBytes = f.size;
+    }
 
     // Honor the layer's declared schema as a whitelist: only keep
     // properties whose key matches a declared field name. Without
@@ -302,9 +397,9 @@ export class IngestController {
     // re-read the item rather than rely on the earlier snapshot since
     // insertFeatures may have mutated bbox / featureCount in between.
     await this.stampV3LayerSource(itemId, layerId, {
-      fileName: file.originalname,
+      fileName: provenanceFileName,
       format: driverToFormat(driver),
-      sizeBytes: file.size,
+      sizeBytes: provenanceSizeBytes,
       importedAt: new Date().toISOString(),
       importedBy: user.id,
       note: `driver: ${driver}`,
