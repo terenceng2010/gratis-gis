@@ -418,6 +418,22 @@ function DrawPanel({
               properties: { mode: 'polygon' },
             })),
           );
+          // Fit the camera to the seeded geometry so the user sees
+          // their existing boundary instead of the world-default
+          // center [-98, 39] / zoom 3. Without this the polygon is
+          // rendered correctly but may be off-screen at the default
+          // zoom, which reads as "the editor doesn't show my
+          // boundary." Mirrors what BoundaryPreview already does.
+          const b = computeBBox(geometry);
+          if (b) {
+            m.fitBounds(
+              [
+                [b[0], b[1]],
+                [b[2], b[3]],
+              ],
+              { padding: 40, duration: 0, maxZoom: 12 },
+            );
+          }
         } catch {
           // Bad shape coming from the DB shouldn't crash the editor;
           // worst case the user just draws fresh.

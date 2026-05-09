@@ -488,7 +488,15 @@ export function ItemsView({
       const next = (await res.json()) as ItemWithShares[];
       setSpatialItems(next);
       setSpatialActive({ bbox, bufferKm });
-      setAreaPanelOpen(false);
+      // #86 follow-up: do NOT close the panel on apply. Pre-#86 the
+      // apply was driven by the explicit "Use this area" button so
+      // closing was the right semantic ("I'm done; apply this").
+      // With live debounced moveend driving apply, closing on every
+      // settle destroys the maplibre map underneath the user's
+      // hands -- the user pans once, the apply succeeds, the panel
+      // unmounts, and the next gesture lands on the items page.
+      // Leave the panel mounted; the user closes it explicitly via
+      // the X / Cancel button when they're done.
     } catch (e) {
       setSpatialError(e instanceof Error ? e.message : 'Search failed');
     } finally {
