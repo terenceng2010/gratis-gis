@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChevronRight, Folder as FolderIcon, FolderOpen } from 'lucide-react';
@@ -88,6 +88,86 @@ export function FolderRail({ folders, activeFolderId }: Props) {
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(
     null,
   );
+  // #90: inline create state. `null` = no edit row open, `'root'`
+  // = creating a top-level folder, `<folderId>` = creating a
+  // subfolder under that folder. The inline edit row reads these
+  // to decide where to render. Mutually exclusive: starting a new
+  // create cancels any in-flight one.
+  const [creatingUnder, setCreatingUnder] = useState<
+    string | 'root' | null
+  >(null);
+  function startCreate(parent: string | 'root') {
+    setCreatingUnder(parent);
+    if (parent !== 'root') {
+      // Auto-expand the parent so the user can see the inline row
+      // they're about to type into.
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.add(parent);
+        return next;
+      });
+    }
+  }
+  async function commitCreate(title: string, parent: string | 'root') {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      setCreatingUnder(null);
+      return;
+    }
+    try {
+      const res = await fetch('/api/portal/items', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'folder',
+          title: trimmed,
+          // childItemIds=[] keeps the new folder valid against the
+          // FolderData shape; access defaults to private on create
+          // server-side, which matches the user's "default to
+          // private or inherit" preference for top-level folders.
+          // Subfolder access is left at server default for now;
+          // inheriting the parent's access tier is a separate
+          // refinement (the parent might not be loaded here).
+          data: { childItemIds: [] },
+        }),
+      });
+      if (!res.ok) {
+        await alert({
+          tone: 'warn',
+          title: 'Could not create folder',
+          message: `Server returned ${res.status}. Try again or use the full New Item form.`,
+        });
+        return;
+      }
+      // If we're creating a subfolder, splice the new id into the
+      // parent's childItemIds via a follow-up PATCH. The folder
+      // hierarchy lives on the parent's data.childItemIds; the new
+      // folder isn't claimed by anyone until the parent updates.
+      if (parent !== 'root') {
+        const created = (await res.json()) as { id?: string };
+        const parentNode = folderById.get(parent);
+        if (created.id && parentNode) {
+          await fetch(`/api/portal/items/${parent}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                childItemIds: [...parentNode.childItemIds, created.id],
+              },
+            }),
+          });
+        }
+      }
+      setCreatingUnder(null);
+      router.refresh();
+    } catch (err) {
+      await alert({
+        tone: 'warn',
+        title: 'Could not create folder',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -234,14 +314,26 @@ export function FolderRail({ folders, activeFolderId }: Props) {
           <FolderIcon className="h-3.5 w-3.5" />
           Folders
         </span>
-        <Link
-          href="/items/new?type=folder"
+        <button
+          type="button"
+          onClick={() => startCreate('root')}
           className="text-[11px] normal-case tracking-normal text-accent hover:underline"
         >
           + New
-        </Link>
+        </button>
       </div>
       <ul className="space-y-0.5 text-sm">
+        {/* #90: inline create row pinned to the top of the tree
+            when the user clicks "+ New" at the rail header. Same
+            row component renders nested under a folder when
+            "New subfolder" is picked from the kebab. */}
+        {creatingUnder === 'root' ? (
+          <FolderCreateRow
+            depth={0}
+            onCommit={(title) => commitCreate(title, 'root')}
+            onCancel={() => setCreatingUnder(null)}
+          />
+        ) : null}
         {topLevel.map((f) => (
           <FolderNode
             key={f.id}
@@ -254,6 +346,10 @@ export function FolderRail({ folders, activeFolderId }: Props) {
             dragOverFolderId={dragOverFolderId}
             onDragOver={setDragOverFolderId}
             onDrop={dropItemIntoFolder}
+            creatingUnder={creatingUnder}
+            onStartCreate={startCreate}
+            onCommitCreate={commitCreate}
+            onCancelCreate={() => setCreatingUnder(null)}
           />
         ))}
       </ul>
@@ -271,6 +367,17 @@ interface NodeProps {
   dragOverFolderId: string | null;
   onDragOver: (id: string | null) => void;
   onDrop: (itemId: string, folderId: string) => void | Promise<void>;
+  /** #90: inline-create plumbing. `creatingUnder` is the parent
+   *  id (or 'root') with an active edit row; `onStartCreate` is
+   *  fired from the kebab's "New subfolder"; commit/cancel close
+   *  the row. */
+  creatingUnder: string | 'root' | null;
+  onStartCreate: (parent: string | 'root') => void;
+  onCommitCreate: (
+    title: string,
+    parent: string | 'root',
+  ) => void | Promise<void>;
+  onCancelCreate: () => void;
 }
 
 function FolderNode({
@@ -283,6 +390,10 @@ function FolderNode({
   dragOverFolderId,
   onDragOver,
   onDrop,
+  creatingUnder,
+  onStartCreate,
+  onCommitCreate,
+  onCancelCreate,
 }: NodeProps) {
   // Children of this folder that are themselves folders (and that
   // the caller can see). Items that are not folders belong in the
@@ -391,8 +502,24 @@ function FolderNode({
           folderId={folder.id}
           folderTitle={folder.title}
           canEdit={folder.canEdit}
+          onCreateSubfolder={onStartCreate}
         />
       </div>
+      {/* #90: render the inline create row directly under this
+          folder when the user picked "New subfolder" from its
+          kebab. The row appears whether the folder has existing
+          subfolders or not, so empty parents still get an entry
+          point. Auto-expand handled in startCreate so the user
+          sees the row even if the folder was collapsed. */}
+      {isOpen && creatingUnder === folder.id ? (
+        <ul className="space-y-0.5">
+          <FolderCreateRow
+            depth={depth + 1}
+            onCommit={(title) => onCommitCreate(title, folder.id)}
+            onCancel={onCancelCreate}
+          />
+        </ul>
+      ) : null}
       {isOpen && hasSubs ? (
         <ul className="space-y-0.5">
           {subfolders.map((sub) => (
@@ -407,10 +534,83 @@ function FolderNode({
               dragOverFolderId={dragOverFolderId}
               onDragOver={onDragOver}
               onDrop={onDrop}
+              creatingUnder={creatingUnder}
+              onStartCreate={onStartCreate}
+              onCommitCreate={onCommitCreate}
+              onCancelCreate={onCancelCreate}
             />
           ))}
         </ul>
       ) : null}
+    </li>
+  );
+}
+
+/**
+ * #90: inline-create row. Looks like a folder row but renders an
+ * autofocused text input in place of the title. Enter / blur
+ * commits with the current value; Escape / blur-empty cancels.
+ * Parent owns the POST + tree-refresh via the onCommit callback.
+ */
+function FolderCreateRow({
+  depth,
+  onCommit,
+  onCancel,
+}: {
+  depth: number;
+  onCommit: (title: string) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  // Mount-focus so the user can type immediately after picking
+  // "+ New" / "New subfolder" without needing to click the input.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  async function commit() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onCommit(value);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <li>
+      <div
+        className="group flex items-center gap-1 rounded-md bg-accent/5 px-2 py-1 ring-1 ring-accent/30"
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+      >
+        <span className="inline-flex w-3.5 shrink-0" aria-hidden />
+        <FolderIcon className="h-3.5 w-3.5 shrink-0 text-amber-700" />
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => {
+            // Blur-with-content commits, blur-empty cancels.
+            // Mirrors Windows Explorer's "click away to save" UX.
+            if (value.trim()) void commit();
+            else onCancel();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              if (value.trim()) void commit();
+              else onCancel();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              onCancel();
+            }
+          }}
+          disabled={busy}
+          placeholder="Folder name"
+          className="min-w-0 flex-1 bg-transparent text-sm text-ink-1 placeholder:text-muted/60 focus:outline-none disabled:opacity-60"
+        />
+      </div>
     </li>
   );
 }

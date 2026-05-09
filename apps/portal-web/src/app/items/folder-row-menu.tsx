@@ -20,9 +20,9 @@ import { useAlert, useConfirm } from '@/components/dialog-provider';
  * secondary-click still get the affordance.
  *
  * Items:
- *   - Open details        -> /items/<folderId>
+ *   - Configure           -> /items/<folderId>
  *   - Share...            -> /items/<folderId>#sharing
- *   - New subfolder       -> /items/new?type=folder&parentFolderId=<folderId>
+ *   - New subfolder       -> inline edit row in the rail (#90)
  *   - Move to trash       -> DELETE /api/portal/items/<folderId>
  *
  * Trash is gated by canEdit; everything else is always visible.
@@ -31,9 +31,22 @@ interface Props {
   folderId: string;
   folderTitle: string;
   canEdit: boolean;
+  /**
+   * #90: optional callback the rail wires up so "New subfolder"
+   * pops an inline edit row anchored under this folder instead of
+   * routing to the heavyweight /items/new wizard. When omitted the
+   * menu falls back to the legacy wizard link so this component
+   * still works in surfaces that haven't wired the inline path.
+   */
+  onCreateSubfolder?: (parentFolderId: string) => void;
 }
 
-export function FolderRowMenu({ folderId, folderTitle, canEdit }: Props) {
+export function FolderRowMenu({
+  folderId,
+  folderTitle,
+  canEdit,
+  onCreateSubfolder,
+}: Props) {
   const router = useRouter();
   const confirm = useConfirm();
   const alert = useAlert();
@@ -152,7 +165,7 @@ export function FolderRowMenu({ folderId, folderTitle, canEdit }: Props) {
             className="flex items-center gap-2 px-3 py-1.5 text-ink-1 hover:bg-surface-2"
           >
             <ExternalLink className="h-3.5 w-3.5 text-muted" />
-            Open details
+            Configure
           </Link>
           <Link
             href={`/items/${folderId}#sharing`}
@@ -166,18 +179,36 @@ export function FolderRowMenu({ folderId, folderTitle, canEdit }: Props) {
             <Share2 className="h-3.5 w-3.5 text-muted" />
             Share...
           </Link>
-          <Link
-            href={`/items/new?type=folder&parentFolderId=${folderId}`}
-            onClick={() => {
-              setOpen(false);
-              setPos(null);
-            }}
-            role="menuitem"
-            className="flex items-center gap-2 px-3 py-1.5 text-ink-1 hover:bg-surface-2"
-          >
-            <FolderPlus className="h-3.5 w-3.5 text-muted" />
-            New subfolder
-          </Link>
+          {onCreateSubfolder ? (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setPos(null);
+                onCreateSubfolder(folderId);
+              }}
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+            >
+              <FolderPlus className="h-3.5 w-3.5 text-muted" />
+              New subfolder
+            </button>
+          ) : (
+            // Fallback for surfaces that haven't wired the inline
+            // path; preserves the legacy heavy-wizard flow.
+            <Link
+              href={`/items/new?type=folder&parentFolderId=${folderId}`}
+              onClick={() => {
+                setOpen(false);
+                setPos(null);
+              }}
+              role="menuitem"
+              className="flex items-center gap-2 px-3 py-1.5 text-ink-1 hover:bg-surface-2"
+            >
+              <FolderPlus className="h-3.5 w-3.5 text-muted" />
+              New subfolder
+            </Link>
+          )}
           {canEdit ? (
             <>
               <div className="my-1 border-t border-border" />
