@@ -78,10 +78,46 @@ services:
       KC_METRICS_ENABLED: "true"
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env.prod}
-      # JVM ceiling. The host has 7.6 GB; capping Keycloak at 1 GB
-      # leaves room for Postgres + the two app containers without
-      # pressure. Bump if Keycloak starts hitting memory under load.
-      JAVA_OPTS_APPEND: -Xms256m -Xmx1024m
+      # JVM ceiling + Agroal connection-pool hardening. The validation
+      # knobs below are what stops the failure mode we hit on
+      # 2026-05-09: postgres restarted during a deploy while Keycloak
+      # had been up 8 days, and Keycloak kept handing dead JDBC
+      # handles out of its pool. The user-visible symptom was admin
+      # actions like "send password reset" returning 500 even when
+      # the side effect (the email) had already gone out, because
+      # Keycloak sends the email first and writes the audit row to
+      # EVENT_ENTITY second; the audit insert hit a dead socket and
+      # the request rolled back.
+      #
+      #   background-validation-interval: every 30s a background
+      #     thread runs Connection.isValid() on idle connections;
+      #     the postgres JDBC driver implements that as a cheap
+      #     ping, so dead connections are evicted within ~30s of
+      #     postgres coming back up rather than being discovered
+      #     one-by-one by failing user requests.
+      #   foreground-validation-interval: belt-and-suspenders. If a
+      #     connection sat idle longer than 10s, validate before
+      #     handing it off. Adds a sub-millisecond ping per checkout
+      #     in the worst case.
+      #   max-lifetime=30M: recycle every connection at most every
+      #     30 min so we never hang on to a truly stale handle even
+      #     if validation somehow says it is fine.
+      #   idle-removal-interval=5M: shrink the pool to min during
+      #     quiet periods so we are not holding 100 hot connections.
+      #   acquisition-timeout=5S: fail fast on a saturated pool
+      #     instead of letting a request hang.
+      #
+      # Seconds (S) and minutes (M) are Quarkus duration shorthand.
+      # Keys land via JAVA_OPTS_APPEND -D properties because
+      # Keycloak 26 does not expose these as KC_DB_* yet.
+      JAVA_OPTS_APPEND: >-
+        -Xms256m
+        -Xmx1024m
+        -Dquarkus.datasource.jdbc.background-validation-interval=30S
+        -Dquarkus.datasource.jdbc.foreground-validation-interval=10S
+        -Dquarkus.datasource.jdbc.acquisition-timeout=5S
+        -Dquarkus.datasource.jdbc.idle-removal-interval=5M
+        -Dquarkus.datasource.jdbc.max-lifetime=30M
     volumes:
       - ./keycloak/themes/portal:/opt/keycloak/themes/portal:ro
       # Realm-import directory. deploy.sh writes the substituted realm

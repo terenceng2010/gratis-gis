@@ -26,6 +26,19 @@ if [[ ! -f infra/.env.prod ]]; then
   exit 1
 fi
 
+# Fast-forward to origin/main before building. Without this, deploy.sh
+# happily rebuilds whatever stale checkout already lives at REPO_ROOT,
+# which is exactly what bit us on 2026-05-09: ada310c was on origin
+# but prod was still at eddcaf2, so the new admin-users overflow fix
+# never landed in the rebuilt portal-web image and the user reported
+# "I logged out, hard refresh, still no changes." Resetting hard to
+# origin/main is safe here because the deploy host has no real local
+# work; .env.prod and any state are outside the worktree.
+echo "=== Syncing repo to origin/main ==="
+git fetch --quiet origin
+git reset --hard origin/main
+git log --oneline -1
+
 # All the GENERATE placeholders have to be replaced before deploy or
 # Keycloak / Postgres / NextAuth will refuse to start.
 if grep -q '^[A-Z_]*=GENERATE$' infra/.env.prod; then
