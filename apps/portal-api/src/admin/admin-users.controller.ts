@@ -215,6 +215,27 @@ export class AdminUsersController {
       }
       const nextAutoDisable =
         dto.autoDisableAt === null ? null : new Date(dto.autoDisableAt);
+      // If the admin is setting (or leaving) an auto-disable
+      // timestamp that is already in the past, force the Keycloak
+      // `enabled` flag off in the same patch. Without this, the
+      // SSO login flow keeps succeeding until the housekeeping
+      // cron next runs (which may be never if the org has not
+      // turned scheduled housekeeping on). The auth-sync layer
+      // would still 401 every API call from such a user, but the
+      // UX is broken: they sign in to portal-web cleanly and only
+      // hit the gate the moment a portal-api request fires. This
+      // closes that gap so "auto-disable on May 8" actually
+      // blocks the May 9 sign-in regardless of cron state.
+      // Skipped when the admin is also explicitly toggling the
+      // enabled flag in this same request, so a deliberate
+      // "re-enable but keep the date" stays as the admin asked.
+      if (
+        nextAutoDisable !== null &&
+        nextAutoDisable.getTime() <= Date.now() &&
+        patch.enabled === undefined
+      ) {
+        patch.enabled = false;
+      }
       if (localUser) {
         if (localUser.orgId !== me.orgId) {
           throw new ForbiddenException('User is not in your organization');
