@@ -196,6 +196,15 @@ services:
     environment:
       NODE_ENV: production
       PORT: "4000"
+      # Bump Node's old-space heap from the default ~1.5 GB to 4 GB.
+      # GDAL ingest of a county-scale parcel layer (1.4M polygons +
+      # 19 attribute fields) loads the whole FeatureCollection into a
+      # JS array before insertFeatures runs; the default ceiling
+      # OOM-crashes the process mid-import (observed 2026-05-09).
+      # 4 GB unblocks datasets up to ~3M polygon features. The real
+      # fix is streaming ingest in batches (#103); until that lands,
+      # this is the band-aid that keeps Create-item from dying.
+      NODE_OPTIONS: --max-old-space-size=4096
       DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
       # Token issuer side: KEYCLOAK_URL is the public-facing Keycloak
       # base, used both as the JWT issuer prefix and as the JWKS
