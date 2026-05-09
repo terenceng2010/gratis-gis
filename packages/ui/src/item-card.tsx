@@ -5,7 +5,10 @@ import { EntityBadge } from './entity-badge';
 import { cn } from './cn';
 
 export interface ItemCardProps {
-  item: Pick<Item, 'id' | 'title' | 'description' | 'type' | 'thumbnailUrl' | 'updatedAt'>;
+  item: Pick<
+    Item,
+    'id' | 'title' | 'description' | 'type' | 'thumbnailUrl' | 'updatedAt' | 'tags'
+  >;
   /**
    * Where clicking the card should go. If omitted, the card renders as a
    * non-interactive block. An href is preferred over an onClick handler so
@@ -31,6 +34,22 @@ export interface ItemCardProps {
   /** Optional trailing slot rendered at the top of the card (above the
    *  thumbnail area): used for things like sharing indicators. */
   headerExtra?: ReactNode;
+  /**
+   * #91: optional click handler for the per-tag chip strip rendered
+   * below the description. When supplied, each tag becomes an
+   * interactive button that fires this callback with the clicked
+   * tag value -- typically a parent state-setter that adds the
+   * tag to a filter set. When omitted (or when item.tags is empty
+   * / undefined), the chip strip is hidden.
+   *
+   * The card itself stays a link; the chip stops propagation on
+   * click so a tag click doesn't navigate to the item detail.
+   */
+  onTagClick?: (tag: string) => void;
+  /** #91: tags currently active in the filter, used to render the
+   *  matching chips with an "active" highlight. Optional; absent
+   *  set means none are highlighted. */
+  activeTags?: ReadonlySet<string>;
   className?: string;
 }
 
@@ -111,6 +130,8 @@ export function ItemCard({
   openInNewTab,
   fallbackIcon,
   headerExtra,
+  onTagClick,
+  activeTags,
   className,
 }: ItemCardProps) {
   const badgeClass = typeBadgeColor[item.type] ?? 'bg-slate-100 text-slate-800';
@@ -174,6 +195,51 @@ export function ItemCard({
       <div className="font-medium text-ink-1">{item.title}</div>
       {item.description ? (
         <div className="line-clamp-2 text-sm text-muted">{item.description}</div>
+      ) : null}
+      {/* #91: tag chips. Render as buttons when onTagClick is
+          supplied so a click on a chip toggles the filter without
+          following the card's link. Active chips render with the
+          accent treatment so the user can see what's filtering.
+          The chip's stopPropagation is critical -- without it the
+          click bubbles to the card's <a> and navigates away. */}
+      {Array.isArray(item.tags) && item.tags.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {item.tags.map((t) => {
+            const active = activeTags?.has(t) ?? false;
+            const chipClass = cn(
+              'inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-medium transition-colors',
+              active
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-border bg-surface-2 text-muted',
+              onTagClick ? 'cursor-pointer hover:bg-surface-0 hover:text-ink-1' : '',
+            );
+            if (!onTagClick) {
+              return (
+                <span key={t} className={chipClass}>
+                  {t}
+                </span>
+              );
+            }
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={(e) => {
+                  // Card is wrapped in an <a>; without stop+prevent
+                  // the chip click would navigate before firing the
+                  // tag filter.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onTagClick(t);
+                }}
+                className={chipClass}
+                aria-pressed={active}
+              >
+                {t}
+              </button>
+            );
+          })}
+        </div>
       ) : null}
       <div className="text-xs text-muted">
         Updated {new Date(item.updatedAt).toLocaleDateString()}

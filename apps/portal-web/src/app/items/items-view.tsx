@@ -150,6 +150,21 @@ export function ItemsView({
   // the current user); the popover hides the section when scope is
   // mine to keep the panel quiet.
   const [ownerFilter, setOwnerFilter] = useState<Set<string>>(new Set());
+  // #91: tag filter. Click a tag chip on a card to add it; click
+  // again to remove. AND semantics within tagFilter (item must
+  // carry every selected tag) -- different from owner / type
+  // facets which OR. Reason: clicking two tags reads as "narrow to
+  // the intersection," matching how AGO and most file managers
+  // treat label combinations.
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  function onToggleTag(tag: string) {
+    setTagFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }
   // Bulk-select state: ids of items the current user has ticked for
   // ownership reassignment. Kept as a Set so toggles are O(1). Only
   // items the user can manage (their own + all for admins) can land
@@ -437,12 +452,22 @@ export function ItemsView({
     if (ownerFilter.size > 0) {
       pool = pool.filter((it) => ownerFilter.has(it.ownerId));
     }
+    // #91: tag facet. AND semantics: items must carry every active
+    // tag. (Owner/type/template were OR; tags are AND because
+    // "narrow by tag combination" is the natural read.)
+    if (tagFilter.size > 0) {
+      const required = Array.from(tagFilter);
+      pool = pool.filter((it) => {
+        const tags = Array.isArray(it.tags) ? it.tags : [];
+        return required.every((t) => tags.includes(t));
+      });
+    }
     // Sort on every filter/sort change. copyWithin keeps the original
     // array intact (it's the server prop).
     const sorted = [...pool];
     sorted.sort((a, b) => compareItems(a, b, sortBy));
     return sorted;
-  }, [sourceItems, typeFilter, templateFilter, ownerFilter, sortBy]);
+  }, [sourceItems, typeFilter, templateFilter, ownerFilter, tagFilter, sortBy]);
 
   function toggleType(t: ItemType) {
     setTypeFilter((prev) => {
@@ -1007,6 +1032,8 @@ export function ItemsView({
               activeFolderTitle: activeFolder.title,
             }
           : {})}
+        onTagClick={onToggleTag}
+        activeTags={tagFilter}
       />
       {showReassign ? (
         <ReassignOwnerDialog
@@ -1950,6 +1977,9 @@ interface BodyProps {
   onRowRemoveFromFolder?: ((item: ItemWithShares) => void) | undefined;
   /** Title of the folder we're inside; used in the kebab label. */
   activeFolderTitle?: string | undefined;
+  /** #91: tag-click + active set propagated down to each card. */
+  onTagClick?: (tag: string) => void;
+  activeTags?: ReadonlySet<string>;
 }
 
 function ItemsBody({
@@ -1967,6 +1997,8 @@ function ItemsBody({
   onRowMoveToTrash,
   onRowRemoveFromFolder,
   activeFolderTitle,
+  onTagClick,
+  activeTags,
 }: BodyProps) {
   if (items.length === 0) {
     return (
@@ -1996,6 +2028,8 @@ function ItemsBody({
         {...(activeFolderTitle
           ? { activeFolderTitle }
           : {})}
+        {...(onTagClick ? { onTagClick } : {})}
+        {...(activeTags ? { activeTags } : {})}
       />
     );
   }
@@ -2047,6 +2081,8 @@ function ItemsBody({
                 ? { onRowRemoveFromFolder }
                 : {})}
               {...(activeFolderTitle ? { activeFolderTitle } : {})}
+              {...(onTagClick ? { onTagClick } : {})}
+              {...(activeTags ? { activeTags } : {})}
             />
           </section>
         );
@@ -2075,6 +2111,11 @@ interface GridProps {
   onRowRemoveFromFolder?: ((item: ItemWithShares) => void) | undefined;
   /** Folder title for the kebab item label. */
   activeFolderTitle?: string | undefined;
+  /** #91: tag-click handler + active tag set for the chip strip
+   *  on each card. Click toggles tag membership in the parent's
+   *  filter set; active tags render with the accent treatment. */
+  onTagClick?: (tag: string) => void;
+  activeTags?: ReadonlySet<string>;
 }
 
 function ItemGrid({
@@ -2091,6 +2132,8 @@ function ItemGrid({
   onRowMoveToTrash,
   onRowRemoveFromFolder,
   activeFolderTitle,
+  onTagClick,
+  activeTags,
 }: GridProps) {
   if (viewMode === 'card') {
     return (
@@ -2173,6 +2216,8 @@ function ItemGrid({
                 // keeps the portal tab as a back-nav anchor (#314).
                 openInNewTab={hasRuntime(item)}
                 fallbackIcon={<Icon />}
+                {...(onTagClick ? { onTagClick } : {})}
+                {...(activeTags ? { activeTags } : {})}
                 headerExtra={
                   <ItemSharingIndicator
                     itemId={item.id}
