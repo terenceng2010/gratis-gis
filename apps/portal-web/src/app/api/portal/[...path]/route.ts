@@ -183,23 +183,37 @@ async function forward(req: NextRequest, pathSegments: string[]) {
 
   const upstream = await fetch(target, init);
   const tUpstream = trace ? Date.now() : 0;
-  // Stream the response body through as bytes so the browser receives
-  // exactly what portal-api produced. text() would re-encode.
-  const body = await upstream.arrayBuffer();
+  // Stream-pass the response body so the browser receives bytes the
+  // moment portal-api flushes them. The previous arrayBuffer() round-
+  // trip buffered the entire body before forwarding, which is fatal
+  // for NDJSON streams (#103 per-batch ingest progress) -- the client
+  // would never see progress events until the entire ingest
+  // completed. Stream-pass also drops a redundant memory copy of
+  // every download from portal-api through the BFF.
+  //
+  // We forward Content-Type unchanged (NDJSON / event-stream /
+  // application/json all flow through). Transfer-Encoding is decided
+  // by Next.js based on the body type; a ReadableStream becomes
+  // chunked transfer automatically.
   if (trace) {
-    const tDone = Date.now();
     // eslint-disable-next-line no-console
     console.log(
       `[bff] ${req.method} /api/${suffix}${qs} ` +
         `session=${tSession - t0}ms upstream=${tUpstream - tSession}ms ` +
-        `body=${tDone - tUpstream}ms total=${tDone - t0}ms ` +
-        `bytes=${body.byteLength}`,
+        `(streaming through)`,
     );
   }
-  return new NextResponse(body, {
+  return new NextResponse(upstream.body, {
     status: upstream.status,
     headers: {
-      'content-type': upstream.headers.get('content-type') ?? 'application/json',
+      'content-type':
+        upstream.headers.get('content-type') ?? 'application/json',
+      // No-cache + no-transform mirrors what portal-api set on the
+      // streaming response, so an intermediate Caddy or browser
+      // cache doesn't try to coalesce the chunks.
+      ...(upstream.headers.get('cache-control')
+        ? { 'cache-control': upstream.headers.get('cache-control')! }
+        : {}),
     },
   });
 }

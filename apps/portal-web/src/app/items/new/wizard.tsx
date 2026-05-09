@@ -1325,8 +1325,10 @@ export function NewItemWizard() {
                 `&sourceLayer=${encodeURIComponent(layer.sourceLayerName)}` +
                 `&mode=replace`;
               const ingestRes = await fetch(ingestUrl, { method: 'POST' });
-              if (!ingestRes.ok) {
-                const text = await ingestRes.text().catch(() => '');
+              if (!ingestRes.ok || !ingestRes.body) {
+                const text = await ingestRes
+                  .text()
+                  .catch(() => '');
                 const errMsg = `${ingestRes.status} ${text.slice(0, 200)}`;
                 ingestErrors.push(`${layer.sourceLayerName}: ${errMsg}`);
                 setIngestProgress((prev) =>
@@ -1338,36 +1340,126 @@ export function NewItemWizard() {
                       )
                     : prev,
                 );
-              } else {
-                // Pull the inserted count out of the response so the
-                // overlay can show the real number of rows that
-                // landed (matches what stats() will show on the
-                // detail page once the user navigates).
-                let insertedCount: number | undefined;
-                try {
-                  const body = (await ingestRes.json()) as {
+                continue;
+              }
+              // #103: response is NDJSON with one event per batch.
+              // Stream-read so the overlay updates as 5k-row batches
+              // commit, instead of waiting for the whole import to
+              // finish. Pump the reader until done; for each
+              // newline-terminated chunk parse the JSON event and
+              // dispatch into the overlay state.
+              const reader = ingestRes.body.getReader();
+              const decoder = new TextDecoder();
+              let buffer = '';
+              let lastInserted = 0;
+              let lastError: string | null = null;
+              let sawDone = false;
+              // eslint-disable-next-line no-constant-condition
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let nl = buffer.indexOf('\n');
+                while (nl >= 0) {
+                  const line = buffer.slice(0, nl).trim();
+                  buffer = buffer.slice(nl + 1);
+                  nl = buffer.indexOf('\n');
+                  if (!line) continue;
+                  let msg: {
+                    event?: string;
                     inserted?: number;
+                    processed?: number;
+                    total?: number;
+                    message?: string;
                   };
-                  if (typeof body.inserted === 'number') {
-                    insertedCount = body.inserted;
+                  try {
+                    msg = JSON.parse(line);
+                  } catch {
+                    // A partial line that snuck past the split is
+                    // unusual but harmless: skip it and let the
+                    // next iteration's buffer accumulate.
+                    continue;
                   }
-                } catch {
-                  // Non-JSON body is unusual but not a failure.
+                  if (msg.event === 'progress' || msg.event === 'start') {
+                    if (typeof msg.inserted === 'number') {
+                      lastInserted = msg.inserted;
+                    }
+                    setIngestProgress((prev) =>
+                      prev
+                        ? prev.map((p, i) => {
+                            if (i !== idx) return p;
+                            const next = {
+                              ...p,
+                              status: 'running' as const,
+                            };
+                            if (typeof msg.inserted === 'number') {
+                              next.insertedCount = msg.inserted;
+                            }
+                            // The server's start event carries the
+                            // GDAL-reported total which can refine
+                            // an off-by-one we got from the probe.
+                            if (
+                              typeof msg.total === 'number' &&
+                              msg.total > 0
+                            ) {
+                              next.expectedFeatureCount = msg.total;
+                            }
+                            return next;
+                          })
+                        : prev,
+                    );
+                  } else if (msg.event === 'done') {
+                    sawDone = true;
+                    if (typeof msg.inserted === 'number') {
+                      lastInserted = msg.inserted;
+                    }
+                    setIngestProgress((prev) =>
+                      prev
+                        ? prev.map((p, i) => {
+                            if (i !== idx) return p;
+                            const next = {
+                              ...p,
+                              status: 'done' as const,
+                            };
+                            if (typeof msg.inserted === 'number') {
+                              next.insertedCount = msg.inserted;
+                            }
+                            return next;
+                          })
+                        : prev,
+                    );
+                  } else if (msg.event === 'error') {
+                    lastError = msg.message ?? 'Ingest failed.';
+                  }
                 }
+              }
+              if (lastError !== null) {
+                ingestErrors.push(`${layer.sourceLayerName}: ${lastError}`);
                 setIngestProgress((prev) =>
                   prev
-                    ? prev.map((p, i) => {
-                        if (i !== idx) return p;
-                        // Build the next row carefully so we don't
-                        // assign insertedCount=undefined under
-                        // exactOptionalPropertyTypes; only set it
-                        // when we actually parsed a number.
-                        const next = { ...p, status: 'done' as const };
-                        if (insertedCount !== undefined) {
-                          next.insertedCount = insertedCount;
-                        }
-                        return next;
-                      })
+                    ? prev.map((p, i) =>
+                        i === idx
+                          ? { ...p, status: 'error', error: lastError! }
+                          : p,
+                      )
+                    : prev,
+                );
+              } else if (!sawDone) {
+                // Stream closed without a `done` event. Most often
+                // this means the server crashed mid-import. Surface
+                // it so the user knows the row count we're showing
+                // is partial.
+                const partialMsg = `Import stream ended without a done event (got ${lastInserted.toLocaleString()} rows).`;
+                ingestErrors.push(
+                  `${layer.sourceLayerName}: ${partialMsg}`,
+                );
+                setIngestProgress((prev) =>
+                  prev
+                    ? prev.map((p, i) =>
+                        i === idx
+                          ? { ...p, status: 'error', error: partialMsg }
+                          : p,
+                      )
                     : prev,
                 );
               }
@@ -1525,7 +1617,28 @@ export function NewItemWizard() {
                 } else if (p.status === 'error') {
                   detail = `Failed: ${p.error ?? 'unknown error'}`;
                 } else if (p.status === 'running') {
-                  detail = `Loading ${expectedLabel}…`;
+                  // Render live progress when the server has started
+                  // streaming batch events. insertedCount ticks up by
+                  // ~5k each batch; pairing with expectedFeatureCount
+                  // gives the user the running "245k / 1.39M" display
+                  // they asked for. Falls back to the static label
+                  // until the first batch lands.
+                  if (
+                    typeof p.insertedCount === 'number' &&
+                    p.expectedFeatureCount > 0
+                  ) {
+                    const pct = Math.min(
+                      100,
+                      Math.round(
+                        (p.insertedCount / p.expectedFeatureCount) * 100,
+                      ),
+                    );
+                    detail = `Loading ${p.insertedCount.toLocaleString()} of ${p.expectedFeatureCount.toLocaleString()} (${pct}%)`;
+                  } else if (typeof p.insertedCount === 'number') {
+                    detail = `Loading ${p.insertedCount.toLocaleString()} features…`;
+                  } else {
+                    detail = `Loading ${expectedLabel}…`;
+                  }
                 } else {
                   detail = `Waiting (${expectedLabel})`;
                 }

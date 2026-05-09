@@ -7,12 +7,14 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Prisma } from '@prisma/client';
+import type { Response } from 'express';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -238,6 +240,7 @@ export class IngestController {
     }),
   )
   async ingestV3Layer(
+    @Res() res: Response,
     @CurrentUser() user: AuthUser,
     @Param('id') itemId: string,
     @Param('layerId') layerId: string,
@@ -255,199 +258,270 @@ export class IngestController {
     // ingests without N more uploads.
     @Query('stagingId') stagingId?: string,
   ) {
-    if (!file && !stagingId) {
-      throw new BadRequestException(
-        'No file uploaded; provide a multipart "file" field or a "stagingId" query parameter.',
-      );
-    }
-    if (mode !== undefined && mode !== 'replace' && mode !== 'append') {
-      throw new BadRequestException(
-        `Unknown mode "${mode}"; expected replace or append.`,
-      );
-    }
-    const ingestMode: 'replace' | 'append' = mode ?? 'append';
-    const item = await this.items.get(user, itemId);
-    if (item.type !== 'data_layer') {
-      throw new BadRequestException(
-        'Ingest only targets data_layer items.',
-      );
-    }
-    const data = item.data as {
-      version?: number;
-      layers?: Array<DataLayerLayerShape>;
-    } | null;
-    if (data?.version !== 3) {
-      throw new BadRequestException(
-        'Per-layer ingest is v3-only. Use /items/:id/ingest for v1/v2 items.',
-      );
-    }
-    const layer = (data.layers ?? []).find((l) => l.id === layerId);
-    if (!layer) {
-      throw new NotFoundException(
-        `Layer ${layerId} is not part of this item's schema.`,
-      );
-    }
-    await this.items.assertCanEdit(user, itemId);
-
-    // Phase 2.5: the engine substrate doesn't need a pre-insert
-    // provisionLayer pass; observations are written to a shared
-    // table keyed by scope, so geometry-type promotion (the old
-    // pre-#240 Multi-* migration) is unnecessary too. Truncate
-    // operates directly on the observation log.
-
-    // #244: replace mode wipes the layer's data before inserting.
-    // Solves the "I re-imported and now have 1.3M rows when the
-    // source has 869k" problem from a partial-failure left behind
-    // by an earlier attempt. Order matters: truncate first, ingest
-    // second, so a failed ingest still leaves the user with an
-    // empty layer rather than a half-old/half-new mix.
-    let truncated = 0;
-    if (ingestMode === 'replace') {
-      // Capture the pre-truncate live-entity count for the
-      // response so the UI can show "Replaced N rows with M".
-      // Engine-side count: distinct entities with no tombstone
-      // and an open valid_to.
-      truncated = await this.dataLayerTables.countLiveEntities(itemId, layer.id);
-      await this.dataLayerTables.truncateLayer(itemId, layerId);
-    }
-
-    // Resolve the source bytes. Two modes:
-    //   1. Staging: we look up the staged file by id, verify it
-    //      belongs to the caller, and read straight off disk via
-    //      fileLayerToGeoJsonFromPath. The staging is not deleted
-    //      here -- a single staging is consumed by N per-layer
-    //      ingests, and the staging cleanup cron handles eviction.
-    //   2. Multipart: legacy path where the caller PUTs the file in
-    //      the request body. Still supported for direct API users
-    //      and the detail-page Import button.
-    let geojson: { type: 'FeatureCollection'; features: unknown[] };
-    let driver: string;
-    let layerName: string;
-    let sourceSrs: string | null;
-    let provenanceFileName: string;
-    let provenanceSizeBytes: number;
-    if (stagingId) {
-      const staged = await this.staging.getStaging(stagingId, user.id);
-      const out = await this.ingest.fileLayerToGeoJsonFromPath(
-        staged.filePath,
-        sourceLayer,
-      );
-      geojson = out.geojson;
-      driver = out.driver;
-      layerName = out.layerName;
-      sourceSrs = out.sourceSrs;
-      provenanceFileName = staged.originalName;
-      provenanceSizeBytes = staged.sizeBytes;
-    } else {
-      // file is guaranteed non-null here by the guard above.
-      const f = file!;
-      const out = await this.ingest.fileLayerToGeoJson(
-        f.buffer,
-        f.originalname,
-        sourceLayer,
-      );
-      geojson = out.geojson;
-      driver = out.driver;
-      layerName = out.layerName;
-      sourceSrs = out.sourceSrs;
-      provenanceFileName = f.originalname;
-      provenanceSizeBytes = f.size;
-    }
-
-    // Honor the layer's declared schema as a whitelist: only keep
-    // properties whose key matches a declared field name. Without
-    // this, importing a shapefile drops every column from the file
-    // into properties (including ESRI internal ones like
-    // OBJECTID, Shape_Area, Shape_Length) regardless of what the
-    // user declared during create. The wizard probe shows the user
-    // the file's full column set; if they want all of them, they
-    // need to declare all of them. Sparse schemas are honored.
+    // #103: response body is newline-delimited JSON. Each line is one
+    // event. Shape:
+    //   {"event":"start","total":1389855,"sourceLayer":"MasterSurfWV_2025"}
+    //   {"event":"progress","processed":5000,"inserted":5000}
+    //   {"event":"progress","processed":10000,"inserted":10000}
+    //   ...
+    //   {"event":"done","inserted":1389855,"sourceLayer":"MasterSurfWV_2025",
+    //    "driver":"OpenFileGDB","sourceSrs":"EPSG:26917","mode":"replace",
+    //    "replaced":0}
+    //   {"event":"error","message":"..."}    (terminal)
     //
-    // Edge case: a layer with zero declared fields is treated as
-    // "I haven't decided yet, take everything" so a one-shot
-    // wizard create doesn't silently drop all data.
-    const fieldNames = new Set((layer.fields ?? []).map((f) => f.name));
-    const filterProps = (props: Record<string, unknown>) => {
-      if (fieldNames.size === 0) return props;
-      const out: Record<string, unknown> = {};
-      for (const k of Object.keys(props)) {
-        if (fieldNames.has(k)) out[k] = props[k];
+    // Why NDJSON instead of returning a single JSON: a county-scale
+    // import takes minutes, and the user-facing wizard wants to
+    // render granular progress instead of a single spinning "Loading
+    // ..." state. NDJSON is supported by every modern browser via
+    // the streaming fetch API and degrades gracefully if the client
+    // simply waits for end-of-body and parses the last line.
+    res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('cache-control', 'no-cache, no-transform');
+    res.setHeader('x-accel-buffering', 'no');
+    res.flushHeaders?.();
+    const writeEvent = (msg: Record<string, unknown>): void => {
+      res.write(JSON.stringify(msg) + '\n');
+    };
+    // The "throw a 4xx HTTP early" pattern doesn't apply once we've
+    // started streaming -- the headers are already 200. So validation
+    // failures past this point go out as `{event:"error",...}` and we
+    // close the body with res.end().
+    const failStream = (status: number, message: string): void => {
+      // For pre-stream rejections the headers haven't been flushed so
+      // we can still send a real status code. Once headers are out,
+      // the most we can do is emit an error event and end the body.
+      if (!res.headersSent) {
+        res.status(status);
       }
-      return out;
+      writeEvent({ event: 'error', status, message });
+      res.end();
     };
 
-    const { inserted } = await this.dataLayerFeatures.insertFeatures(
-      itemId,
-      layerId,
-      geojson.features.map((f) => {
-        const feat = f as {
-          geometry?: unknown;
-          properties?: Record<string, unknown> | null;
-        };
-        return {
-          geometry: feat.geometry,
-          properties: filterProps(feat.properties ?? {}),
-        };
-      }),
-      user,
-    );
-
-    // Stamp provenance on the layer so the detail page can render
-    // "Imported from nest-points.geojson on 4/24/2026 by Mateo". We
-    // re-read the item rather than rely on the earlier snapshot since
-    // insertFeatures may have mutated bbox / featureCount in between.
-    await this.stampV3LayerSource(itemId, layerId, {
-      fileName: provenanceFileName,
-      format: driverToFormat(driver),
-      sizeBytes: provenanceSizeBytes,
-      importedAt: new Date().toISOString(),
-      importedBy: user.id,
-      note: `driver: ${driver}`,
-      sourceSrs,
-    });
-
-    // Recompute item-level bbox from the freshly-loaded layer
-    // tables. Without this, the items list spatial-search filter
-    // and the data_layer detail page's map preview have nothing to
-    // anchor on (item.bbox stays empty), so a just-ingested layer
-    // can't be panned to or rendered until the next housekeeping
-    // recompute pass runs (which can be hours away).
-    //
-    // We re-read item.data so we aggregate over the canonical layer
-    // list (insertFeatures and any concurrent layer edits could
-    // have shifted things). Failures here are non-fatal: the
-    // ingest already succeeded, the bbox just remains stale until
-    // the next housekeeping pass.
     try {
-      const fresh = await this.prisma.item.findUnique({
-        where: { id: itemId },
-        select: { data: true },
-      });
-      const layers = ((fresh?.data ?? null) as { layers?: DataLayerLayerShape[] } | null)
-        ?.layers;
-      if (Array.isArray(layers)) {
-        const bbox = await this.dataLayerTables.aggregateBbox(itemId, layers);
-        await this.prisma.item.update({
-          where: { id: itemId },
-          data: { bbox: bbox ?? [] },
-        });
+      if (!file && !stagingId) {
+        return failStream(
+          400,
+          'No file uploaded; provide a multipart "file" field or a "stagingId" query parameter.',
+        );
       }
+      if (mode !== undefined && mode !== 'replace' && mode !== 'append') {
+        return failStream(
+          400,
+          `Unknown mode "${mode}"; expected replace or append.`,
+        );
+      }
+      const ingestMode: 'replace' | 'append' = mode ?? 'append';
+      const item = await this.items.get(user, itemId);
+      if (item.type !== 'data_layer') {
+        return failStream(400, 'Ingest only targets data_layer items.');
+      }
+      const data = item.data as {
+        version?: number;
+        layers?: Array<DataLayerLayerShape>;
+      } | null;
+      if (data?.version !== 3) {
+        return failStream(
+          400,
+          'Per-layer ingest is v3-only. Use /items/:id/ingest for v1/v2 items.',
+        );
+      }
+      const layer = (data.layers ?? []).find((l) => l.id === layerId);
+      if (!layer) {
+        return failStream(
+          404,
+          `Layer ${layerId} is not part of this item's schema.`,
+        );
+      }
+      await this.items.assertCanEdit(user, itemId);
+
+      // #244 replace-mode preflight (unchanged from non-streaming
+      // version). Truncate happens before any inserts so a failed
+      // stream leaves an empty layer rather than a half-old / half-
+      // new mix.
+      let truncated = 0;
+      if (ingestMode === 'replace') {
+        truncated = await this.dataLayerTables.countLiveEntities(
+          itemId,
+          layer.id,
+        );
+        await this.dataLayerTables.truncateLayer(itemId, layerId);
+      }
+
+      // Property whitelist (unchanged). Sparse schemas drop unknown
+      // columns; an empty schema is treated as "take everything".
+      const fieldNames = new Set((layer.fields ?? []).map((f) => f.name));
+      const filterProps = (props: Record<string, unknown>) => {
+        if (fieldNames.size === 0) return props;
+        const out: Record<string, unknown> = {};
+        for (const k of Object.keys(props)) {
+          if (fieldNames.has(k)) out[k] = props[k];
+        }
+        return out;
+      };
+
+      // Resolve the source path for streaming. Two paths:
+      //   1. Staging: file already on disk under /tmp/gg-staging/<id>/.
+      //      We read straight off disk; the staging cleanup cron
+      //      handles eviction.
+      //   2. Multipart: legacy path where the caller PUTs the file in
+      //      the request body. We have to write the buffer to a temp
+      //      dir so the streaming reader can open it via GDAL. The
+      //      old non-streaming path used the buffer-input variants
+      //      that did the same write internally; we just hoist it
+      //      here so the streaming variant can see a path.
+      let provenanceFileName: string;
+      let provenanceSizeBytes: number;
+      let sourcePath: string;
+      let cleanupSourceDir: (() => Promise<void>) | null = null;
+      if (stagingId) {
+        const staged = await this.staging.getStaging(stagingId, user.id);
+        sourcePath = staged.filePath;
+        provenanceFileName = staged.originalName;
+        provenanceSizeBytes = staged.sizeBytes;
+      } else {
+        const f = file!;
+        const tmp = await this.ingest.materializeBufferToTemp(
+          f.buffer,
+          f.originalname,
+        );
+        sourcePath = tmp.filePath;
+        provenanceFileName = f.originalname;
+        provenanceSizeBytes = f.size;
+        cleanupSourceDir = tmp.cleanup;
+      }
+
+      let totalInserted = 0;
+      let startedFlushed = false;
+      let lastDriver = '';
+      let lastLayerName = '';
+      let lastSourceSrs: string | null = null;
+
+      try {
+        const meta = await this.ingest.streamLayerFromPath(
+          sourcePath,
+          sourceLayer,
+          async (batch, progress) => {
+            // First flush carries `total` so the wizard can render an
+            // accurate "Loaded X of N" denominator immediately. We
+            // only know the GDAL-reported total once streamLayer has
+            // opened the dataset, so we stamp the start event from
+            // inside the first batch callback.
+            if (!startedFlushed) {
+              writeEvent({
+                event: 'start',
+                total: progress.total,
+                sourceLayer: sourceLayer ?? null,
+              });
+              startedFlushed = true;
+            }
+            const filtered = batch.map((b) => ({
+              geometry: b.geometry,
+              properties: filterProps(b.properties),
+            }));
+            const { inserted } =
+              await this.dataLayerFeatures.insertFeatures(
+                itemId,
+                layerId,
+                filtered,
+                user,
+              );
+            totalInserted += inserted;
+            writeEvent({
+              event: 'progress',
+              processed: progress.processed,
+              total: progress.total,
+              inserted: totalInserted,
+            });
+          },
+        );
+        lastDriver = meta.driver;
+        lastLayerName = meta.layerName;
+        lastSourceSrs = meta.sourceSrs;
+
+        // Empty-source edge case: streamLayer opens fine but yields
+        // zero batches. The start event never fires; emit one now so
+        // the client gets a complete event sequence.
+        if (!startedFlushed) {
+          writeEvent({
+            event: 'start',
+            total: meta.total,
+            sourceLayer: sourceLayer ?? null,
+          });
+        }
+      } finally {
+        if (cleanupSourceDir) {
+          await cleanupSourceDir().catch(() => {});
+        }
+      }
+
+      // Stamp provenance + recompute bbox the same way the legacy
+      // non-streaming path did. These run once at the end, not per
+      // batch, because the source-stamp captures the final state and
+      // the aggregateBbox is more efficient on a fully populated
+      // table than mid-stream.
+      await this.stampV3LayerSource(itemId, layerId, {
+        fileName: provenanceFileName,
+        format: driverToFormat(lastDriver),
+        sizeBytes: provenanceSizeBytes,
+        importedAt: new Date().toISOString(),
+        importedBy: user.id,
+        note: `driver: ${lastDriver}`,
+        sourceSrs: lastSourceSrs,
+      });
+
+      try {
+        const fresh = await this.prisma.item.findUnique({
+          where: { id: itemId },
+          select: { data: true },
+        });
+        const layers = (
+          (fresh?.data ?? null) as { layers?: DataLayerLayerShape[] } | null
+        )?.layers;
+        if (Array.isArray(layers)) {
+          const bbox = await this.dataLayerTables.aggregateBbox(
+            itemId,
+            layers,
+          );
+          await this.prisma.item.update({
+            where: { id: itemId },
+            data: { bbox: bbox ?? [] },
+          });
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ingestV3Layer] bbox recompute failed for ${itemId}/${layerId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+
+      writeEvent({
+        event: 'done',
+        driver: lastDriver,
+        sourceLayer: lastLayerName,
+        inserted: totalInserted,
+        sourceSrs: lastSourceSrs,
+        mode: ingestMode,
+        ...(ingestMode === 'replace' ? { replaced: truncated } : {}),
+      });
+      res.end();
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn(
-        `[ingestV3Layer] bbox recompute failed for ${itemId}/${layerId}:`,
-        err instanceof Error ? err.message : err,
+      console.error(
+        `[ingestV3Layer] stream failed for ${itemId}/${layerId}:`,
+        err,
       );
+      const message =
+        err instanceof BadRequestException ||
+        err instanceof NotFoundException ||
+        err instanceof ForbiddenException
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Ingest failed.';
+      writeEvent({ event: 'error', message });
+      res.end();
     }
-
-    return {
-      driver,
-      sourceLayer: layerName,
-      inserted,
-      sourceSrs,
-      mode: ingestMode,
-      ...(ingestMode === 'replace' ? { replaced: truncated } : {}),
-    };
   }
 
   /**

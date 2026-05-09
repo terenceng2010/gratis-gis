@@ -404,6 +404,163 @@ export class IngestService {
   }
 
   /**
+   * Write a multipart upload buffer to a fresh temp dir and return
+   * the on-disk path plus a cleanup hook. Used by callers that have
+   * a Buffer in hand but want to feed the streaming GDAL reader,
+   * which only accepts a path. The cleanup hook should be invoked
+   * in a finally block by the caller; failures are swallowed so a
+   * crashed cleanup doesn't mask the real error.
+   */
+  async materializeBufferToTemp(
+    buffer: Buffer,
+    originalName: string,
+  ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
+    if (!buffer.length) {
+      throw new BadRequestException('Uploaded file is empty.');
+    }
+    if (buffer.length > this.maxBytes) {
+      throw new BadRequestException(
+        `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
+      );
+    }
+    const dirPath = join(tmpdir(), `gg-ingest-${randomUUID()}`);
+    await mkdir(dirPath, { recursive: true });
+    const filePath = join(dirPath, safeFilename(originalName));
+    await writeFile(filePath, buffer);
+    const cleanup = async () => {
+      await rm(dirPath, { recursive: true, force: true }).catch(() => {
+        this.log.warn(`Failed to remove temp dir ${dirPath}`);
+      });
+    };
+    return { filePath, cleanup };
+  }
+
+  /**
+   * Streaming variant of fileLayerToGeoJsonFromPath. Walks features
+   * in order, invoking `onBatch` every `batchSize` features so the
+   * caller can insert rows incrementally instead of buffering the
+   * whole layer in JS memory.
+   *
+   * Why this exists: a county-scale parcel layer (1.4M polygons +
+   * 19 attribute fields) blew through Node's 1.5 GB heap when the
+   * non-streaming variant tried to materialise the full
+   * FeatureCollection. With streaming, peak memory is bounded by
+   * batchSize regardless of source dataset size.
+   *
+   * The callback may return a Promise; we await it before resuming
+   * iteration so DB back-pressure naturally throttles GDAL. GDAL's
+   * own forEach is synchronous, so we use index-based access
+   * (layer.features.get(i)) instead and yield control between
+   * batches via `await onBatch(...)`. Features whose geometry
+   * decode returns null (rare; corrupt rows in legacy shapefiles)
+   * are skipped silently and counted in `processed` so the total
+   * matches what GDAL reported up front.
+   *
+   * Returns metadata about the source after the stream finishes.
+   */
+  async streamLayerFromPath(
+    filePath: string,
+    sourceLayer: string | undefined,
+    onBatch: (
+      batch: Array<{ geometry: unknown; properties: Record<string, unknown> }>,
+      progress: { processed: number; total: number },
+    ) => Promise<void>,
+    opts: { batchSize?: number } = {},
+  ): Promise<{
+    fields: Array<{ name: string; type: 'string' | 'number' | 'boolean' | 'date' }>;
+    driver: string;
+    layerName: string;
+    sourceSrs: string | null;
+    total: number;
+  }> {
+    const batchSize = opts.batchSize ?? 5000;
+    const gdal = await this.loadGdal();
+    const openPath = filePath.toLowerCase().endsWith('.zip')
+      ? `/vsizip/${filePath}`
+      : filePath;
+    const ds = gdal.open(openPath);
+    try {
+      const layers = ds.layers;
+      const count = layers.count();
+      if (count === 0) {
+        throw new BadRequestException(
+          'GDAL opened the file but found no vector layers inside.',
+        );
+      }
+      let targetIdx = -1;
+      if (sourceLayer) {
+        for (let i = 0; i < count; i += 1) {
+          if (layers.get(i).name === sourceLayer) {
+            targetIdx = i;
+            break;
+          }
+        }
+        if (targetIdx === -1) {
+          throw new BadRequestException(
+            `File has no layer named "${sourceLayer}".`,
+          );
+        }
+      } else if (count === 1) {
+        targetIdx = 0;
+      } else {
+        throw new BadRequestException(
+          `File has ${count} layers. Specify which one via the "sourceLayer" query parameter.`,
+        );
+      }
+
+      const layer = layers.get(targetIdx);
+      const fields: Array<{
+        name: string;
+        type: 'string' | 'number' | 'boolean' | 'date';
+      }> = [];
+      const defCount = layer.fields.count();
+      for (let f = 0; f < defCount; f += 1) {
+        const def = layer.fields.get(f);
+        fields.push({ name: def.name, type: gdalTypeToSimple(def.type) });
+      }
+      const target4326 = gdal.SpatialReference.fromEPSG(4326);
+      const xform = buildTransform(gdal, layer.srs, target4326);
+      const total = layer.features.count();
+
+      let batch: Array<{
+        geometry: unknown;
+        properties: Record<string, unknown>;
+      }> = [];
+      let processed = 0;
+
+      // Index-based walk so we can `await onBatch` between flushes.
+      // gdal-async's forEach is synchronous; doing the same loop with
+      // a manual counter is the only way to yield to the event loop
+      // mid-iteration without spawning a worker.
+      for (let i = 0; i < total; i += 1) {
+        const feature = layer.features.get(i);
+        const geomJson = featureGeomJson(feature, xform);
+        processed += 1;
+        if (!geomJson) continue;
+        const props: Record<string, unknown> = feature.fields.toObject();
+        batch.push({ geometry: geomJson, properties: props });
+        if (batch.length >= batchSize) {
+          await onBatch(batch, { processed, total });
+          batch = [];
+        }
+      }
+      if (batch.length > 0) {
+        await onBatch(batch, { processed, total });
+      }
+
+      return {
+        fields,
+        driver: ds.driver.description,
+        layerName: layer.name,
+        sourceSrs: srsAuthCode(layer.srs),
+        total,
+      };
+    } finally {
+      ds.close();
+    }
+  }
+
+  /**
    * gdal-async is a native addon; loading it eagerly would crash the
    * whole portal-api on platforms whose prebuilds are missing. Defer
    * to the first ingest attempt and surface a friendly error if it
