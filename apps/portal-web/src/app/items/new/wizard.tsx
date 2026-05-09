@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type ReactNode,
+} from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
@@ -17,9 +24,11 @@ import {
   Globe2,
   LayoutDashboard,
   Layers,
+  Clock,
   ListChecks,
   Loader2,
   Lock,
+  XCircle,
   Map as MapIcon,
   PencilRuler,
   Plug,
@@ -408,6 +417,22 @@ export function NewItemWizard() {
   const [pendingFileImports, setPendingFileImports] = useState<
     PendingFileImport[]
   >([]);
+
+  // Per-layer ingest progress, surfaced as a modal overlay so the
+  // user sees something happening during the post-create fan-out.
+  // Without this they stare at a spinning Create-item button for
+  // potentially several minutes on a 500 MB GDB and assume the
+  // wizard hung. Null = no fan-out in flight; an array = in-flight
+  // or just-completed (cleared on navigation).
+  const [ingestProgress, setIngestProgress] = useState<Array<{
+    layerId: string;
+    layerLabel: string;
+    sourceLayerName: string;
+    expectedFeatureCount: number;
+    status: 'pending' | 'running' | 'done' | 'error';
+    insertedCount?: number;
+    error?: string;
+  }> | null>(null);
 
   // #298: basemap draft state. Captured up front so the wizard
   // writes a fully-configured item (kind + URL + WMS layer list)
@@ -1236,10 +1261,63 @@ export function NewItemWizard() {
       // exists, every layer's schema is right, and the user lands
       // on the detail page where they can retry per-layer Import
       // manually. We surface a banner-level error so they know.
+      //
+      // Progress: each iteration updates ingestProgress so the modal
+      // overlay can show "Layer X of N: running / done / error" and
+      // the user knows the wizard isn't hung. Per-layer ingest can
+      // take seconds (10k-row dataset) to a few minutes (1M-row GDB),
+      // so a granular indicator beats a single spinning button.
       const ingestErrors: string[] = [];
       if (type === 'data_layer' && pendingFileImports.length > 0) {
+        // Resolve the layers' user-facing labels from the builder
+        // state so the overlay can render "Parcels (1.39M features)"
+        // rather than the raw source-layer name.
+        const labelByLayerId = new Map<string, string>();
+        const featureCountByLayerId = new Map<string, number>();
+        for (const l of featureServiceData.layers) {
+          labelByLayerId.set(l.id, l.label);
+          if (typeof l.featureCount === 'number') {
+            featureCountByLayerId.set(l.id, l.featureCount);
+          }
+        }
+        const initialProgress: Array<{
+          layerId: string;
+          layerLabel: string;
+          sourceLayerName: string;
+          expectedFeatureCount: number;
+          status: 'pending' | 'running' | 'done' | 'error';
+          insertedCount?: number;
+          error?: string;
+        }> = [];
         for (const entry of pendingFileImports) {
           for (const layer of entry.layers) {
+            initialProgress.push({
+              layerId: layer.layerId,
+              layerLabel:
+                labelByLayerId.get(layer.layerId) ?? layer.sourceLayerName,
+              sourceLayerName: layer.sourceLayerName,
+              expectedFeatureCount:
+                featureCountByLayerId.get(layer.layerId) ?? 0,
+              status: 'pending',
+            });
+          }
+        }
+        setIngestProgress(initialProgress);
+
+        let progressIdx = 0;
+        for (const entry of pendingFileImports) {
+          for (const layer of entry.layers) {
+            const idx = progressIdx;
+            progressIdx += 1;
+            // Mark this layer as running so the overlay flips its
+            // row from clock to spinner.
+            setIngestProgress((prev) =>
+              prev
+                ? prev.map((p, i) =>
+                    i === idx ? { ...p, status: 'running' } : p,
+                  )
+                : prev,
+            );
             try {
               const ingestUrl =
                 `/api/portal/items/${saved.id}/layers/${layer.layerId}/import` +
@@ -1249,8 +1327,48 @@ export function NewItemWizard() {
               const ingestRes = await fetch(ingestUrl, { method: 'POST' });
               if (!ingestRes.ok) {
                 const text = await ingestRes.text().catch(() => '');
-                ingestErrors.push(
-                  `${layer.sourceLayerName}: ${ingestRes.status} ${text.slice(0, 200)}`,
+                const errMsg = `${ingestRes.status} ${text.slice(0, 200)}`;
+                ingestErrors.push(`${layer.sourceLayerName}: ${errMsg}`);
+                setIngestProgress((prev) =>
+                  prev
+                    ? prev.map((p, i) =>
+                        i === idx
+                          ? { ...p, status: 'error', error: errMsg }
+                          : p,
+                      )
+                    : prev,
+                );
+              } else {
+                // Pull the inserted count out of the response so the
+                // overlay can show the real number of rows that
+                // landed (matches what stats() will show on the
+                // detail page once the user navigates).
+                let insertedCount: number | undefined;
+                try {
+                  const body = (await ingestRes.json()) as {
+                    inserted?: number;
+                  };
+                  if (typeof body.inserted === 'number') {
+                    insertedCount = body.inserted;
+                  }
+                } catch {
+                  // Non-JSON body is unusual but not a failure.
+                }
+                setIngestProgress((prev) =>
+                  prev
+                    ? prev.map((p, i) => {
+                        if (i !== idx) return p;
+                        // Build the next row carefully so we don't
+                        // assign insertedCount=undefined under
+                        // exactOptionalPropertyTypes; only set it
+                        // when we actually parsed a number.
+                        const next = { ...p, status: 'done' as const };
+                        if (insertedCount !== undefined) {
+                          next.insertedCount = insertedCount;
+                        }
+                        return next;
+                      })
+                    : prev,
                 );
               }
             } catch (ingestErr) {
@@ -1258,12 +1376,19 @@ export function NewItemWizard() {
                 `Auto-ingest failed for ${layer.sourceLayerName}:`,
                 ingestErr,
               );
-              ingestErrors.push(
-                `${layer.sourceLayerName}: ${
-                  ingestErr instanceof Error
-                    ? ingestErr.message
-                    : 'network error'
-                }`,
+              const errMsg =
+                ingestErr instanceof Error
+                  ? ingestErr.message
+                  : 'network error';
+              ingestErrors.push(`${layer.sourceLayerName}: ${errMsg}`);
+              setIngestProgress((prev) =>
+                prev
+                  ? prev.map((p, i) =>
+                      i === idx
+                        ? { ...p, status: 'error', error: errMsg }
+                        : p,
+                    )
+                  : prev,
               );
             }
           }
@@ -1343,6 +1468,99 @@ export function NewItemWizard() {
 
   return (
     <div className="space-y-8">
+      {/* Post-create ingest progress overlay. Shown while the wizard
+          fans out per-layer ingest from the staged file. Without
+          this the user stares at a spinning Create-item button for
+          minutes on a large GDB and has no way to know whether
+          anything is happening. The modal lists every detected
+          layer with status (pending/running/done/error), the
+          expected feature count, and the inserted count returned
+          by the server once a layer finishes. We don't surface a
+          Close button while ingest is running -- the wizard stays
+          mounted and any open modal would just be confusing if
+          dismissed mid-flight. After the loop completes the
+          wizard calls router.push() to land the user on the
+          detail page; the overlay disappears with the unmount. */}
+      {ingestProgress && ingestProgress.length > 0 ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface-1 p-5 shadow-raised">
+            <h3 className="mb-1 text-sm font-medium text-ink-0">
+              Importing features
+            </h3>
+            <p className="mb-3 text-xs text-muted">
+              Loading data into{' '}
+              {ingestProgress.length === 1
+                ? '1 layer'
+                : `${ingestProgress.length} layers`}
+              . This may take a few minutes for large datasets.
+            </p>
+            <ul className="space-y-1.5">
+              {ingestProgress.map((p) => {
+                let icon: ReactNode;
+                if (p.status === 'pending') {
+                  icon = <Clock className="h-3.5 w-3.5 text-muted" />;
+                } else if (p.status === 'running') {
+                  icon = (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+                  );
+                } else if (p.status === 'done') {
+                  icon = (
+                    <Check className="h-3.5 w-3.5 text-success" />
+                  );
+                } else {
+                  icon = (
+                    <XCircle className="h-3.5 w-3.5 text-danger" />
+                  );
+                }
+                const expectedLabel =
+                  p.expectedFeatureCount > 0
+                    ? `${p.expectedFeatureCount.toLocaleString()} features`
+                    : 'features';
+                let detail: string;
+                if (p.status === 'done') {
+                  detail =
+                    typeof p.insertedCount === 'number'
+                      ? `Loaded ${p.insertedCount.toLocaleString()} features`
+                      : 'Loaded';
+                } else if (p.status === 'error') {
+                  detail = `Failed: ${p.error ?? 'unknown error'}`;
+                } else if (p.status === 'running') {
+                  detail = `Loading ${expectedLabel}…`;
+                } else {
+                  detail = `Waiting (${expectedLabel})`;
+                }
+                return (
+                  <li
+                    key={p.layerId}
+                    className="flex items-start gap-2 rounded border border-border bg-surface-0 px-2 py-1.5 text-xs"
+                  >
+                    <span className="mt-0.5 shrink-0">{icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium text-ink-1">
+                        {p.layerLabel}
+                      </div>
+                      <div
+                        className={
+                          p.status === 'error'
+                            ? 'text-[11px] text-danger'
+                            : 'text-[11px] text-muted'
+                        }
+                      >
+                        {detail}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-3 text-[10px] text-muted">
+              Keep this tab open until import completes. You'll be
+              redirected to the item page when finished.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       {/* Selected-type header with back link. Keeps the user oriented
           without forcing a full page nav. */}
       <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 px-4 py-3">
