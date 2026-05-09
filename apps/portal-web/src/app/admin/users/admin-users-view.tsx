@@ -318,9 +318,17 @@ export function AdminUsersView({ initialUsers }: Props) {
         </div>
       ) : null}
 
-      {/* Table */}
-      <div className="overflow-hidden rounded-lg border border-border bg-surface-1">
-        <table className="w-full text-sm">
+      {/* Table. `overflow-x-auto` so the row's per-user action
+          buttons (Access, Edit, Reset, Disable, Delete) stay
+          reachable on narrow viewports. Previously the wrapper
+          had `overflow-hidden`, which cleanly clipped the actions
+          column off-screen with no scroll affordance. The table's
+          `min-w-[900px]` prevents column squish that would crush
+          the action buttons together; below that width the user
+          gets horizontal scroll instead. A proper responsive
+          card-on-narrow layout is queued separately. */}
+      <div className="overflow-x-auto rounded-lg border border-border bg-surface-1">
+        <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-surface-2 text-xs text-muted">
             <tr>
               <th className="px-3 py-2 text-left font-medium">Name</th>
