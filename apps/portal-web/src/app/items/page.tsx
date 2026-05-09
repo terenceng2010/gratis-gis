@@ -104,6 +104,17 @@ export default async function ItemsPage({ searchParams }: Props) {
 
   const me = meEarly;
 
+  // #80: geo_boundary items are needed by the bulk-share modal so
+  // an admin flipping items to Org or Public can also pick a tier-
+  // level clip boundary. Same fetch the item-detail SharingPanel
+  // uses; cached per-render. Failure is non-fatal -- the picker
+  // just renders an empty list with a hint.
+  const geoBoundaries = await apiFetch<
+    Array<{ id: string; title: string }>
+  >('/api/items?type=geo_boundary&lite=true').catch(
+    () => [] as Array<{ id: string; title: string }>,
+  );
+
   // Breadcrumbs from the visible folder set: walks the parent chain
   // back to a top-level ancestor. Multi-parent folders pick the
   // first parent encountered, matching the rail's behaviour.
@@ -263,6 +274,10 @@ export default async function ItemsPage({ searchParams }: Props) {
                   ? { id: activeFolder.id, title: activeFolder.title }
                   : null
               }
+              geoBoundaries={geoBoundaries.map((b) => ({
+                id: b.id,
+                title: b.title,
+              }))}
             />
           )}
         </>

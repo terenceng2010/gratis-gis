@@ -87,6 +87,13 @@ interface Props {
    * when viewing the unfiltered items list (#92).
    */
   activeFolder?: { id: string; title: string } | null | undefined;
+  /**
+   * #80: geo_boundary items in the org, plumbed through to the
+   * bulk-share modal so the Geographic-scope picker (parity with
+   * the per-item Sharing panel) has its options. Empty array is
+   * fine -- the picker shows a "no boundaries available" hint.
+   */
+  geoBoundaries?: Array<{ id: string; title: string }>;
 }
 
 type ViewMode = 'card' | 'list';
@@ -123,6 +130,7 @@ export function ItemsView({
   currentUser,
   folders = [],
   activeFolder = null,
+  geoBoundaries = [],
 }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('card');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
@@ -769,7 +777,18 @@ export function ItemsView({
    * skip silently and surface in the per-skip count, matching
    * the share-bulk error UX.
    */
-  async function handleBulkAccess(next: 'org' | 'public') {
+  async function handleBulkAccess(
+    next: 'org' | 'public',
+    /**
+     * #80 parity: optional tier-level boundary to apply alongside
+     * the access flip. When set, each PATCH includes the right
+     * boundary column for the chosen tier so the bulk path matches
+     * the per-item SharingPanel's Geographic-scope picker. null
+     * explicitly clears any prior boundary; undefined leaves it
+     * untouched.
+     */
+    boundaryId?: string | null,
+  ) {
     setBulkSaving(true);
     setBulkError(null);
     let done = 0;
@@ -781,10 +800,18 @@ export function ItemsView({
     try {
       for (const id of selected) {
         try {
+          // Build the PATCH body. access is always set; the matching
+          // boundary column is included only when the modal supplied
+          // one (or explicit null to clear).
+          const body: Record<string, unknown> = { access: next };
+          if (boundaryId !== undefined) {
+            if (next === 'public') body.publicGeoBoundaryId = boundaryId;
+            else body.orgGeoBoundaryId = boundaryId;
+          }
           const res = await fetch(`/api/portal/items/${id}`, {
             method: 'PATCH',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ access: next }),
+            body: JSON.stringify(body),
           });
           if (res.ok) {
             done += 1;
@@ -1007,6 +1034,7 @@ export function ItemsView({
           saving={bulkSaving}
           onSubmit={handleBulkShare}
           onSubmitAccess={handleBulkAccess}
+          geoBoundaries={geoBoundaries}
           onClose={() => {
             if (!bulkSaving) {
               setShowBulkShare(false);
@@ -1175,6 +1203,7 @@ function BulkShareDialog({
   onSubmit,
   onSubmitAccess,
   onClose,
+  geoBoundaries = [],
 }: {
   count: number;
   saving: boolean;
@@ -1187,9 +1216,18 @@ function BulkShareDialog({
    *  grants because it's a property of the item, not a row in the
    *  shares table. Provided so users can reach both kinds of share
    *  from the same dialog without bouncing through each item's
-   *  detail page. */
-  onSubmitAccess: (next: 'org' | 'public') => void | Promise<void>;
+   *  detail page. The optional `boundaryId` lets the modal apply
+   *  the tier-level Geographic-scope clip alongside the access flip
+   *  (#80 parity with the per-item Sharing panel). */
+  onSubmitAccess: (
+    next: 'org' | 'public',
+    boundaryId?: string | null,
+  ) => void | Promise<void>;
   onClose: () => void;
+  /** geo_boundary items in the org for the Geographic-scope picker.
+   *  Empty array is fine -- the picker shows a hint that no
+   *  boundary items exist yet. */
+  geoBoundaries?: Array<{ id: string; title: string }>;
 }) {
   // Tab between "share with a principal" (the existing flow) and
   // "raise visibility for everyone in the org / on the internet"
@@ -1204,6 +1242,14 @@ function BulkShareDialog({
     'view' | 'download' | 'edit' | 'admin'
   >('view');
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  // #80: per-tier boundary selection. Each tier has its own piece
+  // of state so toggling between Org and Public preserves the
+  // user's prior pick. null means "no clip" (the picker's empty
+  // option).
+  const [orgBoundaryId, setOrgBoundaryId] = useState<string | null>(null);
+  const [publicBoundaryId, setPublicBoundaryId] = useState<string | null>(
+    null,
+  );
 
   async function search(q: string): Promise<PrincipalOption[]> {
     const [usersRes, groupsRes] = await Promise.allSettled([
@@ -1320,6 +1366,55 @@ function BulkShareDialog({
             </p>
           ) : null}
 
+          {/* #80 parity: tier-level Geographic-scope picker. Same
+              affordance the per-item Sharing panel exposes. Only
+              renders for org / public modes (private has no tier
+              path to clip). The clip is enforced at the API layer;
+              data outside the boundary is not returned for that
+              tier. */}
+          {mode === 'org' || mode === 'public' ? (
+            <div className="rounded-md border border-border bg-surface-2 px-3 py-2">
+              <label
+                htmlFor={`bulk-boundary-${mode}`}
+                className="block text-[10px] font-medium uppercase tracking-wide text-muted"
+              >
+                Geographic scope
+              </label>
+              <select
+                id={`bulk-boundary-${mode}`}
+                value={
+                  mode === 'public'
+                    ? publicBoundaryId ?? ''
+                    : orgBoundaryId ?? ''
+                }
+                onChange={(e) => {
+                  const v = e.target.value || null;
+                  if (mode === 'public') setPublicBoundaryId(v);
+                  else setOrgBoundaryId(v);
+                }}
+                disabled={geoBoundaries.length === 0}
+                className="mt-1 h-8 w-full rounded-md border border-border bg-surface-1 px-2 text-xs text-ink-1 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">
+                  {geoBoundaries.length === 0
+                    ? 'No boundary items in this org yet'
+                    : 'No scope (unrestricted)'}
+                </option>
+                {geoBoundaries.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.title}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1.5 text-[11px] text-muted">
+                When set, viewers reaching these items via{' '}
+                {mode === 'public' ? 'public access' : 'your organization'}{' '}
+                only see features inside the boundary. Enforced at the API
+                layer.
+              </p>
+            </div>
+          ) : null}
+
           {mode !== 'principal' ? null : (
           <div>
             <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
@@ -1417,7 +1512,14 @@ function BulkShareDialog({
               if (mode === 'principal') {
                 if (picked) void onSubmit(picked, permission, expiresAt);
               } else {
-                void onSubmitAccess(mode);
+                // #80: pass the per-tier boundary along with the
+                // access flip. null when the user picked "no scope"
+                // explicitly clears any prior boundary on the
+                // affected items, matching the per-item picker
+                // semantics.
+                const boundaryId =
+                  mode === 'public' ? publicBoundaryId : orgBoundaryId;
+                void onSubmitAccess(mode, boundaryId);
               }
             }}
             disabled={saving || (mode === 'principal' && !picked)}
