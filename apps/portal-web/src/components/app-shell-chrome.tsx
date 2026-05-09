@@ -111,7 +111,14 @@ export function AppShellChrome({
 
   return (
     <div className="flex min-h-screen bg-surface-0 text-ink-0">
-      <aside className="hidden w-60 shrink-0 border-r border-border bg-surface-1 px-3 py-4 md:block">
+      {/* Sticky left rail so the nav stays in view while a long
+          items page scrolls underneath -- otherwise drag-and-drop
+          to a folder breaks once the rail scrolls off-screen.
+          `sticky top-0 self-start` plus `h-screen overflow-y-auto`
+          on the inner column lets the nav grow taller than the
+          viewport (admin rail with many entries) without breaking
+          the parent flexbox. */}
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 self-start overflow-y-auto border-r border-border bg-surface-1 px-3 py-4 md:block">
         <Link href="/" className="flex items-center gap-2 px-2 py-2">
           <Compass className="h-6 w-6 text-accent" />
           <span className="text-base font-semibold tracking-tight">GratisGIS</span>

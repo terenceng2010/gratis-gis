@@ -222,8 +222,13 @@ export function FolderRail({ folders, activeFolderId }: Props) {
     );
   }
 
+  // Sticky relative to the page scroll so drag-and-drop into a
+  // folder still works when the user has scrolled the items grid.
+  // `top-4` aligns with the page's py-10 padding so the rail
+  // anchors just below the viewport top. `max-h` + scroll keeps a
+  // long folder tree usable without pushing the page height up.
   return (
-    <aside className="w-56 shrink-0">
+    <aside className="sticky top-4 max-h-[calc(100vh-2rem)] w-56 shrink-0 self-start overflow-y-auto">
       <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted">
         <span className="inline-flex items-center gap-1.5 font-medium">
           <FolderIcon className="h-3.5 w-3.5" />
