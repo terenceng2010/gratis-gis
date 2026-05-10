@@ -32,11 +32,14 @@ interface Props {
 }
 
 export function DataLayerSchema({ data }: Props) {
-  // Open by default. The schema is the most useful inspection view
-  // for a data_layer item and used to be tucked behind a closed
-  // disclosure, which made the page feel empty until the user knew
-  // to expand it. The Raw JSON below stays closed by default.
-  const [open, setOpen] = useState(true);
+  // Closed by default (#116 follow-up). On a multi-layer v3 item
+  // (e.g. county parcels with 100+ fields across 2-3 sublayers) the
+  // schema table dominates the page and pushes everything else
+  // (provenance, version history, the editor itself) below the
+  // fold. The header chip still surfaces field/layer counts so the
+  // user knows whether expanding is worth their time. Raw JSON
+  // continues to start closed.
+  const [open, setOpen] = useState(false);
   const [rawOpen, setRawOpen] = useState(false);
   if (!data) return null;
 
