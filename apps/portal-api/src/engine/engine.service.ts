@@ -38,7 +38,19 @@ import {
  *  shapefile ingest runs land in roughly the same wall-clock as
  *  before once the rewire completes.
  */
-const WRITE_BATCH_SIZE = 500;
+// Multi-row INSERT chunk size for writeMany. Each observation row
+// uses 13 placeholders (id, tx_time, valid_from, valid_to, scope,
+// entity, kind, attrs, geom, cell, author_sub, source, parents),
+// and PostgreSQL's wire protocol caps a prepared statement at
+// 65535 parameters. Hard ceiling: 65535 / 13 = ~5040 rows. 2000
+// leaves comfortable headroom and keeps the round-trip count
+// manageable on bulk imports (1.4M features = 700 INSERTs at
+// 2000/chunk vs 2800 at 500/chunk -- 4x fewer client-server
+// round-trips, with no observable per-INSERT slowdown). The
+// outer streaming-ingest batch (5000 in IngestService) is
+// independent of this and governs JS memory + progress-event
+// granularity, not DB load.
+const WRITE_BATCH_SIZE = 2000;
 
 import { PrismaService } from '../prisma/prisma.service.js';
 
