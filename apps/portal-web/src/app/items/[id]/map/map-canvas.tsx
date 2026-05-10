@@ -73,6 +73,19 @@ interface Props {
   /** Fired whenever the user pans, zooms, rotates, or pitches. */
   onCameraChange: (next: Pick<MapData, 'center' | 'zoom' | 'bearing' | 'pitch'>) => void;
   /**
+   * Fired on every viewport-settled event (`moveend`, `zoomend`,
+   * `rotateend`, `pitchend`) with the map's current geographic
+   * bounding box as `[minLng, minLat, maxLng, maxLat]`. Unlike
+   * `onCameraChange` which only fires for user-driven moves (it
+   * filters on `e.originalEvent`), this fires for programmatic
+   * fits + flyTo too, since downstream consumers (the attribute
+   * table's "Records in map extent" toggle, #115 P13) need the
+   * fresh bbox no matter how the camera moved. Optional so the
+   * existing item-detail preview, which never opens the table,
+   * doesn't have to wire a no-op handler.
+   */
+  onViewportChange?: (bbox: [number, number, number, number]) => void;
+  /**
    * Per-layer sets of selected feature ids. The ids are passed
    * directly to MapLibre's setFeatureState as `id`; v3 data-layer
    * sources use promoteId so the id is the row's `_global_id` UUID
@@ -171,6 +184,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     map,
     basemaps = [],
     onCameraChange,
+    onViewportChange,
     selection,
     selectTool,
     suppressPopup = false,
@@ -409,6 +423,14 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     onCameraChangeRef.current = onCameraChange;
   }, [onCameraChange]);
 
+  // Same ref pattern for the viewport-bbox callback. Optional so the
+  // ref may be holding `undefined`; the firing site null-checks
+  // before calling it.
+  const onViewportChangeRef = useRef(onViewportChange);
+  useEffect(() => {
+    onViewportChangeRef.current = onViewportChange;
+  }, [onViewportChange]);
+
   // Resolve the MapLibre style for the current MapData. `map.basemap`
   // is a UUID referencing a basemap item in the org's library. If
   // that item is present, materialize its BasemapData into a MapLibre
@@ -486,6 +508,29 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     m.on('zoomend', markCamera);
     m.on('rotateend', markCamera);
     m.on('pitchend', markCamera);
+
+    /*
+     * Viewport bbox notifier. Fires on every settled camera move
+     * regardless of whether the move came from the user or from
+     * programmatic flyTo/fitBounds, because consumers like the
+     * attribute table's extent-only fetch need the fresh bbox
+     * every time the visible area changes. Idle is the right
+     * MapLibre event for "the world has stopped moving": it
+     * fires after every animation completes and after every
+     * user gesture settles, so we don't have to listen to
+     * moveend / zoomend / rotateend / pitchend separately.
+     */
+    const fireViewport = () => {
+      const cb = onViewportChangeRef.current;
+      if (!cb) return;
+      const b = m.getBounds();
+      cb([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    };
+    m.on('moveend', fireViewport);
+    m.on('zoomend', fireViewport);
+    // Initial fire once the map is ready so consumers don't have
+    // to wait for the user to pan before they get a bbox.
+    m.once('load', fireViewport);
 
     // Register the default icon library. Layer sync waits on this via
     // the `iconsTick` state: each time a batch of icons finishes

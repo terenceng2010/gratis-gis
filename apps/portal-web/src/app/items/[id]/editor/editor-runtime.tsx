@@ -281,6 +281,14 @@ export function EditorRuntime({
   // Track the camera's current zoom so LayerPanel can render the
   // "current view" tick under each layer's scale-range slider.
   const [currentZoom, setCurrentZoom] = useState<number>(initialMapData.zoom);
+  /**
+   * Current map viewport bbox, fed to AttributeTable's "Records in
+   * map extent" toggle (#115 P13). Updated via MapCanvas's
+   * onViewportChange callback on every settled camera move.
+   */
+  const [mapBbox, setMapBbox] = useState<
+    [number, number, number, number] | null
+  >(null);
 
   const canvasRef = useRef<MapCanvasHandle | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -3540,6 +3548,7 @@ export function EditorRuntime({
               setMapData((cur) => ({ ...cur, ...next }));
               if (typeof next.zoom === 'number') setCurrentZoom(next.zoom);
             }}
+            onViewportChange={setMapBbox}
             selection={selection}
             // #312: the Select tool now supports four modes (click,
             // rectangle, polygon, lasso). The toolbar's Select button
@@ -3644,6 +3653,7 @@ export function EditorRuntime({
             canEdit={canEdit}
             selection={selection}
             setSelection={setSelection}
+            mapBbox={mapBbox}
             onClose={() => {
               setTableOpen(false);
               setTableFocusLayerId(null);

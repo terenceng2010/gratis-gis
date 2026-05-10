@@ -688,6 +688,18 @@ export function MapEditor({
     [canEdit],
   );
 
+  /**
+   * Current map viewport bbox, fed downstream to AttributeTable's
+   * "Records in map extent" toggle (#115 P13). The MapCanvas fires
+   * this on every settled camera move (programmatic or user-driven)
+   * so the table can refetch the paged endpoint with the right
+   * envelope on pan/zoom. Null until the canvas has rendered once
+   * and reported its first bbox.
+   */
+  const [mapBbox, setMapBbox] = useState<
+    [number, number, number, number] | null
+  >(null);
+
   async function save() {
     setError(null);
     setSaving(true);
@@ -985,6 +997,7 @@ export function MapEditor({
             map={map}
             basemaps={basemaps}
             onCameraChange={onCameraChange}
+            onViewportChange={setMapBbox}
             selection={selection}
             selectTool={selectTool}
             onSelectionChange={setSelection}
@@ -1032,6 +1045,7 @@ export function MapEditor({
             selection={selection}
             setSelection={setSelection}
             focusLayerId={tableFocusLayerId}
+            mapBbox={mapBbox}
             onClose={() => {
               setTableOpen(false);
               // Clear the focus pick on close so re-opening from

@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
@@ -12,6 +13,7 @@ import {
   History,
   ImageIcon,
   Loader2,
+  Map as MapIcon,
   Paperclip,
   Search,
   Table,
@@ -114,6 +116,19 @@ interface Props {
    * a prop passthrough.
    */
   pickLists?: Record<string, PickListData>;
+  /**
+   * Current map viewport bbox as `[minLng, minLat, maxLng, maxLat]`.
+   * When provided and the active layer is a v3 data_layer sublayer,
+   * the table switches to server-paged mode: it fetches rows from
+   * `/items/:id/layers/:layerKey/features-page` instead of relying
+   * on the parent-supplied `featuresByLayer` cache. Combined with
+   * the "Records in map extent" toggle (default ON), this is what
+   * makes the table usable on big layers like the 1.4M-row parcels
+   * dataset (#115 P13). Null / undefined disables server-paged mode
+   * and the legacy client-side path is used (which works fine for
+   * geojson-url / arcgis-rest / inline sources).
+   */
+  mapBbox?: [number, number, number, number] | null;
 }
 
 type SortDir = 'asc' | 'desc';
@@ -148,6 +163,7 @@ export function AttributeTable({
   editableFieldsByLayer,
   fieldsByLayer,
   pickLists,
+  mapBbox,
 }: Props) {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [lastPicked, setLastPicked] = useState<number | null>(null);
@@ -194,6 +210,54 @@ export function AttributeTable({
   // table opens with everything visible. Resets when the active layer
   // changes (each layer's selection is independent).
   const [showOnlySelected, setShowOnlySelected] = useState(false);
+
+  /**
+   * "Records in map extent" toggle, default ON (#115 P13). When the
+   * active layer is a v3 data_layer sublayer and mapBbox is wired
+   * through from the canvas, the table switches to server-paged
+   * mode and only asks for rows whose geometry intersects the map's
+   * current viewport. This is the elegant primary mechanism for
+   * making big layers (1.4M-row parcels datasets) usable in the
+   * attribute table: the user already has the right rows on screen,
+   * the table just shows them. Off means "all rows in this layer",
+   * capped at 5,000 with a truncation banner.
+   *
+   * Persisted nowhere yet -- per-session is enough for v1. A user
+   * pref would land alongside other per-user table prefs in a
+   * later pass.
+   */
+  const [extentOnly, setExtentOnly] = useState(true);
+
+  /**
+   * Debounced search query for the server-paged fetch. Decoupling
+   * the URL's `q` from every keystroke prevents a request storm
+   * while typing; 300ms is the standard "feels instant but settles
+   * before fetch" delay we use elsewhere (search bar, item list
+   * filter). The legacy client-side path uses the raw `query`
+   * directly because filtering an already-loaded array is free.
+   */
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  /**
+   * Server-paged results. Populated when the active layer is a v3
+   * data_layer sublayer and we hit /features-page; null otherwise.
+   * The shape matches the controller's return: an array of
+   * `{ id, properties }` plus a count + truncation flag. We don't
+   * receive geometry, so zoom-to-selection in this mode falls back
+   * to a no-op (the row is still highlighted on the map via the
+   * shared selection state + MVT setFeatureState path).
+   */
+  const [serverPage, setServerPage] = useState<{
+    features: Array<{ id: string; properties: Record<string, unknown> }>;
+    count: number;
+    truncated: boolean;
+  } | null>(null);
+  const [serverLoading, setServerLoading] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
 
   // Only layers the viewer is allowed to query belong in the table.
   // `effective.query === false` is the server's signal (from the
@@ -327,6 +391,133 @@ export function AttributeTable({
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? null;
 
+  /**
+   * Server-paged mode is on when the active layer is a v3 data_layer
+   * sublayer (has both itemId + layerKey on its source). The /features-
+   * page endpoint only exists for that path; for legacy geojson-url /
+   * arcgis-rest / geojson-inline sources we fall back to the parent-
+   * fed featuresByLayer cache + client-side filter/sort, which works
+   * fine for those source sizes. (#115 P13)
+   */
+  const serverDataLayerSource =
+    activeLayer && activeLayer.source.kind === 'data-layer'
+      ? activeLayer.source
+      : null;
+  const serverItemId = serverDataLayerSource?.itemId ?? null;
+  const serverLayerKey = serverDataLayerSource?.layerKey ?? null;
+  const serverMode = Boolean(serverItemId && serverLayerKey);
+
+  /**
+   * Stable serialization of entityIds for the server-paged fetch.
+   * "Show selected" in server mode maps to the `entityIds` query
+   * param (UUIDs only -- numeric-index keys can't be queried by
+   * entity). Capped at 1000 to match the server-side validation.
+   * Returns null when the selection wouldn't usefully constrain the
+   * query (mode off, empty selection, or no UUID-shaped keys).
+   */
+  const entityIdsForServer = useMemo<string | null>(() => {
+    if (!serverMode || !showOnlySelected) return null;
+    if (activeSelection.size === 0) return null;
+    const ids: string[] = [];
+    for (const k of activeSelection) {
+      if (typeof k === 'string' && UUID_RE.test(k)) {
+        ids.push(k);
+        if (ids.length >= 1000) break;
+      }
+    }
+    return ids.length > 0 ? ids.join(',') : null;
+  }, [serverMode, showOnlySelected, activeSelection]);
+
+  /**
+   * Drive the server-paged fetch. Re-runs whenever any URL input
+   * changes: active layer, debounced query, sort col/dir,
+   * extent-only toggle + bbox (when on), or the entityIds slice
+   * for show-selected. Aborts the previous in-flight request so
+   * a rapid pan or sort flip doesn't paint stale rows.
+   *
+   * The +1-row LIMIT trick on the server returns `truncated:true`
+   * without a separate COUNT scan; we surface that as the banner
+   * above the table.
+   */
+  useEffect(() => {
+    if (!serverMode || !serverItemId || !serverLayerKey) {
+      setServerPage(null);
+      setServerLoading(false);
+      setServerError(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    let abort = false;
+    const params = new URLSearchParams();
+    // Cap mirrors the server clamp -- explicit so a future change
+    // to either side is loud.
+    params.set('limit', '5000');
+    if (extentOnly && mapBbox) {
+      params.set(
+        'bbox',
+        `${mapBbox[0]},${mapBbox[1]},${mapBbox[2]},${mapBbox[3]}`,
+      );
+    }
+    const q = debouncedQuery.trim();
+    if (q.length > 0) params.set('q', q);
+    if (sortBy) {
+      params.set('sort', sortBy);
+      params.set('dir', sortDir);
+    }
+    if (entityIdsForServer) params.set('entityIds', entityIdsForServer);
+    setServerLoading(true);
+    setServerError(null);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/portal/items/${serverItemId}/layers/${serverLayerKey}/features-page?${params.toString()}`,
+          { signal: ctrl.signal },
+        );
+        if (!res.ok) {
+          if (!abort) {
+            setServerPage({ features: [], count: 0, truncated: false });
+            setServerError(`Server returned ${res.status}`);
+          }
+          return;
+        }
+        const data = (await res.json()) as {
+          features: Array<{ id: string; properties: Record<string, unknown> }>;
+          count: number;
+          truncated: boolean;
+        };
+        if (!abort) setServerPage(data);
+      } catch (err) {
+        if (abort) return;
+        if (err instanceof Error && err.name === 'AbortError') return;
+        setServerError(err instanceof Error ? err.message : 'Fetch failed');
+        setServerPage({ features: [], count: 0, truncated: false });
+      } finally {
+        if (!abort) setServerLoading(false);
+      }
+    })();
+    return () => {
+      abort = true;
+      ctrl.abort();
+    };
+  }, [
+    serverMode,
+    serverItemId,
+    serverLayerKey,
+    extentOnly,
+    mapBbox,
+    debouncedQuery,
+    sortBy,
+    sortDir,
+    entityIdsForServer,
+  ]);
+
+  // Drop any cached server page when the layer changes or the table
+  // closes, so the next open shows a clean loading state instead of
+  // briefly flashing the previous layer's rows.
+  useEffect(() => {
+    if (!serverMode) setServerPage(null);
+  }, [serverMode, activeLayerId]);
+
   // #352: AGO-style Attachments column. Surfaces the v3
   // feature_attachment rows for any attribute table sourced from a
   // v3 data_layer sublayer (those carry the data-layer source kind
@@ -391,15 +582,65 @@ export function AttributeTable({
   // default render. Editor-tracking fields are surfaced (formatted)
   // by the "Edit history" toggle; _global_id is a system UUID with
   // no user-facing purpose. Both are HIDDEN_SYSTEM_FIELDS.
+  //
+  // In server-paged mode (#115 P13) the metadata probe might still
+  // be hammering the legacy /geojson endpoint on a 1.4M-row layer
+  // and never settle, so we fall back to deriving the column set
+  // from the first page of /features-page results. That keeps the
+  // attribute table usable while the metadata probe is in flight.
   const activeFields = useMemo(() => {
-    const all =
+    const fromMetadata =
       activeLayer && metadata[activeLayer.id]?.fields.length
         ? metadata[activeLayer.id]!.fields
         : [];
-    return all.filter((f) => !HIDDEN_SYSTEM_FIELDS.has(f));
-  }, [activeLayer, metadata]);
-  const activeFeatures =
-    (activeLayer ? featuresByLayer[activeLayer.id] : null)?.features ?? [];
+    if (fromMetadata.length > 0) {
+      return fromMetadata.filter((f) => !HIDDEN_SYSTEM_FIELDS.has(f));
+    }
+    if (serverMode && serverPage && serverPage.features.length > 0) {
+      const set = new Set<string>();
+      // Sample the first ~50 rows to catch sparse columns without
+      // walking the full 5000-row payload. JSONB-on-postgres rows
+      // tend to share a shape so 50 is overkill, but cheap.
+      const sample = serverPage.features.slice(0, 50);
+      for (const f of sample) {
+        for (const k of Object.keys(f.properties ?? {})) {
+          if (!HIDDEN_SYSTEM_FIELDS.has(k)) set.add(k);
+        }
+      }
+      return [...set].sort();
+    }
+    return [];
+  }, [activeLayer, metadata, serverMode, serverPage]);
+
+  /**
+   * Unified feature array used by every downstream render and
+   * handler. In server mode we wrap `/features-page` rows in a
+   * Feature-shaped object (no geometry, since the endpoint doesn't
+   * ship geometry to keep response size in check on 5k-row pages);
+   * in legacy mode we use the parent-fed cache as before. The
+   * absence of geometry in server mode is handled gracefully by
+   * `bboxOfFeatures` (it skips features without geometry) and by
+   * the row-click auto-zoom (gated below).
+   */
+  const activeFeatures = useMemo<GeoJSON.Feature[]>(() => {
+    if (serverMode) {
+      if (!serverPage) return [];
+      return serverPage.features.map(
+        (f): GeoJSON.Feature => ({
+          type: 'Feature',
+          // Cast satisfies TS without leaking a fake-geometry into
+          // any handler that actually reads it: those callsites
+          // null-check first.
+          geometry: null as unknown as GeoJSON.Geometry,
+          properties: f.properties,
+          id: f.id,
+        }),
+      );
+    }
+    return (
+      (activeLayer ? featuresByLayer[activeLayer.id] : null)?.features ?? []
+    );
+  }, [serverMode, serverPage, activeLayer, featuresByLayer]);
 
   // Field-domain lookup. Returns the configured options when the
   // field for the active layer carries a coded-value or
@@ -458,7 +699,17 @@ export function AttributeTable({
   // exposed on the toolbar; it filters down to rows whose key is
   // in activeSelection, which is the natural follow-up to picking
   // features on the map (especially with thousands of rows).
+  //
+  // In server-paged mode (#115 P13) all three are already applied
+  // server-side -- the bbox, the q, the sort, and the entityIds
+  // for show-selected -- so we hand back identity indexes. This
+  // matches the design choice spelled out in the commit body:
+  // sort is a JS pass over the bounded result set when needed,
+  // but we let the controller do the work when we can.
   const visibleIndexes = useMemo(() => {
+    if (serverMode) {
+      return activeFeatures.map((_, i) => i);
+    }
     const q = query.trim().toLowerCase();
     let idxs = activeFeatures.map((_, i) => i);
     if (showOnlySelected && activeSelection.size > 0) {
@@ -498,7 +749,15 @@ export function AttributeTable({
       });
     }
     return idxs;
-  }, [activeFeatures, query, sortBy, sortDir, showOnlySelected, activeSelection]);
+  }, [
+    serverMode,
+    activeFeatures,
+    query,
+    sortBy,
+    sortDir,
+    showOnlySelected,
+    activeSelection,
+  ]);
 
   function onHeaderClick(field: string) {
     if (sortBy === field) {
@@ -539,8 +798,17 @@ export function AttributeTable({
     // bearing in the Response Viewer where users land data-first.
     // Read directly from `next` (not activeSelection) because the
     // setState above hasn't flushed yet inside this handler.
-    const bbox = bboxOfKeySet(next);
-    if (bbox) onZoomTo(bbox);
+    //
+    // Server-paged mode skips this: /features-page doesn't ship
+    // geometry on the response (would 10-100x payload size on a
+    // 5000-row page), so we can't compute a bbox client-side. The
+    // map already shows the row via the MVT setFeatureState path,
+    // and an explicit zoom-to from the toolbar can hit a dedicated
+    // selection-extent endpoint once that lands. (#115 P13)
+    if (!serverMode) {
+      const bbox = bboxOfKeySet(next);
+      if (bbox) onZoomTo(bbox);
+    }
   }
 
   /**
@@ -782,11 +1050,17 @@ export function AttributeTable({
               // other layers keep their highlight on the map. The
               // show-only-selected and Edit-history toggles, the
               // search query, and the sort are all per-layer view
-              // state and reset.
+              // state and reset. Extent-only flips back to its
+              // default ON so a switch to a big layer doesn't trip
+              // the no-cap fallback the user disabled for a small
+              // layer they were on.
               setQuery('');
               setSortBy(null);
               setLastPicked(null);
               setShowOnlySelected(false);
+              setExtentOnly(true);
+              setServerPage(null);
+              setServerError(null);
             }}
             className="h-7 min-w-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           >
@@ -809,9 +1083,43 @@ export function AttributeTable({
             />
           </label>
           <span className="text-[11px] text-muted">
-            {visibleIndexes.length.toLocaleString()} rows
+            {serverLoading
+              ? 'Loading...'
+              : `${visibleIndexes.length.toLocaleString()} rows`}
+            {serverMode && serverPage?.truncated ? '+' : ''}
             {activeSelection.size > 0 ? ` · ${activeSelection.size} selected` : ''}
           </span>
+          {/* "Records in map extent" toggle (#115 P13). Default ON
+              for data-layer sources so opening the table on a big
+              layer (1.4M parcels) only loads rows the user can see.
+              Toggle off to query all rows -- still capped at 5,000
+              with a truncation banner. Hidden for legacy sources
+              (geojson-url / arcgis-rest / inline) since the client-
+              side path doesn't have a meaningful "in-extent" notion
+              right now. */}
+          {serverMode ? (
+            <button
+              type="button"
+              onClick={() => setExtentOnly((v) => !v)}
+              aria-pressed={extentOnly}
+              disabled={!mapBbox}
+              title={
+                !mapBbox
+                  ? 'Map viewport not available yet'
+                  : extentOnly
+                    ? 'Show all records (capped at 5,000)'
+                    : 'Show only records in the current map extent'
+              }
+              className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                extentOnly
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border bg-surface-1 text-muted hover:text-ink-1'
+              }`}
+            >
+              <MapIcon className="h-3 w-3" />
+              In extent
+            </button>
+          ) : null}
           {/* "Show selected" toggle: when a layer has thousands of
               rows, finding the few selected ones by scrolling is
               painful. This filters visibleIndexes down to just the
@@ -872,9 +1180,13 @@ export function AttributeTable({
         <button
           type="button"
           onClick={zoomToSelection}
-          disabled={activeSelection.size === 0}
+          disabled={activeSelection.size === 0 || serverMode}
           className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-          title="Zoom to selected features"
+          title={
+            serverMode
+              ? 'Zoom to selection is not available for paged data layers yet'
+              : 'Zoom to selected features'
+          }
         >
           <Focus className="h-3.5 w-3.5" />
           Zoom to
@@ -899,15 +1211,36 @@ export function AttributeTable({
         </button>
       </div>
 
+      {serverMode && serverPage?.truncated ? (
+        <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            Showing 5,000+ rows
+            {extentOnly ? ' in this extent' : ''}. Zoom in
+            {extentOnly ? '' : ', enable "In extent",'} or filter to see more.
+          </span>
+        </div>
+      ) : null}
       {!activeLayer ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted">
           No layer selected.
         </div>
+      ) : serverMode && serverLoading && activeFeatures.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading features...
+        </div>
       ) : activeFeatures.length === 0 ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted">
-          {metadata[activeLayer.id]?.loading
-            ? 'Loading features...'
-            : 'No features to show.'}
+          {serverError
+            ? `Failed to load: ${serverError}`
+            : serverMode
+              ? extentOnly
+                ? 'No features in this map extent.'
+                : 'No features to show.'
+              : metadata[activeLayer.id]?.loading
+                ? 'Loading features...'
+                : 'No features to show.'}
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
