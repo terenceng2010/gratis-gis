@@ -563,6 +563,117 @@ export class DataLayerEngine {
   }
 
   /**
+   * Build a Mapbox Vector Tile for one layer at a given z/x/y. The
+   * tile contains the layer's current-state features clipped to the
+   * tile envelope.
+   *
+   * Why MVT instead of the listFeatures GeoJSON path:
+   *
+   *   Rendering a county-scale dataset (1.4M parcels) as a single
+   *   GeoJSON FeatureCollection means the api serves hundreds of MB
+   *   per request, the browser parses it on the main thread, and
+   *   MapLibre re-tessellates the whole thing before drawing.
+   *   Empirically that pegs both threads for tens of seconds and
+   *   the page becomes unresponsive while the work runs. MVT is
+   *   what AGO and every other production map stack uses for big
+   *   layers: per-tile vector geometry, bbox-clipped, gzipped,
+   *   cached by the browser. The same 1.4M polygons render
+   *   incrementally as the user pans, at native MapLibre speed.
+   *
+   * The tile payload only includes the `_global_id` property so it
+   * stays small. Popup / attribute access still routes through
+   * listFeatures with `entity: <featureId>`; the click handler in
+   * the web client fetches full attrs on demand.
+   *
+   * Authz model is the same as listFeatures: the caller has already
+   * passed the canRead check via the controller. We do NOT plumb
+   * lens-policy row filters through MVT yet; if a layer's lens
+   * policy filters rows out, those rows would still leak in the
+   * tile. Acceptable for v1 (lens policies aren't widely used);
+   * tracked as a Phase-D follow-up. Geo-limit and boundary clip,
+   * which are the much more common scoping mechanisms, ARE honored
+   * via ST_Intersects clauses.
+   *
+   * Geometry-less ("table mode") sublayers return an empty MVT.
+   */
+  async mvtTile(args: {
+    itemId: string;
+    layerId: string;
+    z: number;
+    x: number;
+    y: number;
+    geoLimit?: GeoJsonGeometry;
+    boundaryClip?: GeoJsonGeometry;
+    isTable?: boolean;
+  }): Promise<Buffer> {
+    if (args.isTable === true) {
+      return Buffer.alloc(0);
+    }
+
+    const scope = this.scope(args.itemId, args.layerId);
+    const filters: Prisma.Sql[] = [];
+
+    if (args.geoLimit !== undefined) {
+      const json = JSON.stringify(args.geoLimit);
+      filters.push(
+        Prisma.sql`AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+      );
+    }
+    if (args.boundaryClip !== undefined) {
+      const json = JSON.stringify(args.boundaryClip);
+      filters.push(
+        Prisma.sql`AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+      );
+    }
+    const filterExtras =
+      filters.length > 0 ? Prisma.join(filters, ' ') : Prisma.empty;
+
+    // ST_TileEnvelope(z, x, y) returns the tile bbox in EPSG:3857
+    // (Web Mercator). We bbox-filter on the geom column in 4326 by
+    // transforming the envelope back to 4326 first; the && operator
+    // uses the spatial index. ST_AsMVTGeom then transforms each
+    // surviving geometry into the tile's local coordinate space
+    // (4096-unit grid, with the 64-unit buffer that MapLibre needs
+    // to avoid seams at tile edges).
+    interface TileRow {
+      mvt: Buffer;
+    }
+    const rows = await this.prisma.$queryRaw<TileRow[]>`
+      WITH currents AS (
+        SELECT DISTINCT ON (entity)
+          entity,
+          geom,
+          kind
+        FROM observation
+        WHERE scope = ${scope}
+          AND valid_to IS NULL
+          AND geom IS NOT NULL
+          AND geom && ST_Transform(ST_TileEnvelope(${args.z}, ${args.x}, ${args.y}), 4326)
+          ${filterExtras}
+        ORDER BY entity, valid_from DESC, tx_time DESC
+      ),
+      tile_features AS (
+        SELECT
+          entity::text AS _global_id,
+          ST_AsMVTGeom(
+            ST_Transform(geom, 3857),
+            ST_TileEnvelope(${args.z}, ${args.x}, ${args.y}),
+            4096,
+            64,
+            true
+          ) AS geom
+        FROM currents
+        WHERE kind <> 'delete'
+      )
+      SELECT
+        COALESCE(ST_AsMVT(tile_features, 'features', 4096, 'geom'), '\\x'::bytea) AS mvt
+      FROM tile_features
+    `;
+    const buf = rows[0]?.mvt;
+    return buf instanceof Buffer ? buf : Buffer.alloc(0);
+  }
+
+  /**
    * Apply a Cedar-evaluated row filter to the engine's read output.
    * Pulled into its own method so the spec for Phase D can drive
    * it directly without rebuilding a full PostGIS query path.

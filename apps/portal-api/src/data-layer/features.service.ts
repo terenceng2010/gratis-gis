@@ -211,6 +211,42 @@ export class DataLayerFeaturesService {
     return { inserted: written.length };
   }
 
+  /**
+   * Vector-tile bytes for one layer at z/x/y (#115 P12).
+   *
+   * Pure read-through to DataLayerEngine.mvtTile. Kept here so the
+   * controller can stay engine-unaware -- the controller already
+   * speaks to this service for every other read, and the auth /
+   * sharing guards on the route are unchanged.
+   */
+  async mvtTile(
+    itemId: string,
+    layerId: string,
+    z: number,
+    x: number,
+    y: number,
+    opts: {
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+      isTable?: boolean;
+    } = {},
+  ): Promise<Buffer> {
+    return this.dataLayer.mvtTile({
+      itemId,
+      layerId,
+      z,
+      x,
+      y,
+      ...(opts.geoLimit !== undefined
+        ? { geoLimit: opts.geoLimit as GeoJsonGeometry }
+        : {}),
+      ...(opts.boundaryClip !== undefined
+        ? { boundaryClip: opts.boundaryClip as GeoJsonGeometry }
+        : {}),
+      ...(opts.isTable === true ? { isTable: true } : {}),
+    });
+  }
+
   /** Update a feature. Reads the current state through the adapter
    *  (which doubles as the existence + ownership check), merges the
    *  patch with the current values, writes a `kind: 'update'`

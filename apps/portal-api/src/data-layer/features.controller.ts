@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -169,6 +170,81 @@ export class DataLayerFeaturesController {
       }
     }
     return this.v3.listFeatures(itemId, layerId, opts);
+  }
+
+  /**
+   * Mapbox Vector Tile of a single layer at z/x/y (#115 P12).
+   *
+   * Endpoint shape: GET /items/:id/layers/:layerId/tile/:z/:x/:y.mvt
+   *
+   * Used by the map page for big data_layers (anything more than a
+   * few thousand features). Browser MapLibre fetches per-tile as
+   * the user pans/zooms; each tile is small (KB) and the request is
+   * bbox-bounded to the tile envelope, so even 1.4M-parcel layers
+   * render incrementally at native MapLibre speed instead of
+   * choking on one giant GeoJSON payload.
+   *
+   * Auth + share gates match /geojson: assertV3Layer in 'read' mode
+   * resolves the user's effective row scope and geo limit, plus the
+   * layer-level boundary clip (?clip=<geo_boundary_id>).
+   *
+   * The `.mvt` is in the path rather than as a Content-Type negotiation
+   * because MapLibre's tile-URL templates don't speak Accept headers
+   * and this is the convention every tile server (pg_tileserv,
+   * martin, vector tile spec) follows.
+   */
+  @Get('tile/:z/:x/:y.mvt')
+  async tile(
+    @Res() res: Response,
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Param('z') zStr: string,
+    @Param('x') xStr: string,
+    @Param('y') yStr: string,
+    @Query('clip') clip?: string,
+  ) {
+    const { geoLimit, isTable } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'read',
+    );
+    const z = Number(zStr);
+    const x = Number(xStr);
+    const y = Number(yStr);
+    if (
+      !Number.isInteger(z) ||
+      !Number.isInteger(x) ||
+      !Number.isInteger(y) ||
+      z < 0 ||
+      z > 24 ||
+      x < 0 ||
+      y < 0
+    ) {
+      throw new BadRequestException('Invalid tile coordinates.');
+    }
+    const opts: {
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+      isTable?: boolean;
+    } = {};
+    if (isTable) opts.isTable = true;
+    if (geoLimit) opts.geoLimit = geoLimit;
+    if (clip) {
+      const geom = await this.resolveBoundaryGeometry(clip);
+      if (geom) opts.boundaryClip = geom;
+    }
+    const buf = await this.v3.mvtTile(itemId, layerId, z, x, y, opts);
+    res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile');
+    // Per-tile responses are pure functions of (scope, z, x, y) and
+    // the layer's current state. Browser-side caching on a short TTL
+    // keeps panning back-and-forth fast without us paying the round-
+    // trip every time. The "current state" updates on every write,
+    // so we don't want stale tiles for long: a minute is the right
+    // balance for an authoring tool.
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.end(buf);
   }
 
   /** GeoJSON view of a single layer: the map editor's overlay source

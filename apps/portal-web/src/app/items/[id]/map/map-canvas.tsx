@@ -704,8 +704,18 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
+    // #115 P12: data-layer sources now render via MVT vector tiles
+    // (see syncOverlays). MapLibre fetches tiles itself, bbox-bound
+    // to the viewport, so the legacy bbox-fetch-and-setData effect
+    // is a no-op for data-layer. Editor-target layers still need
+    // the GeoJSON + setData path because the editor reads full
+    // attrs from the source feature; they wear the data-layer kind
+    // but the source URL points at /geojson rather than /tile.
     const dataLayers = map.layers.filter(
-      (l) => l.visible && l.source.kind === 'data-layer',
+      (l) =>
+        l.visible &&
+        l.source.kind === 'data-layer' &&
+        l.id.startsWith('editor-target:'),
     );
     for (const id of Object.keys(dataLayerControllers.current)) {
       if (!dataLayers.some((l) => l.id === id)) {
@@ -916,10 +926,54 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       if (!layer || !layer.popup.enabled) return;
       if (layer.effective && layer.effective.query === false) return;
       popupRef.current?.remove();
+
+      // #115 P12: data-layer features now render from MVT, so the
+      // tile only carries `_global_id`. Render the popup with a
+      // brief loading note, then fetch the full feature attrs and
+      // patch the popup HTML in place. For non-data-layer sources
+      // and editor-target layers (which keep the GeoJSON path) the
+      // tile/source already carries every property and the fetch
+      // is unnecessary.
+      const isMvtFeature =
+        layer.source.kind === 'data-layer' &&
+        !layer.id.startsWith('editor-target:');
+      const fallbackProps = hit.properties ?? {};
       popupRef.current = new maplibregl.Popup({ closeOnClick: true, maxWidth: '320px' })
         .setLngLat(e.lngLat)
-        .setHTML(renderPopupHtml(layer, hit.properties ?? {}))
+        .setHTML(
+          isMvtFeature
+            ? '<div class="gg-popup-loading" style="padding:8px;color:#666;font-size:12px;">Loading…</div>'
+            : renderPopupHtml(layer, fallbackProps),
+        )
         .addTo(m!);
+
+      if (isMvtFeature && layer.source.kind === 'data-layer') {
+        const popup = popupRef.current;
+        const featureId =
+          (hit.id as string | number | undefined) ??
+          (fallbackProps as Record<string, unknown>)._global_id;
+        if (typeof featureId !== 'string' && typeof featureId !== 'number') {
+          // No id to look up; show the limited tile-side properties.
+          popup.setHTML(renderPopupHtml(layer, fallbackProps));
+        } else {
+          const dataSource = layer.source;
+          const url = dataSource.layerKey
+            ? `/api/portal/items/${dataSource.itemId}/layers/${encodeURIComponent(dataSource.layerKey)}/features?entity=${encodeURIComponent(String(featureId))}`
+            : `/api/portal/items/${dataSource.itemId}/features?entity=${encodeURIComponent(String(featureId))}`;
+          fetch(url, { cache: 'no-store' })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((fc: { features?: Array<{ properties?: Record<string, unknown> }> } | null) => {
+              if (popupRef.current !== popup) return; // user already closed / moved on
+              const props = fc?.features?.[0]?.properties ?? fallbackProps;
+              popup.setHTML(renderPopupHtml(layer, props));
+            })
+            .catch(() => {
+              if (popupRef.current === popup) {
+                popup.setHTML(renderPopupHtml(layer, fallbackProps));
+              }
+            });
+        }
+      }
     }
 
     m.on('mousemove', onMouseMove);
@@ -1792,13 +1846,62 @@ function syncOverlays(
     const isEditorTarget = layer.id.startsWith('editor-target:');
     const useStableId =
       layer.source.kind === 'data-layer' || isEditorTarget;
-    m.addSource(sourceId, {
-      type: 'geojson',
-      data,
-      ...(useStableId
-        ? { promoteId: '_global_id' }
-        : { generateId: true }),
-    });
+
+    // #115 P12: data-layer sources now render via vector tiles
+    // instead of one giant GeoJSON FeatureCollection. The api
+    // emits MVT bytes per z/x/y and MapLibre handles bbox-bound
+    // tile fetching natively as the user pans. This is the
+    // architectural fix for the "1.4M parcels melt the browser"
+    // problem: each tile is a few KB instead of hundreds of MB
+    // for the whole layer.
+    //
+    // Tradeoff: MVT carries `_global_id` only -- the popup +
+    // renderer attribute access path fetches full attrs via the
+    // /features/:id endpoint on demand. Renderers that read
+    // attribute values (unique-value coloring, etc.) fall back
+    // to the layer's base style on the MVT path; that's a known
+    // limitation tracked for follow-up.
+    //
+    // Editor-target layers stay on the GeoJSON path because the
+    // editor needs full attrs in-feature to drive forms +
+    // table-mode editing.
+    const isMvt =
+      layer.source.kind === 'data-layer' && !isEditorTarget;
+    if (isMvt && layer.source.kind === 'data-layer') {
+      const dataSource = layer.source;
+      const base = dataSource.layerKey
+        ? `/api/portal/items/${dataSource.itemId}/layers/${encodeURIComponent(dataSource.layerKey)}/tile/{z}/{x}/{y}.mvt`
+        : `/api/portal/items/${dataSource.itemId}/tile/{z}/{x}/{y}.mvt`;
+      const effectiveClip =
+        layer.boundaryFilterItemId ?? mapClipBoundaryId ?? null;
+      const tileUrl = effectiveClip
+        ? `${base}?clip=${encodeURIComponent(effectiveClip)}`
+        : base;
+      m.addSource(sourceId, {
+        type: 'vector',
+        tiles: [tileUrl],
+        minzoom: 0,
+        maxzoom: 22,
+        // Vector-source promoteId is keyed by source-layer name.
+        // Our MVT emits one layer named "features", so we attach
+        // the promote rule there.
+        promoteId: { features: '_global_id' },
+      });
+    } else {
+      m.addSource(sourceId, {
+        type: 'geojson',
+        data,
+        ...(useStableId
+          ? { promoteId: '_global_id' }
+          : { generateId: true }),
+      });
+    }
+
+    // Vector sources require 'source-layer' on every paint layer
+    // that draws from them. Geojson sources don't accept the
+    // property at all -- supplying it on a geojson source throws.
+    // We spread sourceLayerProp into every addLayer call below.
+    const sourceLayerProp = isMvt ? { 'source-layer': 'features' as const } : {};
 
     const op = layer.opacity;
     const s = layer.style;
@@ -1893,6 +1996,7 @@ function syncOverlays(
       id: `gg:${layer.id}-fill`,
       type: 'fill',
       source: sourceId,
+      ...sourceLayerProp,
       minzoom,
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
@@ -1913,6 +2017,7 @@ function syncOverlays(
       id: `gg:${layer.id}-poly-line`,
       type: 'line',
       source: sourceId,
+      ...sourceLayerProp,
       minzoom,
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
@@ -1936,6 +2041,7 @@ function syncOverlays(
       id: `gg:${layer.id}-line`,
       type: 'line',
       source: sourceId,
+      ...sourceLayerProp,
       minzoom,
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'LineString'], layer.filter),
@@ -1978,6 +2084,7 @@ function syncOverlays(
         id: `gg:${layer.id}-icon-halo`,
         type: 'circle',
         source: sourceId,
+        ...sourceLayerProp,
         minzoom,
         maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
@@ -1997,6 +2104,7 @@ function syncOverlays(
         id: `gg:${layer.id}-circle`,
         type: 'symbol',
         source: sourceId,
+        ...sourceLayerProp,
         minzoom,
         maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
@@ -2034,6 +2142,7 @@ function syncOverlays(
         id: `gg:${layer.id}-circle`,
         type: 'circle',
         source: sourceId,
+        ...sourceLayerProp,
         minzoom,
         maxzoom,
         filter: combineFilter(['==', ['geometry-type'], 'Point'], layer.filter),
@@ -2070,6 +2179,7 @@ function syncOverlays(
         id: `gg:${layer.id}-label`,
         type: 'symbol',
         source: sourceId,
+        ...sourceLayerProp,
         minzoom: labelsMinzoom,
         maxzoom: labelsMaxzoom,
         layout: {
