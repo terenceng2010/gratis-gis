@@ -125,6 +125,24 @@ export interface HousekeepingBundle {
     indexBytes: number;
     rowEstimate: number;
   }>;
+  /** Top 50 data_layer scopes by approximate observation footprint
+   *  (#115 P10 follow-up). After the engine pivot the per-table
+   *  list is dominated by `observation_p202xxxxx` partitions that
+   *  collapse every layer; this gives the actual per-layer
+   *  breakdown so the admin can see "WV Parcels = 4.8 GB" at a
+   *  glance. Bytes are approximate (prorated from partition size
+   *  by row count); ranking is reliable. */
+  largestDataLayers: Array<{
+    itemId: string;
+    layerId: string;
+    itemTitle: string;
+    itemType: string | null;
+    /** True when the scope's observations exist but the parent
+     *  item row is gone. Pre-cleanup-fix orphans show up here. */
+    orphan: boolean;
+    rows: number;
+    approxBytes: number;
+  }>;
   expiringShares: Array<{
     itemId: string;
     itemTitle: string;
@@ -164,6 +182,7 @@ export function HousekeepingView({ bundle }: Props) {
     expiringUsers,
     storage,
     largestTables,
+    largestDataLayers,
   } = bundle;
 
   // One selection set per table: items and users live in different
@@ -714,10 +733,28 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<Layers className="h-4 w-4" />}
         title="Largest database tables"
         empty="No tables to report."
-        caption="Top 10 user tables in the public schema by total size (heap + indexes). The fs_* tables are the per-layer feature stores for individual data_layer items; form_submission holds every form response. PostGIS reference tables and Prisma bookkeeping are excluded."
+        caption="Top 10 user tables in the public schema by total size (heap + indexes). The observation_p20xxxxx tables are monthly partitions of the engine's observation log; form_submission holds every form response. PostGIS reference tables and Prisma bookkeeping are excluded. For per-layer drill-down see the Storage by data layer card below."
       >
         {largestTables.length === 0 ? null : (
           <LargestTablesTable rows={largestTables} />
+        )}
+      </Section>
+
+      {/* Per-data-layer drill-down inside the observation table
+          (#115 P10 follow-up). The table above lumps every layer
+          together as monthly partitions; this card breaks that
+          out by `data_layer:itemId:layerId` scope. Bytes are
+          approximate (prorated from partition size by row count).
+          Orphans -- scopes whose owning item is gone -- show up
+          tagged so they can be cleaned up. */}
+      <Section
+        icon={<Layers className="h-4 w-4" />}
+        title="Storage by data layer"
+        empty="No data_layer scopes have feature observations yet."
+        caption="Top 50 data layers by approximate observation footprint. The 'approx' bytes column is prorated from the observation table's total size by row share, not measured per row, so it ranks layers reliably but should not be read as a literal disk number. Orphan rows belong to a permanently deleted item and can be cleaned up via the orphan-cleanup migration (#115)."
+      >
+        {largestDataLayers.length === 0 ? null : (
+          <LargestDataLayersTable rows={largestDataLayers} />
         )}
       </Section>
     </div>
@@ -1330,6 +1367,59 @@ function LargestTablesTable({
             </td>
           </tr>
         ))}
+      </tbody>
+    </table>
+  );
+}
+
+function LargestDataLayersTable({
+  rows,
+}: {
+  rows: HousekeepingBundle['largestDataLayers'];
+}) {
+  return (
+    <table className="w-full text-sm">
+      <thead className="bg-surface-2 text-left text-[11px] uppercase tracking-wide text-muted">
+        <tr>
+          <th className="px-4 py-2">Item</th>
+          <th className="px-4 py-2">Layer</th>
+          <th className="px-4 py-2">Approx size</th>
+          <th className="px-4 py-2">Rows</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-border">
+        {rows.map((r) => {
+          const titleNode = r.orphan ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="italic text-muted">{r.itemTitle}</span>
+              <span className="rounded border border-warn/30 bg-warn/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warn">
+                orphan
+              </span>
+            </span>
+          ) : (
+            <Link
+              href={`/items/${r.itemId}`}
+              className="text-ink-0 hover:text-accent"
+            >
+              {r.itemTitle}
+            </Link>
+          );
+          return (
+            <tr key={`${r.itemId}:${r.layerId}`}>
+              <td className="px-4 py-2">{titleNode}</td>
+              <td className="px-4 py-2 font-mono text-[11px] text-muted">
+                {r.layerId}
+              </td>
+              <td className="px-4 py-2 font-mono text-ink-0">
+                {formatBytes(r.approxBytes)}
+                <span className="ml-1 text-[10px] text-muted">approx</span>
+              </td>
+              <td className="px-4 py-2 font-mono text-muted">
+                {r.rows.toLocaleString()}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

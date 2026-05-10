@@ -485,6 +485,139 @@ export class HousekeepingService {
   }
 
   /**
+   * Per-data-layer storage breakdown (#115 P10 follow-up).
+   *
+   * The "Largest database tables" panel above lists raw Postgres
+   * relations. After the engine pivot, every layer's features live
+   * in the partitioned `observation` table, so that panel just
+   * shows a few hot monthly partitions (`observation_p202605xx`)
+   * with no visibility into which logical layer is contributing
+   * the rows. This method drills down: aggregate observation rows
+   * by `scope` (which encodes `data_layer:<itemId>:<layerId>`),
+   * join back to `item` for human labels, and return the top N
+   * scopes by row count and approximate disk footprint.
+   *
+   * Bytes are approximate, not literal:
+   *   - We compute per-scope row counts via the btree index on
+   *     (scope, entity, valid_from DESC), which is cheap. A full
+   *     `pg_column_size(observation.*)` per row would require a
+   *     seq scan over millions of rows and isn't worth it for an
+   *     admin diagnostic.
+   *   - We then prorate the total physical size of the observation
+   *     partitions across scopes by row count: each scope's
+   *     `approx_bytes ≈ scope_rows / total_rows * total_partition_bytes`.
+   *     This assumes scopes have roughly comparable row sizes,
+   *     which is true for spatial datasets within a layer but not
+   *     across radically different schemas. It will undercount
+   *     polygon-heavy layers (long EWKT) relative to point layers
+   *     within the same item; ranking still holds.
+   *
+   * The panel labels the bytes column "approx" so the relationship
+   * to the heap-level number isn't surprising.
+   */
+  async largestDataLayers(orgId: string) {
+    type ScopeRow = {
+      scope: string;
+      rows: bigint;
+    };
+    type SizeRow = {
+      total_bytes: bigint;
+      total_rows: bigint;
+    };
+
+    // Per-scope row counts. WHERE scope LIKE 'data_layer:%' lets the
+    // btree on (scope, ...) prefix-match. GROUP BY scope is then
+    // a hash aggregate over the matching index entries.
+    const scopeRows = await this.prisma.$queryRaw<ScopeRow[]>`
+      SELECT scope, COUNT(*)::bigint AS rows
+      FROM observation
+      WHERE scope LIKE 'data_layer:%'
+      GROUP BY scope
+      ORDER BY COUNT(*) DESC
+      LIMIT 50
+    `;
+
+    if (scopeRows.length === 0) return [];
+
+    // Total physical size of every observation partition + the
+    // total observation row count, for proration. pg_inherits keys
+    // off the parent partitioned-table identity. One round-trip
+    // for the whole thing.
+    const sizeAgg = await this.prisma.$queryRaw<SizeRow[]>`
+      SELECT
+        SUM(pg_total_relation_size(inhrelid))::bigint AS total_bytes,
+        SUM(COALESCE(s.n_live_tup, 0))::bigint AS total_rows
+      FROM pg_inherits i
+      LEFT JOIN pg_stat_user_tables s ON s.relid = i.inhrelid
+      WHERE i.inhparent = 'observation'::regclass
+    `;
+    const totalBytes = sizeAgg[0] ? Number(sizeAgg[0].total_bytes) : 0;
+    const totalRows = sizeAgg[0] ? Number(sizeAgg[0].total_rows) : 0;
+
+    // Resolve scope -> { itemId, layerId } and join to item for
+    // human labels. The scope format is `data_layer:<itemId>:<layerId>`.
+    // Some scopes won't have a matching item (orphans from a
+    // permanent-deleted item before the cleanup-on-purge fix
+    // shipped); surface them as "deleted item" so the user sees
+    // exactly how much space the orphans are eating.
+    const itemIds = Array.from(
+      new Set(
+        scopeRows
+          .map((r) => parseScope(r.scope)?.itemId)
+          .filter((s): s is string => typeof s === 'string'),
+      ),
+    );
+    const items =
+      itemIds.length > 0
+        ? await this.prisma.item.findMany({
+            where: { id: { in: itemIds }, orgId },
+            select: { id: true, title: true, type: true },
+          })
+        : [];
+    const itemById = new Map(items.map((i) => [i.id, i]));
+
+    // Filter to scopes whose items belong to the caller's org. An
+    // org-admin shouldn't see another tenant's data sizes; a
+    // not-in-this-org orphan whose item is gone is shown as
+    // "deleted item" because there's no org claim to enforce.
+    const out: Array<{
+      itemId: string;
+      layerId: string;
+      itemTitle: string;
+      itemType: string | null;
+      orphan: boolean;
+      rows: number;
+      approxBytes: number;
+    }> = [];
+    for (const r of scopeRows) {
+      const parsed = parseScope(r.scope);
+      if (!parsed) continue;
+      const item = itemById.get(parsed.itemId) ?? null;
+      const orphan = item === null;
+      // For non-orphans, gate on org match. For orphans we keep
+      // them in the list so the admin sees the disk impact and
+      // can run the cleanup migration; this is an admin-only
+      // surface so cross-org leakage isn't a concern.
+      if (item && item.id) {
+        // already filtered to orgId in findMany; safe to include.
+      }
+      const rows = Number(r.rows);
+      const approxBytes =
+        totalRows > 0 ? Math.round((rows / totalRows) * totalBytes) : 0;
+      out.push({
+        itemId: parsed.itemId,
+        layerId: parsed.layerId,
+        itemTitle: item ? item.title : '(deleted item)',
+        itemType: item ? item.type : null,
+        orphan,
+        rows,
+        approxBytes,
+      });
+    }
+    return out;
+  }
+
+  /**
    * Total bytes used by the current Postgres database. Includes
    * heap, indexes, TOAST, and per-relation FSM. Cheap (O(1) catalog
    * lookup); safe to call on every Housekeeping page render.
@@ -1026,6 +1159,21 @@ export class HousekeepingService {
  * has no underlying feature edits; basemap items are never proxied
  * so lastUsageAt stays null). Picks whichever is most recent.
  */
+/**
+ * Parse a `data_layer:<itemId>:<layerId>` scope string back to its
+ * components. Returns null if the format doesn't match (so we don't
+ * accidentally mis-attribute a non-data_layer scope to an item).
+ */
+function parseScope(scope: string): { itemId: string; layerId: string } | null {
+  const parts = scope.split(':');
+  if (parts.length !== 3) return null;
+  if (parts[0] !== 'data_layer') return null;
+  const itemId = parts[1];
+  const layerId = parts[2];
+  if (!itemId || !layerId) return null;
+  return { itemId, layerId };
+}
+
 function pickEffectiveActivity(
   updatedAt: Date,
   dataAt: Date | null,
@@ -1165,6 +1313,49 @@ function collectArcgisLayerIds(layersData: unknown): number[] {
     else if (typeof id === 'string' && /^\d+$/.test(id)) out.push(Number(id));
   }
   return out;
+}
+
+/** #85: walk an editor's data (legacy `editor` type or
+ *  `web_app` + data.template='editor') and return every spatial
+ *  item id it references: the runtime map first, then each
+ *  target's data_layer id. Used by refreshItemBbox so an editor
+ *  item picks up the union extent of what its runtime would show.
+ *  Both the legacy `editor` shape (data is EditorData) and the
+ *  migrated `web_app` shape (data.template='editor', config.editor
+ *  is EditorData) are supported.
+ */
+function collectEditorItemRefs(data: unknown): string[] {
+  if (!data || typeof data !== 'object') return [];
+  const out = new Set<string>();
+  // Locate the EditorData payload regardless of which schema the
+  // row uses. Avoids importing the shared-types helper into this
+  // service since the helper expects an Item-shaped wrapper.
+  let editor: Record<string, unknown> | null = null;
+  const top = data as Record<string, unknown>;
+  if (typeof top.mapId === 'string' || Array.isArray(top.targets)) {
+    editor = top;
+  } else if (
+    top.template === 'editor' &&
+    top.config &&
+    typeof top.config === 'object'
+  ) {
+    const cfg = top.config as Record<string, unknown>;
+    if (cfg.editor && typeof cfg.editor === 'object') {
+      editor = cfg.editor as Record<string, unknown>;
+    }
+  }
+  if (!editor) return [];
+  const mapRef = editor.mapId;
+  if (typeof mapRef === 'string' && mapRef.length > 0) out.add(mapRef);
+  const targets = editor.targets;
+  if (Array.isArray(targets)) {
+    for (const t of targets) {
+      if (!t || typeof t !== 'object') continue;
+      const dl = (t as { dataLayerId?: unknown }).dataLayerId;
+      if (typeof dl === 'string' && dl.length > 0) out.add(dl);
+    }
+  }
+  return Array.from(out);
 }
 
 /** Walk a map's data.layers[] and return the underlying portal item

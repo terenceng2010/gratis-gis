@@ -105,6 +105,19 @@ export class HousekeepingController {
   }
 
   /**
+   * Top data_layer scopes by approximate observation footprint
+   * (#115 P10 follow-up). After the engine pivot the per-table
+   * "Largest database tables" list collapses every layer into a
+   * handful of monthly partitions and stops being useful for
+   * "which dataset is eating disk?". This drills down to
+   * data_layer:itemId:layerId.
+   */
+  @Get('largest-data-layers')
+  largestDataLayers(@CurrentUser() user: AuthUser) {
+    return this.housekeeping.largestDataLayers(user.orgId);
+  }
+
+  /**
    * "Soon to expire" share rows (#86). `?within=` is the lookahead
    * window in days; defaults to 30. Already-expired rows are
    * included with `isExpired: true` so the admin can extend or

@@ -41,6 +41,7 @@ export default async function AdminHousekeepingPage() {
       expiringUsers,
       storage,
       largestTables,
+      largestDataLayers,
       config,
       runs,
     ] = await Promise.all([
@@ -68,6 +69,9 @@ export default async function AdminHousekeepingPage() {
       apiFetch<HousekeepingBundle['largestTables']>(
         '/api/admin/housekeeping/largest-tables',
       ),
+      apiFetch<HousekeepingBundle['largestDataLayers']>(
+        '/api/admin/housekeeping/largest-data-layers',
+      ),
       apiFetch<HousekeepingConfig>('/api/admin/housekeeping/config'),
       apiFetch<HousekeepingRun[]>(
         '/api/admin/housekeeping/runs?limit=10',
@@ -82,6 +86,7 @@ export default async function AdminHousekeepingPage() {
       expiringUsers,
       storage,
       largestTables,
+      largestDataLayers,
     };
     scheduleConfig = config;
     scheduleRuns = runs;
