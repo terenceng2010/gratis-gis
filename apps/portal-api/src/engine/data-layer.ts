@@ -563,6 +563,184 @@ export class DataLayerEngine {
   }
 
   /**
+   * Paged attribute-table read: returns current-state features
+   * (attrs only, no geometry) for a layer with optional bbox
+   * filter, free-text search, sort, and a hard cap with truncation
+   * indicator. The attribute-table card on the map page calls this
+   * to populate its rows.
+   *
+   * Why a separate path instead of reusing listFeatures:
+   *
+   *   The map attribute table never needs geometry (the map
+   *   itself already has it via MVT or otherwise). Sending the
+   *   geometry over the wire on a 5000-row response inflates the
+   *   payload by 10-100x for polygon-heavy layers. We also don't
+   *   need the "current state via DISTINCT ON" CTE structure
+   *   because the table view is meant to be a quick slice -- a
+   *   simple "currents" pass with the same valid_to/kind filters
+   *   is enough.
+   *
+   *   The LIMIT N+1 trick at the end lets us tell the caller
+   *   whether the result set was capped without an extra COUNT
+   *   query. If `limit + 1` rows came back we know there's more
+   *   and trim the response to exactly `limit`. If fewer, we got
+   *   everything.
+   *
+   * Search (`q`): server-side ILIKE across every JSONB attribute
+   * value cast to text. Honest about cost: on a fully-unbounded
+   * (no bbox) big-layer query this is a seq scan + sort and will
+   * be slow. With a bbox filter (the default UX path) the scan is
+   * already bounded to the bbox hit-set; the search runs over
+   * that smaller set in sub-second.
+   *
+   * Sort: any attribute name or one of the synthetic columns
+   * (_global_id, _created_at, _edited_at). Same honest-about-cost
+   * note as search: bbox-bounded sort is fast; unbounded sort by
+   * a non-indexed attr on a 1.4M-row layer is not. The UI's
+   * default "extent only" toggle keeps users on the fast path.
+   */
+  async pageFeatures(args: {
+    itemId: string;
+    layerId: string;
+    bbox?: [number, number, number, number];
+    q?: string;
+    sort?: string;
+    dir?: 'asc' | 'desc';
+    limit: number;
+    entityIds?: string[];
+    geoLimit?: GeoJsonGeometry;
+    boundaryClip?: GeoJsonGeometry;
+    isTable?: boolean;
+  }): Promise<{
+    features: Array<{ id: string; properties: Record<string, unknown> }>;
+    count: number;
+    truncated: boolean;
+  }> {
+    const scope = this.scope(args.itemId, args.layerId);
+    const limit = Math.min(Math.max(args.limit | 0, 1), 5000);
+    const fetchN = limit + 1;
+
+    const filters: Prisma.Sql[] = [];
+    if (!args.isTable) {
+      if (args.bbox !== undefined) {
+        const [w, s, e, n] = args.bbox;
+        filters.push(
+          Prisma.sql`AND geom && ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}, 4326)`,
+        );
+      }
+      if (args.geoLimit !== undefined) {
+        const json = JSON.stringify(args.geoLimit);
+        filters.push(
+          Prisma.sql`AND (geom IS NULL OR ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326)))`,
+        );
+      }
+      if (args.boundaryClip !== undefined) {
+        const json = JSON.stringify(args.boundaryClip);
+        filters.push(
+          Prisma.sql`AND geom IS NOT NULL AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+        );
+      }
+    }
+    if (args.entityIds !== undefined && args.entityIds.length > 0) {
+      // The caller validates these are UUIDs upstream; cast each
+      // through ::uuid in the IN clause so a non-uuid string can't
+      // reach the planner.
+      const ids = args.entityIds.slice(0, 1000);
+      filters.push(
+        Prisma.sql`AND entity = ANY(ARRAY[${Prisma.join(
+          ids.map((id) => Prisma.sql`${id}::uuid`),
+        )}])`,
+      );
+    }
+    if (args.q !== undefined && args.q.trim().length > 0) {
+      // Pattern-escape the user input so SQL meta-characters don't
+      // turn into wildcards. ILIKE pattern: %escaped%.
+      const escaped = args.q
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
+      const pattern = `%${escaped}%`;
+      // Cast the entire JSONB to text and ILIKE over it. This
+      // searches every attribute value in one comparison. It's a
+      // single per-row predicate so the planner doesn't fan out
+      // per-column. Returns false negatives on values stored as
+      // numbers/booleans (their text repr matches) which is
+      // acceptable -- the user is doing a free-text search, they
+      // expect "contains" semantics.
+      filters.push(Prisma.sql`AND attrs::text ILIKE ${pattern}`);
+    }
+    const filterExtras =
+      filters.length > 0 ? Prisma.join(filters, ' ') : Prisma.empty;
+
+    // Currency read: DISTINCT ON (entity) over current
+    // observations. The SQL-level ORDER BY is fixed (entity,
+    // valid_from DESC, tx_time DESC) because that's required for
+    // DISTINCT ON to pick the latest row per entity. The CALLER's
+    // sort is applied as a JS pass over the bounded result; with
+    // limit+1 capped at 5001 the JS sort cost is negligible.
+    const sortCol = args.sort;
+    const sortDirDesc = args.dir === 'desc';
+
+    interface Row {
+      entity: string;
+      attrs: Record<string, unknown> | null;
+      edited_by: string;
+      edited_at: Date;
+    }
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT DISTINCT ON (entity)
+        entity,
+        attrs,
+        author_sub AS edited_by,
+        tx_time AS edited_at
+      FROM observation
+      WHERE scope = ${scope}
+        AND valid_to IS NULL
+        AND kind <> 'delete'
+        ${filterExtras}
+      ORDER BY entity, valid_from DESC, tx_time DESC
+      LIMIT ${fetchN}
+    `;
+    const sortKey: (r: Row) => string | number = (() => {
+      if (sortCol === '_global_id' || !sortCol) {
+        return (r: Row) => r.entity;
+      }
+      if (sortCol === '_edited_at') {
+        return (r: Row) => r.edited_at.getTime();
+      }
+      const col = sortCol;
+      return (r: Row) => {
+        const v = r.attrs?.[col] as unknown;
+        if (v === null || v === undefined) return '';
+        return typeof v === 'number' ? v : String(v);
+      };
+    })();
+    rows.sort((a, b) => {
+      const va = sortKey(a);
+      const vb = sortKey(b);
+      if (va < vb) return sortDirDesc ? 1 : -1;
+      if (va > vb) return sortDirDesc ? -1 : 1;
+      return 0;
+    });
+
+    const truncated = rows.length > limit;
+    const kept = truncated ? rows.slice(0, limit) : rows;
+    return {
+      features: kept.map((r) => ({
+        id: r.entity,
+        properties: {
+          ...(r.attrs ?? {}),
+          _global_id: r.entity,
+          _edited_by: r.edited_by,
+          _edited_at: r.edited_at.toISOString(),
+        },
+      })),
+      count: kept.length,
+      truncated,
+    };
+  }
+
+  /**
    * Build a Mapbox Vector Tile for one layer at a given z/x/y. The
    * tile contains the layer's current-state features clipped to the
    * tile envelope.

@@ -218,6 +218,44 @@ export class DataLayerFeaturesService {
   }
 
   /**
+   * Paged attribute-table read (#115 P13). Bbox-bounded by default
+   * with hard cap + truncation flag; sends attrs only, no geometry.
+   */
+  async pageFeatures(
+    itemId: string,
+    layerId: string,
+    args: {
+      bbox?: [number, number, number, number];
+      q?: string;
+      sort?: string;
+      dir?: 'asc' | 'desc';
+      limit?: number;
+      entityIds?: string[];
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+      isTable?: boolean;
+    } = {},
+  ) {
+    return this.dataLayer.pageFeatures({
+      itemId,
+      layerId,
+      ...(args.bbox !== undefined ? { bbox: args.bbox } : {}),
+      ...(args.q !== undefined ? { q: args.q } : {}),
+      ...(args.sort !== undefined ? { sort: args.sort } : {}),
+      ...(args.dir !== undefined ? { dir: args.dir } : {}),
+      limit: args.limit ?? 5000,
+      ...(args.entityIds !== undefined ? { entityIds: args.entityIds } : {}),
+      ...(args.geoLimit !== undefined
+        ? { geoLimit: args.geoLimit as GeoJsonGeometry }
+        : {}),
+      ...(args.boundaryClip !== undefined
+        ? { boundaryClip: args.boundaryClip as GeoJsonGeometry }
+        : {}),
+      ...(args.isTable === true ? { isTable: true } : {}),
+    });
+  }
+
+  /**
    * Vector-tile bytes for one layer at z/x/y (#115 P12).
    *
    * Pure read-through to DataLayerEngine.mvtTile. Kept here so the

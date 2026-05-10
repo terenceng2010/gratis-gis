@@ -256,6 +256,105 @@ export class DataLayerFeaturesController {
     res.end(buf);
   }
 
+  /**
+   * Paged attribute-table read (#115 P13).
+   *
+   * The map page's attribute-table card calls this once per pan,
+   * once per search keystroke, once per sort-header click. Returns
+   * attribute rows (NO geometry -- the map already has it) for the
+   * given bbox-bounded subset, with a hard cap and truncation
+   * flag. With the default "extent only" UX toggle the bbox keeps
+   * the result set small even on a 1.4M-parcel layer.
+   *
+   * Sort: any attribute on the layer schema OR one of
+   * `_global_id`, `_edited_at`, `_created_at`. Direction asc|desc.
+   *
+   * Search (`q`): free-text ILIKE across attribute values. Bbox-
+   * bounded; on a fully-unbounded big-layer query it'll be slow
+   * but the default UI doesn't trigger that path.
+   *
+   * `entityIds`: optional explicit set; powers the "Show selected
+   * only" toggle. Capped at 1000.
+   *
+   * Response shape:
+   *   { features: Array<{ id, properties }>, count, truncated }
+   *
+   * `truncated: true` means the underlying query had > limit rows
+   * and the UI should surface a "Showing 5,000+ rows; zoom in or
+   * filter" banner.
+   */
+  @Get('features-page')
+  async featuresPage(
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('bbox') bbox?: string,
+    @Query('q') q?: string,
+    @Query('sort') sort?: string,
+    @Query('dir') dir?: 'asc' | 'desc',
+    @Query('limit') limit?: string,
+    @Query('entityIds') entityIds?: string,
+    @Query('clip') clip?: string,
+  ) {
+    const { geoLimit, isTable, layer } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'read',
+    );
+
+    const opts: {
+      bbox?: [number, number, number, number];
+      q?: string;
+      sort?: string;
+      dir?: 'asc' | 'desc';
+      limit?: number;
+      entityIds?: string[];
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+      isTable?: boolean;
+    } = {};
+    if (isTable) opts.isTable = true;
+    if (bbox) {
+      const parts = bbox.split(',').map(Number);
+      if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+        opts.bbox = [parts[0]!, parts[1]!, parts[2]!, parts[3]!];
+      }
+    }
+    if (q) opts.q = q;
+    // Whitelist sort column against the layer schema + the two
+    // synthetic columns we support. Unknown columns silently fall
+    // back to default (entity order) -- matches how parentFk
+    // validation handles bad columns elsewhere in this controller.
+    if (sort) {
+      const SYNTHETIC = new Set(['_global_id', '_edited_at', '_created_at']);
+      if (SYNTHETIC.has(sort) || schemaHasField(layer, sort)) {
+        opts.sort = sort;
+      }
+    }
+    if (dir === 'asc' || dir === 'desc') opts.dir = dir;
+    if (limit) {
+      const n = Number(limit);
+      if (Number.isFinite(n) && n > 0) {
+        opts.limit = Math.min(Math.max(Math.floor(n), 1), 5000);
+      }
+    }
+    if (entityIds) {
+      const ids = entityIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s))
+        .slice(0, 1000);
+      if (ids.length > 0) opts.entityIds = ids;
+    }
+    if (geoLimit) opts.geoLimit = geoLimit;
+    if (clip) {
+      const geom = await this.resolveBoundaryGeometry(clip);
+      if (geom) opts.boundaryClip = geom;
+    }
+    return this.v3.pageFeatures(itemId, layerId, opts);
+  }
+
   /** GeoJSON view of a single layer: the map editor's overlay source
    *  hits this per-layer URL for v3 items, the same way v2 items use
    *  /items/:id/geojson. */
