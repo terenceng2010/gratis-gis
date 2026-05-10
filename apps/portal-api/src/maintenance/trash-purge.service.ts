@@ -3,8 +3,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
+import type { ItemType } from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LeaderElectionService } from '../cron/leader-election.service.js';
+import { ItemsService } from '../items/items.service.js';
 
 /**
  * Permanently deletes rows from the trash once their retention window
@@ -28,6 +31,7 @@ export class TrashPurgeService {
     private readonly prisma: PrismaService,
     private readonly cfg: ConfigService,
     private readonly leader: LeaderElectionService,
+    private readonly items: ItemsService,
   ) {}
 
   // 3am UTC keeps it off peak traffic for most deployments. Cron syntax
@@ -57,14 +61,44 @@ export class TrashPurgeService {
 
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
 
-    const [items, groups] = await this.prisma.$transaction([
-      this.prisma.item.deleteMany({ where: { deletedAt: { lt: cutoff } } }),
-      this.prisma.group.deleteMany({ where: { deletedAt: { lt: cutoff } } }),
-    ]);
+    // Per-row teardown so backing-storage cleanup runs (#115 P11).
+    // Pre-fix this used a bulk deleteMany which left observation rows
+    // and MinIO objects orphaned -- the visible symptom was disk usage
+    // not budging after admins emptied the trash. Iterating items is
+    // the slow path; for typical retention windows the candidate set
+    // is tens-to-hundreds of rows, not thousands.
+    const expiredItems = await this.prisma.item.findMany({
+      where: { deletedAt: { lt: cutoff } },
+      select: { id: true, type: true, data: true },
+    });
+    let itemsPurged = 0;
+    for (const it of expiredItems) {
+      try {
+        await this.items.tearDownItemBackingStorage(
+          it.id,
+          it.type as ItemType,
+          it.data,
+        );
+        await this.prisma.item.delete({ where: { id: it.id } });
+        itemsPurged += 1;
+      } catch (err) {
+        // Log + continue. We don't want one bad row to halt the
+        // whole sweep; it'll get another chance on tomorrow's run.
+        this.log.warn(
+          `Trash purge skipped item ${it.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+
+    const groups = await this.prisma.group.deleteMany({
+      where: { deletedAt: { lt: cutoff } },
+    });
 
     this.log.log(
-      `Purge swept trash older than ${retentionDays}d: items=${items.count}, groups=${groups.count}`,
+      `Purge swept trash older than ${retentionDays}d: items=${itemsPurged}, groups=${groups.count}`,
     );
-    return { items: items.count, groups: groups.count };
+    return { items: itemsPurged, groups: groups.count };
   }
 }

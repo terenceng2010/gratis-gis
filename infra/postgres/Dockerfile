@@ -14,4 +14,12 @@ FROM postgis/postgis:16-3.4
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-16-partman \
+        postgresql-16-repack \
     && rm -rf /var/lib/apt/lists/*
+
+# pg_repack rebuilds tables online (no full table lock, just brief
+# trigger-install windows) so we can reclaim disk after big deletes
+# without scheduling downtime. Used after the #115 P11 orphan-
+# cleanup migration to actually shrink the observation partitions.
+# CREATE EXTENSION lives in the migration that first uses it; this
+# Dockerfile just needs to ship the binaries.

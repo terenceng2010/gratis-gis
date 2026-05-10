@@ -16,6 +16,7 @@ import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
 import { PolicyModule } from '../policy/policy.module.js';
+import { StorageModule } from '../storage/storage.module.js';
 
 @Module({
   imports: [
@@ -23,6 +24,10 @@ import { PolicyModule } from '../policy/policy.module.js';
     NotificationsModule,
     DerivedLayersModule,
     PolicyModule,
+    // #115 P11: ItemsService.tearDownItemBackingStorage calls
+    // storage.deleteObject when a file item is permanently
+    // deleted. Without this import the constructor DI fails.
+    StorageModule,
   ],
   controllers: [
     ItemsController,

@@ -35,6 +35,7 @@ import {
 } from '../data-layer/tables.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { DerivedLayersService } from '../derived-layers/derived-layers.service.js';
+import { StorageService } from '../storage/storage.service.js';
 
 // Optional fields use `| undefined` explicitly so class-validator DTOs
 // (which leave unset keys present-as-undefined) can satisfy these types
@@ -116,6 +117,7 @@ export class ItemsService {
     private readonly snapshots: DataSnapshotService,
     private readonly notifications: NotificationsService,
     private readonly derivedLayers: DerivedLayersService,
+    private readonly storage: StorageService,
   ) {}
 
   async list(
@@ -1289,21 +1291,7 @@ export class ItemsService {
     if (!this.sharing.canAdmin(user, item)) {
       throw new ForbiddenException('Only the owner or an org admin can purge an item');
     }
-    // Drop any backing PostGIS tables before removing the item row so
-    // we can still reference the item id to build the table name(s).
-    if (item.type === 'data_layer') {
-      const data = item.data as { version?: number; storageType?: string } | null;
-      // v2 (single table per item) -- legacy storage type, predates
-      // the engine cutover. Still has a real per-item table to drop.
-      if (data?.storageType === 'postgis' && data?.version !== 3) {
-        const tbl = `fs_${id.replace(/-/g, '')}`;
-        await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tbl}"`);
-      }
-      // Phase 2.5: v3 layers no longer have per-layer tables to drop.
-      // The observation-log rows for each scope linger as harmless
-      // orphans after the item row is removed; Phase 2.6's migration
-      // sweeps them out alongside the legacy fs_ tables.
-    }
+    await this.tearDownItemBackingStorage(item.id, item.type, item.data);
     // Cascade folder cleanup: any folder whose data.childItemIds
     // references the now-purged UUID gets that UUID spliced out.
     // Soft-delete deliberately does NOT do this (so trash restoration
@@ -1311,6 +1299,66 @@ export class ItemsService {
     // when the item is gone for good. See docs/folders.md.
     await this.spliceFromFolders(id);
     await this.prisma.item.delete({ where: { id } });
+  }
+
+  /**
+   * Cross-storage cleanup that runs when an item is permanently
+   * deleted. Public so the nightly TrashPurgeService can invoke it
+   * for each row before its bulk deleteMany; until #115 P11 the
+   * TrashPurgeService bypassed this and just deleted the item row,
+   * leaving observations + MinIO objects to accumulate as orphans.
+   *
+   * Handles, by item type:
+   *
+   *   - v3 data_layer: DELETE FROM observation WHERE scope LIKE
+   *     'data_layer:<itemId>:%'. The partition router targets only
+   *     the actual partitions; one statement, no per-layer fan-out.
+   *   - legacy v2 data_layer: DROP the per-item fs_ table.
+   *   - file: storage.deleteObject(storageKey) so the MinIO object
+   *     doesn't leak. Best-effort -- a missing object is fine; we
+   *     swallow ENOENT so a half-uploaded item still purges.
+   *
+   * Other item types (map, web_app, dashboard, ...) carry only
+   * metadata in item.data and don't need backing-storage cleanup.
+   */
+  async tearDownItemBackingStorage(
+    itemId: string,
+    itemType: ItemType,
+    itemData: unknown,
+  ): Promise<void> {
+    if (itemType === 'data_layer') {
+      const data = itemData as
+        | { version?: number; storageType?: string }
+        | null;
+      if (data?.version === 3) {
+        // Engine-pivot layout: features live in `observation` keyed
+        // by scope. Wipe every scope under this item id in one
+        // statement; pg_partman partition routing keeps it cheap.
+        await this.prisma.$executeRaw`
+          DELETE FROM observation
+          WHERE scope LIKE ${`data_layer:${itemId}:%`}
+        `;
+      } else if (data?.storageType === 'postgis') {
+        // v2 legacy: per-item table. Drop it so the storage shrinks
+        // immediately (DROP TABLE returns disk faster than DELETE).
+        const tbl = `fs_${itemId.replace(/-/g, '')}`;
+        await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tbl}"`);
+      }
+    } else if (itemType === 'file') {
+      const data = itemData as { storageKey?: string } | null;
+      const key = data?.storageKey;
+      if (typeof key === 'string' && key.length > 0) {
+        try {
+          await this.storage.deleteObject(key);
+        } catch (err) {
+          // Best-effort. A missing key, MinIO down, or transient
+          // permission error shouldn't block the item-row delete.
+          // The orphan accounting on the storage card surfaces any
+          // leaked object.
+          void err;
+        }
+      }
+    }
   }
 
   /**

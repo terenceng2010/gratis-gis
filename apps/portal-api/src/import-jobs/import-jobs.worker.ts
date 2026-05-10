@@ -263,15 +263,28 @@ export class ImportJobsWorker implements OnModuleInit {
             );
           },
         );
-        // Close the COPY stream and commit. All batches now durable.
-        await writer.end();
-        copyClosed = true;
+        // Important: streamLayerFromPath returns NORMALLY when we
+        // cancel mid-stream (the onBatch callback noops once the
+        // cancelled flag is set, but the GDAL feature pump runs to
+        // completion). If we just unconditionally call writer.end()
+        // here, the COPY transaction COMMITS every row that already
+        // streamed before the cancel -- which was the bug behind
+        // 1.3M ghost rows in observation after multiple cancelled
+        // imports today. Branch on cancelled and call abort()
+        // instead so the partial-load rolls back cleanly.
+        if (cancelled) {
+          await writer.abort();
+          copyClosed = true;
+        } else {
+          await writer.end();
+          copyClosed = true;
+        }
       } finally {
         if (!copyClosed) {
-          // Stream-end didn't run (we threw, or were cancelled mid-
-          // batch). Roll back the open transaction so the connection
-          // returns to the pool clean. Best-effort; abort swallows
-          // its own errors.
+          // Stream-end didn't run (we threw before reaching the
+          // branch above). Roll back the open transaction so the
+          // connection returns to the pool clean. Best-effort;
+          // abort swallows its own errors.
           await writer.abort();
         }
         await writer.close();
