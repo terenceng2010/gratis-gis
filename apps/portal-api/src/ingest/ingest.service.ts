@@ -559,6 +559,21 @@ export class IngestService {
           }
         }
         feature = layer.features.next();
+        // #115 P7: yield the event loop every ~256 features. gdal-
+        // async's first()/next() and featureGeomJson are SYNCHRONOUS
+        // C++ calls -- a tight while-loop over them blocks the Node
+        // thread for seconds at a time on county-scale polygon
+        // datasets, which starves portal-api of cycles for ANY other
+        // request (item GETs, SSR fetches, the import-jobs polling
+        // banner, the cancel button itself). Without this yield the
+        // import is fast but the rest of the app is unusable while
+        // it runs. setImmediate is enough to drain the I/O queue;
+        // setTimeout(0) would over-yield. The 256 cadence keeps the
+        // throughput cost in the single-digit-percent range while
+        // delivering low-double-digit ms event-loop responsiveness.
+        if (processed % 256 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
       }
       if (batch.length > 0) {
         await onBatch(batch, { processed, total });
