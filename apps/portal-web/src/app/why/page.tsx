@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth';
 import {
   ArrowLeft,
   Code2,
+  Coffee,
   Compass,
   Github,
   Heart,
@@ -36,6 +37,16 @@ export default async function WhyPage() {
   const repo =
     process.env.NEXT_PUBLIC_GITHUB_REPO ?? 'palavido-dev/gratis-gis';
   const repoUrl = `https://github.com/${repo}`;
+
+  // Donation links. GitHub Sponsors defaults to the maintainer's
+  // sponsor page (derived from the repo owner); a fork can override
+  // both via env. PayPal has no sensible default, so we only render
+  // the button when the env var is set. This keeps the surface from
+  // showing a broken donate link on first deploy.
+  const sponsorsUrl =
+    process.env.NEXT_PUBLIC_GITHUB_SPONSORS ??
+    `https://github.com/sponsors/${repo.split('/')[0]}`;
+  const paypalUrl = process.env.NEXT_PUBLIC_PAYPAL_DONATE ?? null;
 
   return (
     <div className="flex min-h-screen flex-col bg-surface-0">
@@ -117,6 +128,19 @@ export default async function WhyPage() {
             act on. If you want to actually write code with me, let&rsquo;s
             talk.
           </p>
+          <aside className="rounded-md border border-border bg-surface-1 p-4 text-[14px] text-ink-1">
+            <p className="flex items-start gap-2">
+              <Coffee className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+              <span>
+                Half joking, half not: if GratisGIS just saved your
+                organization thousands of dollars you would have
+                otherwise spent on a commercial GIS system, well, find
+                it in your heart to show a little love. PayPal and
+                GitHub Sponsors links are below. I am not above buying
+                myself a coffee with it.
+              </span>
+            </p>
+          </aside>
           <p className="text-ink-0">
             In the meantime, it is what the name implies: gratis. Free.
           </p>
@@ -162,8 +186,27 @@ export default async function WhyPage() {
             <Code2 className="h-4 w-4" />
             Contribute code
           </a>
+          <a
+            href={sponsorsUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface-1 px-4 text-sm font-medium text-ink-1 hover:bg-surface-2"
+          >
+            <Heart className="h-4 w-4 text-accent" />
+            GitHub Sponsors
+          </a>
+          {paypalUrl ? (
+            <a
+              href={paypalUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface-1 px-4 text-sm font-medium text-ink-1 hover:bg-surface-2"
+            >
+              <Coffee className="h-4 w-4 text-accent" />
+              Buy me a coffee (PayPal)
+            </a>
+          ) : null}
           <span className="inline-flex items-center gap-1.5 text-xs text-muted sm:ml-2">
-            <Heart className="h-3.5 w-3.5 text-accent" />
             Built with care, on my own time.
           </span>
         </section>
