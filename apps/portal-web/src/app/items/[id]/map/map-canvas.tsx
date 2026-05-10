@@ -412,6 +412,25 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       bearing: map.bearing,
       pitch: map.pitch,
       attributionControl: false,
+      // #115 P12: tile fetches (data_layer MVT, future basemap-via-
+      // bff) go through the same-origin /api/portal/ BFF and need
+      // the Keycloak session cookie to authenticate. MapLibre's
+      // tile worker does NOT include credentials by default, so
+      // tile requests come back as 401 silently. transformRequest
+      // is the documented hook to fix this without leaking cookies
+      // to external tile hosts: scope the credentials change to
+      // same-origin URLs only.
+      transformRequest: (url) => {
+        try {
+          const parsed = new URL(url, window.location.origin);
+          if (parsed.origin === window.location.origin) {
+            return { url, credentials: 'include' };
+          }
+        } catch {
+          /* malformed URL; fall through */
+        }
+        return { url };
+      },
     });
     if (!hideNavigationControl) {
       m.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
