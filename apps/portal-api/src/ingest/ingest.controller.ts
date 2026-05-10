@@ -506,19 +506,24 @@ export class IngestController {
       });
       res.end();
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[ingestV3Layer] stream failed for ${itemId}/${layerId}:`,
-        err,
-      );
       const message =
         err instanceof BadRequestException ||
         err instanceof NotFoundException ||
         err instanceof ForbiddenException
           ? err.message
           : err instanceof Error
-            ? err.message
+            ? err.message || err.name || 'Ingest failed.'
             : 'Ingest failed.';
+      // Log the underlying error AND the message we're about to
+      // surface to the client. Earlier we logged just `err`, which
+      // for some gdal-async / native errors prints as the bare
+      // string "Error" with no message and no stack -- making the
+      // failure mode invisible without attaching a debugger.
+      // eslint-disable-next-line no-console
+      console.error(
+        `[ingestV3Layer] stream failed for ${itemId}/${layerId}: ${message}`,
+        err instanceof Error ? err.stack : err,
+      );
       writeEvent({ event: 'error', message });
       res.end();
     }

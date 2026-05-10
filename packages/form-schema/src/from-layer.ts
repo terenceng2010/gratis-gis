@@ -251,6 +251,36 @@ function fieldToQuestion(
   const label = labelOverride ?? f.label ?? humanise(f.name);
   const required = f.nullable === false;
 
+  // Multi-select fields carry an array of pick-list codes; surface
+  // them as select-many. Domain is mandatory at the data_layer level
+  // for multi_select, but we tolerate an absent domain here (e.g. a
+  // half-typed schema) by falling through to the scalar path so the
+  // UI doesn't crash mid-edit.
+  if (f.type === 'multi_select' && f.domain?.type === 'coded-value') {
+    const choices: Choice[] = f.domain.values.map((v) => ({
+      value: String(v.code),
+      label: v.label,
+    }));
+    return {
+      type: 'select-many',
+      id: f.name,
+      label,
+      choices,
+      ...(required ? { required: true } : {}),
+      bindTo: { layerKey, column: f.name },
+    };
+  }
+  if (f.type === 'multi_select' && f.domain?.type === 'coded-value-ref') {
+    return {
+      type: 'select-many',
+      id: f.name,
+      label,
+      choices: [],
+      pickListId: f.domain.pickListItemId,
+      ...(required ? { required: true } : {}),
+      bindTo: { layerKey, column: f.name },
+    };
+  }
   // Coded-value domains override the type mapping: regardless of the
   // underlying field type, a constrained value-set is best surfaced
   // as a select-one. Inline values become embedded choices; pick-list

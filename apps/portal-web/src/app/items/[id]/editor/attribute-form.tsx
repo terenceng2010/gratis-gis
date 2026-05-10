@@ -238,6 +238,127 @@ function FieldRow({
     );
   }
 
+  // multi_select renders as a checkbox group with each option drawn
+  // from the field's domain. The wire shape is an array of codes;
+  // we accept null/undefined/array on read and always emit an array
+  // on write (empty array when nothing is checked, never null, so
+  // downstream code can treat the field as homogeneous). A legacy
+  // CSV string ("a,b,c") gets parsed into ["a","b","c"] for display
+  // -- this lets users edit data imported from AGO without first
+  // having to re-shape it.
+  if (field.type === 'multi_select') {
+    let mOptions: Array<{ code: string | number; label: string }> = [];
+    let mUnresolvedRef = false;
+    if (field.domain?.type === 'coded-value') {
+      mOptions = field.domain.values;
+    } else if (field.domain?.type === 'coded-value-ref') {
+      const list = pickLists?.[field.domain.pickListItemId];
+      if (list) {
+        mOptions = list.entries.map((e) => ({ code: e.code, label: e.label }));
+      } else {
+        mUnresolvedRef = true;
+      }
+    }
+    // Normalize the current value to a Set<string> of selected codes.
+    const selected = new Set<string>(coerceArrayCodes(value));
+    if (mOptions.length > 0) {
+      return (
+        <fieldset className="block text-xs">
+          <legend className="text-ink-1">
+            {label}
+            {required ? <span className="ml-1 text-danger">*</span> : null}
+          </legend>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 rounded-md border border-border bg-surface-1 px-2 py-1.5">
+            {mOptions.map((o) => {
+              const codeStr = String(o.code);
+              const checked = selected.has(codeStr);
+              return (
+                <label
+                  key={codeStr}
+                  className="inline-flex items-center gap-1.5 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const next = new Set(selected);
+                      if (e.target.checked) next.add(codeStr);
+                      else next.delete(codeStr);
+                      // Preserve numeric codes when the inline domain
+                      // declared them as numbers; pick-list refs are
+                      // always strings.
+                      const ordered = mOptions
+                        .filter((opt) => next.has(String(opt.code)))
+                        .map((opt) =>
+                          typeof opt.code === 'number' ? opt.code : String(opt.code),
+                        );
+                      onChange(ordered);
+                    }}
+                    className="h-3.5 w-3.5 rounded border-border"
+                  />
+                  <span>
+                    {o.label}{' '}
+                    <span className="text-muted">({o.code})</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      );
+    }
+    if (mUnresolvedRef) {
+      return (
+        <label className="block text-xs">
+          <span className="text-ink-1">
+            {label}
+            {required ? <span className="ml-1 text-danger">*</span> : null}
+          </span>
+          <input
+            type="text"
+            value={
+              Array.isArray(value)
+                ? value.map((v) => String(v)).join(', ')
+                : value === null || value === undefined
+                  ? ''
+                  : String(value)
+            }
+            onChange={(e) => {
+              // Comma-split fallback -- the pick list is unresolved
+              // so we can't validate codes. Keep what the user types.
+              const parts = e.target.value
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0);
+              onChange(parts);
+            }}
+            className="mt-1 h-9 w-full rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+          />
+          <p className="mt-0.5 text-[11px] text-amber-800">
+            This multi-select references a pick list that could not be
+            loaded. Edit as comma-separated codes; validation is not
+            enforced here.
+          </p>
+        </label>
+      );
+    }
+    // multi_select with no domain at all -- shouldn't happen in
+    // practice (the wizard requires one) but render a disabled
+    // notice rather than a useless empty fieldset.
+    return (
+      <label className="block text-xs">
+        <span className="text-ink-1">
+          {label}
+          {required ? <span className="ml-1 text-danger">*</span> : null}
+        </span>
+        <p className="mt-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-[11px] text-amber-800">
+          This multi-select field has no choices configured. Edit the
+          layer schema to add a pick list.
+        </p>
+      </label>
+    );
+  }
+
   // Domain-backed fields render as a <select>. coded-value carries
   // the value list inline; coded-value-ref points at a pick_list
   // item that the runtime resolved server-side and passed in via
@@ -399,10 +520,43 @@ function defaultFor(f: FeatureField): unknown {
   switch (f.type) {
     case 'boolean':
       return false;
+    case 'multi_select':
+      // Empty array is the right "nothing selected" representation.
+      // Keeps downstream code from having to special-case null.
+      return [];
     case 'number':
     case 'string':
     case 'date':
     default:
       return null;
   }
+}
+
+/**
+ * Coerce a stored multi_select value into an array of code strings
+ * for the checkbox renderer. Accepts:
+ *   - null / undefined -> []
+ *   - array of strings/numbers -> stringified codes (preserves order)
+ *   - legacy comma-separated string ("a, b, c") -> split + trim
+ *   - any other scalar (number, etc.) -> single-element array
+ *
+ * The legacy-CSV branch lets a user open a feature whose multi_select
+ * data was imported from AGO before the schema flipped to native
+ * arrays, edit it, and have the next save land as a real array. No
+ * separate migration pass needed.
+ */
+function coerceArrayCodes(v: unknown): string[] {
+  if (v === null || v === undefined) return [];
+  if (Array.isArray(v)) {
+    return v
+      .filter((x) => x !== null && x !== undefined)
+      .map((x) => String(x));
+  }
+  if (typeof v === 'string') {
+    return v
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+  return [String(v)];
 }

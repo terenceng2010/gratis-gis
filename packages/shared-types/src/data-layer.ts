@@ -18,8 +18,28 @@
 
 import type { ISODateString } from './ids';
 
-/** Authoritative column types. Keep synced with the form-schema package. */
-export type FeatureFieldType = 'string' | 'number' | 'boolean' | 'date';
+/**
+ * Authoritative column types. Keep synced with the form-schema package.
+ *
+ * `multi_select` is the array variant: the field's value is an array of
+ * pick-list codes (e.g. `["salamander", "frog"]`) rather than a single
+ * scalar. Storage stays jsonb so containment queries (`@> '["frog"]'`)
+ * hit the GIN index on observation.attrs without any per-field column
+ * provisioning. A multi_select field MUST carry a `domain` of type
+ * coded-value or coded-value-ref; the codes inside the array reference
+ * that pick list. Renderers, validators, and the form-schema converter
+ * branch on this type to handle the array shape (vs the scalar shape
+ * that `string` / `number` / `boolean` / `date` carry). AGO stores the
+ * same data as a comma-separated string in a single text field; we
+ * keep the native array internally and serialize to CSV at export
+ * boundaries for AGO round-trip (#107 / #108).
+ */
+export type FeatureFieldType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'multi_select';
 
 /**
  * Optional value-constraint on a field, modelled after Esri's "domain":

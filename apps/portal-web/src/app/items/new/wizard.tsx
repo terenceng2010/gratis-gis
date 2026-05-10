@@ -434,6 +434,17 @@ export function NewItemWizard() {
     error?: string;
   }> | null>(null);
 
+  // When the post-create fan-out has at least one layer error, hold
+  // the user on the overlay until they click Continue rather than
+  // auto-navigating to the detail page. Without this, the wizard
+  // flashed the failure banner for a fraction of a second and was
+  // gone -- end users could easily think the import succeeded
+  // (#111). Stores the URL we WOULD have navigated to so the
+  // Continue handler still lands them on the right page.
+  const [ingestNavTarget, setIngestNavTarget] = useState<string | null>(
+    null,
+  );
+
   // #298: basemap draft state. Captured up front so the wizard
   // writes a fully-configured item (kind + URL + WMS layer list)
   // instead of an empty placeholder. The shape mirrors BasemapData;
@@ -1490,19 +1501,28 @@ export function NewItemWizard() {
         // we don't bother with an explicit drop endpoint.
         setPendingFileImports([]);
       }
+      // data_layer still wants the ingest panel front and centre.
+      // arcgis_service no longer needs #configure-arcgis because we baked
+      // the probed config into dataJson above.
+      const anchor = type === 'data_layer' ? '#add-data' : '';
+      const targetUrl = `/items/${saved.id}${anchor}`;
+
       if (ingestErrors.length > 0) {
+        // Don't auto-navigate when any layer's ingest failed. The
+        // user just watched a row flip to red and needs the chance to
+        // read what went wrong before being kicked to the detail page.
+        // Stash the destination on the overlay state and let the user
+        // dismiss with the Continue button (handler in the overlay
+        // JSX) -- that's where the navigation actually fires now.
         setError(
           `Item created, but feature import failed for ${ingestErrors.length} layer(s). ` +
             `Use the per-layer Import button on the detail page to retry. Details: ` +
             ingestErrors.join('; ').slice(0, 500),
         );
+        setIngestNavTarget(targetUrl);
+      } else {
+        startTransition(() => router.push(targetUrl));
       }
-
-      // data_layer still wants the ingest panel front and centre.
-      // arcgis_service no longer needs #configure-arcgis because we baked
-      // the probed config into dataJson above.
-      const anchor = type === 'data_layer' ? '#add-data' : '';
-      startTransition(() => router.push(`/items/${saved.id}${anchor}`));
     } catch (err) {
       // Network failure or thrown error inside fetch - surface it
       // rather than leaving the user staring at a silent form.
@@ -1666,10 +1686,34 @@ export function NewItemWizard() {
                 );
               })}
             </ul>
-            <p className="mt-3 text-[10px] text-muted">
-              Keep this tab open until import completes. You'll be
-              redirected to the item page when finished.
-            </p>
+            {ingestNavTarget ? (
+              <>
+                <p className="mt-3 text-[11px] text-danger">
+                  One or more layers failed to import. The item exists
+                  with the correct schema; click an Import features
+                  button on the detail page to retry per layer.
+                </p>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = ingestNavTarget;
+                      setIngestNavTarget(null);
+                      setIngestProgress(null);
+                      startTransition(() => router.push(target));
+                    }}
+                    className="inline-flex h-8 items-center gap-1 rounded bg-accent px-3 text-xs font-medium text-accent-foreground hover:opacity-90"
+                  >
+                    Continue to item
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="mt-3 text-[10px] text-muted">
+                Keep this tab open until import completes. You'll be
+                redirected to the item page when finished.
+              </p>
+            )}
           </div>
         </div>
       ) : null}

@@ -590,6 +590,15 @@ export function AttributeTable({
       unknown
     >;
     if (typeof props['_global_id'] !== 'string') return false;
+    // multi_select doesn't fit a single-cell inline editor (a checkbox
+    // group needs more vertical space than the cell affords). Disable
+    // inline edit for these fields and let the user edit them through
+    // the row's full attribute form, where AttributeForm renders the
+    // checkbox group properly.
+    const fieldDef = fieldsByLayer?.[activeLayer.id]?.find(
+      (f) => f.name === field,
+    );
+    if (fieldDef?.type === 'multi_select') return false;
     return true;
   }
 
@@ -1399,6 +1408,18 @@ function compareValues(a: unknown, b: unknown): number {
 
 function formatCell(v: unknown, fieldName?: string): string {
   if (v === null || v === undefined) return '';
+  // multi_select values land here as arrays of codes. Render as a
+  // human-friendly comma-separated list rather than the raw
+  // JSON.stringify "[\"a\",\"b\"]" the object branch below would
+  // produce. The full chip-strip with resolved labels is a polish
+  // that lives in the cell renderer; this keeps the row readable
+  // while the editor handles real codes-to-labels.
+  if (Array.isArray(v)) {
+    return v
+      .filter((x) => x !== null && x !== undefined)
+      .map((x) => String(x))
+      .join(', ');
+  }
   if (typeof v === 'object') return JSON.stringify(v);
   // #355: route user-id-shaped fields through the cached name
   // resolver. Any field whose name matches the known

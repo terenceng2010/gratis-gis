@@ -71,6 +71,11 @@ const FIELD_TYPE_OPTIONS: Array<{ value: FeatureFieldType; label: string }> = [
   { value: 'number', label: 'Number' },
   { value: 'boolean', label: 'Yes/No' },
   { value: 'date', label: 'Date' },
+  // Multi-select stores an array of pick-list codes. A pick list is
+  // mandatory to define the legal codes; the wizard auto-prompts for
+  // one when this type is chosen via the same coded-value UI that
+  // single-select strings use.
+  { value: 'multi_select', label: 'Multi-select' },
 ];
 
 const GEOMETRY_OPTIONS: Array<{
@@ -711,10 +716,18 @@ function FieldRow({
       field.domain.type === 'coded-value-ref');
   const isRefDomain =
     field.domain !== undefined && field.domain.type === 'coded-value-ref';
-  const canHaveDomain = field.type === 'string' || field.type === 'number';
+  // multi_select REQUIRES a domain (the array's codes have to come from
+  // somewhere). string and number can optionally carry one; boolean and
+  // date never do. The wizard's type-switch handler seeds a blank
+  // coded-value list when the user picks multi_select so the domain
+  // editor shows immediately.
+  const canHaveDomain =
+    field.type === 'string' ||
+    field.type === 'number' ||
+    field.type === 'multi_select';
   // "Advanced" constraints apply to strings (maxLength) and numbers
-  // (integer/decimal + precision/scale). Boolean and date get nothing
-  // to configure at the storage level.
+  // (integer/decimal + precision/scale). Boolean, date, and
+  // multi_select get nothing to configure at the storage level.
   const canHaveConstraints = field.type === 'string' || field.type === 'number';
   const hasConstraints = field.storage !== undefined && (
     field.storage.maxLength !== undefined ||
@@ -763,7 +776,7 @@ function FieldRow({
             value={field.type}
             onChange={(e) => {
               const nextType = e.target.value as FeatureFieldType;
-              // If switching to a type that can't hold a domain, drop it
+              // Switching to a type that can't hold a domain drops it
               // rather than leaving stale coded values behind.
               if (
                 (nextType === 'boolean' || nextType === 'date') &&
@@ -772,9 +785,24 @@ function FieldRow({
                 const { domain: _d, ...rest } = field;
                 void _d;
                 onChange({ ...(rest as Partial<FeatureField>), type: nextType });
-              } else {
-                onChange({ type: nextType });
+                return;
               }
+              // Switching TO multi_select with no existing domain seeds a
+              // blank coded-value list so the user immediately sees the
+              // domain editor and is nudged to pick a pick list. Without
+              // this they'd land on a multi_select with no codes, which
+              // is a useless field.
+              if (nextType === 'multi_select' && !field.domain) {
+                onChange({
+                  type: nextType,
+                  domain: {
+                    type: 'coded-value',
+                    values: [{ code: '', label: '' }],
+                  },
+                });
+                return;
+              }
+              onChange({ type: nextType });
             }}
             className="h-7 w-full rounded border border-border bg-surface-1 px-1 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           >

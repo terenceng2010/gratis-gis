@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -22,9 +23,14 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import type { Response } from 'express';
 
 import type { ItemShare } from '@prisma/client';
-import { isEditorItem } from '@gratis-gis/shared-types';
+import {
+  isEditorItem,
+  type FeatureField,
+  type FeatureRecord,
+} from '@gratis-gis/shared-types';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -34,6 +40,7 @@ import { EditorPolicyService } from '../items/editor-policy.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { DataLayerFeaturesService } from './features.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { featuresToCsv } from './csv-export.js';
 
 class AppendFeatureDto {
   @IsOptional() @IsString() globalId?: string;
@@ -188,6 +195,89 @@ export class DataLayerFeaturesController {
       parentFk,
       parentId,
     );
+  }
+
+  /**
+   * CSV export of a single layer (#107). Same auth + sharing
+   * gates as /geojson; the only difference is the response shape.
+   *
+   * For multi_select fields, the canonical jsonb-array storage gets
+   * flattened to a comma-joined RFC-4180 quoted cell so downstream
+   * AGO / Survey123 / Excel consumers see the format they expect
+   * without us polluting internal storage with the AGO shape.
+   *
+   * Geometry columns are emitted alongside attributes: lon/lat for
+   * point layers, WKT for everything else, attribute-only for
+   * table-mode sublayers. Suppress all geometry columns with
+   * ?geometry=none.
+   *
+   * Returns Content-Disposition: attachment so the browser saves
+   * the response with a sensible filename instead of trying to
+   * render text/csv inline.
+   */
+  @Get('csv')
+  async csv(
+    @Res() res: Response,
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('bbox') bbox?: string,
+    @Query('at') at?: string,
+    @Query('clip') clip?: string,
+    @Query('parentFk') parentFk?: string,
+    @Query('parentId') parentId?: string,
+    @Query('geometry') geometry?: 'none' | 'wkt' | 'lonlat' | 'auto',
+  ) {
+    const fc = await this.listFeatures(
+      user,
+      itemId,
+      layerId,
+      bbox,
+      at,
+      clip,
+      parentFk,
+      parentId,
+    );
+    // listFeatures returns a FeatureCollection-shaped object. Resolve
+    // the layer's schema separately so the CSV column order matches
+    // the user's declared field order (and labels stay human-friendly).
+    const { layer, isTable } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'read',
+    );
+    const fields: FeatureField[] = (layer?.fields ?? []) as FeatureField[];
+    const features = ((fc as { features?: FeatureRecord[] }).features ??
+      []) as FeatureRecord[];
+
+    // Geometry-mode opts. `auto` (default) lets featuresToCsv pick
+    // lon/lat for points and WKT for everything else; explicit modes
+    // force the column shape. Table-mode sublayers always omit
+    // geometry regardless of the query parameter.
+    const csvOpts: Parameters<typeof featuresToCsv>[2] = {};
+    if (isTable || geometry === 'none') {
+      csvOpts.includeGeometry = false;
+    } else if (geometry === 'wkt') {
+      csvOpts.emitWkt = true;
+      csvOpts.emitLonLat = false;
+    } else if (geometry === 'lonlat') {
+      csvOpts.emitWkt = false;
+      csvOpts.emitLonLat = true;
+    }
+
+    const body = featuresToCsv(features, fields, csvOpts);
+    // The minimal layer shape returned by assertV3Layer doesn't carry
+    // user-facing label/name; use layerId as a stable filename stem.
+    // The browser still picks up Content-Disposition's filename and
+    // the user can rename on save anyway.
+    const filenameStem = layerId.replace(/[^\w.-]+/g, '_');
+    res.setHeader('content-type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'content-disposition',
+      `attachment; filename="${filenameStem}.csv"`,
+    );
+    res.send(body);
   }
 
   /**

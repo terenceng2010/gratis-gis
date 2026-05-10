@@ -527,22 +527,38 @@ export class IngestService {
         properties: Record<string, unknown>;
       }> = [];
       let processed = 0;
+      const isTable = layer.geomType === 100; // wkbNone
 
-      // Index-based walk so we can `await onBatch` between flushes.
-      // gdal-async's forEach is synchronous; doing the same loop with
-      // a manual counter is the only way to yield to the event loop
-      // mid-iteration without spawning a worker.
-      for (let i = 0; i < total; i += 1) {
-        const feature = layer.features.get(i);
-        const geomJson = featureGeomJson(feature, xform);
+      // Cursor walk via first()/next(). gdal-async's
+      // `layer.features.get(i)` looks up by FID, NOT by index --
+      // GDB layers commonly have non-sequential FIDs (e.g. starting
+      // at 1 with deletions creating gaps), so the indexed loop
+      // 404s on the first iteration and tears the stream. The
+      // forEach variant works because it iterates the cursor under
+      // the hood; we drive the same cursor manually so we can yield
+      // to the event loop with `await onBatch` between flushes
+      // without buffering the whole layer in memory.
+      let feature = layer.features.first();
+      while (feature) {
         processed += 1;
-        if (!geomJson) continue;
-        const props: Record<string, unknown> = feature.fields.toObject();
-        batch.push({ geometry: geomJson, properties: props });
-        if (batch.length >= batchSize) {
-          await onBatch(batch, { processed, total });
-          batch = [];
+        const geomJson = isTable ? null : featureGeomJson(feature, xform);
+        // Spatial layer with an undecodable geometry: skip silently
+        // (matches what the legacy non-streaming path did). For
+        // table-mode layers, the absence of geometry is expected and
+        // we still emit the row.
+        const skip = !isTable && !geomJson;
+        if (!skip) {
+          const props: Record<string, unknown> = feature.fields.toObject();
+          batch.push({
+            geometry: isTable ? null : geomJson,
+            properties: props,
+          });
+          if (batch.length >= batchSize) {
+            await onBatch(batch, { processed, total });
+            batch = [];
+          }
         }
+        feature = layer.features.next();
       }
       if (batch.length > 0) {
         await onBatch(batch, { processed, total });
