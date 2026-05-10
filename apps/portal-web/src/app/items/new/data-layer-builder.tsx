@@ -317,9 +317,17 @@ export function DataLayerBuilder({
               <LayerCard
                 layer={layer}
                 spatialLayers={spatialLayers}
-                // Expand the first layer by default, collapse the rest.
-                // Keeps a three-layer service readable without a click.
-                initialOpen={idx === 0 || layers.length <= 3}
+                // Layer rows start collapsed regardless of count. A
+                // 1.4M-feature parcel layer with 19 fields renders
+                // a giant scroll if it's open by default; the user
+                // explicitly expands the layer they want to edit.
+                // Matches the Schema / Version History accordion
+                // pattern elsewhere on the page.
+                initialOpen={false}
+                // idx is unused now but keep the var to avoid a
+                // map-arg-rename diff when we wire something else
+                // here (drag handle, focus management) later.
+                {...(idx >= 0 ? {} : {})}
                 collapseSignal={collapseAllSignal}
                 expandSignal={expandAllSignal}
                 onPatch={(patch) => patchLayer(layer.id, patch)}
@@ -400,19 +408,15 @@ function LayerCard({
 
   return (
     <div className="rounded-md border border-border bg-surface-0">
+      {/* Header row: icon, label, type-badge, remove, expand chevron.
+          Chevron sits on the right edge to match the Schema and
+          Version History accordion blocks elsewhere on the detail
+          page; #116 was about both inconsistent placement (was on
+          the left) and the visual cost of having every layer
+          expanded by default on a multi-layer service. The trash
+          button stays adjacent to the chevron so destructive +
+          structural row controls cluster together. */}
       <div className="flex items-center gap-2 px-3 py-2">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2"
-          aria-label={open ? 'Collapse' : 'Expand'}
-        >
-          {open ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" />
-          )}
-        </button>
         <span className="flex h-6 w-6 items-center justify-center rounded bg-accent/10 text-accent">
           <Icon className="h-3.5 w-3.5" />
         </span>
@@ -444,6 +448,19 @@ function LayerCard({
           aria-label="Remove layer"
         >
           <Trash2 className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2"
+          aria-label={open ? 'Collapse' : 'Expand'}
+          aria-expanded={open}
+        >
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
         </button>
       </div>
 
