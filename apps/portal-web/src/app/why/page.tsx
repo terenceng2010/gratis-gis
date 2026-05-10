@@ -38,15 +38,17 @@ export default async function WhyPage() {
     process.env.NEXT_PUBLIC_GITHUB_REPO ?? 'palavido-dev/gratis-gis';
   const repoUrl = `https://github.com/${repo}`;
 
-  // Donation links. GitHub Sponsors defaults to the maintainer's
-  // sponsor page (derived from the repo owner); a fork can override
-  // both via env. PayPal has no sensible default, so we only render
-  // the button when the env var is set. This keeps the surface from
-  // showing a broken donate link on first deploy.
+  // Donation links. Both default to the canonical upstream
+  // maintainer's handles (same convention as the repo URL above,
+  // which defaults to palavido-dev/gratis-gis). Forks should
+  // override via env so donations don't get misrouted to the
+  // upstream maintainer. Set the env var to an empty string to
+  // hide the button entirely.
   const sponsorsUrl =
     process.env.NEXT_PUBLIC_GITHUB_SPONSORS ??
     `https://github.com/sponsors/${repo.split('/')[0]}`;
-  const paypalUrl = process.env.NEXT_PUBLIC_PAYPAL_DONATE ?? null;
+  const paypalUrl =
+    process.env.NEXT_PUBLIC_PAYPAL_DONATE ?? 'https://paypal.me/palavido';
 
   return (
     <div className="flex min-h-screen flex-col bg-surface-0">
@@ -203,7 +205,7 @@ export default async function WhyPage() {
               className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface-1 px-4 text-sm font-medium text-ink-1 hover:bg-surface-2"
             >
               <Coffee className="h-4 w-4 text-accent" />
-              Buy me a coffee (PayPal)
+              PayPal
             </a>
           ) : null}
           <span className="inline-flex items-center gap-1.5 text-xs text-muted sm:ml-2">
