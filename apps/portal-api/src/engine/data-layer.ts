@@ -648,7 +648,7 @@ export class DataLayerEngine {
         WHERE scope = ${scope}
           AND valid_to IS NULL
           AND geom IS NOT NULL
-          AND geom && ST_Transform(ST_TileEnvelope(${args.z}, ${args.x}, ${args.y}), 4326)
+          AND geom && ST_Transform(ST_TileEnvelope(${args.z}::integer, ${args.x}::integer, ${args.y}::integer), 4326)
           ${filterExtras}
         ORDER BY entity, valid_from DESC, tx_time DESC
       ),
@@ -657,7 +657,7 @@ export class DataLayerEngine {
           entity::text AS _global_id,
           ST_AsMVTGeom(
             ST_Transform(geom, 3857),
-            ST_TileEnvelope(${args.z}, ${args.x}, ${args.y}),
+            ST_TileEnvelope(${args.z}::integer, ${args.x}::integer, ${args.y}::integer),
             4096,
             64,
             true
