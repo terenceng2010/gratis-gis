@@ -227,11 +227,26 @@ export class IngestController {
   }
 
   /**
-   * Per-layer ingest for v3 multi-layer items. Accepts a file + the
-   * optional name of a source layer inside a multi-layer archive
-   * (GDB, shapefile zip with several .shp). Features get bulk-
-   * inserted into the target layer's PostGIS table: which must
-   * already exist (provisioned on item create by ItemsService).
+   * Per-layer ingest for v3 multi-layer items.
+   *
+   * @deprecated #115 P6: superseded by the async import-jobs flow at
+   * `POST /items/:id/layers/:layerId/import-jobs`. The wizard now
+   * creates a job row and navigates immediately; the in-process
+   * ImportJobsWorker drains the queue using the COPY bulk-write
+   * path (5-10x faster than this endpoint) and the detail-page
+   * banner reports progress.
+   *
+   * This endpoint stays for direct API users (curl, scripted
+   * ingests) that want the synchronous NDJSON behavior. Callers
+   * who don't care about the streaming progress events should
+   * migrate to the import-jobs endpoint to pick up the perf
+   * improvements -- this path will not get further perf work.
+   *
+   * Accepts a file + the optional name of a source layer inside a
+   * multi-layer archive (GDB, shapefile zip with several .shp).
+   * Features get bulk-inserted into the target layer's PostGIS
+   * table; which must already exist (provisioned on item create
+   * by ItemsService).
    */
   @Post('items/:id/layers/:layerId/import')
   @UseInterceptors(

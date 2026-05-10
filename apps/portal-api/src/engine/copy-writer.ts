@@ -2,7 +2,7 @@
 import { Pool, type PoolClient } from 'pg';
 import { from as copyFrom } from 'pg-copy-streams';
 
-import { cellForGeometry, uuidv7, type Observation } from '@gratis-gis/engine';
+import { uuidv7, type Observation } from '@gratis-gis/engine';
 
 /**
  * COPY-based bulk writer for the observation table (#115 P3).
@@ -106,7 +106,12 @@ export class CopyWriter {
       throw new Error('CopyWriter.write called before start().');
     }
     const id = obs.id ?? uuidv7();
-    const cell = obs.cell ?? cellForGeometry(obs.geom);
+    // Phase 4 (#115): skip per-row h3-js calls in the bulk-import
+    // path. The cell column is unindexed (observation_cell_idx was
+    // dropped in 20260510180000) and no read path queries it. We
+    // still respect a caller-supplied cell so single-row writes
+    // that already computed it can carry it through.
+    const cell = obs.cell ?? null;
     const cells: string[] = [
       escapeText(id),
       escapeText(obs.txTime?.toISOString() ?? new Date().toISOString()),
