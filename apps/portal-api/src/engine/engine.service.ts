@@ -97,15 +97,7 @@ export class EngineService {
         ${
           geomJson === null
             ? Prisma.sql`NULL`
-            : // ST_Force2D flattens any Z / M dimension the source
-              // geometry brings in. The observation.geom column is
-              // declared as 2D Geometry(Geometry, 4326); inserting a
-              // 3D polygon (typical for GDB exports from elevation-
-              // aware datasets) errors with `Geometry has Z dimension
-              // but column does not`. We do not surface a Z dimension
-              // anywhere in the read path or renderer, so dropping it
-              // on write is lossless from the user's perspective.
-              Prisma.sql`ST_Force2D(ST_GeomFromGeoJSON(${geomJson}::text))`
+            : Prisma.sql`ST_GeomFromGeoJSON(${geomJson}::text)`
         },
         ${obs.cell ?? null},
         ${obs.author.sub},
@@ -169,12 +161,8 @@ export class EngineService {
             `$${base + 2}::timestamptz, $${base + 3}::timestamptz, ` +
             `$${base + 4}, $${base + 5}::uuid, $${base + 6}, ` +
             `$${base + 7}::jsonb, ` +
-            // ST_Force2D drops Z / M dimensions on write so a 3D
-            // source (GDB elevation polygons, KML altitude) lands
-            // cleanly in the 2D observation.geom column. Same
-            // rationale as the single-row write path above.
             `CASE WHEN $${base + 8}::text IS NULL THEN NULL ` +
-            `ELSE ST_Force2D(ST_GeomFromGeoJSON($${base + 8}::text)) END, ` +
+            `ELSE ST_GeomFromGeoJSON($${base + 8}::text) END, ` +
             `$${base + 9}, $${base + 10}, ` +
             `$${base + 11}::jsonb, $${base + 12}::uuid[])`,
         );
