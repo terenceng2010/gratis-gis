@@ -367,8 +367,15 @@ services:
     # Override CMD: same image but boot the worker entry point instead
     # of the http server.
     command: ["node", "dist/worker.main.js"]
+    # The slim node base image doesn't ship procps, so `pgrep`
+    # isn't available. Use a /proc shell test instead: container
+    # PID 1 is the worker after tini exec's it; if /proc/1 has the
+    # right cmdline it's alive. (If the worker process dies, the
+    # container itself exits and `restart: unless-stopped` brings
+    # it right back -- this healthcheck is mostly belt-and-
+    # suspenders.)
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'dist/worker.main.js' >/dev/null"]
+      test: ["CMD-SHELL", "grep -q worker.main.js /proc/1/cmdline"]
       interval: 30s
       timeout: 5s
       retries: 3
