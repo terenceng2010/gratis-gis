@@ -9,20 +9,23 @@ import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 
 import { ImportJobsService } from './import-jobs.service.js';
 import { ImportJobsController } from './import-jobs.controller.js';
-import { ImportJobsWorker } from './import-jobs.worker.js';
 
 /**
- * Async import jobs (#115). Brings together:
+ * Async import jobs HTTP surface (#115).
  *
  *   - the persistence + lifecycle service (ImportJobsService)
  *   - the HTTP surface (ImportJobsController)
- *   - the in-process worker that drains queued jobs
- *     (ImportJobsWorker)
+ *
+ * The actual worker process lives in ImportJobsWorkerModule and
+ * runs in a separate `portal-worker` container (#115 P8 worker
+ * split). Splitting them keeps CPU-bound import work from
+ * starving the api's request thread when a county-scale ingest
+ * is in flight, and lets the worker scale horizontally without
+ * dragging the api with it.
  *
  * Imports IngestModule (for the GDAL streaming reader and the
- * staging service) and the data-layer modules (for the truncate +
- * feature insert + bbox aggregation paths). The worker reuses
- * the existing services rather than duplicating their logic.
+ * staging service) so the controller can probe the staging file
+ * at enqueue time to capture totalFeatures.
  */
 @Module({
   imports: [
@@ -32,7 +35,7 @@ import { ImportJobsWorker } from './import-jobs.worker.js';
     DataLayerFeaturesModule,
     DataLayerTablesModule,
   ],
-  providers: [ImportJobsService, ImportJobsWorker],
+  providers: [ImportJobsService],
   controllers: [ImportJobsController],
   exports: [ImportJobsService],
 })

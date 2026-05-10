@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
 import { DataSnapshotService } from '../items/data-snapshot.service.js';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 
 /**
  * Nightly sweep that drops ItemDataSnapshot rows past their TTL or
@@ -19,12 +20,16 @@ import { DataSnapshotService } from '../items/data-snapshot.service.js';
 export class SnapshotPurgeService {
   private readonly log = new Logger(SnapshotPurgeService.name);
 
-  constructor(private readonly snapshots: DataSnapshotService) {}
+  constructor(
+    private readonly snapshots: DataSnapshotService,
+    private readonly leader: LeaderElectionService,
+  ) {}
 
   // 3:15am UTC, staggered off the trash purge so they don't both wake
   // the DB at the same instant.
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'purge-snapshots' })
   async handleCron() {
+    if (!this.leader.shouldRun()) return;
     const res = await this.snapshots.purge();
     this.log.log(
       `Snapshot purge: removedByAge=${res.removedByAge}, removedByCap=${res.removedByCap}`,

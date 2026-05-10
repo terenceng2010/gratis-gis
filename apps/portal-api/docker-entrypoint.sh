@@ -26,8 +26,20 @@ else
   exit 1
 fi
 
-echo "[entrypoint] applying prisma migrations against $(echo "$DATABASE_URL" | sed -E 's#://[^@]+@#://***@#')"
-/app/node_modules/.bin/prisma migrate deploy --schema=/app/prisma/schema.prisma
+# Migration application is gated by SKIP_MIGRATE so we can run a
+# dedicated one-shot `portal-migrate` service that owns the schema
+# transition while every other container (api replicas, worker)
+# starts past it without racing.
+#
+# Backwards compatible: if SKIP_MIGRATE is unset or any value other
+# than "true", the entrypoint still applies migrations -- mirrors the
+# pre-replicas single-container behavior.
+if [[ "${SKIP_MIGRATE:-}" == "true" ]]; then
+  echo "[entrypoint] SKIP_MIGRATE=true; assuming portal-migrate ran first."
+else
+  echo "[entrypoint] applying prisma migrations against $(echo "$DATABASE_URL" | sed -E 's#://[^@]+@#://***@#')"
+  /app/node_modules/.bin/prisma migrate deploy --schema=/app/prisma/schema.prisma
+fi
 
 echo "[entrypoint] starting: $*"
 exec "$@"

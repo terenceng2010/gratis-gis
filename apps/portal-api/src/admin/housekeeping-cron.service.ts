@@ -7,6 +7,7 @@ import {
   HousekeepingScheduleService,
   type HousekeepingConfig,
 } from './housekeeping-schedule.service.js';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 
 /**
  * Registers the scheduled-housekeeping cron job and keeps it in
@@ -28,15 +29,33 @@ export class HousekeepingCronService implements OnModuleInit {
   constructor(
     private readonly schedule: HousekeepingScheduleService,
     private readonly scheduler: SchedulerRegistry,
+    private readonly leader: LeaderElectionService,
   ) {}
 
   async onModuleInit() {
+    // Multi-replica safety: only the leader registers and runs the
+    // cron. Followers skip registration entirely so the dynamic
+    // SchedulerRegistry cron doesn't fire on every replica. We
+    // re-evaluate on config changes either way; a config change
+    // received by a follower replica is a no-op (apply() short-
+    // circuits below).
+    if (!this.leader.shouldRun()) {
+      this.log.log(
+        'Skipping housekeeping cron registration on this replica (not the cron leader).',
+      );
+      // Subscribe to config changes anyway so a future leader handoff
+      // would pick up the latest config -- safe because apply() also
+      // gates on shouldRun.
+      this.schedule.onConfigChange((next) => this.apply(next));
+      return;
+    }
     const cfg = await this.schedule.getConfig();
     this.apply(cfg);
     this.schedule.onConfigChange((next) => this.apply(next));
   }
 
   private apply(cfg: HousekeepingConfig) {
+    if (!this.leader.shouldRun()) return;
     this.unregister();
 
     if (cfg.scheduleMode === 'off') {

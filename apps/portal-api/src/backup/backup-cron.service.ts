@@ -8,6 +8,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 
 import { BackupService, type BackupConfig } from './backup.service.js';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 
 /**
  * Registers the scheduled backup job and keeps it in sync with the
@@ -28,12 +29,23 @@ export class BackupCronService implements OnModuleInit {
   constructor(
     private readonly backup: BackupService,
     private readonly scheduler: SchedulerRegistry,
+    private readonly leader: LeaderElectionService,
   ) {}
 
   async onModuleInit() {
-    // Load the effective config (DB row merged over env) and
-    // register the job for the first time. Then subscribe so every
-    // subsequent admin save re-applies the schedule.
+    // Multi-replica safety: only the leader registers the cron.
+    // Backups write to the shared portal-api-backups volume, but the
+    // pg_dump process itself is a heavyweight operation we never
+    // want fanned out across replicas. The leader is the single
+    // writer; followers handle download/list traffic and never
+    // generate new archives.
+    if (!this.leader.shouldRun()) {
+      this.log.log(
+        'Skipping backup cron registration on this replica (not the cron leader).',
+      );
+      this.backup.onConfigChange((next) => this.apply(next));
+      return;
+    }
     const cfg = await this.backup.getConfig();
     this.apply(cfg);
     this.backup.onConfigChange((next) => this.apply(next));
@@ -46,6 +58,7 @@ export class BackupCronService implements OnModuleInit {
    * them in the UI and save again without restarting the process.
    */
   private apply(cfg: BackupConfig) {
+    if (!this.leader.shouldRun()) return;
     this.unregister();
 
     if (cfg.scheduleMode === 'off') {

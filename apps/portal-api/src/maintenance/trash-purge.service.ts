@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 
 /**
  * Permanently deletes rows from the trash once their retention window
@@ -26,12 +27,16 @@ export class TrashPurgeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cfg: ConfigService,
+    private readonly leader: LeaderElectionService,
   ) {}
 
   // 3am UTC keeps it off peak traffic for most deployments. Cron syntax
   // from @nestjs/schedule: "second minute hour day-of-month month day-of-week".
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { name: 'purge-trash' })
   async handleCron() {
+    // Multi-replica safety: only the leader runs this. Otherwise N
+    // replicas would each fire deleteMany at 3am.
+    if (!this.leader.shouldRun()) return;
     await this.purgeExpired();
   }
 

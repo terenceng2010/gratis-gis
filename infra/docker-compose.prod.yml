@@ -179,13 +179,53 @@ services:
     networks:
       - gratis-net
 
+  # One-shot migration runner. Runs `prisma migrate deploy` against the
+  # production database, then exits. Other services depend_on this with
+  # `service_completed_successfully` so a fresh deploy applies pending
+  # migrations EXACTLY once (not N times across api replicas + worker).
+  # The image is shared with portal-api/portal-worker so we don't carry
+  # an extra build target.
+  portal-migrate:
+    image: gratis-gis/portal-api:latest
+    container_name: gratis-gis-prod-portal-migrate
+    build:
+      context: ..
+      dockerfile: apps/portal-api/Dockerfile
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
+    # Run prisma migrate deploy and exit. Idempotent: a current DB
+    # no-ops in seconds. The container will be in `exited` state
+    # afterwards, which is what `service_completed_successfully` waits
+    # for.
+    entrypoint: ["/usr/bin/tini", "--"]
+    command:
+      - sh
+      - -c
+      - >
+        /app/node_modules/.bin/prisma generate --schema=/app/prisma/schema.prisma &&
+        /app/node_modules/.bin/prisma migrate deploy --schema=/app/prisma/schema.prisma
+    networks:
+      - gratis-net
+
   portal-api:
     image: gratis-gis/portal-api:latest
-    container_name: gratis-gis-prod-portal-api
+    # NOTE: container_name removed so docker compose can spawn N
+    # replicas (otherwise compose errors out about a name conflict).
+    # Cron leader-election is handled inside the process via PG
+    # advisory lock; whichever replica acquires the lock first runs
+    # the @Cron handlers (BackupCronService, NotificationsWorker
+    # tick, etc.). Followers keep all HTTP routes mapped but skip
+    # cron side effects.
     build:
       context: ..
       dockerfile: apps/portal-api/Dockerfile
     restart: unless-stopped
+    deploy:
+      replicas: 2
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,6 +233,8 @@ services:
         condition: service_started
       minio:
         condition: service_started
+      portal-migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: "4000"
@@ -205,6 +247,14 @@ services:
       # fix is streaming ingest in batches (#103); until that lands,
       # this is the band-aid that keeps Create-item from dying.
       NODE_OPTIONS: --max-old-space-size=4096
+      # Migrations are owned by the portal-migrate one-shot. Skip on
+      # every long-lived process so N replicas + the worker don't all
+      # take the migration lock at boot.
+      SKIP_MIGRATE: "true"
+      # Staging dir lives on a shared docker volume mounted in api +
+      # portal-worker. Without this, the worker can't read files the
+      # api wrote at /ingest/stage time (different container tmpfs).
+      STAGING_DIR: /var/lib/gg-staging
       DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
       # Token issuer side: KEYCLOAK_URL is the public-facing Keycloak
       # base, used both as the JWT issuer prefix and as the JWKS
@@ -256,9 +306,74 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-https://gratisgis.org}
     volumes:
       - portal-api-backups:/app/backups
+      - gg-staging:/var/lib/gg-staging
     networks:
       - gratis-net
-    # No public port. Caddy talks to it as `portal-api:4000`.
+    # No public port. Caddy talks to it as `portal-api:4000` and load-
+    # balances across replicas via Docker DNS round-robin.
+
+  # Async-import worker. Same image as portal-api, different CMD:
+  # bootstraps a Nest standalone application context that loads only
+  # ImportJobsWorkerModule -- no HTTP listener, just the polling loop
+  # that drains the import_job table. CPU-bound import work runs here
+  # so the api never blocks on a county-scale parcel ingest.
+  #
+  # SELECT FOR UPDATE SKIP LOCKED in ImportJobsService.claimNext()
+  # makes N>1 worker replicas safe; today we keep replicas=1 because
+  # one worker per host is plenty for the dataset volumes we see, and
+  # parallel COPY against the same observation table competes for the
+  # GIN attrs pending list flushes anyway.
+  portal-worker:
+    image: gratis-gis/portal-api:latest
+    container_name: gratis-gis-prod-portal-worker
+    build:
+      context: ..
+      dockerfile: apps/portal-api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      minio:
+        condition: service_started
+      portal-migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=4096
+      SKIP_MIGRATE: "true"
+      STAGING_DIR: /var/lib/gg-staging
+      # The worker never runs the cron leader-election lock because
+      # nothing in ImportJobsWorkerModule is @Cron-driven; the import
+      # poll loop is plain setInterval. ENABLE_CRONS=false keeps the
+      # leader-election service from acquiring an extra connection it
+      # doesn't need.
+      ENABLE_CRONS: "false"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
+      KEYCLOAK_URL: https://${AUTH_DOMAIN:-auth.gratisgis.org}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gratis-gis}
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-portal-api-admin}
+      KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?KEYCLOAK_ADMIN_CLIENT_SECRET must be set in .env.prod}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY must be set in .env.prod}
+      MINIO_ENDPOINT: https://${STORAGE_DOMAIN:-storage.gratisgis.org}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${S3_BUCKET:-gratisgis}
+      MINIO_PUBLIC_BASE: https://${STORAGE_DOMAIN:-storage.gratisgis.org}
+      PUBLIC_URL: ${PUBLIC_URL:-https://gratisgis.org}
+    volumes:
+      - gg-staging:/var/lib/gg-staging
+    # Override CMD: same image but boot the worker entry point instead
+    # of the http server.
+    command: ["node", "dist/worker.main.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'dist/worker.main.js' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - gratis-net
 
   portal-web:
     image: gratis-gis/portal-web:latest
@@ -347,6 +462,10 @@ volumes:
   caddy-data:
   caddy-config:
   portal-api-backups:
+  # Shared staging dir between portal-api (writer at /ingest/stage)
+  # and portal-worker (reader at runJob). Without this, files staged
+  # by the api would not be visible to the worker.
+  gg-staging:
 
 networks:
   gratis-net:

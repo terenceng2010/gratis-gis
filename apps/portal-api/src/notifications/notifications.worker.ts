@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { EmailTransport } from './email-transport.js';
 import { NotificationTemplateService } from './notification-template.service.js';
 import { renderNotification, type RenderContext } from './templates.js';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 
 /**
  * Drains the notification queue in batches. Runs on a 30-second
@@ -48,6 +49,7 @@ export class NotificationsWorker {
     private readonly transport: EmailTransport,
     private readonly cfg: ConfigService,
     private readonly templates: NotificationTemplateService,
+    private readonly leader: LeaderElectionService,
   ) {
     this.enabled =
       (this.cfg.get<string>('NOTIFICATIONS_ENABLED') ?? '').toLowerCase() ===
@@ -70,6 +72,11 @@ export class NotificationsWorker {
 
   @Cron(CronExpression.EVERY_30_SECONDS, { name: 'notifications-drain' })
   async tick() {
+    // Multi-replica safety: only the leader drains the queue. Without
+    // this every replica's tick would race the same submitted-rows
+    // window and SMTP-send the same notification N times. The class
+    // doc above flagged this as a future TODO; it's now enforced.
+    if (!this.leader.shouldRun()) return;
     if (!this.enabled) return;
     if (this.busy) {
       // Previous tick still in flight (slow SMTP, big batch). Skip

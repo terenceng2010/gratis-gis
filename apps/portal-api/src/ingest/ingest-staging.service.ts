@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 import {
   mkdir,
   readdir,
@@ -54,15 +55,21 @@ import { randomUUID } from 'node:crypto';
 export class IngestStagingService implements OnModuleInit {
   private readonly log = new Logger(IngestStagingService.name);
 
+  constructor(private readonly leader: LeaderElectionService) {}
+
   /** Stagings expire after this many ms of wall-clock age. */
   private readonly maxAgeMs = 60 * 60 * 1000; // 1h
 
-  /** Root of the staging tree on local disk. Per-process under tmpdir
-   *  so a multi-replica deploy would each see only their own stagings;
-   *  acceptable today because portal-api runs as a single replica and
-   *  staging is short-lived. A future move to MinIO would let us go
-   *  multi-replica without coordinating disk paths. */
-  private readonly root = join(tmpdir(), 'gg-staging');
+  /** Root of the staging tree on disk. Defaults to a tmpdir-rooted
+   *  path; the prod compose overrides it via STAGING_DIR to a named
+   *  volume that's mounted in BOTH portal-api (writer) and portal-
+   *  worker (reader). Without the shared volume the worker would
+   *  ENOENT on every staged file because they live in a different
+   *  container's tmpfs. */
+  private readonly root =
+    process.env.STAGING_DIR && process.env.STAGING_DIR.trim().length > 0
+      ? process.env.STAGING_DIR
+      : join(tmpdir(), 'gg-staging');
 
   async onModuleInit() {
     // Make sure the staging root exists before anybody tries to write
@@ -202,6 +209,11 @@ export class IngestStagingService implements OnModuleInit {
    */
   @Cron(CronExpression.EVERY_30_MINUTES)
   async cleanupStaleScheduled(): Promise<void> {
+    // Multi-replica safety: only the leader sweeps. The staging volume
+    // is shared so any replica's cleanup would scan the same set, but
+    // letting all of them race produces ENOENT noise + duplicate
+    // recursive deletes.
+    if (!this.leader.shouldRun()) return;
     await this.cleanupStaleSync();
   }
 

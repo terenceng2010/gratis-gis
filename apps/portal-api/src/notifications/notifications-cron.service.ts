@@ -6,6 +6,7 @@ import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from './notifications.service.js';
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 
 /**
  * Periodic notification triggers that don't have a natural API
@@ -56,6 +57,7 @@ export class NotificationsCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly leader: LeaderElectionService,
     cfg: ConfigService,
   ) {
     this.enabled =
@@ -74,6 +76,13 @@ export class NotificationsCron {
     name: 'notifications-trigger-sweep',
   })
   async tick() {
+    // Multi-replica safety: only the leader sweeps. Otherwise N
+    // replicas would each pump the same expiring-share + auto-
+    // disable-warning rows into NotificationsService.notify(), and
+    // the JSONB-payload idempotency check has a small race window
+    // where two simultaneous notify() calls would both miss the
+    // existing-row check and double-enqueue.
+    if (!this.leader.shouldRun()) return;
     if (!this.enabled) return;
     await this.sweepExpiringShares();
     await this.sweepExpiredShares();

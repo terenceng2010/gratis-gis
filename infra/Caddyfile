@@ -76,17 +76,52 @@ www.{$PORTAL_DOMAIN} {
     handle /api/geocode/* {
         reverse_proxy portal-web:3000
     }
+    # portal-api runs as N replicas (deploy.replicas in
+    # docker-compose.prod.yml). `dynamic a` re-resolves the DNS A
+    # record every 30s and round-robins across every IP that comes
+    # back, so adding/removing replicas takes effect within the
+    # refresh window without a Caddy restart. With a static
+    # `reverse_proxy portal-api:4000`, Caddy resolves once at startup
+    # and pins to whichever replica it saw first; this avoided that.
     handle /api/* {
-        reverse_proxy portal-api:4000
+        reverse_proxy {
+            dynamic a {
+                name portal-api
+                port 4000
+                refresh 30s
+            }
+            lb_policy round_robin
+        }
     }
     handle /docs {
-        reverse_proxy portal-api:4000
+        reverse_proxy {
+            dynamic a {
+                name portal-api
+                port 4000
+                refresh 30s
+            }
+            lb_policy round_robin
+        }
     }
     handle /docs/* {
-        reverse_proxy portal-api:4000
+        reverse_proxy {
+            dynamic a {
+                name portal-api
+                port 4000
+                refresh 30s
+            }
+            lb_policy round_robin
+        }
     }
     handle /health {
-        reverse_proxy portal-api:4000
+        reverse_proxy {
+            dynamic a {
+                name portal-api
+                port 4000
+                refresh 30s
+            }
+            lb_policy round_robin
+        }
     }
 
     # Everything else: the Next.js portal.
