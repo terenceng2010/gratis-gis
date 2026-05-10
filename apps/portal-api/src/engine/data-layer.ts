@@ -307,6 +307,44 @@ export class DataLayerEngine {
   }
 
   /**
+   * COPY-based bulk variant of writeFeaturesCreate. Same input
+   * shape, same output shape; the difference is the path the
+   * observations take to the database.
+   *
+   * The caller hands in a started CopyWriter so one transaction
+   * can span many batches (cheaper than one transaction per
+   * batch). Use only for the async-import-job worker -- online
+   * single-row writes still go through writeFeaturesCreate so
+   * they pick up validation, derived-layer cache invalidation,
+   * and the regular insert path.
+   */
+  async copyFeaturesCreate(
+    inputs: CreateFeatureArgs[],
+    writer: import('./copy-writer.js').CopyWriter,
+  ): Promise<Array<{ globalId: string; observationId: string }>> {
+    if (inputs.length === 0) return [];
+
+    const observations: Observation[] = inputs.map((args) => ({
+      scope: this.scope(args.itemId, args.layerId),
+      entity: args.globalId ?? uuidv7(),
+      kind: 'create',
+      validFrom: new Date(),
+      validTo: null,
+      attrs: args.properties ?? null,
+      geom: args.geometry ?? null,
+      author: args.principal,
+      source: args.source ?? DEFAULT_SOURCE,
+      parents: [],
+    }));
+
+    const written = await this.engine.copyMany(observations, writer);
+    return written.map((obs) => ({
+      globalId: obs.entity,
+      observationId: requireId(obs.id),
+    }));
+  }
+
+  /**
    * Append a `kind: 'update'` observation for an existing entity.
    * The latest observation per entity is what the read path returns,
    * so writing a new observation is enough; we never mutate prior

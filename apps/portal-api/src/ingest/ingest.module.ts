@@ -20,5 +20,10 @@ import { IngestStagingService } from './ingest-staging.service.js';
   ],
   providers: [IngestService, IngestStagingService],
   controllers: [IngestController],
+  // Both IngestService (GDAL probe + stream) and IngestStagingService
+  // (the /tmp/gg-staging/<id>/ store) are reused by ImportJobsModule
+  // and ImportJobsController -- export them so DI can resolve through
+  // the module boundary instead of constructing fresh instances.
+  exports: [IngestService, IngestStagingService],
 })
 export class IngestModule {}

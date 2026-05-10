@@ -12,6 +12,7 @@ import {
 } from '../data-layer/tables.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import { CopyWriter } from '../engine/copy-writer.js';
 
 /**
  * In-process worker for ImportJob rows (#115).
@@ -213,33 +214,71 @@ export class ImportJobsWorker implements OnModuleInit {
       // sees the import stop within seconds.
       let cancelled = false;
 
-      const meta = await this.ingest.streamLayerFromPath(
-        staged.filePath,
-        job.sourceLayerName,
-        async (batch, progress) => {
-          if (cancelled) return;
-          if (await this.jobs.isCancelled(job.id)) {
-            cancelled = true;
-            return;
-          }
-          const filtered = batch.map((b) => ({
-            geometry: b.geometry,
-            properties: filterProps(b.properties),
-          }));
-          const { inserted } = await this.dataLayerFeatures.insertFeatures(
-            job.itemId,
-            job.layerId,
-            filtered,
-            author,
-          );
-          totalInserted += inserted;
-          await this.jobs.updateProgress(
-            job.id,
-            progress.processed,
-            totalInserted,
-          );
-        },
-      );
+      // Open one COPY transaction for the whole import. PostgreSQL's
+      // COPY FROM STDIN is the bulk-load wire protocol -- 5-10x
+      // faster than batched multi-row INSERTs because the server
+      // skips per-row SQL parsing and parameter binding. We run
+      // SET LOCAL synchronous_commit=off inside the transaction so
+      // a re-runnable bulk import doesn't pay an fsync per batch
+      // commit. The writer is closed cleanly on success and
+      // aborted on any throw or cancel so a partial run never
+      // stays half-written.
+      const databaseUrl = process.env.DATABASE_URL;
+      if (!databaseUrl) {
+        throw new Error('DATABASE_URL is not set; COPY ingest cannot start.');
+      }
+      const writer = new CopyWriter(databaseUrl);
+      await writer.start();
+      let copyClosed = false;
+      let meta: Awaited<
+        ReturnType<IngestService['streamLayerFromPath']>
+      >;
+      try {
+        meta = await this.ingest.streamLayerFromPath(
+          staged.filePath,
+          job.sourceLayerName,
+          async (batch, progress) => {
+            if (cancelled) return;
+            if (await this.jobs.isCancelled(job.id)) {
+              cancelled = true;
+              return;
+            }
+            const filtered = batch.map((b) => ({
+              geometry: b.geometry,
+              properties: filterProps(b.properties),
+            }));
+            const { inserted } =
+              await this.dataLayerFeatures.bulkInsertFeatures(
+                job.itemId,
+                job.layerId,
+                filtered,
+                author,
+                writer,
+              );
+            totalInserted += inserted;
+            await this.jobs.updateProgress(
+              job.id,
+              progress.processed,
+              totalInserted,
+            );
+          },
+        );
+        // Close the COPY stream and commit. All batches now durable.
+        await writer.end();
+        copyClosed = true;
+      } finally {
+        if (!copyClosed) {
+          // Stream-end didn't run (we threw, or were cancelled mid-
+          // batch). Roll back the open transaction so the connection
+          // returns to the pool clean. Best-effort; abort swallows
+          // its own errors.
+          await writer.abort();
+        }
+        await writer.close();
+      }
+      lastDriver = meta.driver;
+      lastLayerName = meta.layerName;
+      lastSourceSrs = meta.sourceSrs;
       lastDriver = meta.driver;
       lastLayerName = meta.layerName;
       lastSourceSrs = meta.sourceSrs;
