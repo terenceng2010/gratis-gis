@@ -121,6 +121,7 @@ import { DeleteItemButton } from './delete-button';
 import { ReassignOwnerButton } from './reassign-owner-button';
 import { MapEditor } from './map/map-editor';
 import { DataLayerEditor } from './data-layer/editor';
+import { ImportJobsBanner } from './import-jobs-banner';
 import { DataLayerV3SchemaEditor } from './data-layer/v3-schema-editor';
 import { ArcgisServiceEditor } from './arcgis-service/editor';
 import { PickListEditor } from './pick-list/editor';
@@ -542,6 +543,12 @@ export default async function ItemDetailPage({ params }: Props) {
         </section>
       ) : item.type === 'data_layer' ? (
         <>
+          {/* #115: live banner for async import jobs. Self-hides when
+              there's nothing to show; polls every 2.5s while jobs are
+              active and triggers router.refresh() once the queue
+              drains so the SSR feature counts re-render with the
+              freshly-imported rows. */}
+          <ImportJobsBanner itemId={item.id} />
           {/* Provenance panel runs above the schema editor so 'where
               did this come from?' is answered before 'here's the
               field list.' Silent when the item has no source block

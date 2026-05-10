@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   useTransition,
-  type ReactNode,
 } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -24,11 +23,9 @@ import {
   Globe2,
   LayoutDashboard,
   Layers,
-  Clock,
   ListChecks,
   Loader2,
   Lock,
-  XCircle,
   Map as MapIcon,
   PencilRuler,
   Plug,
@@ -418,29 +415,13 @@ export function NewItemWizard() {
     PendingFileImport[]
   >([]);
 
-  // Per-layer ingest progress, surfaced as a modal overlay so the
-  // user sees something happening during the post-create fan-out.
-  // Without this they stare at a spinning Create-item button for
-  // potentially several minutes on a 500 MB GDB and assume the
-  // wizard hung. Null = no fan-out in flight; an array = in-flight
-  // or just-completed (cleared on navigation).
-  const [ingestProgress, setIngestProgress] = useState<Array<{
-    layerId: string;
-    layerLabel: string;
-    sourceLayerName: string;
-    expectedFeatureCount: number;
-    status: 'pending' | 'running' | 'done' | 'error';
-    insertedCount?: number;
-    error?: string;
-  }> | null>(null);
-
-  // When the post-create fan-out has at least one layer error, hold
-  // the user on the overlay until they click Continue rather than
-  // auto-navigating to the detail page. Without this, the wizard
-  // flashed the failure banner for a fraction of a second and was
-  // gone -- end users could easily think the import succeeded
-  // (#111). Stores the URL we WOULD have navigated to so the
-  // Continue handler still lands them on the right page.
+  // #115: when one or more per-layer import-job enqueues fail, hold
+  // the user on the wizard so they can read the inline error banner
+  // before navigating. The actual import is async (worker drains the
+  // import_job table; detail-page banner reports progress); only the
+  // ENQUEUE failures surface here. Stores the URL we WOULD have
+  // navigated to so the inline Continue button lands them on the
+  // right page.
   const [ingestNavTarget, setIngestNavTarget] = useState<string | null>(
     null,
   );
@@ -1273,232 +1254,48 @@ export function NewItemWizard() {
       // on the detail page where they can retry per-layer Import
       // manually. We surface a banner-level error so they know.
       //
-      // Progress: each iteration updates ingestProgress so the modal
-      // overlay can show "Layer X of N: running / done / error" and
-      // the user knows the wizard isn't hung. Per-layer ingest can
-      // take seconds (10k-row dataset) to a few minutes (1M-row GDB),
-      // so a granular indicator beats a single spinning button.
+      // #115: enqueue async import jobs and navigate immediately.
+      // Each per-layer import becomes a row in the import_job table;
+      // the in-process worker drains the queue and updates progress
+      // there. The detail page's import-progress banner reads the
+      // same rows and renders live progress without us having to
+      // hold the wizard open. End-user benefit: a 30-min county-
+      // scale import no longer pins them to a modal.
+      //
+      // Failures here mean the JOB enqueue failed, not the import
+      // itself. Surface those inline; the user can retry per-layer
+      // from the detail page. Per-layer-import-while-running errors
+      // surface in the detail-page banner from the import_job row.
       const ingestErrors: string[] = [];
       if (type === 'data_layer' && pendingFileImports.length > 0) {
-        // Resolve the layers' user-facing labels from the builder
-        // state so the overlay can render "Parcels (1.39M features)"
-        // rather than the raw source-layer name.
-        const labelByLayerId = new Map<string, string>();
-        const featureCountByLayerId = new Map<string, number>();
-        for (const l of featureServiceData.layers) {
-          labelByLayerId.set(l.id, l.label);
-          if (typeof l.featureCount === 'number') {
-            featureCountByLayerId.set(l.id, l.featureCount);
-          }
-        }
-        const initialProgress: Array<{
-          layerId: string;
-          layerLabel: string;
-          sourceLayerName: string;
-          expectedFeatureCount: number;
-          status: 'pending' | 'running' | 'done' | 'error';
-          insertedCount?: number;
-          error?: string;
-        }> = [];
         for (const entry of pendingFileImports) {
           for (const layer of entry.layers) {
-            initialProgress.push({
-              layerId: layer.layerId,
-              layerLabel:
-                labelByLayerId.get(layer.layerId) ?? layer.sourceLayerName,
-              sourceLayerName: layer.sourceLayerName,
-              expectedFeatureCount:
-                featureCountByLayerId.get(layer.layerId) ?? 0,
-              status: 'pending',
-            });
-          }
-        }
-        setIngestProgress(initialProgress);
-
-        let progressIdx = 0;
-        for (const entry of pendingFileImports) {
-          for (const layer of entry.layers) {
-            const idx = progressIdx;
-            progressIdx += 1;
-            // Mark this layer as running so the overlay flips its
-            // row from clock to spinner.
-            setIngestProgress((prev) =>
-              prev
-                ? prev.map((p, i) =>
-                    i === idx ? { ...p, status: 'running' } : p,
-                  )
-                : prev,
-            );
             try {
-              const ingestUrl =
-                `/api/portal/items/${saved.id}/layers/${layer.layerId}/import` +
-                `?stagingId=${encodeURIComponent(entry.stagingId)}` +
-                `&sourceLayer=${encodeURIComponent(layer.sourceLayerName)}` +
-                `&mode=replace`;
-              const ingestRes = await fetch(ingestUrl, { method: 'POST' });
-              if (!ingestRes.ok || !ingestRes.body) {
-                const text = await ingestRes
-                  .text()
-                  .catch(() => '');
-                const errMsg = `${ingestRes.status} ${text.slice(0, 200)}`;
-                ingestErrors.push(`${layer.sourceLayerName}: ${errMsg}`);
-                setIngestProgress((prev) =>
-                  prev
-                    ? prev.map((p, i) =>
-                        i === idx
-                          ? { ...p, status: 'error', error: errMsg }
-                          : p,
-                      )
-                    : prev,
-                );
-                continue;
-              }
-              // #103: response is NDJSON with one event per batch.
-              // Stream-read so the overlay updates as 5k-row batches
-              // commit, instead of waiting for the whole import to
-              // finish. Pump the reader until done; for each
-              // newline-terminated chunk parse the JSON event and
-              // dispatch into the overlay state.
-              const reader = ingestRes.body.getReader();
-              const decoder = new TextDecoder();
-              let buffer = '';
-              let lastInserted = 0;
-              let lastError: string | null = null;
-              let sawDone = false;
-              // eslint-disable-next-line no-constant-condition
-              while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                let nl = buffer.indexOf('\n');
-                while (nl >= 0) {
-                  const line = buffer.slice(0, nl).trim();
-                  buffer = buffer.slice(nl + 1);
-                  nl = buffer.indexOf('\n');
-                  if (!line) continue;
-                  let msg: {
-                    event?: string;
-                    inserted?: number;
-                    processed?: number;
-                    total?: number;
-                    message?: string;
-                  };
-                  try {
-                    msg = JSON.parse(line);
-                  } catch {
-                    // A partial line that snuck past the split is
-                    // unusual but harmless: skip it and let the
-                    // next iteration's buffer accumulate.
-                    continue;
-                  }
-                  if (msg.event === 'progress' || msg.event === 'start') {
-                    if (typeof msg.inserted === 'number') {
-                      lastInserted = msg.inserted;
-                    }
-                    setIngestProgress((prev) =>
-                      prev
-                        ? prev.map((p, i) => {
-                            if (i !== idx) return p;
-                            const next = {
-                              ...p,
-                              status: 'running' as const,
-                            };
-                            if (typeof msg.inserted === 'number') {
-                              next.insertedCount = msg.inserted;
-                            }
-                            // The server's start event carries the
-                            // GDAL-reported total which can refine
-                            // an off-by-one we got from the probe.
-                            if (
-                              typeof msg.total === 'number' &&
-                              msg.total > 0
-                            ) {
-                              next.expectedFeatureCount = msg.total;
-                            }
-                            return next;
-                          })
-                        : prev,
-                    );
-                  } else if (msg.event === 'done') {
-                    sawDone = true;
-                    if (typeof msg.inserted === 'number') {
-                      lastInserted = msg.inserted;
-                    }
-                    setIngestProgress((prev) =>
-                      prev
-                        ? prev.map((p, i) => {
-                            if (i !== idx) return p;
-                            const next = {
-                              ...p,
-                              status: 'done' as const,
-                            };
-                            if (typeof msg.inserted === 'number') {
-                              next.insertedCount = msg.inserted;
-                            }
-                            return next;
-                          })
-                        : prev,
-                    );
-                  } else if (msg.event === 'error') {
-                    lastError = msg.message ?? 'Ingest failed.';
-                  }
-                }
-              }
-              if (lastError !== null) {
-                ingestErrors.push(`${layer.sourceLayerName}: ${lastError}`);
-                setIngestProgress((prev) =>
-                  prev
-                    ? prev.map((p, i) =>
-                        i === idx
-                          ? { ...p, status: 'error', error: lastError! }
-                          : p,
-                      )
-                    : prev,
-                );
-              } else if (!sawDone) {
-                // Stream closed without a `done` event. Most often
-                // this means the server crashed mid-import. Surface
-                // it so the user knows the row count we're showing
-                // is partial.
-                const partialMsg = `Import stream ended without a done event (got ${lastInserted.toLocaleString()} rows).`;
+              const enqueueUrl = `/api/portal/items/${saved.id}/layers/${layer.layerId}/import-jobs`;
+              const enqueueRes = await fetch(enqueueUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  stagingId: entry.stagingId,
+                  sourceLayerName: layer.sourceLayerName,
+                  mode: 'replace',
+                }),
+              });
+              if (!enqueueRes.ok) {
+                const text = await enqueueRes.text().catch(() => '');
                 ingestErrors.push(
-                  `${layer.sourceLayerName}: ${partialMsg}`,
-                );
-                setIngestProgress((prev) =>
-                  prev
-                    ? prev.map((p, i) =>
-                        i === idx
-                          ? { ...p, status: 'error', error: partialMsg }
-                          : p,
-                      )
-                    : prev,
+                  `${layer.sourceLayerName}: ${enqueueRes.status} ${text.slice(0, 200)}`,
                 );
               }
-            } catch (ingestErr) {
-              console.error(
-                `Auto-ingest failed for ${layer.sourceLayerName}:`,
-                ingestErr,
-              );
-              const errMsg =
-                ingestErr instanceof Error
-                  ? ingestErr.message
-                  : 'network error';
-              ingestErrors.push(`${layer.sourceLayerName}: ${errMsg}`);
-              setIngestProgress((prev) =>
-                prev
-                  ? prev.map((p, i) =>
-                      i === idx
-                        ? { ...p, status: 'error', error: errMsg }
-                        : p,
-                    )
-                  : prev,
+            } catch (err) {
+              ingestErrors.push(
+                `${layer.sourceLayerName}: ${
+                  err instanceof Error ? err.message : 'network error'
+                }`,
               );
             }
           }
         }
-        // Done with the staging client-side. Server-side cleanup is
-        // handled by the staging cleanup cron in IngestStagingService;
-        // we don't bother with an explicit drop endpoint.
         setPendingFileImports([]);
       }
       // data_layer still wants the ingest panel front and centre.
@@ -1508,7 +1305,7 @@ export function NewItemWizard() {
       const targetUrl = `/items/${saved.id}${anchor}`;
 
       if (ingestErrors.length > 0) {
-        // Don't auto-navigate when any layer's ingest failed. The
+        // Don't auto-navigate when any layer's enqueue failed. The
         // user just watched a row flip to red and needs the chance to
         // read what went wrong before being kicked to the detail page.
         // Stash the destination on the overlay state and let the user
@@ -1580,144 +1377,6 @@ export function NewItemWizard() {
 
   return (
     <div className="space-y-8">
-      {/* Post-create ingest progress overlay. Shown while the wizard
-          fans out per-layer ingest from the staged file. Without
-          this the user stares at a spinning Create-item button for
-          minutes on a large GDB and has no way to know whether
-          anything is happening. The modal lists every detected
-          layer with status (pending/running/done/error), the
-          expected feature count, and the inserted count returned
-          by the server once a layer finishes. We don't surface a
-          Close button while ingest is running -- the wizard stays
-          mounted and any open modal would just be confusing if
-          dismissed mid-flight. After the loop completes the
-          wizard calls router.push() to land the user on the
-          detail page; the overlay disappears with the unmount. */}
-      {ingestProgress && ingestProgress.length > 0 ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-lg border border-border bg-surface-1 p-5 shadow-raised">
-            <h3 className="mb-1 text-sm font-medium text-ink-0">
-              Importing features
-            </h3>
-            <p className="mb-3 text-xs text-muted">
-              Loading data into{' '}
-              {ingestProgress.length === 1
-                ? '1 layer'
-                : `${ingestProgress.length} layers`}
-              . This may take a few minutes for large datasets.
-            </p>
-            <ul className="space-y-1.5">
-              {ingestProgress.map((p) => {
-                let icon: ReactNode;
-                if (p.status === 'pending') {
-                  icon = <Clock className="h-3.5 w-3.5 text-muted" />;
-                } else if (p.status === 'running') {
-                  icon = (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-                  );
-                } else if (p.status === 'done') {
-                  icon = (
-                    <Check className="h-3.5 w-3.5 text-success" />
-                  );
-                } else {
-                  icon = (
-                    <XCircle className="h-3.5 w-3.5 text-danger" />
-                  );
-                }
-                const expectedLabel =
-                  p.expectedFeatureCount > 0
-                    ? `${p.expectedFeatureCount.toLocaleString()} features`
-                    : 'features';
-                let detail: string;
-                if (p.status === 'done') {
-                  detail =
-                    typeof p.insertedCount === 'number'
-                      ? `Loaded ${p.insertedCount.toLocaleString()} features`
-                      : 'Loaded';
-                } else if (p.status === 'error') {
-                  detail = `Failed: ${p.error ?? 'unknown error'}`;
-                } else if (p.status === 'running') {
-                  // Render live progress when the server has started
-                  // streaming batch events. insertedCount ticks up by
-                  // ~5k each batch; pairing with expectedFeatureCount
-                  // gives the user the running "245k / 1.39M" display
-                  // they asked for. Falls back to the static label
-                  // until the first batch lands.
-                  if (
-                    typeof p.insertedCount === 'number' &&
-                    p.expectedFeatureCount > 0
-                  ) {
-                    const pct = Math.min(
-                      100,
-                      Math.round(
-                        (p.insertedCount / p.expectedFeatureCount) * 100,
-                      ),
-                    );
-                    detail = `Loading ${p.insertedCount.toLocaleString()} of ${p.expectedFeatureCount.toLocaleString()} (${pct}%)`;
-                  } else if (typeof p.insertedCount === 'number') {
-                    detail = `Loading ${p.insertedCount.toLocaleString()} features…`;
-                  } else {
-                    detail = `Loading ${expectedLabel}…`;
-                  }
-                } else {
-                  detail = `Waiting (${expectedLabel})`;
-                }
-                return (
-                  <li
-                    key={p.layerId}
-                    className="flex items-start gap-2 rounded border border-border bg-surface-0 px-2 py-1.5 text-xs"
-                  >
-                    <span className="mt-0.5 shrink-0">{icon}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium text-ink-1">
-                        {p.layerLabel}
-                      </div>
-                      <div
-                        className={
-                          p.status === 'error'
-                            ? 'text-[11px] text-danger'
-                            : 'text-[11px] text-muted'
-                        }
-                      >
-                        {detail}
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-            {ingestNavTarget ? (
-              <>
-                <p className="mt-3 text-[11px] text-danger">
-                  One or more layers failed to import. The item exists
-                  with the correct schema; click an Import features
-                  button on the detail page to retry per layer.
-                </p>
-                <div className="mt-3 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const target = ingestNavTarget;
-                      setIngestNavTarget(null);
-                      setIngestProgress(null);
-                      startTransition(() => router.push(target));
-                    }}
-                    className="inline-flex h-8 items-center gap-1 rounded bg-accent px-3 text-xs font-medium text-accent-foreground hover:opacity-90"
-                  >
-                    Continue to item
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="mt-3 text-[10px] text-muted">
-                Keep this tab open until import completes. You'll be
-                redirected to the item page when finished.
-              </p>
-            )}
-          </div>
-        </div>
-      ) : null}
-
       {/* Selected-type header with back link. Keeps the user oriented
           without forcing a full page nav. */}
       <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 px-4 py-3">
@@ -1989,7 +1648,22 @@ export function NewItemWizard() {
           className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
           role="alert"
         >
-          {error}
+          <p>{error}</p>
+          {ingestNavTarget ? (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = ingestNavTarget;
+                  setIngestNavTarget(null);
+                  startTransition(() => router.push(target));
+                }}
+                className="inline-flex h-7 items-center gap-1 rounded bg-danger px-2.5 text-xs font-medium text-white hover:opacity-90"
+              >
+                Continue to item
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
