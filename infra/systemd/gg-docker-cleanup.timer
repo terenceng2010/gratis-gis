@@ -1,0 +1,11 @@
+[Unit]
+Description=GratisGIS docker cleanup - run daily at 03:30 UTC
+Requires=gg-docker-cleanup.service
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
