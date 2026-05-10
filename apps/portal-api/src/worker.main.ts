@@ -2,6 +2,7 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 
 import { ImportJobsWorkerModule } from './import-jobs/import-jobs-worker.module.js';
 import { LeaderElectionModule } from './cron/leader-election.module.js';
@@ -32,7 +33,18 @@ import { LeaderElectionModule } from './cron/leader-election.module.js';
  * files uploaded via POST /ingest/stage are readable here.
  */
 @Module({
-  imports: [LeaderElectionModule, ImportJobsWorkerModule],
+  imports: [
+    // Global ConfigService is needed because transitive deps reach
+    // NotificationsService (via ItemsModule -> share notifications)
+    // and IngestStagingService, both of which DI ConfigService for
+    // env-driven knobs. Without `isGlobal: true` here, the worker
+    // crashes at boot with "Nest can't resolve dependencies of the
+    // NotificationsService" because no module in scope re-exports
+    // it.
+    ConfigModule.forRoot({ isGlobal: true }),
+    LeaderElectionModule,
+    ImportJobsWorkerModule,
+  ],
 })
 class WorkerAppModule {}
 
