@@ -412,24 +412,32 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       bearing: map.bearing,
       pitch: map.pitch,
       attributionControl: false,
-      // #115 P12: tile fetches (data_layer MVT, future basemap-via-
-      // bff) go through the same-origin /api/portal/ BFF and need
-      // the Keycloak session cookie to authenticate. MapLibre's
-      // tile worker does NOT include credentials by default, so
-      // tile requests come back as 401 silently. transformRequest
-      // is the documented hook to fix this without leaking cookies
-      // to external tile hosts: scope the credentials change to
-      // same-origin URLs only.
+      // #115 P12: tile fetches (data_layer MVT) go through the
+      // same-origin /api/portal/ BFF and need the Keycloak session
+      // cookie to authenticate. MapLibre's tile worker does NOT
+      // include credentials by default, so tile requests come back
+      // as 401 silently. transformRequest is the documented hook
+      // to fix this without leaking cookies to external tile hosts.
+      //
+      // Important: MapLibre runs the tile fetch in a Web Worker
+      // (no `window` global). `new Request('/relative/path')` in
+      // a worker throws "Failed to construct 'Request': Failed to
+      // parse URL" because the worker has no base URL context.
+      // We resolve relative URLs to absolute here on the main
+      // thread (where `window.location` IS available) before
+      // handing them to the worker.
       transformRequest: (url) => {
         try {
           const parsed = new URL(url, window.location.origin);
           if (parsed.origin === window.location.origin) {
-            return { url, credentials: 'include' };
+            return { url: parsed.toString(), credentials: 'include' };
           }
+          return { url: parsed.toString() };
         } catch {
-          /* malformed URL; fall through */
+          // Malformed URL; pass through so MapLibre can surface the
+          // real error rather than masking it with a silent rewrite.
+          return { url };
         }
-        return { url };
       },
     });
     if (!hideNavigationControl) {
