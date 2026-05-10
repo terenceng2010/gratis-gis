@@ -192,7 +192,10 @@ export function PublicLanding({
       )}
 
       <footer className="border-t border-border bg-surface-1 py-6 text-center text-xs text-muted">
-        Powered by GratisGIS
+        Powered by GratisGIS &middot;{' '}
+        <Link href="/why" className="underline hover:text-ink-0">
+          Why GratisGIS
+        </Link>
       </footer>
     </div>
   );
