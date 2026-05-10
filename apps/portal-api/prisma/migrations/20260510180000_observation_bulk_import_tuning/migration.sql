@@ -30,17 +30,20 @@
 -- 1. Drop unused cell index.
 DROP INDEX IF EXISTS observation_cell_idx;
 
--- 2. Tune attrs GIN fastupdate. Apply to the parent and every child.
-ALTER INDEX observation_attrs_gin
-  SET (fastupdate = on, gin_pending_list_limit = 65536);
-
+-- 2. Tune attrs GIN fastupdate. ALTER INDEX SET storage parameters
+--    is NOT supported on partitioned-index parents in Postgres 16
+--    (error code 42809: "This operation is not supported for
+--    partitioned indexes."). Storage parameters live per-partition,
+--    so we iterate the existing children. Future partitions created
+--    by pg_partman will start with default storage params; an
+--    operator who cares can re-run this DO block (or, longer-term,
+--    we add a partman post-create hook).
 DO $$
 DECLARE
-  child_oid OID;
   child_name TEXT;
 BEGIN
-  FOR child_oid, child_name IN
-    SELECT inhrelid::regclass::oid, inhrelid::regclass::text
+  FOR child_name IN
+    SELECT inhrelid::regclass::text
       FROM pg_inherits
      WHERE inhparent = 'observation_attrs_gin'::regclass
   LOOP
