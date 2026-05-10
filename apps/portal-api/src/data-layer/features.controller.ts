@@ -99,6 +99,13 @@ export class DataLayerFeaturesController {
     // runtime to list existing related rows under a parent feature.
     @Query('parentFk') parentFk?: string,
     @Query('parentId') parentId?: string,
+    // #115 P12: single-feature lookup by stable entity id. The MVT
+    // popup path calls /features?entity=<id> after a click to pull
+    // full attrs (the tile itself only ships _global_id). Without
+    // this, every popup on an MVT layer would fan out to the full
+    // layer scan -- on a 1.4M-parcel dataset that's the symptom
+    // the user just hit: popup stuck on "Loading...".
+    @Query('entity') entity?: string,
   ) {
     const { geoLimit, rowScope, isTable, layer } = await this.assertV3Layer(
       user,
@@ -114,8 +121,10 @@ export class DataLayerFeaturesController {
       ownRowsOnly?: { userId: string };
       isTable?: boolean;
       parentFkFilter?: { column: string; parentId: string };
+      entity?: string;
     } = {};
     if (isTable) opts.isTable = true;
+    if (entity) opts.entity = entity;
     if (bbox) {
       const parts = bbox.split(',').map(Number);
       if (parts.length === 4 && parts.every((n) => !isNaN(n))) {

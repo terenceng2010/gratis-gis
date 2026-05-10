@@ -4,6 +4,7 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -317,10 +318,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
             : rendered[0];
           if (!match || match.id === undefined) return;
           const prevId = match.id as string | number;
-          m.setFeatureState({ source: sourceId, id: prevId }, { hover: true });
+          m.setFeatureState(featureStateRef(m, sourceId, prevId), { hover: true });
           // Clear after a couple seconds so the pulse feels temporary.
           setTimeout(() => {
-            m.setFeatureState({ source: sourceId, id: prevId }, { hover: false });
+            m.setFeatureState(featureStateRef(m, sourceId, prevId), { hover: false });
           }, 2500);
         };
         m.once('moveend', handle);
@@ -338,6 +339,31 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // ref is enough: we don't need this in React state.
   const appliedSelectionRef = useRef<Record<string, Set<number | string>>>(
     {},
+  );
+
+  // #115 P12: setFeatureState on a vector source MUST include the
+  // sourceLayer name; on a geojson source it must NOT. We pick the
+  // right shape at call time by inspecting the source type. Without
+  // this, every mousemove over an MVT data_layer hit threw
+  // "The sourceLayer parameter must be provided for vector source
+  // types" and the console-error storm dropped the page to <5 fps.
+  const featureStateRef = useCallback(
+    (
+      m: maplibregl.Map,
+      sourceId: string,
+      id: string | number,
+    ): {
+      source: string;
+      id: string | number;
+      sourceLayer?: string;
+    } => {
+      const src = m.getSource(sourceId);
+      if (src && (src.type as unknown as string) === 'vector') {
+        return { source: sourceId, id, sourceLayer: 'features' };
+      }
+      return { source: sourceId, id };
+    },
+    [],
   );
 
   // Sync shared selection state → MapLibre feature-state. Diffs against
@@ -364,12 +390,12 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
 
       for (const id of prev) {
         if (!next.has(id)) {
-          m.setFeatureState({ source: sourceId, id }, { selected: false });
+          m.setFeatureState(featureStateRef(m, sourceId, id), { selected: false });
         }
       }
       for (const id of next) {
         if (!prev.has(id)) {
-          m.setFeatureState({ source: sourceId, id }, { selected: true });
+          m.setFeatureState(featureStateRef(m, sourceId, id), { selected: true });
         }
       }
     }
@@ -840,7 +866,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         const cur = hoveredRef.current;
         if (cur) {
           m!.setFeatureState(
-            { source: cur.sourceId, id: cur.featureId },
+            featureStateRef(m!, cur.sourceId, cur.featureId),
             { hover: false },
           );
           hoveredRef.current = null;
@@ -857,7 +883,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const cur = hoveredRef.current;
       if (cur) {
         m!.setFeatureState(
-          { source: cur.sourceId, id: cur.featureId },
+          featureStateRef(m!, cur.sourceId, cur.featureId),
           { hover: false },
         );
         hoveredRef.current = null;
@@ -867,7 +893,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         // feature-state needs ids; GeoJSON features have `id` only if
         // the source was added with generateId: true (we do).
         m!.setFeatureState(
-          { source: hit.source, id: hit.id },
+          featureStateRef(m!, hit.source, hit.id as string | number),
           { hover: true },
         );
         hoveredRef.current = {
@@ -880,7 +906,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const cur = hoveredRef.current;
       if (!cur || !m) return;
       m.setFeatureState(
-        { source: cur.sourceId, id: cur.featureId },
+        featureStateRef(m, cur.sourceId, cur.featureId),
         { hover: false },
       );
       hoveredRef.current = null;

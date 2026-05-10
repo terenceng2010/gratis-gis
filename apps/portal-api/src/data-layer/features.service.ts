@@ -101,6 +101,11 @@ export class DataLayerFeaturesService {
       ownRowsOnly?: { userId: string };
       isTable?: boolean;
       parentFkFilter?: { column: string; parentId: string };
+      /** #115 P12: single-feature lookup by stable entity UUID.
+       *  The map popup path uses this after an MVT click to fetch
+       *  full attrs by id; without it the popup would force the
+       *  layer to return every feature. */
+      entity?: string;
     } = {},
   ): Promise<{ type: 'FeatureCollection'; features: DataLayerFeatureOut[] }> {
     const result = await this.dataLayer.listFeatures({
@@ -121,6 +126,7 @@ export class DataLayerFeaturesService {
         ? { parentFkFilter: opts.parentFkFilter }
         : {}),
       ...(opts.isTable === true ? { isTable: true } : {}),
+      ...(opts.entity !== undefined ? { entity: opts.entity } : {}),
     });
     return result;
   }
