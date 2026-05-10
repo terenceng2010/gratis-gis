@@ -109,7 +109,14 @@ COPY --from=build --chown=app:app /repo/apps/portal-api/prisma /app/prisma
 # it with the right ownership so a volume mount onto this path inherits
 # the same uid/gid (Docker volumes inherit the underlying directory's
 # ownership when first attached).
-RUN mkdir -p /app/backups /app/data && chown -R app:app /app/backups /app/data
+#
+# /var/lib/gg-staging is the cross-container staging dir for the
+# async-import worker (#115 P8). Same ownership trick: the `gg-staging`
+# named volume needs to inherit app:app at first attach so the
+# IngestStagingService can mkdir under it as the non-root `app` user.
+# Without this pre-create, the volume mount lands as root:root and
+# every `/ingest/stage` POST hits EACCES.
+RUN mkdir -p /app/backups /app/data /var/lib/gg-staging && chown -R app:app /app/backups /app/data /var/lib/gg-staging
 
 # Entrypoint: apply migrations, then start. Idempotent on a current
 # DB (no-op when nothing pending). Surfaces migration errors as exit

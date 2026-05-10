@@ -220,14 +220,23 @@ export class EngineService {
     writer: import('./copy-writer.js').CopyWriter,
   ): Promise<Observation[]> {
     if (inputs.length === 0) return [];
+    // Skip cellForGeometry in the bulk-import path: #115 P4 dropped
+    // observation_cell_idx, so the column is unindexed. The COPY
+    // writer also passes cell=null when the caller doesn't supply
+    // one, which is the same behavior. Saves 1.4M h3-js calls per
+    // county-scale import.
     const filled: Observation[] = inputs.map((obs) => ({
       ...obs,
       id: obs.id ?? uuidv7(),
       txTime: obs.txTime ?? new Date(),
-      cell: obs.cell ?? cellForGeometry(obs.geom),
+      cell: obs.cell ?? null,
     }));
     for (const obs of filled) validateObservation(obs);
-    for (const obs of filled) writer.write(obs);
+    // P9: ship the whole batch in one postMessage to the encoder
+    // worker_thread instead of N per-row write() calls. The encoder
+    // returns the joined COPY-line string; the writer pushes it to
+    // the pg-copy-streams socket in one shot.
+    await writer.writeBatch(filled);
     return filled;
   }
 

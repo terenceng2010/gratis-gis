@@ -133,9 +133,13 @@ export function AppShellChrome({
             Folders
           </NavLink>
           <NavLink href="/groups" icon={<Users className="h-4 w-4" />}>Groups</NavLink>
-          <NavLink href="/field" icon={<ClipboardList className="h-4 w-4" />}>
-            Field
-          </NavLink>
+          {/* The /field landing is intentionally hidden from the
+              desktop sidebar -- the route stays valid so a mobile
+              user who scans a deployment QR code or shares a direct
+              link still lands on it, but desktop users reach field
+              deployments more naturally through the items list +
+              the "Field" item-type filter. Don't reintroduce a top-
+              level entry here without a redesign. */}
           <NavLink href="/recently-deleted" icon={<Trash2 className="h-4 w-4" />}>
             Recently deleted
           </NavLink>

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Pool, type PoolClient } from 'pg';
 import { from as copyFrom } from 'pg-copy-streams';
+import { Worker } from 'node:worker_threads';
+import { join } from 'node:path';
 
-import { uuidv7, type Observation } from '@gratis-gis/engine';
+import { type Observation } from '@gratis-gis/engine';
 
 /**
- * COPY-based bulk writer for the observation table (#115 P3).
+ * COPY-based bulk writer for the observation table (#115 P3 + P9).
  *
  * Why this exists separately from EngineService.writeMany:
  *
@@ -21,6 +23,16 @@ import { uuidv7, type Observation } from '@gratis-gis/engine';
  * applies them with no per-row SQL parsing. Empirically 5-10x
  * faster than batched multi-row INSERTs for large imports.
  *
+ * P9 worker-thread split: encoding observations to COPY lines
+ * (per-coordinate EWKT, JSON.stringify on attrs, four regex passes
+ * in escapeText) is CPU-bound. With everything on one thread the
+ * GDAL feature pump and the COPY-stream writer were forced to wait
+ * on the encoder. Moving the encoder to a worker_thread lets the
+ * main thread keep pumping features and writing bytes while the
+ * encoder works on the previous batch in parallel. On real-world
+ * county-scale parcel imports (some polygons have 50000+ vertices)
+ * this is roughly a 2x throughput win.
+ *
  * Caveats:
  *   - We open a separate pg connection (pg-copy-streams needs the
  *     raw client; Prisma doesn't expose its underlying pool). The
@@ -29,11 +41,8 @@ import { uuidv7, type Observation } from '@gratis-gis/engine';
  *   - Geometry is encoded as EWKT (`SRID=4326;POINT (...)`),
  *     skipping ST_GeomFromGeoJSON entirely. PostGIS parses EWKT
  *     considerably faster than GeoJSON.
- *   - The `cell` h3 index is computed JS-side from the geometry
- *     and shipped as a literal column value. This is the same
- *     work the engine.service writeMany did; once the cell is
- *     promoted to a generated column (#115 P4) the JS-side call
- *     drops out.
+ *   - The `cell` h3 index is set null in the bulk path; #115 P4
+ *     dropped the index that justified per-row computation.
  *   - This path bypasses derived-layer cache invalidation
  *     (notifySourceWrite). The worker fires a single bulk
  *     invalidation after the COPY completes -- cheaper than
@@ -45,6 +54,12 @@ export class CopyWriter {
   private client: PoolClient | null = null;
   private stream: NodeJS.WritableStream | null = null;
   private rowCount = 0;
+  private encoder: Worker | null = null;
+  private nextRequestId = 0;
+  private pending = new Map<
+    number,
+    { resolve: (lines: string) => void; reject: (err: Error) => void }
+  >();
 
   constructor(databaseUrl: string) {
     // Single-use pool sized to one connection. The worker's
@@ -87,56 +102,103 @@ export class CopyWriter {
       ') FROM STDIN WITH (FORMAT text)';
     this.stream = this.client.query(copyFrom(sql)) as unknown as
       NodeJS.WritableStream;
+    // Spawn the encoder worker_thread. The compiled JS sits at
+    // dist/engine/copy-writer.js, with copy-encoder.worker.js next
+    // to it. portal-api is built as CommonJS so we resolve via
+    // __dirname rather than import.meta.url.
+    this.encoder = new Worker(join(__dirname, 'copy-encoder.worker.js'));
+    this.encoder.on('message', (msg: EncoderMessage) => {
+      const slot = this.pending.get(msg.id);
+      if (!slot) return;
+      this.pending.delete(msg.id);
+      if (msg.type === 'encoded') slot.resolve(msg.lines);
+      else slot.reject(new Error(msg.message));
+    });
+    this.encoder.on('error', (err) => {
+      // Fail every in-flight request; the worker is unrecoverable.
+      for (const [id, slot] of this.pending) {
+        slot.reject(err);
+        this.pending.delete(id);
+      }
+    });
   }
 
   /**
-   * Write one observation row. Caller must have invoked start()
-   * first. The row is encoded as PostgreSQL's TEXT-format COPY
-   * line: tab-separated fields, terminated with newline, with the
-   * documented backslash-escape rules for embedded special chars.
+   * Encode a batch of observations on the worker_thread and stream
+   * the resulting COPY lines to the server. Backpressure-aware: if
+   * the COPY stream's outgoing buffer is full we await the drain
+   * event before resolving so the caller pauses GDAL until Postgres
+   * has consumed enough bytes.
    *
-   * Geometry: emitted as EWKT with SRID=4326 prefix when present;
-   * \\N (null) otherwise. PostGIS recognizes EWKT on COPY-in.
-   *
-   * Attrs / source: emitted as compact JSON. PostgreSQL's jsonb
-   * input parser handles the COPY-escaped form transparently.
+   * Use this instead of calling write() per-row when you have a
+   * batch in hand (every bulk import path does). One postMessage()
+   * to encode 2000 rows beats 2000 round-trips.
    */
-  write(obs: Observation): void {
-    if (!this.stream) {
-      throw new Error('CopyWriter.write called before start().');
+  async writeBatch(batch: Observation[]): Promise<void> {
+    if (!this.stream || !this.encoder) {
+      throw new Error('CopyWriter.writeBatch called before start().');
     }
-    const id = obs.id ?? uuidv7();
-    // Phase 4 (#115): skip per-row h3-js calls in the bulk-import
-    // path. The cell column is unindexed (observation_cell_idx was
-    // dropped in 20260510180000) and no read path queries it. We
-    // still respect a caller-supplied cell so single-row writes
-    // that already computed it can carry it through.
-    const cell = obs.cell ?? null;
-    const cells: string[] = [
-      escapeText(id),
-      escapeText(obs.txTime?.toISOString() ?? new Date().toISOString()),
-      escapeText(obs.validFrom.toISOString()),
-      obs.validTo === null
-        ? '\\N'
-        : escapeText(obs.validTo.toISOString()),
-      escapeText(obs.scope),
-      escapeText(obs.entity),
-      escapeText(obs.kind),
-      obs.attrs === null ? '\\N' : escapeText(JSON.stringify(obs.attrs)),
-      obs.geom === null
-        ? '\\N'
-        : escapeText(geomToEwkt(obs.geom)),
-      cell === null ? '\\N' : escapeText(cell),
-      escapeText(obs.author.sub),
-      escapeText(JSON.stringify(obs.source)),
-      // uuid[] in COPY text format: '{a,b,c}' literal. Empty
-      // array is '{}'. Escape because braces and commas are
-      // text-COPY meta in some contexts (they're not for arrays
-      // specifically, but escapeText is a no-op for safe text).
-      escapeText(`{${obs.parents.join(',')}}`),
-    ];
-    this.stream.write(cells.join('\t') + '\n');
-    this.rowCount += 1;
+    if (batch.length === 0) return;
+    const id = this.nextRequestId;
+    this.nextRequestId += 1;
+    const lines = await new Promise<string>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      // postMessage clones the batch. Date objects survive the
+      // structured clone; nested attrs/source/geom are plain JSON
+      // shapes. Send the batch in a single message so the worker
+      // does only one parse/encode loop.
+      this.encoder!.postMessage({
+        type: 'encode',
+        id,
+        batch: batch.map((obs) => ({
+          id: obs.id,
+          txTime: obs.txTime,
+          validFrom: obs.validFrom,
+          validTo: obs.validTo,
+          scope: obs.scope,
+          entity: obs.entity,
+          kind: obs.kind,
+          attrs: obs.attrs,
+          geom: obs.geom,
+          cell: obs.cell ?? null,
+          author: { sub: obs.author.sub, displayName: obs.author.displayName },
+          source: obs.source,
+          parents: obs.parents,
+        })),
+      });
+    });
+    this.rowCount += batch.length;
+    const stream = this.stream;
+    const ok = stream.write(lines);
+    if (!ok) {
+      // The COPY stream's buffer is full -- wait for the consumer
+      // (the pg socket) to drain before we let the caller queue
+      // more. Without this, large bursts grow the in-process
+      // buffer unboundedly.
+      await new Promise<void>((resolve, reject) => {
+        const onDrain = () => {
+          stream.off('error', onError);
+          resolve();
+        };
+        const onError = (err: Error) => {
+          stream.off('drain', onDrain);
+          reject(err);
+        };
+        stream.once('drain', onDrain);
+        stream.once('error', onError);
+      });
+    }
+  }
+
+  /**
+   * Per-row write kept for compatibility with code paths that
+   * stream observations one at a time (single-row online writes
+   * never use this writer in practice, but the signature stays so
+   * a future caller can add a row without batching). Internally
+   * just a one-element batch.
+   */
+  async write(obs: Observation): Promise<void> {
+    await this.writeBatch([obs]);
   }
 
   /**
@@ -159,6 +221,10 @@ export class CopyWriter {
     this.client.release();
     this.client = null;
     this.stream = null;
+    if (this.encoder) {
+      await this.encoder.terminate();
+      this.encoder = null;
+    }
     return this.rowCount;
   }
 
@@ -177,6 +243,14 @@ export class CopyWriter {
       this.client?.release();
       this.client = null;
       this.stream = null;
+      if (this.encoder) {
+        try {
+          await this.encoder.terminate();
+        } catch {
+          /* best effort */
+        }
+        this.encoder = null;
+      }
     }
   }
 
@@ -187,96 +261,6 @@ export class CopyWriter {
   }
 }
 
-/**
- * Escape a value for COPY's TEXT format per the PostgreSQL docs:
- *   https://www.postgresql.org/docs/current/sql-copy.html
- *
- * Backslash and newline / tab / carriage-return need to be
- * escaped; everything else passes through. NUL never appears in
- * our data so we don't need to worry about it.
- */
-function escapeText(s: string): string {
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/\t/g, '\\t')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r');
-}
-
-/**
- * Convert a GeoJSON geometry to PostGIS EWKT with SRID=4326.
- * Hand-rolled rather than depending on a WKT lib because we own
- * the geometry types we produce (Point/LineString/Polygon and
- * their Multi- variants, with optional Z). EWKT lets PostGIS skip
- * the JSON parser entirely; on a million-row import this is the
- * second-biggest perf lever after COPY itself.
- */
-function geomToEwkt(g: unknown): string {
-  if (!g || typeof g !== 'object') return '';
-  const obj = g as { type?: string; coordinates?: unknown };
-  const t = obj.type;
-  const c = obj.coordinates;
-  if (!t || c === undefined) return '';
-  // Detect Z: any coordinate triple where the third element is a
-  // finite number signals 3D. We trust GDAL to emit consistent
-  // dimensionality per geometry; if a polygon's outer ring is
-  // 3D, all rings are.
-  const hasZ = detectZ(c);
-  const dimTag = hasZ ? ' Z' : '';
-  switch (t) {
-    case 'Point':
-      return `SRID=4326;POINT${dimTag}(${pointToWkt(c, hasZ)})`;
-    case 'LineString':
-      return `SRID=4326;LINESTRING${dimTag}(${ringToWkt(c, hasZ)})`;
-    case 'Polygon':
-      return `SRID=4326;POLYGON${dimTag}(${polygonRingsToWkt(c, hasZ)})`;
-    case 'MultiPoint':
-      return `SRID=4326;MULTIPOINT${dimTag}(${ringToWkt(c, hasZ)})`;
-    case 'MultiLineString':
-      return `SRID=4326;MULTILINESTRING${dimTag}(${multiLineToWkt(c, hasZ)})`;
-    case 'MultiPolygon':
-      return `SRID=4326;MULTIPOLYGON${dimTag}(${multiPolygonToWkt(c, hasZ)})`;
-    default:
-      return '';
-  }
-}
-
-function detectZ(c: unknown): boolean {
-  if (!Array.isArray(c) || c.length === 0) return false;
-  const first = c[0];
-  if (typeof first === 'number') {
-    // We're at the leaf coordinate level (Point shape).
-    return c.length >= 3 && typeof c[2] === 'number';
-  }
-  return detectZ(first);
-}
-
-function pointToWkt(c: unknown, hasZ: boolean): string {
-  if (!Array.isArray(c) || c.length < 2) return '';
-  if (hasZ && typeof c[2] === 'number') {
-    return `${c[0]} ${c[1]} ${c[2]}`;
-  }
-  return `${c[0]} ${c[1]}`;
-}
-
-function ringToWkt(c: unknown, hasZ: boolean): string {
-  if (!Array.isArray(c)) return '';
-  return c.map((p) => pointToWkt(p, hasZ)).join(', ');
-}
-
-function polygonRingsToWkt(c: unknown, hasZ: boolean): string {
-  if (!Array.isArray(c)) return '';
-  return c.map((ring) => `(${ringToWkt(ring, hasZ)})`).join(', ');
-}
-
-function multiLineToWkt(c: unknown, hasZ: boolean): string {
-  if (!Array.isArray(c)) return '';
-  return c.map((line) => `(${ringToWkt(line, hasZ)})`).join(', ');
-}
-
-function multiPolygonToWkt(c: unknown, hasZ: boolean): string {
-  if (!Array.isArray(c)) return '';
-  return c
-    .map((poly) => `(${polygonRingsToWkt(poly, hasZ)})`)
-    .join(', ');
-}
+type EncoderMessage =
+  | { type: 'encoded'; id: number; lines: string }
+  | { type: 'error'; id: number; message: string };
