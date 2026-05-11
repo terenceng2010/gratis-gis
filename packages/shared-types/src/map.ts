@@ -519,7 +519,24 @@ export interface MapLayerStyle {
  * popup header. Empty falls back to the layer's own title.
  */
 export interface MapLayerPopup {
+  /** When true, clicking a feature opens a popup. The field is
+   *  named `enabled` for backward compat (it existed before hover
+   *  popups did); semantically reads as "click enables popup". */
   enabled: boolean;
+  /**
+   * When true, hovering a feature opens a preview popup at the
+   *  cursor and closes it on mouseleave (#74 follow-up to a real
+   *  user ask). Click + hover can both be on at the same time:
+   *  the hover popup is the preview, the click popup is the
+   *  pinned version. The content templates are shared.
+   *
+   *  Hover popups deliberately render from tile-side properties
+   *  only (no per-hover API fetch) to keep the cursor-move handler
+   *  cheap. For data_layer MVT features that means the popup shows
+   *  whichever fields the tile carries; the user can click to get
+   *  the full attribute fetch.
+   */
+  showOnHover?: boolean;
   mode: 'all' | 'picked' | 'template';
   fields: string[];
   titleTemplate: string;

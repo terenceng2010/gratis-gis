@@ -1166,6 +1166,31 @@ function LayerRow({
                 onToggle={() => toggle('interactions')}
               >
                 <div className="space-y-1.5 text-sm">
+                  {/* Popup triggers (#74 follow-up): moved here from
+                      the POPUPS section so all per-layer behavior
+                      toggles live together. The POPUPS section
+                      stays for content configuration (title /
+                      body templates) but the on/off live here. */}
+                  <Toggle
+                    Icon={MousePointerClick}
+                    label="Click shows popup"
+                    checked={layer.popup.enabled}
+                    onChange={(v) =>
+                      onPatch({
+                        popup: { ...layer.popup, enabled: v },
+                      })
+                    }
+                  />
+                  <Toggle
+                    Icon={Sparkles}
+                    label="Popup on hover"
+                    checked={layer.popup.showOnHover === true}
+                    onChange={(v) =>
+                      onPatch({
+                        popup: { ...layer.popup, showOnHover: v },
+                      })
+                    }
+                  />
                   <Toggle
                     Icon={Sparkles}
                     label="Highlight on hover"

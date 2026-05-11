@@ -29,19 +29,23 @@ export function PopupEditor({ value, metadata, onChange }: Props) {
     onChange({ ...value, ...p });
   }
 
+  // The popup-trigger toggles ("Click shows popup", "Popup on
+  // hover") live in the Interactions section now (they're behavior
+  // toggles; this section is content configuration). When neither
+  // trigger is on the section renders an empty-state nudge instead
+  // of the title/body editors so a no-op section doesn't sit
+  // open with no effect.
+  const triggerActive = value.enabled || value.showOnHover === true;
+
   return (
     <div className="space-y-3">
-      <label className="flex cursor-pointer items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={value.enabled}
-          onChange={(e) => patch({ enabled: e.target.checked })}
-          className="h-3.5 w-3.5 rounded border-border text-accent focus:ring-accent/30"
-        />
-        <span className="text-ink-1">Click shows popup</span>
-      </label>
-
-      {value.enabled ? (
+      {!triggerActive ? (
+        <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+          Popups are off for this layer. Turn on{' '}
+          <em>Click shows popup</em> or <em>Popup on hover</em> in
+          Interactions to configure the popup&rsquo;s content.
+        </p>
+      ) : (
         <>
           <TitleEditor value={value} metadata={metadata} onPatch={patch} />
 
@@ -75,7 +79,7 @@ export function PopupEditor({ value, metadata, onChange }: Props) {
             <TemplateEditor value={value} metadata={metadata} onPatch={patch} />
           ) : null}
         </>
-      ) : null}
+      )}
     </div>
   );
 }

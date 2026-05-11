@@ -203,6 +203,16 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   const mapRef = useRef<maplibregl.Map | null>(null);
   const hoveredRef = useRef<{ sourceId: string; featureId: string | number } | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  // Hover popup (#74 follow-up). Separate from popupRef so a
+  // hover preview doesn't fight with a pinned click popup. The
+  // hover popup renders tile-side properties only (no per-cursor-
+  // move API fetch) and disposes on mouseleave or when the hover
+  // moves to a feature on a layer that doesn't have showOnHover.
+  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
+  const hoverPopupFeatureRef = useRef<{
+    layerId: string;
+    featureId: string | number;
+  } | null>(null);
   // Mirror of map.layers so async callbacks (basemap swap's
   // styledata handler, deferred icon loads) see the latest layer
   // list without re-running their setup effect on every prop update.
@@ -946,16 +956,84 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
           featureId: hit.id as string | number,
         };
       }
+
+      // Hover popup (#74 follow-up). When the cursor lands on a
+      // feature whose layer has `popup.showOnHover`, render a
+      // preview popup at the cursor. Updates in place when the
+      // cursor moves to a different feature on the same layer
+      // (instead of remove+create, which would flicker). Disposes
+      // when the cursor leaves all hover-popup layers.
+      const layerForHover = hit
+        ? map.layers.find((l) =>
+            overlayLayerIds(l.id).some((id) => id === hit.layer.id),
+          )
+        : null;
+      const hoverWanted =
+        !!layerForHover &&
+        layerForHover.popup.showOnHover === true &&
+        !(layerForHover.effective && layerForHover.effective.query === false);
+      if (!hoverWanted || !hit) {
+        if (hoverPopupRef.current) {
+          hoverPopupRef.current.remove();
+          hoverPopupRef.current = null;
+          hoverPopupFeatureRef.current = null;
+        }
+      } else if (hit.id !== undefined && layerForHover) {
+        const featureKey = {
+          layerId: layerForHover.id,
+          featureId: hit.id as string | number,
+        };
+        const prev = hoverPopupFeatureRef.current;
+        const sameFeature =
+          prev !== null &&
+          prev.layerId === featureKey.layerId &&
+          prev.featureId === featureKey.featureId;
+        const html = renderPopupHtml(
+          layerForHover,
+          hit.properties ?? {},
+        );
+        if (hoverPopupRef.current && sameFeature) {
+          // Same feature, just track cursor: update position so
+          // the popup follows the pointer through the feature.
+          hoverPopupRef.current.setLngLat(e.lngLat);
+        } else {
+          // Different feature (or first show): create / re-target.
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = new maplibregl.Popup({
+            closeOnClick: false,
+            closeButton: false,
+            maxWidth: '320px',
+            offset: 10,
+          })
+            .setLngLat(e.lngLat)
+            .setHTML(html)
+            .addTo(m!);
+          hoverPopupFeatureRef.current = featureKey;
+          // Add a stable class so CSS can distinguish hover
+          // popups (e.g. subtler styling) from click popups.
+          const el = hoverPopupRef.current.getElement();
+          if (el) el.classList.add('gg-hover-popup');
+        }
+      }
     }
     function onMouseLeave() {
       const cur = hoveredRef.current;
-      if (!cur || !m) return;
-      m.setFeatureState(
-        featureStateRef(m, cur.sourceId, cur.featureId),
-        { hover: false },
-      );
-      hoveredRef.current = null;
-      m.getCanvas().style.cursor = '';
+      if (cur && m) {
+        m.setFeatureState(
+          featureStateRef(m, cur.sourceId, cur.featureId),
+          { hover: false },
+        );
+        hoveredRef.current = null;
+        m.getCanvas().style.cursor = '';
+      }
+      // Hover popup follows the cursor: clear it whenever the
+      // cursor leaves the canvas so a stray popup doesn't linger
+      // when the user moves to another part of the page.
+      if (hoverPopupRef.current) {
+        hoverPopupRef.current.remove();
+        hoverPopupRef.current = null;
+        hoverPopupFeatureRef.current = null;
+      }
     }
     function onClick(e: maplibregl.MapMouseEvent) {
       const tool = selectToolRef.current;
