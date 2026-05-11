@@ -220,6 +220,17 @@ model User {
   /// run the reassign-then-cascade flow (#138) to fully purge.
   /// Same shape as Group.deletedAt and Item.deletedAt for consistency.
   deletedAt     DateTime? @map("deleted_at")
+  /// Tamper-proof master account flag (#134). When true the admin
+  /// API refuses every mutation that targets this user: role change,
+  /// enable/disable toggle, auto-disable, delete, password reset.
+  /// The flag itself can only be set via direct DB access; no API
+  /// surface exposes a "toggle protected" route, by design. This
+  /// is the always-on defense that lets us open the portal up for
+  /// public testing without giving a tester the ability to take
+  /// over the master admin. Pairs with the env flag
+  /// PORTAL_LOCK_ADMIN_TIER which separately forbids the creation
+  /// of NEW admin accounts during testing mode.
+  isProtected   Boolean  @default(false) @map("is_protected")
 
   org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   ownedGroups   Group[]       @relation("GroupOwner")

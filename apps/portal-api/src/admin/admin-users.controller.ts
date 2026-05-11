@@ -152,6 +152,17 @@ export class AdminUsersController {
     @CurrentUser() me: AuthUser,
     @Body() dto: InviteUserDto,
   ): Promise<KeycloakUserRep> {
+    // #134: when the org is in public-testing mode (PORTAL_LOCK_ADMIN_TIER)
+    // refuse any invite that would mint a new admin. Combined with the
+    // per-user isProtected flag on the master account this closes the
+    // create-admin-then-take-over escalation path. The flag is checked
+    // here AND in update() so neither create-as-admin nor promote-after
+    // is reachable.
+    if (dto.orgRole === 'admin' && isAdminTierLocked()) {
+      throw new ForbiddenException(
+        'This portal is in public-testing mode; new admin accounts cannot be created.',
+      );
+    }
     // Orgs are single-tenant per realm in the current model, so new
     // users inherit the inviting admin's org slug. When we go multi-
     // tenant, an explicit org claim moves onto the DTO.
@@ -179,6 +190,23 @@ export class AdminUsersController {
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
   ): Promise<AdminUserRep> {
+    // #133 / #134: every potential lockout / take-over pathway flows
+    // through this PATCH, so the gating lives here. The helper reads
+    // the target's local row + protected flag, compares against the
+    // caller's identity, and throws BadRequestException / Forbidden
+    // before the Keycloak write happens. Mutations that don't change
+    // role / enabled / autoDisableAt skip the count + self checks
+    // (a name edit doesn't lock anyone out).
+    //
+    // Conditional-spread the optional keys because the project's
+    // exactOptionalPropertyTypes treats `?:` as "may be omitted",
+    // not "may be undefined".
+    const intent: Parameters<typeof this.assertMutationAllowed>[2] = {};
+    if (dto.orgRole !== undefined) intent.orgRole = dto.orgRole;
+    if (dto.enabled !== undefined) intent.enabled = dto.enabled;
+    if (dto.autoDisableAt !== undefined) intent.autoDisableAt = dto.autoDisableAt;
+    await this.assertMutationAllowed(me, id, intent);
+
     // Drop any undefined optional keys so the service's read-modify-
     // write logic doesn't overwrite existing values with undefined.
     const patch: Parameters<typeof this.kc.updateUser>[1] = {};
@@ -301,7 +329,16 @@ export class AdminUsersController {
    */
   @Delete(':id')
   @HttpCode(204)
-  async remove(@Param('id') id: string): Promise<void> {
+  async remove(
+    @CurrentUser() me: AuthUser,
+    @Param('id') id: string,
+  ): Promise<void> {
+    // #133 / #134: delete is a special-case "demote and then erase";
+    // gate it through the same self / sole-admin / protected checks.
+    // We model delete as "would remove an active admin" so the
+    // sole-admin floor catches it the same way demote does.
+    await this.assertMutationAllowed(me, id, { kind: 'delete' });
+
     // First try to grab the Keycloak record so we know the username
     // for local cleanup. Either the user is there (we'll delete) or
     // they aren't (we'll fall through to local cleanup by id alone).
@@ -360,7 +397,22 @@ export class AdminUsersController {
    */
   @Post(':id/reset-password')
   @HttpCode(204)
-  async resetPassword(@Param('id') id: string): Promise<void> {
+  async resetPassword(
+    @CurrentUser() me: AuthUser,
+    @Param('id') id: string,
+  ): Promise<void> {
+    // #134: a protected user's password is theirs alone -- never
+    // reset by another admin (including the protected user
+    // themselves through this UI). If the protected user genuinely
+    // needs a reset they go through the Keycloak Account Console
+    // directly. This closes the "tester clicks Reset on the master
+    // admin's row and now owns the inbox-bound reset link" path.
+    const target = await this.loadTarget(me, id);
+    if (target.localUser?.isProtected) {
+      throw new ForbiddenException(
+        'This account is protected; password reset is not available through the admin UI.',
+      );
+    }
     await this.kc.sendExecuteActionsEmail(id, [
       'UPDATE_PASSWORD',
       'VERIFY_EMAIL',
@@ -641,6 +693,197 @@ export class AdminUsersController {
       neverSignedIn: false,
     };
   }
+
+  // ----------------------------------------------------------------
+  // #133 / #134: lockout + take-over guards
+  // ----------------------------------------------------------------
+
+  /**
+   * Resolve a route-param user id to the Keycloak record and the
+   * matching local user row (by username, since seeded accounts
+   * have local id != Keycloak sub). Used by every mutation gate so
+   * the protected flag + role count come from a single source of
+   * truth instead of being re-fetched per call.
+   *
+   * Throws NotFoundException if neither side has the user. Returns
+   * `localUser: null` for users who exist in Keycloak but have
+   * never signed in (no local row yet) -- those users are by
+   * definition not protected and not the master admin.
+   */
+  private async loadTarget(
+    me: AuthUser,
+    id: string,
+  ): Promise<{
+    kcUser: KeycloakUserRep;
+    localUser: {
+      id: string;
+      orgId: string;
+      orgRole: 'viewer' | 'contributor' | 'admin';
+      isProtected: boolean;
+      username: string;
+    } | null;
+    isSelf: boolean;
+  }> {
+    const kcUser = await this.kc.getUser(id);
+    if (!kcUser?.username) {
+      throw new NotFoundException('User not found');
+    }
+    const localUser = await this.prisma.user.findUnique({
+      where: { username: kcUser.username },
+      select: {
+        id: true,
+        orgId: true,
+        orgRole: true,
+        isProtected: true,
+        username: true,
+      },
+    });
+    // Defense in depth: a target whose local row is in a different
+    // org from the caller can't be touched, even if the AdminGuard
+    // route was somehow reached cross-org.
+    if (localUser && localUser.orgId !== me.orgId) {
+      throw new ForbiddenException('User is not in your organization');
+    }
+    // Self-identity check via username (stable across Keycloak sub
+    // / local id mismatches that plague seeded users).
+    const isSelf =
+      kcUser.username === me.username ||
+      (localUser !== null && localUser.username === me.username);
+    return { kcUser, localUser, isSelf };
+  }
+
+  /**
+   * Core gating helper. Inputs describe the intended mutation; the
+   * helper throws if any of the following would happen:
+   *
+   *  1. The target is a protected user (master admin). No mutation
+   *     against them is allowed through the API, ever, regardless
+   *     of caller. Flag is set via direct DB only.
+   *
+   *  2. The mutation would demote / disable / delete the CALLER
+   *     themselves. Self-demote / self-disable is the classic
+   *     accidental-lockout footgun; we force the user to ask a
+   *     different admin instead.
+   *
+   *  3. The mutation would leave the org with zero active admins.
+   *     Active = orgRole='admin' AND enabled (Keycloak side) AND
+   *     no past-due autoDisableAt. We count what the post-mutation
+   *     world would look like; only refuse when it would be empty.
+   *
+   *  4. The mutation would create a new admin and the deploy is in
+   *     public-testing mode (PORTAL_LOCK_ADMIN_TIER=true). Covers
+   *     PATCH role->admin; the create-as-admin path is gated
+   *     separately in invite().
+   *
+   * `intent.kind === 'delete'` is treated as a demote+disable; it
+   * removes the user entirely so they no longer count as an admin.
+   */
+  private async assertMutationAllowed(
+    me: AuthUser,
+    targetId: string,
+    intent: {
+      orgRole?: 'viewer' | 'contributor' | 'admin';
+      enabled?: boolean;
+      autoDisableAt?: string | null;
+      kind?: 'delete';
+    },
+  ): Promise<void> {
+    const { localUser, isSelf } = await this.loadTarget(me, targetId);
+
+    // (1) Protected master admin: untouchable through any API
+    // surface. The error message is intentionally generic so we
+    // don't leak which accounts are flagged.
+    if (localUser?.isProtected) {
+      throw new ForbiddenException(
+        'This account is protected and cannot be modified through the admin UI.',
+      );
+    }
+
+    // What does the mutation do? Translate the intent fields into
+    // a single "post-mutation snapshot" we can check the floor
+    // against.
+    const willDemote =
+      intent.orgRole !== undefined &&
+      intent.orgRole !== 'admin' &&
+      localUser?.orgRole === 'admin';
+    const willDisable = intent.enabled === false;
+    const willAutoDisable =
+      intent.autoDisableAt !== undefined &&
+      intent.autoDisableAt !== null &&
+      new Date(intent.autoDisableAt).getTime() <= Date.now();
+    const willDelete = intent.kind === 'delete';
+    const willPromoteToAdmin =
+      intent.orgRole === 'admin' && localUser?.orgRole !== 'admin';
+
+    // (4) Public-testing mode: no minting new admins. The invite()
+    // path checks this separately for create; this catches promote.
+    if (willPromoteToAdmin && isAdminTierLocked()) {
+      throw new ForbiddenException(
+        'This portal is in public-testing mode; new admin accounts cannot be created.',
+      );
+    }
+
+    // (2) Self-* refusal. Calling out the action by name keeps the
+    // error specific so the FE can disable the right control.
+    if (isSelf) {
+      if (willDemote) {
+        throw new BadRequestException(
+          'You cannot change your own role. Ask another admin to do this.',
+        );
+      }
+      if (willDisable) {
+        throw new BadRequestException(
+          'You cannot disable your own account. Ask another admin to do this.',
+        );
+      }
+      if (willAutoDisable) {
+        throw new BadRequestException(
+          'You cannot set an auto-disable date on your own account.',
+        );
+      }
+      if (willDelete) {
+        throw new BadRequestException(
+          'You cannot delete your own account. Ask another admin to do this.',
+        );
+      }
+    }
+
+    // (3) Sole-admin floor. Skipped when the mutation doesn't
+    // affect an admin (no demote / disable / delete / auto-disable
+    // on an admin row). The existing autoDisableAt-on-admin guard
+    // in update() still fires too -- redundant but safe.
+    const wouldRemoveAdminCount =
+      localUser?.orgRole === 'admin' &&
+      (willDemote || willDisable || willAutoDisable || willDelete);
+    if (wouldRemoveAdminCount) {
+      const adminCount = await this.prisma.user.count({
+        where: {
+          orgId: me.orgId,
+          orgRole: 'admin',
+          deletedAt: null,
+          OR: [{ autoDisableAt: null }, { autoDisableAt: { gt: new Date() } }],
+        },
+      });
+      if (adminCount <= 1) {
+        throw new BadRequestException(
+          'Refusing to remove the last active admin in this organization. Promote another user to admin first.',
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Read the public-testing-mode env flag. Looked up per call so a
+ * deploy can flip it via env (compose restart) without rebuilding
+ * the image. Truthy values: '1', 'true', 'yes', 'on' (case-
+ * insensitive). Default is false: the portal acts as a normal
+ * single-org private instance unless the operator explicitly opts
+ * into testing mode.
+ */
+function isAdminTierLocked(): boolean {
+  const raw = (process.env.PORTAL_LOCK_ADMIN_TIER ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 }
 
 /**
