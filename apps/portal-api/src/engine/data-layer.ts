@@ -783,6 +783,17 @@ export class DataLayerEngine {
     geoLimit?: GeoJsonGeometry;
     boundaryClip?: GeoJsonGeometry;
     isTable?: boolean;
+    /**
+     * Layer's declared field schema. Each entry's name is projected
+     * into the MVT as a feature property so MapLibre expressions
+     * (`['get', 'fieldName']` for labels, popups, and filters) can
+     * resolve at render time. Without this the tile only carries
+     * `_global_id` + geometry and every {{field}} resolves to null.
+     * Caller should pass the layer's `fields[]` from its schema;
+     * names must already be validated (the data_layer field-name
+     * regex prevents SQL identifier injection).
+     */
+    fields?: Array<{ name: string; type?: string }>;
   }): Promise<Buffer> {
     if (args.isTable === true) {
       return Buffer.alloc(0);
@@ -806,6 +817,44 @@ export class DataLayerEngine {
     const filterExtras =
       filters.length > 0 ? Prisma.join(filters, ' ') : Prisma.empty;
 
+    // Build the per-field projection list. Each declared field gets
+    // a `(attrs->>'name')::cast AS "name"` projection so it lands in
+    // the MVT as a typed feature property. Identifier names must
+    // not be parameterized in PostgreSQL bind protocol; Prisma.raw
+    // is safe here because the field-name regex enforced by the
+    // schema (`/^[A-Za-z_][A-Za-z0-9_]*$/`) is stricter than the
+    // identifier whitelist we apply below. Belt-and-suspenders: we
+    // reject any name that fails the regex even though the schema
+    // path should have caught it upstream.
+    const SAFE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+    const fieldProjections: Prisma.Sql[] = [];
+    if (Array.isArray(args.fields)) {
+      for (const f of args.fields) {
+        if (!SAFE_NAME.test(f.name)) continue;
+        const cast = sqlCastForFieldType(f.type);
+        // `attrs` is the JSONB column on observation; `->>'name'`
+        // extracts as text, then we cast where the schema declares
+        // a numeric / boolean / date type so MapLibre's typed
+        // expressions (e.g. `['>', ['get', 'pop'], 5]`) actually
+        // work without string coercion warnings.
+        fieldProjections.push(
+          Prisma.raw(
+            `(attrs->>'${f.name}')${cast} AS "${f.name}"`,
+          ),
+        );
+      }
+    }
+    const fieldProjection =
+      fieldProjections.length > 0
+        ? Prisma.sql`, ${Prisma.join(fieldProjections, ', ')}`
+        : Prisma.empty;
+    // `currents` needs `attrs` available so the outer projection
+    // can read it. Only include the JSONB column when we have at
+    // least one field to project, to keep the row narrower in the
+    // (rare) no-fields case.
+    const currentsAttrs =
+      fieldProjections.length > 0 ? Prisma.sql`, attrs` : Prisma.empty;
+
     // ST_TileEnvelope(z, x, y) returns the tile bbox in EPSG:3857
     // (Web Mercator). We bbox-filter on the geom column in 4326 by
     // transforming the envelope back to 4326 first; the && operator
@@ -822,6 +871,7 @@ export class DataLayerEngine {
           entity,
           geom,
           kind
+          ${currentsAttrs}
         FROM observation
         WHERE scope = ${scope}
           AND valid_to IS NULL
@@ -840,6 +890,7 @@ export class DataLayerEngine {
             64,
             true
           ) AS geom
+          ${fieldProjection}
         FROM currents
         WHERE kind <> 'delete'
       )
@@ -901,4 +952,19 @@ function requireId(id: string | undefined): string {
     throw new Error('engine returned observation without id');
   }
   return id;
+}
+
+/**
+ * Map a FeatureFieldType to a PostgreSQL cast suffix so the JSONB
+ * `->>` text extraction lands in MVT with the right typed
+ * property. Boolean and date are intentionally string-typed in
+ * MVT (MVT itself doesn't have boolean/date wire types; MapLibre
+ * compares them as strings), so we leave those uncast. Number
+ * fields go through `::numeric` so `['>', ['get', 'pop'], 5]`
+ * works without coercion warnings. Unknown / missing types fall
+ * back to text.
+ */
+function sqlCastForFieldType(type: string | undefined): string {
+  if (type === 'number') return '::numeric';
+  return '';
 }

@@ -273,6 +273,15 @@ export class DataLayerFeaturesService {
       geoLimit?: unknown;
       boundaryClip?: unknown;
       isTable?: boolean;
+      /**
+       * Layer's declared field schema. Passed through to the engine
+       * so each declared field is projected as an MVT feature
+       * property, which is what makes label / popup / filter
+       * expressions resolve client-side (#147). Omitted only when
+       * the caller can't get the schema (table-mode layers don't
+       * have it anyway; they short-circuit to an empty tile).
+       */
+      fields?: Array<{ name: string; type?: string }>;
     } = {},
   ): Promise<Buffer> {
     return this.dataLayer.mvtTile({
@@ -288,6 +297,7 @@ export class DataLayerFeaturesService {
         ? { boundaryClip: opts.boundaryClip as GeoJsonGeometry }
         : {}),
       ...(opts.isTable === true ? { isTable: true } : {}),
+      ...(opts.fields ? { fields: opts.fields } : {}),
     });
   }
 

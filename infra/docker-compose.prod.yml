@@ -34,6 +34,17 @@ services:
     image: gratis-gis-postgres:prod
     container_name: gratis-gis-prod-postgres
     restart: unless-stopped
+    # /dev/shm: postgres uses POSIX shared memory for parallel
+    # query workers and for ST_AsMVT tile generation. Docker's
+    # default is 64 MB, which immediately blows up on PostGIS
+    # tile builds over multi-million-row layers (we hit
+    # "could not resize shared memory segment ... No space left
+    # on device" 500s on /tile/:z/:x/:y.mvt against the 1.4M-row
+    # WV parcels test layer). 1 GB is generous for our host
+    # (8 GB total) but it's tmpfs so the kernel only commits
+    # pages actually written; the cap is the headroom for one
+    # tile-build to land on.
+    shm_size: 1g
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gratisgis}
       POSTGRES_USER: ${POSTGRES_USER:-gratisgis}

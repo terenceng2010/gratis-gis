@@ -213,7 +213,7 @@ export class DataLayerFeaturesController {
     @Param('y') yStr: string,
     @Query('clip') clip?: string,
   ) {
-    const { geoLimit, isTable } = await this.assertV3Layer(
+    const { geoLimit, isTable, layer } = await this.assertV3Layer(
       user,
       itemId,
       layerId,
@@ -237,12 +237,29 @@ export class DataLayerFeaturesController {
       geoLimit?: unknown;
       boundaryClip?: unknown;
       isTable?: boolean;
+      fields?: Array<{ name: string; type?: string }>;
     } = {};
     if (isTable) opts.isTable = true;
     if (geoLimit) opts.geoLimit = geoLimit;
     if (clip) {
       const geom = await this.resolveBoundaryGeometry(clip);
       if (geom) opts.boundaryClip = geom;
+    }
+    // #147: project the layer's declared fields into the tile so
+    // labels, popups, and filters have feature properties to read
+    // at render time. Without this every {{field}} evaluates to
+    // null. Filter to non-system field names; identifier safety is
+    // enforced again in the engine.
+    if (layer && Array.isArray(layer.fields)) {
+      opts.fields = layer.fields
+        .filter(
+          (f): f is { name: string; type?: string } =>
+            typeof f.name === 'string' && f.name.length > 0,
+        )
+        .map((f) => ({
+          name: f.name,
+          ...(typeof f.type === 'string' ? { type: f.type } : {}),
+        }));
     }
     const buf = await this.v3.mvtTile(itemId, layerId, z, x, y, opts);
     res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile');

@@ -254,8 +254,17 @@ export async function discoverLayerMetadata(
         // returning fields here keeps the labels editor and search
         // field-inserter functional even when the feature sample
         // didn't.
+        //
+        // We deliberately do NOT set `error` here when schema fields
+        // are available: the editor surfaces metadata.error as a red
+        // "Source returned 500" string under the filters / popups
+        // sections, which is alarming for the user and misleading
+        // (the layer is fine, only the sample couldn't run). When
+        // we have schema fields the layer authoring experience
+        // works end-to-end without the sample. Only surface error
+        // when we have nothing to give the editor.
         if (signal?.aborted) return EMPTY;
-        return {
+        const next: LayerMetadata = {
           ...EMPTY,
           fields: [...schemaFields].sort(),
           geometryTypes:
@@ -264,8 +273,11 @@ export async function discoverLayerMetadata(
             declaredGeometry === 'polygon'
               ? new Set([declaredGeometry])
               : new Set<GeometryFamily>(),
-          error: `Source returned ${res.status}`,
         };
+        if (schemaFields.length === 0) {
+          next.error = `Source returned ${res.status}`;
+        }
+        return next;
       }
       raw = await res.json();
       // Seed the field set with the schema-derived names so any
