@@ -131,6 +131,20 @@ const TYPE_GROUPS: TypeGroup[] = [
     label: 'Data',
     options: [
       {
+        // Basemap lives under Data rather than Maps because it's a
+        // remote-data pointer (tile URL / style.json / WMS endpoint)
+        // that maps reference, just like Connected service or Data
+        // layer. The original "Map = canvas, Basemap = also a kind
+        // of map" framing mirrored Esri / AGO, but in GratisGIS's
+        // model Map is the composition and Basemap is one of the
+        // data sources composed -- the same category as the other
+        // referenced layer types.
+        value: 'basemap',
+        label: 'Basemap',
+        desc: 'A reusable background layer (style URL, tile template, or WMS) for maps.',
+        Icon: Globe,
+      },
+      {
         value: 'geo_boundary',
         label: 'Boundary',
         desc: 'A named region (polygon) reused across shares, maps, and filters.',
@@ -172,12 +186,6 @@ const TYPE_GROUPS: TypeGroup[] = [
   {
     label: 'Maps',
     options: [
-      {
-        value: 'basemap',
-        label: 'Basemap',
-        desc: 'A reusable background layer (style URL, tile template, or WMS) for maps.',
-        Icon: Globe,
-      },
       {
         value: 'map',
         label: 'Map',
