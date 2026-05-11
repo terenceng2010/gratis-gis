@@ -116,6 +116,19 @@ export function extractDependencies(
     }
   }
 
+  if (item.type === 'geocoding_service') {
+    // #74: geocoding_service items reference a data_layer through
+    // `data.sourceLayerId`. Record it so the data_layer shows up
+    // in the geocoder's "Depends on" panel and vice versa, and so
+    // moving the source layer to trash surfaces the geocoder as
+    // a dependent (the cascade-share / dependents-warning surface
+    // already reads from this extractor).
+    const src = (data as { sourceLayerId?: unknown }).sourceLayerId;
+    if (typeof src === 'string' && src.length > 0) {
+      itemIds.add(src);
+    }
+  }
+
   if (item.type === 'folder') {
     // A folder claims a list of item UUIDs (childItemIds). Each one
     // is a hard dependency: the folder "depends on" the items it

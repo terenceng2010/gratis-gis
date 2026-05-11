@@ -38,6 +38,13 @@ export const ITEM_TYPES = [
   'folder',
   'editor',
   'data_collection',
+  // #74: geocoding service backed by an internal data_layer. Wraps
+  // a vector layer (parcels, addresses, places) + a search-fields
+  // config and exposes a /geocode endpoint for maps + apps to
+  // consume. Sits alongside arcgis_geocode `service` items as the
+  // two ways to publish a geocoder; both feed the same map-search
+  // picker.
+  'geocoding_service',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];

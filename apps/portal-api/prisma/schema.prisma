@@ -157,6 +157,10 @@ enum ItemType {
   /// `protocol` discriminator on data_json. Legacy types stay in this
   /// enum for the deprecation window.
   service
+  /// #74: geocoding service backed by a data_layer item. Wraps a
+  /// vector layer + search-fields config and exposes a /geocode
+  /// runtime endpoint for maps + apps to use as a search source.
+  geocoding_service          @map("geocoding-service")
 }
 
 // ---------- Tables ----------
