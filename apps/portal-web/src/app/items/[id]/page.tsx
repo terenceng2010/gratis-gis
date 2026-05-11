@@ -745,20 +745,36 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             canEdit={canManage}
           />
         </section>
-      ) : isCustomAppItem(item) ? (
-        <section className="mb-6">
-          {/* #261: Custom Web App config. The Phase-1 surface is
-              structural (map, targets list, pages + widget kinds);
-              the full drag-drop visual designer lands as a follow-up
-              on top of this scaffolding. */}
-          <CustomAppDetail
-            itemId={item.id}
-            initial={{
-              ...DEFAULT_CUSTOM_APP,
-              ...((readCustomAppData(item) ?? {}) as Partial<CustomAppData>),
-            }}
-            canEdit={canManage}
-          />
+      ) : isCustomAppItem(item) && isBuilderView ? (
+        <CustomAppDetail
+          itemId={item.id}
+          itemTitle={item.title}
+          initial={{
+            ...DEFAULT_CUSTOM_APP,
+            ...((readCustomAppData(item) ?? {}) as Partial<CustomAppData>),
+          }}
+          canEdit={canManage}
+        />
+      ) : isCustomAppItem(item) && !isBuilderView ? (
+        <section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink-0">
+              Custom web app configuration
+            </p>
+            <p className="mt-0.5 text-xs text-muted">
+              Open the full-screen builder to drag widgets onto the
+              canvas, arrange pages, and bind data layers.
+            </p>
+          </div>
+          {canManage ? (
+            <Link
+              href={`/items/${item.id}?view=configure`}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground hover:opacity-90"
+            >
+              <Pencil className="h-4 w-4" />
+              Configure
+            </Link>
+          ) : null}
         </section>
       ) : item.type === 'data_collection' ? (
         <section className="mb-6">

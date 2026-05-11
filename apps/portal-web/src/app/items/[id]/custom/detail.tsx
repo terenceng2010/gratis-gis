@@ -63,9 +63,15 @@ import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
 import { useConfirm } from '@/components/dialog-provider';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
 
 interface Props {
   itemId: string;
+  /**
+   * Item title for the BuilderShell top bar. Pass-through from the
+   * parent detail page (`item.title`).
+   */
+  itemTitle: string;
   initial: CustomAppData;
   canEdit: boolean;
 }
@@ -96,7 +102,7 @@ interface Props {
  * everything else, real renders are reserved for the runtime
  * (#341); the designer's job is layout + binding.
  */
-export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
+export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) {
   // #357: migrate any v1 (12-col / 48px-row) app to the new v2 grid
   // (24-col / 24px-row) on load so the rest of the designer can
   // assume v2 coordinates. Idempotent: v2 input passes through
@@ -527,64 +533,120 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
   const selectedWidget =
     activePage.widgets.find((w) => w.id === selectedWidgetId) ?? null;
 
+  // BuilderShell top-bar right side. Saved indicator + Save button +
+  // Open link to the runtime. Page/widget counts surface as a small
+  // muted line just below the title so the user gets a quick context
+  // chip without it occupying button-style real estate.
+  const toolbarRight = (
+    <>
+      {error && (
+        <span className="inline-flex items-center gap-1 text-xs text-rose-600">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {error}
+        </span>
+      )}
+      {saved && (
+        <span className="text-xs font-medium text-emerald-600">Saved</span>
+      )}
+      <button
+        type="button"
+        disabled={!canEdit || !dirty || saving}
+        onClick={onSave}
+        className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+        Save
+      </button>
+      <a
+        href={`/items/${itemId}/custom/run`}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2"
+      >
+        <Eye className="h-4 w-4" />
+        Open
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    </>
+  );
+
+  // Title shown next to the back arrow. Slim version: title +
+  // a comma-separated context (pages / widgets) appended visually.
+  // We keep this in the title string itself so it fits the BuilderShell
+  // top bar's truncate-on-overflow behavior.
+  const titleSummary = `${itemTitle} · ${app.pages.length} page${
+    app.pages.length === 1 ? '' : 's'
+  } · ${activePage.widgets.length} widget${
+    activePage.widgets.length === 1 ? '' : 's'
+  }`;
+
+  // Right-panel content is selection-dependent. Either a widget's
+  // own properties panel (when one is selected) or the app-level
+  // properties (default map, targets, page title, etc.).
+  const rightPanelContent = selectedWidget ? (
+    <WidgetProperties
+      widget={selectedWidget}
+      canEdit={canEdit}
+      pageWidgets={activePage.widgets}
+      appPages={app.pages}
+      appTargets={app.targets}
+      appMapId={app.mapId}
+      appMapTitle={mapTitle}
+      mapTitlesById={mapTitlesById}
+      onChange={(patch) => updateWidget(selectedWidget.id, patch)}
+      onChangeConfig={(configPatch) =>
+        updateWidget(selectedWidget.id, {
+          config: {
+            ...selectedWidget.config,
+            ...configPatch,
+          } as CustomWidget['config'],
+        })
+      }
+      onPickWidgetMap={() =>
+        setPickingMap({ scope: 'widget', widgetId: selectedWidget.id })
+      }
+      onRemove={() => removeWidget(selectedWidget.id)}
+    />
+  ) : (
+    <AppProperties
+      app={app}
+      page={activePage}
+      mapTitle={mapTitle}
+      canEdit={canEdit}
+      onUpdateApp={updateApp}
+      onUpdatePage={(patch) => updatePage(activePageIdx, patch)}
+      onClearMap={() => {
+        setApp((cur) => {
+          const { mapId: _drop, ...rest } = cur;
+          void _drop;
+          return rest;
+        });
+        setDirty(true);
+      }}
+      onPickMap={() => setPickingMap({ scope: 'app' })}
+    />
+  );
+
   return (
-    <div className="space-y-3">
-      {/* Header card: status + Save + Open ------------------------------ */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <Sparkles className="h-4 w-4 text-amber-500" strokeWidth={1.75} />
-          <div>
-            <div className="text-sm font-medium text-ink-0">
-              Custom web app
-            </div>
-            <div className="text-xs text-muted">
-              {app.pages.length} page{app.pages.length === 1 ? '' : 's'} ·{' '}
-              {activePage.widgets.length} widget
-              {activePage.widgets.length === 1 ? '' : 's'} on this page
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {saved && (
-            <span className="text-xs font-medium text-emerald-600">Saved</span>
-          )}
-          {error && (
-            <span className="inline-flex items-center gap-1 text-xs text-rose-600">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              {error}
-            </span>
-          )}
-          <button
-            type="button"
-            disabled={!canEdit || !dirty || saving}
-            onClick={onSave}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Save
-          </button>
-          <a
-            href={`/items/${itemId}/custom/run`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-semibold text-ink-1 hover:bg-surface-2"
-          >
-            <Eye className="h-3.5 w-3.5" />
-            Open
-            <ExternalLink className="h-3.5 w-3.5" />
-          </a>
-        </div>
-      </div>
-
-      {/* Three-pane workspace --------------------------------------- */}
-      <div className="flex h-[calc(100vh-180px)] min-h-[480px] gap-3">
-        {/* LEFT: palette */}
-        <Palette canEdit={canEdit} />
-
-        {/* CENTER: page tabs + canvas. The tab strip lives just above
-            the canvas so it stays aligned with the grid. The runtime
-            uses the same strip in its header. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
+    <>
+      <BuilderShell
+        storageKey="builder-shell:web-app-custom"
+        backHref={`/items/${itemId}`}
+        title={titleSummary}
+        icon={<Sparkles className="h-4 w-4 text-amber-500" strokeWidth={1.75} />}
+        toolbarRight={toolbarRight}
+        leftPanel={<Palette canEdit={canEdit} />}
+        leftPanelTitle="Widgets"
+        leftRailIcon={<LayoutGrid className="h-4 w-4" />}
+        rightPanel={rightPanelContent}
+        rightPanelTitle="Configuration"
+        rightRailIcon={<Settings className="h-4 w-4" />}
+      >
+        {/* Canvas + page-tab strip. PageTabs sits above Canvas; both
+            live inside an absolute-inset wrapper so the canvas grid
+            takes the full BuilderShell main slot height as the user
+            resizes panels. */}
+        <div className="absolute inset-0 flex flex-col gap-2 p-2">
           <PageTabs
             pages={app.pages}
             activeIdx={activePageIdx}
@@ -595,69 +657,26 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
             onRemove={removePage}
             onMove={movePage}
           />
-          <Canvas
-            widgets={activePage.widgets}
-            selectedId={selectedWidgetId}
-            canEdit={canEdit}
-            previewMapData={previewMapData}
-            previewBasemaps={previewBasemaps}
-            widgetMapData={widgetMapData}
-            activeTabIdxByWidget={activeTabIdxByWidget}
-            onSetActiveTabIdx={setActiveTabIdx}
-            onSelect={setSelectedWidgetId}
-            onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
-            onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
-          />
+          <div className="min-h-0 flex-1">
+            <Canvas
+              widgets={activePage.widgets}
+              selectedId={selectedWidgetId}
+              canEdit={canEdit}
+              previewMapData={previewMapData}
+              previewBasemaps={previewBasemaps}
+              widgetMapData={widgetMapData}
+              activeTabIdxByWidget={activeTabIdxByWidget}
+              onSetActiveTabIdx={setActiveTabIdx}
+              onSelect={setSelectedWidgetId}
+              onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
+              onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
+            />
+          </div>
         </div>
+      </BuilderShell>
 
-        {/* RIGHT: properties panel */}
-        <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1">
-          {selectedWidget ? (
-            <WidgetProperties
-              widget={selectedWidget}
-              canEdit={canEdit}
-              pageWidgets={activePage.widgets}
-              appPages={app.pages}
-              appTargets={app.targets}
-              appMapId={app.mapId}
-              appMapTitle={mapTitle}
-              mapTitlesById={mapTitlesById}
-              onChange={(patch) => updateWidget(selectedWidget.id, patch)}
-              onChangeConfig={(configPatch) =>
-                updateWidget(selectedWidget.id, {
-                  config: {
-                    ...selectedWidget.config,
-                    ...configPatch,
-                  } as CustomWidget['config'],
-                })
-              }
-              onPickWidgetMap={() =>
-                setPickingMap({ scope: 'widget', widgetId: selectedWidget.id })
-              }
-              onRemove={() => removeWidget(selectedWidget.id)}
-            />
-          ) : (
-            <AppProperties
-              app={app}
-              page={activePage}
-              mapTitle={mapTitle}
-              canEdit={canEdit}
-              onUpdateApp={updateApp}
-              onUpdatePage={(patch) => updatePage(activePageIdx, patch)}
-              onClearMap={() => {
-                setApp((cur) => {
-                  const { mapId: _drop, ...rest } = cur;
-                  void _drop;
-                  return rest;
-                });
-                setDirty(true);
-              }}
-              onPickMap={() => setPickingMap({ scope: 'app' })}
-            />
-          )}
-        </aside>
-      </div>
-
+      {/* PickMapDialog renders outside BuilderShell so its own
+          fixed-position modal z-index sits above the shell (z-20). */}
       <PickMapDialog
         open={pickingMap !== null}
         onPick={(picked) => {
@@ -681,7 +700,7 @@ export function CustomAppDetail({ itemId, initial, canEdit }: Props) {
         }}
         onClose={() => setPickingMap(null)}
       />
-    </div>
+    </>
   );
 }
 
@@ -987,29 +1006,27 @@ function Palette({ canEdit }: { canEdit: boolean }) {
     tiles: PALETTE_TILES.filter((t) => t.category === cat.id),
   })).filter((g) => g.tiles.length > 0);
 
+  // Palette renders inside BuilderShell's leftPanel slot, which
+  // already provides the panel header (title "Widgets") and the
+  // scroll container. We only need the categorized tile list here.
   return (
-    <aside className="flex w-56 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-1">
-      <div className="border-b border-border px-3 py-2.5">
-        <p className="text-sm font-medium text-ink-0">Widgets</p>
-        <p className="mt-0.5 text-xs text-muted">
-          {canEdit ? 'Drag onto the canvas' : 'Read only'}
-        </p>
-      </div>
-      <div className="flex flex-col overflow-auto pb-2">
-        {grouped.map((group) => (
-          <div key={group.id} className="border-b border-border last:border-0">
-            <div className="px-3 pb-1 pt-3">
-              <p className="text-xs font-medium text-ink-1">{group.label}</p>
-            </div>
-            <div className="flex flex-col">
-              {group.tiles.map((tile) => (
-                <PaletteTile key={tile.kind} {...tile} canEdit={canEdit} />
-              ))}
-            </div>
+    <div className="flex flex-col pb-2">
+      <p className="border-b border-border bg-surface-2 px-3 py-1.5 text-[11px] text-muted">
+        {canEdit ? 'Drag a widget onto the canvas' : 'Read only'}
+      </p>
+      {grouped.map((group) => (
+        <div key={group.id} className="border-b border-border last:border-0">
+          <div className="px-3 pb-1 pt-3">
+            <p className="text-xs font-medium text-ink-1">{group.label}</p>
           </div>
-        ))}
-      </div>
-    </aside>
+          <div className="flex flex-col">
+            {group.tiles.map((tile) => (
+              <PaletteTile key={tile.kind} {...tile} canEdit={canEdit} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
