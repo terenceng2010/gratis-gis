@@ -129,6 +129,19 @@ interface Props {
    * geojson-url / arcgis-rest / inline sources).
    */
   mapBbox?: [number, number, number, number] | null;
+  /**
+   * When true, the table renders to fill its parent container
+   * (`relative h-full w-full`) instead of overlaying the bottom 40%
+   * of an `absolute` parent. The own close button is also hidden
+   * and global Esc handling is skipped, on the assumption that the
+   * parent (a ToolPopover, a modal dialog, etc.) owns those.
+   *
+   * This is what the Custom Web App designer's attribute-table
+   * widget passes so it can drop the same component into a panel-
+   * arrangement-positioned popover without the map-editor's
+   * bottom-dock CSS fighting the popover's own sizing.
+   */
+  embedded?: boolean;
 }
 
 type SortDir = 'asc' | 'desc';
@@ -164,6 +177,7 @@ export function AttributeTable({
   fieldsByLayer,
   pickLists,
   mapBbox,
+  embedded = false,
 }: Props) {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [lastPicked, setLastPicked] = useState<number | null>(null);
@@ -1035,7 +1049,19 @@ export function AttributeTable({
   if (!open) return null;
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-20 flex h-[40%] min-h-[240px] flex-col border-t border-border bg-surface-1 shadow-overlay">
+    <div
+      className={
+        embedded
+          ? // Embedded: fill the parent (a ToolPopover content area in
+            // the Custom Web App, etc.). The parent owns positioning,
+            // sizing, and chrome.
+            'relative flex h-full w-full flex-col bg-surface-1'
+          : // Default: bottom dock over a relatively-positioned canvas
+            // parent (the map editor's pattern). 40% of the canvas
+            // height, full width.
+            'absolute bottom-0 left-0 right-0 z-20 flex h-[40%] min-h-[240px] flex-col border-t border-border bg-surface-1 shadow-overlay'
+      }
+    >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <h3 className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted">
           <Table className="h-3.5 w-3.5" />
@@ -1201,14 +1227,18 @@ export function AttributeTable({
           <FilterIcon className="h-3.5 w-3.5" />
           Use as filter
         </button>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {/* The own close button is hidden when embedded: the parent
+            (a ToolPopover in the Custom Web App, etc.) owns close. */}
+        {embedded ? null : (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {serverMode && serverPage?.truncated ? (

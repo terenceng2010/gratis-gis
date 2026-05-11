@@ -9,7 +9,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type RefObject,
+  type SetStateAction,
 } from 'react';
 import {
   ArrowLeft,
@@ -51,6 +53,8 @@ import type {
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import type { SelectToolMode } from '../map/select-tool';
+import { AttributeTable } from '../map/attribute-table';
+import type { LayerMetadata } from '../map/layer-metadata';
 import {
   MapCanvas,
   type MapCanvasHandle,
@@ -1186,6 +1190,12 @@ function SelectWidgetRender({ widget }: { widget: CustomWidget }) {
 
 // ---- AttributeTable widget -------------------------------------------------
 
+/**
+ * Shared shape used by ChartWidgetRender (and previously by the
+ * legacy AttributeTableWidgetRender) for its lazy GeoJSON fetch.
+ * Phase 2 of the attribute-table swap moved the table off this
+ * shape onto the rich AttributeTable, but Chart still consumes it.
+ */
 interface FetchedFeatures {
   loading: boolean;
   rows: Array<{ id: string | number; props: Record<string, unknown> }>;
@@ -1193,106 +1203,194 @@ interface FetchedFeatures {
   error: string | null;
 }
 
+/**
+ * Custom Web App's attribute-table widget. Phase 2 swaps the previous
+ * minimal HTML table for the rich AttributeTable component from the
+ * map item, so the panel that opens when the user clicks the
+ * attribute-table toolbar button looks and behaves identically to the
+ * one in the map editor: layer picker dropdown across all the bound
+ * map's queryable layers, text query bar, sort by column,
+ * In-extent toggle, Show selected, server-paged mode for v3
+ * data_layer sublayers (so the 1.4M-row parcels case stays fast),
+ * Zoom-to-selection, "Use as filter".
+ *
+ * State sourcing:
+ *
+ *   - When the widget is bound to a Map widget via
+ *     `syncWithMapWidgetId`, the table reads the bound map's layers,
+ *     selection, and viewport bbox from CustomMapsContext. Clicking a
+ *     row mutates the same selection state the map renders, so the
+ *     feature highlights, layer access, view scope, and any other
+ *     map-level concerns all stay coherent across the two widgets.
+ *
+ *   - When the widget is unbound (no `syncWithMapWidgetId`), the
+ *     table falls back to a single-layer view of the widget's
+ *     configured target with local selection state. Useful for
+ *     pages that show a table without a paired map. The Zoom-to
+ *     control no-ops in this mode (no map to fly).
+ *
+ * The widget passes `embedded={true}` so AttributeTable fills the
+ * ToolPopover content area instead of bottom-docking, and so its own
+ * close button is hidden (the popover provides one).
+ */
 function AttributeTableWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'attribute-table') return null;
+  // Pin the narrowed config to a local so the useMemo / useCallback
+  // closures below don't re-narrow `widget.config` (TS loses the
+  // discriminant inside hook bodies otherwise).
+  const cfg = widget.config;
   const ctx = useContext(CustomMapsContext);
-  const target = ctx?.resolvedTargets[widget.config.targetIndex] ?? null;
-  const [data, setData] = useState<FetchedFeatures>({
-    loading: true,
-    rows: [],
-    fields: [],
-    error: null,
-  });
-  const maxRows = widget.config.maxRows ?? 200;
 
+  const mapWidgetId = cfg.syncWithMapWidgetId;
+  const boundMapState = mapWidgetId ? ctx?.states[mapWidgetId] ?? null : null;
+  const boundMapInstance = mapWidgetId ? ctx?.maps[mapWidgetId] ?? null : null;
+
+  // Layers shown in the table's layer-picker dropdown. Bound to a
+  // map: all the map's layers (the rich AttributeTable filters down
+  // to queryable ones internally). Unbound: just the configured
+  // target as a synthetic single-layer array.
+  const layers = useMemo<MapLayer[]>(() => {
+    if (boundMapState?.mapData.layers) return boundMapState.mapData.layers;
+    if (!ctx) return [];
+    const target = ctx.resolvedTargets[cfg.targetIndex];
+    if (!target) return [];
+    return [target.mapLayer];
+  }, [boundMapState, ctx, cfg.targetIndex]);
+
+  // Selection state. Shared with the bound map when present; the
+  // table updates `MapState.selection` via the context's `update`
+  // helper so the same Set drives both the table highlights and the
+  // map's feature-state. Unbound: local React state.
+  const [localSelection, setLocalSelection] = useState<
+    Record<string, Set<number | string>>
+  >({});
+  const selection = boundMapState?.selection ?? localSelection;
+  const setSelection: Dispatch<
+    SetStateAction<Record<string, Set<number | string>>>
+  > = useCallback(
+    (update) => {
+      if (mapWidgetId && ctx) {
+        ctx.update(mapWidgetId, (cur) => ({
+          ...cur,
+          selection:
+            typeof update === 'function'
+              ? (update as (
+                  s: Record<string, Set<number | string>>,
+                ) => Record<string, Set<number | string>>)(cur.selection)
+              : update,
+        }));
+        return;
+      }
+      setLocalSelection(update);
+    },
+    [ctx, mapWidgetId],
+  );
+
+  // Live map viewport bbox. Drives server-paged mode for v3
+  // data_layer sublayers: when present, the table fetches rows in
+  // the visible extent instead of materializing every row. Tracked
+  // here via moveend so we update only after the pan/zoom settles
+  // and don't churn the AttributeTable's fetch on every frame.
+  const [mapBbox, setMapBbox] = useState<
+    [number, number, number, number] | null
+  >(null);
   useEffect(() => {
-    if (!target) {
-      setData({ loading: false, rows: [], fields: [], error: 'No target' });
+    if (!boundMapInstance) {
+      setMapBbox(null);
       return;
     }
-    let abort = false;
-    setData({ loading: true, rows: [], fields: [], error: null });
-    void (async () => {
-      try {
-        const url = `/api/portal/items/${target.dataLayerId}/layers/${target.layerKey}/geojson`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const fc = (await res.json()) as GeoJSON.FeatureCollection;
-        if (abort) return;
-        const features = (fc.features ?? []).slice(0, maxRows);
-        const fieldSet = new Set<string>();
-        for (const f of features) {
-          for (const k of Object.keys(f.properties ?? {})) fieldSet.add(k);
-        }
-        const fields = Array.from(fieldSet).filter((f) => !f.startsWith('_'));
-        setData({
-          loading: false,
-          rows: features.map((f) => ({
-            id: (f.id ?? '') as string | number,
-            props: (f.properties ?? {}) as Record<string, unknown>,
-          })),
-          fields,
-          error: null,
-        });
-      } catch (err) {
-        if (abort) return;
-        setData({
-          loading: false,
-          rows: [],
-          fields: [],
-          error: err instanceof Error ? err.message : 'Fetch failed',
-        });
-      }
-    })();
-    return () => {
-      abort = true;
+    const update = () => {
+      const b = boundMapInstance.getBounds();
+      setMapBbox([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
     };
-  }, [target, maxRows]);
+    update();
+    boundMapInstance.on('moveend', update);
+    return () => {
+      boundMapInstance.off('moveend', update);
+    };
+  }, [boundMapInstance]);
+
+  // The configured target picks which layer the picker focuses on
+  // first open. Beyond that the user can switch via the dropdown.
+  const focusLayerId = useMemo(() => {
+    if (!ctx) return null;
+    const target = ctx.resolvedTargets[cfg.targetIndex];
+    return target?.mapLayer.id ?? null;
+  }, [ctx, cfg.targetIndex]);
+
+  // Metadata is normally populated by the map canvas as it loads
+  // each layer's features. The Custom App runtime doesn't carry an
+  // equivalent populated map yet, but AttributeTable tolerates an
+  // empty record (it just falls back to behavior that doesn't need
+  // geometryType-aware features). Server-paged mode for v3 layers
+  // doesn't depend on metadata at all.
+  const metadata = useMemo<Record<string, LayerMetadata>>(() => ({}), []);
+
+  // featuresByLayer is the client-side feature cache the legacy
+  // (non-v3) sources rely on. We don't pre-warm it: for v3 data
+  // layers (the modern case), the AttributeTable server-pages by
+  // mapBbox automatically. Legacy sources would need a fetch here;
+  // unblocking that path is filed as a follow-up.
+  const featuresByLayer = useMemo<
+    Record<string, GeoJSON.FeatureCollection | null>
+  >(() => ({}), []);
+
+  const onZoomTo = useCallback(
+    (bbox: [number, number, number, number]) => {
+      if (!mapWidgetId || !ctx) return;
+      ctx.flyTo(mapWidgetId, bbox);
+    },
+    [ctx, mapWidgetId],
+  );
+
+  const onPatchLayer = useCallback(
+    (layerId: string, patch: Partial<MapLayer>) => {
+      if (!mapWidgetId || !ctx) return;
+      ctx.update(mapWidgetId, (cur) => ({
+        ...cur,
+        mapData: {
+          ...cur.mapData,
+          layers: cur.mapData.layers.map((l) =>
+            l.id === layerId ? { ...l, ...patch } : l,
+          ),
+        },
+      }));
+    },
+    [ctx, mapWidgetId],
+  );
+
+  // No bound map = no usable table because the rich AttributeTable
+  // expects a non-empty layers array. Show a friendly nudge so the
+  // author knows what to wire up.
+  if (layers.length === 0) {
+    return (
+      <p className="p-3 text-xs italic text-muted">
+        Configure the widget&rsquo;s target layer (or bind to a Map
+        widget that has layers) to populate the attribute table.
+      </p>
+    );
+  }
 
   return (
-    <WidgetFrame icon={LayersIcon} title="Attribute Table">
-      {data.loading ? (
-        <p className="p-2 text-xs italic text-muted">Loading…</p>
-      ) : data.error ? (
-        <p className="p-2 text-xs text-rose-600">{data.error}</p>
-      ) : data.rows.length === 0 ? (
-        <p className="p-2 text-xs italic text-muted">No features.</p>
-      ) : (
-        <div className="flex-1 overflow-auto">
-          <table className="min-w-full border-collapse text-[11px]">
-            <thead className="sticky top-0 z-10 bg-surface-2">
-              <tr>
-                {data.fields.map((f) => (
-                  <th
-                    key={f}
-                    className="border-b border-border px-2 py-1 text-left font-medium text-ink-1"
-                  >
-                    {f}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((r, i) => (
-                <tr
-                  key={`${r.id}:${i}`}
-                  className="border-b border-border hover:bg-surface-2"
-                >
-                  {data.fields.map((f) => (
-                    <td
-                      key={f}
-                      className="whitespace-nowrap px-2 py-1 text-ink-1"
-                    >
-                      {formatCell(r.props[f])}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </WidgetFrame>
+    <AttributeTable
+      embedded
+      open
+      layers={layers}
+      featuresByLayer={featuresByLayer}
+      metadata={metadata}
+      canEdit={false}
+      selection={selection}
+      setSelection={setSelection}
+      onClose={() => {
+        /* The ToolPopover owns close; the embedded AttributeTable
+           hides its own close button, so this is a no-op stub kept
+           for the typed prop. */
+      }}
+      onZoomTo={onZoomTo}
+      onPatchLayer={onPatchLayer}
+      focusLayerId={focusLayerId}
+      mapBbox={mapBbox}
+    />
   );
 }
 
