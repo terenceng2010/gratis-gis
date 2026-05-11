@@ -318,6 +318,17 @@ export interface AttributeTableWidgetConfig {
   syncWithMapWidgetId?: string;
   /** Maximum rows fetched. Defaults to 200 in the runtime. */
   maxRows?: number;
+  /**
+   * #261 follow-up: attribute-table joins the map-following crew so
+   * authors can drop it on the toolbar instead of stealing a row of
+   * grid real estate. When `displayMode === 'tool'`, the widget
+   * renders as an icon button and the table opens in a floating
+   * panel configured by `panelArrangement`. Default arrangement
+   * anchors the panel to the bottom edge of the canvas, matching
+   * where the map-item's attribute table docks.
+   */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface TextWidgetConfig {

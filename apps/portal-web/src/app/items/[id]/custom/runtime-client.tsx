@@ -28,6 +28,7 @@ import {
   Printer,
   Search as SearchIcon,
   Square as SquareIcon,
+  Table2 as TableIcon,
   Type as TypeIcon,
   X as XIcon,
 } from 'lucide-react';
@@ -490,6 +491,12 @@ const TOOL_DISPLAY_KINDS: ReadonlySet<CustomWidgetKind> = new Set([
   'bookmark',
   'coordinates',
   'my-location',
+  // #261 follow-up: attribute-table now supports tool display mode so
+  // authors can drop it onto the toolbar above the map. When
+  // displayMode='tool' the runtime renders an icon button that opens
+  // the table in a floating panel (anchored bottom-center by default,
+  // matching the map item's dock).
+  'attribute-table',
 ]);
 
 function isToolDisplayWidget(widget: CustomWidget): boolean {
@@ -517,6 +524,7 @@ const KIND_TOOL_LABEL: Record<string, string> = {
   bookmark: 'Bookmarks',
   coordinates: 'Coordinates',
   'my-location': 'My location',
+  'attribute-table': 'Attribute table',
 };
 
 /**
@@ -2218,7 +2226,7 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   map: MapIcon,
   legend: ListTree,
   'layer-list': LayersIcon,
-  'attribute-table': LayersIcon,
+  'attribute-table': TableIcon,
   text: TypeIcon,
   chart: ChevronRight,
   search: SearchIcon,

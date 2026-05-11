@@ -3641,6 +3641,21 @@ function defaultPanelArrangement(kind: CustomWidgetKind): PanelArrangement {
       return { ...base, anchor: 'top-right', width: 280, height: 180 };
     case 'my-location':
       return { ...base, anchor: 'top-right', width: 280, height: 160 };
+    case 'attribute-table':
+      // Mirrors the map item's attribute table dock: wide and not
+      // very tall, anchored along the bottom edge so the map above
+      // stays usable. Width is generous enough for a half-dozen
+      // columns at default zoom; the runtime resizer (panel
+      // arrangement) lets the author bump it up if they bind many
+      // fields.
+      return {
+        ...base,
+        anchor: 'bottom-center',
+        width: 720,
+        height: 280,
+        offsetX: 12,
+        offsetY: 12,
+      };
     default:
       return base;
   }
@@ -3662,6 +3677,12 @@ const TOOL_MODE_KINDS: ReadonlySet<CustomWidgetKind> = new Set([
   'bookmark',
   'coordinates',
   'my-location',
+  // #261 follow-up: attribute-table joins the map-following crew so
+  // authors can drop it on the toolbar instead of stealing a row of
+  // grid real estate. Default panel arrangement (below) anchors the
+  // resulting overlay along the bottom edge, matching where the
+  // map-item's attribute table panel docks.
+  'attribute-table',
 ]);
 
 /**
@@ -3740,7 +3761,19 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
         id,
         kind,
         layout,
-        config: { kind: 'attribute-table', targetIndex: 0 },
+        config: {
+          kind: 'attribute-table',
+          targetIndex: 0,
+          // Match the other map-following widgets: default to tool
+          // mode so freshly-dropped attribute tables show up as
+          // toolbar buttons instead of stealing a row of grid
+          // real estate. Authors can flip to 'panel' in the right
+          // rail if they want the table inline. (Existing app data
+          // without displayMode still resolves to 'panel' via
+          // effectiveDisplayMode, so back-compat is preserved.)
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('attribute-table'),
+        },
       };
     case 'text':
       return {
