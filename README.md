@@ -44,9 +44,14 @@ third party's cloud.
   storage. Both run inside your firewall. No data egress, no foreign
   jurisdictions, no hidden tenancy boundaries.
 - **Open standards, in and out.** GeoJSON, OGC API Features, CSW / ISO 19115
-  metadata, DCAT catalog, vector tiles, Esri WebMap JSON. Import without a
-  converter, export without an export window. Portal maps are consumable in
-  ArcGIS Pro, AGO, QGIS, and kepler.gl natively (`GET /items/:id/web-map.json`).
+  metadata, DCAT catalog, vector tiles. WebMap JSON import preserves the
+  metadata (extent, basemap, layer list, symbology, popups) and the source
+  URLs, so an AGO map referencing public FeatureServers renders against
+  AGO's hosted data; cutting the cord fully requires a separate
+  "stage as portal dataset" step. Export emits WebMap JSON pointing at the
+  portal's own layer URLs (`GET /items/:id/web-map.json`); whether ArcGIS
+  Pro / AGO / QGIS consume it natively depends on the importing tool's
+  strictness and is worth testing in your environment.
 - **No proprietary file formats.** Your data lives in a documented
   Postgres + PostGIS schema with no opaque binary blobs. If GratisGIS
   disappears tomorrow, your data is still queryable with `psql` and
