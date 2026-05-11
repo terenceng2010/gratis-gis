@@ -7,6 +7,7 @@ import {
   Check,
   GripVertical,
   Loader2,
+  RefreshCw,
   Save,
   Search,
   Trash2,
@@ -223,6 +224,60 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
         f.name === name ? { ...f, weight } : f,
       ),
     }));
+  }
+
+  /**
+   * Run the per-field GIN trigram index rebuild against the
+   * currently-saved geocoder config. Independent of save state:
+   * needed for two cases the save-triggered path doesn't cover
+   *
+   *   1. Re-running the rebuild on a geocoder whose config is
+   *      unchanged (hasChanges=false short-circuits save()).
+   *   2. First-time index build on geocoders that existed before
+   *      the rebuild path shipped (no save trigger ever fired).
+   *
+   * Shows the same "Indexing..." spinner + summary as the
+   * save-triggered rebuild so the UX is consistent.
+   */
+  async function rebuildOnly() {
+    if (!canEdit) return;
+    setError(null);
+    setIndexBuilding(true);
+    setIndexSummary(null);
+    try {
+      const res = await fetch(
+        `/api/portal/geocode/${itemId}/rebuild-indexes`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        let msg = `Index build failed (HTTP ${res.status}).`;
+        try {
+          const body = (await res.text()) ?? '';
+          const parsed = JSON.parse(body) as { message?: unknown };
+          if (typeof parsed.message === 'string') msg = parsed.message;
+        } catch {
+          /* keep HTTP fallback */
+        }
+        setError(msg);
+        return;
+      }
+      const summary = (await res.json()) as {
+        created: string[];
+        kept: string[];
+        dropped: string[];
+        rowCount: number;
+        durationMs: number;
+      };
+      setIndexSummary(summary);
+      // Surface as "Saved"-style toast so the user gets the same
+      // affirmative feedback they'd see from a save-with-rebuild.
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2400);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Index build failed.');
+    } finally {
+      setIndexBuilding(false);
+    }
   }
 
   async function save() {
@@ -624,6 +679,33 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
               <p className="text-muted">No changes.</p>
             )}
           </div>
+          {/* Rebuild indexes (#74 perf followup). Always enabled
+              when the user has edit access AND there's no
+              outstanding save in flight. Independent of
+              hasChanges so a user can re-run the rebuild on an
+              unchanged geocoder (or a geocoder that pre-dated the
+              rebuild path) without making a dummy edit first. */}
+          <button
+            type="button"
+            onClick={() => void rebuildOnly()}
+            disabled={
+              saving ||
+              indexBuilding ||
+              !draft.sourceLayerId ||
+              draft.searchFields.length === 0
+            }
+            title={
+              !draft.sourceLayerId
+                ? 'Pick a source layer first.'
+                : draft.searchFields.length === 0
+                  ? 'Pick at least one search field first.'
+                  : 'Rebuild the per-field search indexes against the saved configuration.'
+            }
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Rebuild indexes
+          </button>
           <button
             type="button"
             onClick={discard}
