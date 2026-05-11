@@ -144,6 +144,7 @@ import { DataLayerSchema } from './data-layer/schema-panel';
 import { VersionHistoryPanel } from './data-layer/version-history-panel';
 import { ComingSoon } from './coming-soon';
 import { BasemapEditor } from './basemap/editor';
+import { GeocodingServiceEditor } from './geocoding/editor';
 
 interface Props {
   params: { id: string };
@@ -884,6 +885,22 @@ export default async function ItemDetailPage({ params }: Props) {
             const canDownload = canManage || viewerCanDownload;
             return <FileDetail data={safe} canDownload={canDownload} />;
           })()}
+        </section>
+      ) : item.type === 'geocoding_service' ? (
+        <section className="mb-6">
+          {/* #74: geocoding_service detail editor. Authoring flow
+              (pick source layer, pick fields, configure weights /
+              label / bbox) + a test panel that runs against the
+              saved config so the author can validate. */}
+          <GeocodingServiceEditor
+            itemId={item.id}
+            initial={
+              (item.data && typeof item.data === 'object'
+                ? item.data
+                : { version: 1, sourceLayerId: '', searchFields: [] }) as import('@gratis-gis/shared-types').GeocodingServiceData
+            }
+            canEdit={canManage}
+          />
         </section>
       ) : item.type === 'basemap' ? (
         <section className="mb-6">

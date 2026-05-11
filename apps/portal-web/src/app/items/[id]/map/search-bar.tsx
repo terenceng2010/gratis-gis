@@ -6,6 +6,7 @@ import { Loader2, MapPin, Search, Tag, X } from 'lucide-react';
 import type { MapLayer } from '@gratis-gis/shared-types';
 import {
   geocode,
+  geocodeViaItem,
   searchArcgisLayers,
   searchLayers,
   type SearchResult,
@@ -15,6 +16,19 @@ interface Props {
   layers: MapLayer[];
   featuresByLayer: Record<string, GeoJSON.FeatureCollection | null>;
   geocodingEnabled: boolean;
+  /**
+   * #74: optional geocoding_service item id. When set, the search
+   * bar queries that geocoder instead of Nominatim. The runtime
+   * forwards the map's current viewport as the bbox so the
+   * similarity scan stays scoped to what the user is looking at.
+   */
+  geocoderItemId?: string;
+  /**
+   * #74: current viewport bbox for the geocoder. Optional; when
+   * missing the runtime falls back to the geocoder's configured
+   * bbox filter.
+   */
+  viewportBbox?: [number, number, number, number] | null;
   /**
    * Called when the user picks a result. The canvas owns the flyTo +
    * highlight logic; we just hand off the target.
@@ -41,6 +55,8 @@ export function SearchBar({
   layers,
   featuresByLayer,
   geocodingEnabled,
+  geocoderItemId,
+  viewportBbox,
   onPick,
 }: Props) {
   const [query, setQuery] = useState('');
@@ -63,22 +79,29 @@ export function SearchBar({
   );
 
   // Debounced geocoder. Don't run for super-short queries: every
-  // keystroke triggers a network request and Nominatim asks nicely
-  // that we keep volume low.
+  // keystroke triggers a network request. When the map has a
+  // geocoderItemId picked (#74) the runtime uses that geocoder
+  // instead of Nominatim, forwarding the current viewport so the
+  // similarity scan stays scoped.
   useEffect(() => {
     if (!geocodingEnabled) {
       setGeocodeResults([]);
       return;
     }
     const q = query.trim();
-    if (q.length < 3) {
+    if (q.length < 2) {
       setGeocodeResults([]);
       return;
     }
     const controller = new AbortController();
     setGeocodeLoading(true);
     const handle = setTimeout(() => {
-      geocode(q, controller.signal)
+      const promise = geocoderItemId
+        ? geocodeViaItem(q, geocoderItemId, viewportBbox ?? null, controller.signal)
+        : q.length >= 3
+          ? geocode(q, controller.signal)
+          : Promise.resolve([] as SearchResult[]);
+      promise
         .then((rows) => setGeocodeResults(rows))
         .finally(() => setGeocodeLoading(false));
     }, 350);
@@ -86,7 +109,7 @@ export function SearchBar({
       controller.abort();
       clearTimeout(handle);
     };
-  }, [query, geocodingEnabled]);
+  }, [query, geocodingEnabled, geocoderItemId, viewportBbox]);
 
   // Debounced ArcGIS REST attribute search. Runs only when at least
   // one visible layer is arcgis-rest and searchable; otherwise we

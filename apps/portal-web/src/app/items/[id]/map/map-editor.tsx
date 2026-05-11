@@ -8,6 +8,7 @@ import {
   Loader2,
   Map as MapBaseIcon,
   Save,
+  Search,
   ShieldCheck,
   Table,
 } from 'lucide-react';
@@ -273,6 +274,79 @@ export function MapEditor({
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [basemapMenuOpen]);
+  // Geocoder picker (#74). Same popover pattern as the basemap menu:
+  // a Search-icon toolbar button that opens a small menu listing
+  // "Default (Nominatim)" plus every geocoder the user can read
+  // (geocoding_service items + arcgis_geocode service items). Only
+  // rendered when at least one custom geocoder is available so the
+  // toolbar doesn't grow noise on orgs that haven't published any.
+  const [geocoderMenuOpen, setGeocoderMenuOpen] = useState(false);
+  const geocoderMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!geocoderMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (geocoderMenuRef.current && !geocoderMenuRef.current.contains(t)) {
+        setGeocoderMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [geocoderMenuOpen]);
+  const [availableGeocoders, setAvailableGeocoders] = useState<
+    Array<{ id: string; title: string; kind: 'internal' | 'arcgis' }>
+  >([]);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        // Pull both geocoding_service items and service items
+        // (arcgis_geocode protocol is a service item with a
+        // specific data.protocol value). We filter the service
+        // items to geocoders client-side because the lite list
+        // doesn't return the data blob; the service list is
+        // typically small enough that this is fine.
+        const [gsRes, svcRes] = await Promise.all([
+          fetch('/api/portal/items?type=geocoding_service&lite=1').then((r) =>
+            r.ok ? r.json() : [],
+          ),
+          fetch('/api/portal/items?type=service').then((r) =>
+            r.ok ? r.json() : [],
+          ),
+        ]);
+        const gsList = Array.isArray(gsRes) ? gsRes : [];
+        const svcList = Array.isArray(svcRes) ? svcRes : [];
+        const arcgisGeocoders = svcList.filter((s) => {
+          const proto = (s as { data?: { protocol?: unknown } }).data?.protocol;
+          return proto === 'arcgis_geocode';
+        });
+        if (cancelled) return;
+        const combined: Array<{
+          id: string;
+          title: string;
+          kind: 'internal' | 'arcgis';
+        }> = [
+          ...gsList.map((g: { id: string; title: string }) => ({
+            id: g.id,
+            title: g.title,
+            kind: 'internal' as const,
+          })),
+          ...arcgisGeocoders.map((g: { id: string; title: string }) => ({
+            id: g.id,
+            title: g.title,
+            kind: 'arcgis' as const,
+          })),
+        ];
+        setAvailableGeocoders(combined);
+      } catch {
+        /* network blip; leave list empty */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [legendOpen, setLegendOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
   // Layer id chosen by the per-layer kebab's "Open attribute table"
@@ -604,6 +678,25 @@ export function MapEditor({
     markDirty();
   }
 
+  /**
+   * #74: set the map's geocoding source. Pass `null` (or empty
+   * string) to fall back to Nominatim. Stored on
+   * `map.search.geocoderId` so the search bar can route queries to
+   * the picked geocoder instead of the default.
+   */
+  function setGeocoderId(value: string | null) {
+    setMap((m) => {
+      const nextSearch = { ...(m.search ?? { enabled: true, geocoding: true }) };
+      if (value) {
+        nextSearch.geocoderId = value;
+      } else {
+        delete nextSearch.geocoderId;
+      }
+      return { ...m, search: nextSearch };
+    });
+    markDirty();
+  }
+
   /** Value currently shown in the picker: the basemap item UUID. */
   const pickerValue = map.basemap;
 
@@ -857,6 +950,86 @@ export function MapEditor({
                   </div>
                 ) : null}
               </div>
+              {availableGeocoders.length > 0 ? (
+                <div ref={geocoderMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setGeocoderMenuOpen((v) => !v)}
+                    title="Search source"
+                    aria-label="Search source"
+                    aria-haspopup="menu"
+                    aria-expanded={geocoderMenuOpen}
+                    className={`inline-flex h-7 items-center justify-center rounded px-2 text-ink-1 hover:bg-surface-2 ${
+                      geocoderMenuOpen ? 'bg-purple-100 text-purple-800' : ''
+                    }`}
+                  >
+                    <Search className="h-4 w-4" />
+                  </button>
+                  {geocoderMenuOpen ? (
+                    <div
+                      role="menu"
+                      className="absolute right-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-raised"
+                    >
+                      <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        Search source
+                      </div>
+                      <ul className="max-h-72 overflow-auto py-1">
+                        <li>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setGeocoderId(null);
+                              setGeocoderMenuOpen(false);
+                            }}
+                            className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
+                              !map.search?.geocoderId
+                                ? 'bg-purple-100 text-purple-800'
+                                : 'text-ink-1'
+                            }`}
+                          >
+                            <span className="truncate">
+                              Default (Nominatim)
+                            </span>
+                            {!map.search?.geocoderId ? (
+                              <span className="ml-auto text-[10px] uppercase tracking-wide">
+                                active
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                        {availableGeocoders.map((g) => {
+                          const active = map.search?.geocoderId === g.id;
+                          return (
+                            <li key={g.id}>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setGeocoderId(g.id);
+                                  setGeocoderMenuOpen(false);
+                                }}
+                                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
+                                  active
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : 'text-ink-1'
+                                }`}
+                              >
+                                <span className="min-w-0 flex-1 truncate">
+                                  {g.title}
+                                </span>
+                                <span className="text-[10px] uppercase tracking-wide text-muted">
+                                  {g.kind === 'internal' ? 'internal' : 'ArcGIS'}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <ToolbarIconToggle
                 Icon={List}
                 label="Legend"
@@ -1013,6 +1186,10 @@ export function MapEditor({
               layers={map.layers}
               featuresByLayer={featuresByLayer}
               geocodingEnabled={map.search?.geocoding !== false}
+              {...(map.search?.geocoderId
+                ? { geocoderItemId: map.search.geocoderId }
+                : {})}
+              viewportBbox={mapBbox ?? null}
               onPick={(r) => {
                 canvasRef.current?.flyAndHighlight({
                   bbox: r.bbox,

@@ -157,6 +157,20 @@ export interface MapSearchConfig {
    * to their own data and will turn this off.
    */
   geocoding: boolean;
+  /**
+   * Optional UUID of a geocoding_service item (#74) or an
+   * arcgis_geocode-protocol service item (#75) that should be used
+   * as the geocoding source for this map. When set, the search bar
+   * queries the picked geocoder instead of Nominatim; when unset
+   * AND `geocoding: true`, falls back to Nominatim.
+   *
+   * The map runtime fetches candidates from
+   * `/api/portal/geocode/:geocoderId` (for geocoding_service items)
+   * with the caller's auth. Items the viewer can't read 404 cleanly
+   * and the search bar surfaces "no geocoder available" rather than
+   * silently falling back to a service they didn't pick.
+   */
+  geocoderId?: string;
 }
 
 export interface MapLayer {

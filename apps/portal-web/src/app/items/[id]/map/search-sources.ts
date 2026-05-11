@@ -269,6 +269,65 @@ export async function searchArcgisLayers(
 }
 
 /**
+ * Ask a portal-hosted geocoding_service item (#74) for candidates.
+ * Same shape as `geocode()`: returns `kind: 'place'` results with
+ * label + center coordinates. The runtime hits
+ * /api/portal/geocode/:itemId which enforces authz (the viewer
+ * must be able to read the geocoder item AND the underlying
+ * data_layer). When the user lacks access, this returns an empty
+ * list rather than throwing -- the search bar then surfaces "no
+ * candidates" the same way it would for an empty Nominatim result.
+ *
+ * The map's visible-extent bbox is forwarded so the runtime clamps
+ * its similarity scan to the user's current view; large statewide
+ * geocoders stay fast even when zoomed in.
+ */
+export async function geocodeViaItem(
+  query: string,
+  geocoderItemId: string,
+  bbox: [number, number, number, number] | null,
+  signal?: AbortSignal,
+): Promise<SearchResult[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const params = new URLSearchParams({ text: q });
+  if (bbox) params.set('bbox', bbox.join(','));
+  params.set('limit', '8');
+  const url = `/api/portal/geocode/${encodeURIComponent(geocoderItemId)}?${params.toString()}`;
+  const init: RequestInit = { headers: { Accept: 'application/json' } };
+  if (signal) init.signal = signal;
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return [];
+    return [];
+  }
+  if (!res.ok) return [];
+  const body = (await res.json()) as {
+    candidates: Array<{
+      featureId: string;
+      score: number;
+      label: string;
+      geom: { type: 'Point'; coordinates: [number, number] };
+    }>;
+  };
+  return body.candidates.map((c) => {
+    const [lng, lat] = c.geom.coordinates;
+    return {
+      kind: 'place' as const,
+      label: c.label,
+      // Score-as-subtitle keeps the geocoder's ranking visible to
+      // the user without an extra column; mirrors what Esri's
+      // Locator picker shows on hover.
+      subtitle: `score ${c.score.toFixed(2)}`,
+      bbox: null,
+      center: Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null,
+    };
+  });
+}
+
+/**
  * Ask Nominatim for matches. The abort signal cancels stale requests
  * so the UI never applies a result that's already been superseded.
  */

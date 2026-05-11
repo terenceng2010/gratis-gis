@@ -26,6 +26,7 @@ import {
   Loader2,
   Lock,
   Map as MapIcon,
+  MapPin,
   PencilRuler,
   Plug,
   Search,
@@ -55,6 +56,7 @@ import {
   DEFAULT_DERIVED_LAYER,
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
+  DEFAULT_GEOCODING_SERVICE,
   DEFAULT_MAP,
   DEFAULT_FOLDER,
   DEFAULT_CUSTOM_APP,
@@ -172,6 +174,15 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'File',
         desc: 'Any uploaded file (PDF, image, zip, etc.).',
         Icon: FileText,
+      },
+      {
+        // #74: geocoding_service. Wraps a data_layer + chosen
+        // search fields and exposes a /geocode endpoint for maps
+        // and apps to use as a search source.
+        value: 'geocoding_service',
+        label: 'Geocoding service',
+        desc: 'Searchable index over a data layer. Lets maps and apps geocode against your own parcels, addresses, or places.',
+        Icon: MapPin,
       },
       {
         value: 'pick_list',
@@ -1017,6 +1028,14 @@ export function NewItemWizard() {
         config: { template: 'custom', custom: DEFAULT_CUSTOM_APP },
       };
       data = webApp;
+    } else if (type === 'geocoding_service') {
+      // #74: empty geocoding_service. The detail page hosts the
+      // source-layer + search-fields config (which fields to
+      // search, weights, label template, bboxFilter). Creating
+      // empty + configuring on the detail page mirrors how
+      // pick_list and geo_boundary work; the wizard would
+      // duplicate the editor surface for no gain.
+      data = DEFAULT_GEOCODING_SERVICE;
     } else if (type === 'data_collection') {
       // mapId is structural: a data_collection without a map has
       // nothing for collectors to tap on. Block create until the
