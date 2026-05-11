@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { XMLParser } from 'fast-xml-parser';
 
 import { AdminGuard } from './admin.guard.js';
 
@@ -35,17 +36,25 @@ import { AdminGuard } from './admin.guard.js';
  *      `{base}/tile/{z}/{y}/{x}` (Esri row-before-column order).
  *
  *   3. URL has `?service=WMTS`, contains a `/wmts/` path segment,
- *      or ends in `WMTSCapabilities.xml` -> kind: 'tile-url';
- *      fetch capabilities, pick the first Layer's RESTful
- *      ResourceURL template (resourceType="tile"), substitute
- *      {Layer}/{Style}/{TileMatrixSet} from the doc, rewrite
- *      {TileMatrix}/{TileRow}/{TileCol} to MapLibre's
- *      {z}/{y}/{x}, lift Title + AccessConstraints.
+ *      or ends in `WMTSCapabilities.xml` -> kind: 'tile-url'.
+ *      Parses the capabilities document, walks all layers,
+ *      validates each layer's TileMatrixSet is web-mercator-
+ *      compatible (EPSG:3857 / 900913 / GoogleMapsCompatible /
+ *      WebMercatorQuad), validates every TileMatrix identifier is
+ *      a non-negative integer (so `{TileMatrix}` -> `{z}`
+ *      substitution is valid), picks the default Style, and
+ *      computes minZoom/maxZoom from the TileMatrix identifiers.
+ *      Refuses with a descriptive error when no layer satisfies
+ *      these constraints.
  *
  *   4. URL has `?service=WMS` (or path / file extension suggests
- *      WMS) -> kind: 'wms'; fetch GetCapabilities and surface
- *      Title + AccessConstraints + first layer name for the
- *      wmsConfig.
+ *      WMS) -> kind: 'wms'. Parses the capabilities document,
+ *      walks the nested Layer tree, accumulates CRS values from
+ *      parent layers (WMS spec: child layers inherit parent CRS),
+ *      and picks the first queryable layer (one with a Name) whose
+ *      effective CRS list contains EPSG:3857. Version-aware:
+ *      reads `CRS` for WMS >= 1.3.0 and `SRS` for earlier
+ *      versions.
  *
  *   5. URL responds with `application/json` and the body looks
  *      like a MapLibre style (has `version`, `sources`, `layers`)
@@ -114,16 +123,21 @@ export class AdminBasemapProbeController {
       }
     }
 
-    // (3) WMTS GetCapabilities. Checked BEFORE WMS because some
-    // servers expose both at adjacent paths and a WMTS URL with
-    // ?service=WMTS would otherwise miss; the WMS detector keys on
-    // /wms path or service=WMS, which doesn't overlap with /wmts.
+    // (3) WMTS GetCapabilities. Checked BEFORE WMS because the
+    // detectors don't overlap (WMS keys on /wms, WMTS keys on
+    // /wmts) but we want WMTS-first ordering documented.
     if (looksLikeWmts(parsed)) {
       try {
         return await this.probeWmts(parsed);
       } catch (err) {
         this.log.warn(
           `WMTS probe failed for ${url}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        // Re-throw if the detector is confident this is WMTS, so
+        // the operator sees the actual reason. The KVP fall-back
+        // logic of WMS detection won't help a WMTS document.
+        throw new BadRequestException(
+          err instanceof Error ? err.message : 'WMTS probe failed.',
         );
       }
     }
@@ -135,6 +149,9 @@ export class AdminBasemapProbeController {
       } catch (err) {
         this.log.warn(
           `WMS probe failed for ${url}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw new BadRequestException(
+          err instanceof Error ? err.message : 'WMS probe failed.',
         );
       }
     }
@@ -216,45 +233,6 @@ export class AdminBasemapProbeController {
     };
   }
 
-  private async probeWms(parsed: URL): Promise<BasemapProbeResult> {
-    // Strip whatever query the URL had; GetCapabilities is a
-    // standard request we compose ourselves.
-    const base = `${parsed.origin}${parsed.pathname}`;
-    const capsUrl = `${base}?service=WMS&request=GetCapabilities&version=1.3.0`;
-    const res = await fetchWithTimeout(capsUrl, 10_000);
-    if (!res.ok) {
-      throw new Error(`GetCapabilities returned ${res.status}`);
-    }
-    const xml = await res.text();
-    // Very light XML scrape. Full WMS Capabilities parsing is
-    // multi-version and we don't need to be exhaustive: we just
-    // want a Title + AccessConstraints + the first named layer.
-    const title = matchXmlText(xml, 'Title');
-    const attribution =
-      matchXmlText(xml, 'AccessConstraints') ||
-      matchXmlText(xml, 'OrganizationName');
-    // First <Layer><Name>...</Name>. The outer Service block also
-    // has Name + Title but those describe the SERVER, not the
-    // layer; we want the first published layer for the form.
-    const firstLayerName = firstLayerNameFromCaps(xml);
-    if (!firstLayerName) {
-      throw new Error('No named Layer in GetCapabilities response');
-    }
-    return {
-      kind: 'wms',
-      wmsUrl: base,
-      wmsConfig: {
-        layers: firstLayerName,
-        format: 'image/png',
-        transparent: true,
-        version: '1.3.0',
-        crs: 'EPSG:3857',
-      },
-      ...(title ? { title } : {}),
-      ...(attribution ? { attribution } : {}),
-    };
-  }
-
   private async probeWmts(parsed: URL): Promise<BasemapProbeResult> {
     // WMTS exposes capabilities two ways:
     //   * RESTful:  .../wmts/1.0.0/WMTSCapabilities.xml
@@ -272,80 +250,150 @@ export class AdminBasemapProbeController {
     }
     const xml = await res.text();
 
-    // Service-level title + attribution. Most WMTS docs use the
-    // OWS namespace prefix (ows:Title) but a few servers omit it,
-    // so we try both.
-    const title =
-      matchXmlText(xml, 'ows:Title') || matchXmlText(xml, 'Title');
-    const attribution =
-      matchXmlText(xml, 'AccessConstraints') ||
-      matchXmlText(xml, 'ows:AccessConstraints') ||
-      matchXmlText(xml, 'ows:ProviderName');
-
-    // Walk to the first <Layer>...</Layer> block. WMTS docs often
-    // list many layers (different products / styles); we pick the
-    // first as "the basemap" and let the admin edit the resulting
-    // URL by hand if they want a different one.
-    const layerBlock = xml.match(/<Layer\b[\s\S]*?<\/Layer>/i)?.[0];
-    if (!layerBlock) {
-      throw new Error('No <Layer> found in WMTS capabilities');
+    const doc = parseXml(xml);
+    const caps = asElement(doc.Capabilities);
+    if (!caps) {
+      throw new Error('Response is not a WMTS Capabilities document.');
     }
 
-    // The RESTful binding exposes one or more <ResourceURL
-    // format="image/png" resourceType="tile" template="..."/>
-    // elements inside the Layer. We want the first one whose
-    // resourceType is "tile" (FeatureInfo URLs also live here).
-    const resourceUrlRe =
-      /<ResourceURL\b[^>]*?\bresourceType="tile"[^>]*?\btemplate="([^"]+)"[^>]*\/?>/i;
-    const resourceUrlMatch = resourceUrlRe.exec(layerBlock);
-    let template = resourceUrlMatch?.[1];
+    // Service-level title + attribution. The OWS namespace prefix
+    // is stripped by the parser (`removeNSPrefix: true`), so a
+    // server using `ows:Title` or `wmts:Title` lands at the same
+    // key as one using bare `Title`.
+    const svcId = asElement(caps.ServiceIdentification);
+    const svcProvider = asElement(caps.ServiceProvider);
+    const title = textOf(svcId?.Title);
+    const attribution =
+      textOf(svcId?.AccessConstraints) ?? textOf(svcProvider?.ProviderName);
 
-    // Fallback for servers that only expose KVP tile URLs: we
-    // could synthesize a GetTile KVP request here, but those are
-    // server-side rendered (one request per tile, no template
-    // semantics) and MapLibre can't consume them as an XYZ source
-    // directly. Tell the operator that the layer isn't RESTful
-    // rather than handing back something broken.
-    if (!template) {
+    const contents = asElement(caps.Contents);
+    if (!contents) {
+      throw new Error('WMTS Capabilities has no <Contents> block.');
+    }
+
+    const layers = toArray(contents.Layer).filter(isElement);
+    if (layers.length === 0) {
+      throw new Error('No <Layer> found in WMTS Contents.');
+    }
+
+    // Build a TileMatrixSet lookup keyed by Identifier so each
+    // layer's TileMatrixSetLink reference resolves to the actual
+    // matrix definition with its CRS and TileMatrix list.
+    const tmsList = toArray(contents.TileMatrixSet).filter(isElement);
+    const tmsById = new Map<string, XmlElement>();
+    for (const tms of tmsList) {
+      const id = textOf(tms.Identifier);
+      if (id) tmsById.set(id, tms);
+    }
+
+    // Walk every (layer, TileMatrixSetLink) combination and accept
+    // the first one that passes all four checks: (a) layer has a
+    // RESTful ResourceURL with resourceType="tile", (b) the
+    // referenced TileMatrixSet exists, (c) its SupportedCRS is
+    // web-mercator-compatible, (d) every TileMatrix identifier in
+    // the set is a non-negative integer (required so MapLibre's
+    // {z} placeholder can directly substitute the WMTS
+    // {TileMatrix} identifier).
+    const rejections: string[] = [];
+    let chosen: ChosenWmtsLayer | undefined;
+    layerLoop: for (const layer of layers) {
+      const layerLabel = textOf(layer.Identifier) ?? '(unnamed layer)';
+      const tileResource = toArray(layer.ResourceURL)
+        .filter(isElement)
+        .find(
+          (r) =>
+            r['@_resourceType'] === 'tile' &&
+            typeof r['@_template'] === 'string',
+        );
+      if (!tileResource) {
+        rejections.push(
+          `${layerLabel}: no RESTful <ResourceURL resourceType="tile">`,
+        );
+        continue;
+      }
+      const template = String(tileResource['@_template']);
+      const links = toArray(layer.TileMatrixSetLink).filter(isElement);
+      for (const link of links) {
+        const tmsRef = textOf(link.TileMatrixSet);
+        if (!tmsRef) continue;
+        const tms = tmsById.get(tmsRef);
+        if (!tms) {
+          rejections.push(
+            `${layerLabel}: references unknown TileMatrixSet "${tmsRef}"`,
+          );
+          continue;
+        }
+        const crs = textOf(tms.SupportedCRS);
+        // Accept either CRS-encoded web mercator markers
+        // (EPSG:3857, EPSG:900913, with or without URN wrappers)
+        // OR the de-facto-standard identifiers that imply web
+        // mercator (GoogleMapsCompatible, WebMercatorQuad). The
+        // identifier check is a fallback for servers that omit
+        // SupportedCRS.
+        if (!isWebMercatorCrs(crs) && !isWebMercatorCrs(tmsRef)) {
+          rejections.push(
+            `${layerLabel}: TileMatrixSet "${tmsRef}" CRS "${crs ?? 'unknown'}" is not web mercator`,
+          );
+          continue;
+        }
+        const matrices = toArray(tms.TileMatrix).filter(isElement);
+        const matrixIds = matrices.map((m) => textOf(m.Identifier));
+        if (
+          matrixIds.length === 0 ||
+          !matrixIds.every((id) => id !== undefined && /^\d+$/.test(id))
+        ) {
+          rejections.push(
+            `${layerLabel}: TileMatrixSet "${tmsRef}" has non-integer TileMatrix identifiers (cannot map to MapLibre {z})`,
+          );
+          continue;
+        }
+        const levels = matrixIds.map((id) => parseInt(id as string, 10));
+        chosen = {
+          layer,
+          tms,
+          template,
+          minZoom: Math.min(...levels),
+          maxZoom: Math.max(...levels),
+        };
+        break layerLoop;
+      }
+    }
+
+    if (!chosen) {
+      const detail =
+        rejections.length > 0
+          ? ' Details: ' + rejections.slice(0, 3).join('; ')
+          : '';
       throw new Error(
-        'WMTS layer has no RESTful ResourceURL template; this ' +
-          'server only supports KVP GetTile, which MapLibre cannot ' +
-          'consume as a vector/raster tile source.',
+        `No WMTS layer in this capabilities document satisfies the basemap constraints (RESTful tile ResourceURL, web-mercator TileMatrixSet, integer TileMatrix identifiers).${detail}`,
       );
     }
 
-    // The template uses WMTS placeholders. Substitute the ones we
-    // can resolve from the capabilities document (Layer, Style,
-    // TileMatrixSet) and rewrite the XYZ-equivalent ones into
-    // MapLibre's {z}/{x}/{y} syntax.
-    const layerIdentifier =
-      firstTextInBlock(layerBlock, 'ows:Identifier') ||
-      firstTextInBlock(layerBlock, 'Identifier');
+    // Substitute the WMTS template placeholders. {Layer}, {Style},
+    // {TileMatrixSet} resolve from the capabilities document; the
+    // coordinate triple maps onto MapLibre's XYZ source convention.
+    const layerIdentifier = textOf(chosen.layer.Identifier);
+    const styles = toArray(chosen.layer.Style).filter(isElement);
+    // Spec: <Style isDefault="true"> marks the default; fall back
+    // to the first style if no default is flagged (most public
+    // services use exactly one style, often named "default").
+    const defaultStyle =
+      styles.find((s) => s['@_isDefault'] === 'true') ?? styles[0];
+    const styleIdentifier = defaultStyle
+      ? textOf(defaultStyle.Identifier)
+      : undefined;
+    const tmsIdentifier = textOf(chosen.tms.Identifier);
+
+    let template = chosen.template;
     if (layerIdentifier) {
       template = template.replace(/\{Layer\}/g, layerIdentifier);
     }
-    // First <Style>...<Identifier>X</Identifier>...</Style>.
-    const styleBlock = /<Style\b[\s\S]*?<\/Style>/i.exec(layerBlock)?.[0];
-    const styleIdentifier = styleBlock
-      ? firstTextInBlock(styleBlock, 'ows:Identifier') ||
-        firstTextInBlock(styleBlock, 'Identifier') ||
-        'default'
-      : 'default';
-    template = template.replace(/\{Style\}/g, styleIdentifier);
-    // First <TileMatrixSetLink><TileMatrixSet>X</TileMatrixSet>...
-    const tmsRef =
-      firstTextInBlock(layerBlock, 'TileMatrixSet') ||
-      firstTextInBlock(layerBlock, 'ows:TileMatrixSet');
-    if (tmsRef) {
-      template = template.replace(/\{TileMatrixSet\}/g, tmsRef);
+    if (styleIdentifier) {
+      template = template.replace(/\{Style\}/g, styleIdentifier);
     }
-    // Coordinate placeholders. WMTS's {TileMatrix} is the zoom
-    // level (assuming a Google-compatible matrix set, which is the
-    // common case for web basemaps); {TileRow} is y, {TileCol} is
-    // x. If the matrix set isn't Google-compatible the resulting
-    // tiles will be misaligned, but that's true for any XYZ-style
-    // wrapper around WMTS and the admin can pick a different
-    // TileMatrixSet if needed.
+    if (tmsIdentifier) {
+      template = template.replace(/\{TileMatrixSet\}/g, tmsIdentifier);
+    }
     template = template
       .replace(/\{TileMatrix\}/g, '{z}')
       .replace(/\{TileRow\}/g, '{y}')
@@ -354,6 +402,84 @@ export class AdminBasemapProbeController {
     return {
       kind: 'tile-url',
       tileUrl: template,
+      ...(title ? { title } : {}),
+      ...(attribution ? { attribution } : {}),
+      minZoom: chosen.minZoom,
+      maxZoom: chosen.maxZoom,
+    };
+  }
+
+  private async probeWms(parsed: URL): Promise<BasemapProbeResult> {
+    // Strip whatever query the URL had; GetCapabilities is a
+    // standard request we compose ourselves. Default to 1.3.0
+    // because it's the current spec; servers that only speak
+    // 1.1.1 typically still answer a 1.3.0 request with their
+    // 1.1.1 doc (and the parser handles both via the dual root
+    // element check below).
+    const base = `${parsed.origin}${parsed.pathname}`;
+    const capsUrl = `${base}?service=WMS&request=GetCapabilities&version=1.3.0`;
+    const res = await fetchWithTimeout(capsUrl, 10_000);
+    if (!res.ok) {
+      throw new Error(`WMS GetCapabilities returned ${res.status}`);
+    }
+    const xml = await res.text();
+
+    const doc = parseXml(xml);
+    // WMS 1.3.0 uses <WMS_Capabilities>; earlier versions
+    // (1.1.x and 1.0.0) use <WMT_MS_Capabilities>. Check both.
+    const root =
+      asElement(doc.WMS_Capabilities) ?? asElement(doc.WMT_MS_Capabilities);
+    if (!root) {
+      throw new Error('Response is not a WMS Capabilities document.');
+    }
+    const versionAttr = root['@_version'];
+    const version =
+      typeof versionAttr === 'string' && versionAttr.length > 0
+        ? versionAttr
+        : '1.3.0';
+    // WMS 1.3.0 introduced the <CRS> tag; earlier versions used
+    // <SRS>. The GetMap CRS/SRS parameter name follows the same
+    // split. We read the appropriate tag per version.
+    const crsTagName: 'CRS' | 'SRS' =
+      compareVersion(version, '1.3.0') >= 0 ? 'CRS' : 'SRS';
+
+    // Service-level title + attribution
+    const service = asElement(root.Service);
+    const title = textOf(service?.Title);
+    const contactInfo = asElement(service?.ContactInformation);
+    const contactPerson = asElement(contactInfo?.ContactPersonPrimary);
+    const attribution =
+      textOf(service?.AccessConstraints) ??
+      textOf(contactPerson?.ContactOrganization);
+
+    // The <Capability><Layer> root is conventionally a non-
+    // queryable container holding nested Layer elements. The
+    // WMS spec says CRS values inherit from parent to child, so
+    // we walk depth-first with accumulating inherited CRS and
+    // pick the first leaf (Name-bearing) layer whose effective
+    // CRS set includes a web-mercator value.
+    const capability = asElement(root.Capability);
+    const rootLayer = asElement(capability?.Layer);
+    if (!rootLayer) {
+      throw new Error('WMS Capabilities has no <Capability><Layer>.');
+    }
+    const layerName = findFirstWebMercatorWmsLayer(rootLayer, crsTagName, []);
+    if (!layerName) {
+      throw new Error(
+        'No queryable WMS layer in this server advertises support for EPSG:3857 (web mercator). MapLibre basemaps require web mercator.',
+      );
+    }
+
+    return {
+      kind: 'wms',
+      wmsUrl: base,
+      wmsConfig: {
+        layers: layerName,
+        format: 'image/png',
+        transparent: true,
+        version,
+        crs: 'EPSG:3857',
+      },
       ...(title ? { title } : {}),
       ...(attribution ? { attribution } : {}),
     };
@@ -414,7 +540,195 @@ export interface BasemapProbeResult {
 }
 
 // ----------------------------------------------------------------
-// helpers
+// XML parsing utilities
+// ----------------------------------------------------------------
+
+/**
+ * Loose typing for a parsed XML node. fast-xml-parser returns a
+ * plain object tree where each element is either a string (for
+ * text-only elements), an XmlElement (one child of each name), or
+ * an array of XmlElement / strings (when an element has siblings
+ * with the same name). Attribute values land under keys prefixed
+ * with `@_`.
+ */
+type XmlValue = string | number | boolean | XmlElement | XmlValue[];
+interface XmlElement {
+  [key: string]: XmlValue | undefined;
+}
+
+const xmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  // Strip namespace prefixes (ows:, wmts:, xlink:, etc) so every
+  // server's variant of <ows:Title> / <wmts:Title> / <Title>
+  // lands at the same key in the parsed object tree.
+  removeNSPrefix: true,
+  // Keep all values as strings; the spec defines XML types per
+  // element and we'd rather parse explicitly than rely on the
+  // library's type guessing.
+  parseAttributeValue: false,
+  parseTagValue: false,
+  trimValues: true,
+});
+
+function parseXml(xml: string): XmlElement {
+  try {
+    const result = xmlParser.parse(xml) as unknown;
+    if (typeof result !== 'object' || result === null) {
+      throw new Error('Parser returned non-object root.');
+    }
+    return result as XmlElement;
+  } catch (err) {
+    throw new Error(
+      `Could not parse XML: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+function isElement(value: unknown): value is XmlElement {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function asElement(value: XmlValue | undefined): XmlElement | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    // If the parser saw multiple siblings (rare for the elements
+    // we look up at single-cardinality positions like Service or
+    // Capability) we take the first as the canonical one.
+    const first = value[0];
+    return isElement(first) ? first : undefined;
+  }
+  return isElement(value) ? value : undefined;
+}
+
+/**
+ * Extract the text content of a node. Handles three shapes that
+ * fast-xml-parser emits:
+ *   - bare string for elements with only text content
+ *   - { '#text': 'value', '@_attr': '...' } for elements with
+ *     both attributes and text
+ *   - undefined / object-without-#text yields undefined
+ * Whitespace is preserved as the parser already trims (trimValues).
+ */
+function textOf(value: XmlValue | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') {
+    return value.length > 0 ? value : undefined;
+  }
+  if (typeof value === 'number') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    // Multiple children of the same name: take the first text-
+    // bearing one. Used for tags like <Keyword>foo</Keyword>
+    // that repeat; we want a representative value.
+    for (const item of value) {
+      const t = textOf(item);
+      if (t) return t;
+    }
+    return undefined;
+  }
+  if (isElement(value)) {
+    const t = value['#text'];
+    if (typeof t === 'string') return t.length > 0 ? t : undefined;
+    if (typeof t === 'number') return String(t);
+  }
+  return undefined;
+}
+
+function toArray(value: XmlValue | undefined): XmlValue[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+// ----------------------------------------------------------------
+// WMTS / WMS helpers
+// ----------------------------------------------------------------
+
+interface ChosenWmtsLayer {
+  layer: XmlElement;
+  tms: XmlElement;
+  template: string;
+  minZoom: number;
+  maxZoom: number;
+}
+
+/**
+ * Is `crsString` a web-mercator CRS identifier in any of the
+ * forms WMTS / WMS services use? The spec allows several
+ * encodings of the same projection:
+ *   - "EPSG:3857" (WMS 1.3.0 short form)
+ *   - "urn:ogc:def:crs:EPSG::3857" (URN with empty version)
+ *   - "urn:ogc:def:crs:EPSG:6.18:3:3857" (URN with version)
+ *   - "http://www.opengis.net/def/crs/EPSG/0/3857" (HTTP URI)
+ *   - "EPSG:900913" (Google's legacy alias, still served by
+ *     some older Mapproxy / GeoServer installations)
+ *   - "GoogleMapsCompatible" / "WebMercatorQuad" (de-facto-
+ *     standard WMTS TileMatrixSet identifiers that imply 3857)
+ * We match the four-digit EPSG codes with a word boundary so a
+ * spurious "38573" wouldn't match.
+ */
+function isWebMercatorCrs(crsString: string | undefined): boolean {
+  if (!crsString) return false;
+  if (/\b(?:3857|900913)\b/.test(crsString)) return true;
+  if (/googlemapscompatible/i.test(crsString)) return true;
+  if (/webmercatorquad/i.test(crsString)) return true;
+  return false;
+}
+
+/**
+ * Depth-first walk of a WMS Layer tree. WMS layers nest, and the
+ * spec requires child layers to inherit their parent's CRS list.
+ * We accumulate inherited CRS through the recursion, and return
+ * the Name of the first layer that (a) has a Name attribute (i.e.
+ * is queryable) AND (b) advertises web mercator in its effective
+ * CRS set (own + inherited).
+ *
+ * `crsTagName` is 'CRS' for WMS >= 1.3.0 and 'SRS' for earlier.
+ */
+function findFirstWebMercatorWmsLayer(
+  layer: XmlElement,
+  crsTagName: 'CRS' | 'SRS',
+  inheritedCrs: string[],
+): string | undefined {
+  const ownCrs = toArray(layer[crsTagName])
+    .map(textOf)
+    .filter((s): s is string => typeof s === 'string');
+  const effectiveCrs = [...inheritedCrs, ...ownCrs];
+
+  const name = textOf(layer.Name);
+  if (name && effectiveCrs.some(isWebMercatorCrs)) {
+    return name;
+  }
+
+  const children = toArray(layer.Layer).filter(isElement);
+  for (const child of children) {
+    const hit = findFirstWebMercatorWmsLayer(child, crsTagName, effectiveCrs);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/**
+ * Compare two dotted-numeric versions ("1.1.1" vs "1.3.0").
+ * Returns positive when a > b, negative when a < b, 0 when equal.
+ * Sufficient for WMS version comparison; not a general semver
+ * implementation.
+ */
+function compareVersion(a: string, b: string): number {
+  const aP = a.split('.').map((n) => parseInt(n, 10));
+  const bP = b.split('.').map((n) => parseInt(n, 10));
+  const len = Math.max(aP.length, bP.length);
+  for (let i = 0; i < len; i++) {
+    const ai = Number.isFinite(aP[i]) ? (aP[i] as number) : 0;
+    const bi = Number.isFinite(bP[i]) ? (bP[i] as number) : 0;
+    if (ai !== bi) return ai - bi;
+  }
+  return 0;
+}
+
+// ----------------------------------------------------------------
+// URL / network helpers
 // ----------------------------------------------------------------
 
 function looksLikeXyzTemplate(url: string): boolean {
@@ -452,44 +766,6 @@ function looksLikeWms(parsed: URL): boolean {
   // without an explicit service= param.
   if (/(^|\/)wms(\/|$)/i.test(parsed.pathname)) return true;
   return false;
-}
-
-function matchXmlText(xml: string, tag: string): string | undefined {
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i');
-  const m = re.exec(xml);
-  if (!m || !m[1]) return undefined;
-  // Strip surrounding whitespace + collapse internal whitespace.
-  const v = m[1].replace(/\s+/g, ' ').trim();
-  return v.length > 0 ? v : undefined;
-}
-
-function firstTextInBlock(block: string, tag: string): string | undefined {
-  // Like matchXmlText but scoped to an inner XML fragment. Useful
-  // when a parent block (a <Layer> or <Style>) has many siblings
-  // with the same tag at different depths and we want the first
-  // *direct or nested* occurrence inside this block, not the
-  // whole document.
-  const safeTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`<${safeTag}[^>]*>([\\s\\S]*?)</${safeTag}>`, 'i');
-  const m = re.exec(block);
-  if (!m || !m[1]) return undefined;
-  const v = m[1].replace(/\s+/g, ' ').trim();
-  return v.length > 0 ? v : undefined;
-}
-
-function firstLayerNameFromCaps(xml: string): string | undefined {
-  // Walk every <Layer>...<Name>X</Name>...</Layer> and pick the
-  // first one. WMS capabilities nests Layer elements; the first
-  // INNER one with a Name is the smallest publishable layer.
-  const layerBlocks = xml.match(/<Layer\b[\s\S]*?<\/Layer>/gi);
-  if (!layerBlocks) return undefined;
-  for (const block of layerBlocks) {
-    const m = /<Name[^>]*>([\s\S]*?)<\/Name>/i.exec(block);
-    if (m && m[1] && m[1].trim().length > 0) {
-      return m[1].trim();
-    }
-  }
-  return undefined;
 }
 
 function isPrivateOrLoopbackHost(host: string): boolean {
