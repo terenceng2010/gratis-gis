@@ -170,7 +170,7 @@ export async function discoverLayerMetadata(
       typeof layer.source.layerKey === 'string' &&
       layer.source.layerKey.length > 0
     ) {
-      // v3 sublayer. Two changes from the v1/v2 path:
+      // v3 sublayer. Three changes from the v1/v2 path:
       //
       // 1. Hit /items/:id/layers/:layerKey/geojson (the per-sublayer
       //    endpoint), not /items/:id/geojson (which only works for
@@ -182,9 +182,21 @@ export async function discoverLayerMetadata(
       //    a feature added yet -- without this preempt, every empty
       //    point/line/polygon sublayer renders as a non-spatial
       //    table in the layer panel.
+      // 3. Also pull the sublayer's `fields[]` schema from the same
+      //    parent-item fetch. v3 sublayers carry their authoritative
+      //    field list in their item data; the features-driven loop
+      //    below is only useful for valuesByField. Using the schema
+      //    means the labels editor + search-bar field-inserter
+      //    dropdowns appear instantly, even when the /geojson sample
+      //    is still in flight or has failed against a giant layer
+      //    (see #145).
       const itemId = layer.source.itemId;
       const layerKey = layer.source.layerKey;
       let declaredGeometry: 'point' | 'line' | 'polygon' | null | undefined;
+      // Schema-direct fields. Captured here, applied to fieldSet
+      // before the (slower, optional) geojson sample. Empty for
+      // legacy items that don't carry per-layer `fields[]`.
+      const schemaFields: string[] = [];
       try {
         const descInit: RequestInit = {};
         if (signal) descInit.signal = signal;
@@ -196,11 +208,21 @@ export async function discoverLayerMetadata(
               layers?: Array<{
                 id?: string;
                 geometryType?: 'point' | 'line' | 'polygon' | null;
+                fields?: Array<{ name?: unknown }>;
               }>;
             };
           };
           const sub = item.data?.layers?.find((l) => l.id === layerKey);
-          if (sub) declaredGeometry = sub.geometryType ?? null;
+          if (sub) {
+            declaredGeometry = sub.geometryType ?? null;
+            if (Array.isArray(sub.fields)) {
+              for (const f of sub.fields) {
+                if (typeof f.name === 'string' && f.name.length > 0) {
+                  schemaFields.push(f.name);
+                }
+              }
+            }
+          }
         }
       } catch {
         // Fall through to the features fetch; if that errors too the
@@ -208,11 +230,16 @@ export async function discoverLayerMetadata(
       }
       if (declaredGeometry === null) {
         // Authoritative table sublayer. Skip the geojson fetch
-        // entirely (the v3 endpoint refuses geojson on tables) and
-        // surface fields via the parent item's schema if we can get
-        // it, but at minimum return isTable=true so the UI hides
-        // the cartographic editors.
-        return { ...EMPTY, isTable: true, loading: false };
+        // entirely (the v3 endpoint refuses geojson on tables).
+        // Return the schema-derived fields so the inline editor
+        // can still resolve them; cartographic editors stay hidden
+        // via isTable=true.
+        return {
+          ...EMPTY,
+          fields: [...schemaFields].sort(),
+          isTable: true,
+          loading: false,
+        };
       }
       const init: RequestInit = {};
       if (signal) init.signal = signal;
@@ -221,9 +248,34 @@ export async function discoverLayerMetadata(
         init,
       );
       if (!res.ok) {
-        return { ...EMPTY, error: `Source returned ${res.status}` };
+        // Geojson fetch failed (typically a large layer timing out
+        // or being too big for the client). Don't lose the schema-
+        // derived field list just because the sample couldn't run;
+        // returning fields here keeps the labels editor and search
+        // field-inserter functional even when the feature sample
+        // didn't.
+        if (signal?.aborted) return EMPTY;
+        return {
+          ...EMPTY,
+          fields: [...schemaFields].sort(),
+          geometryTypes:
+            declaredGeometry === 'point' ||
+            declaredGeometry === 'line' ||
+            declaredGeometry === 'polygon'
+              ? new Set([declaredGeometry])
+              : new Set<GeometryFamily>(),
+          error: `Source returned ${res.status}`,
+        };
       }
       raw = await res.json();
+      // Seed the field set with the schema-derived names so any
+      // schema-declared field with no sampled values still appears
+      // in the inserter. The features loop below unions in any
+      // fields that show up in data but aren't in the schema
+      // (defensive: stale schema vs. freshly-imported data).
+      if (schemaFields.length > 0) {
+        (raw as { __schemaFields?: string[] }).__schemaFields = schemaFields;
+      }
       // If the parent item told us the declared geometry but we
       // sampled zero features, seed geometryTypes from the
       // declaration so symbology / legend treat the empty layer as
@@ -273,6 +325,16 @@ export async function discoverLayerMetadata(
     )?.features ?? [];
 
   const fieldSet = new Set<string>();
+  // Seed schema-declared fields (v3 data-layer path only; other
+  // sources omit this). Ensures the inserter dropdowns see every
+  // declared column even when the feature sample is empty or sparse.
+  const schemaFields =
+    raw && typeof raw === 'object'
+      ? (raw as { __schemaFields?: string[] }).__schemaFields
+      : undefined;
+  if (Array.isArray(schemaFields)) {
+    for (const name of schemaFields) fieldSet.add(name);
+  }
   const valuesByField: Record<string, Set<string>> = {};
   const geometryTypes = new Set<GeometryFamily>();
 
