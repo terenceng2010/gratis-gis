@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -53,6 +54,24 @@ export class GeocodingController {
       opts,
     );
     return { candidates };
+  }
+
+  /**
+   * Rebuild the per-searchField GIN trigram indexes that power
+   * this geocoder's runtime query (#74 perf followup). Synchronous;
+   * can take several minutes on large data layers. The editor UI
+   * shows a "Building search indexes..." spinner while this runs.
+   *
+   * Requires admin on the geocoder item (the service layer
+   * enforces this). The endpoint returns the list of indexes
+   * created / kept / dropped so the UI can summarize.
+   */
+  @Post(':itemId/rebuild-indexes')
+  async rebuildIndexes(
+    @CurrentUser() user: AuthUser,
+    @Param('itemId') itemId: string,
+  ) {
+    return this.geocoding.rebuildIndexes(user, itemId);
   }
 }
 

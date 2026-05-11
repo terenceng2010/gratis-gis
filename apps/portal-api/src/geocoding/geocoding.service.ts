@@ -14,6 +14,7 @@ import type {
 import { isGeocodingServiceData } from '@gratis-gis/shared-types';
 
 import { ItemsService } from '../items/items.service.js';
+import { SharingService } from '../items/sharing.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 
@@ -63,9 +64,18 @@ export class GeocodingService {
   private static readonly DEFAULT_CANDIDATES = 10;
   private static readonly MAX_TEXT_LENGTH = 200;
 
+  /**
+   * Hex characters allowed in the index-name segment we derive from
+   * the geocoder item id. UUIDs match [a-f0-9-] so we strip dashes
+   * for a tight identifier (Postgres has a 63-char limit on
+   * relation names).
+   */
+  private static readonly INDEX_NAME_PREFIX = 'idx_geo';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly items: ItemsService,
+    private readonly sharing: SharingService,
   ) {}
 
   async search(
@@ -198,6 +208,23 @@ export class GeocodingService {
     const filterSql =
       filters.length > 0 ? Prisma.join(filters, ' ') : Prisma.empty;
 
+    // Index-using filter (#74 perf followup). The %> operator
+    // (word similarity above pg_trgm.word_similarity_threshold)
+    // can use a GIN trigram index on `(attrs->>'field')`, which
+    // we create per searchField in rebuildIndexes(). Without
+    // this prefilter, queries against >100K-row layers go
+    // sequential and take minutes. We OR across every search
+    // field so a hit in ANY field qualifies the row for scoring.
+    //
+    // Lowering the per-query word_similarity threshold via
+    // set_limit() makes the index hand back broader candidates;
+    // we still apply minScore on the computed word_similarity
+    // score below, so this just controls candidate breadth.
+    const trgmFilters = validatedFields.map(
+      (f) => Prisma.sql`attrs->>${f.name} %> ${text}`,
+    );
+    const trgmFilterSql = Prisma.sql`AND (${Prisma.join(trgmFilters, ' OR ')})`;
+
     interface CandidateRow {
       entity: string;
       attrs: Record<string, unknown> | null;
@@ -205,12 +232,27 @@ export class GeocodingService {
       score: number;
     }
 
+    // Lower the per-query word_similarity_threshold so the %>
+    // operator returns broader candidates; we then apply minScore
+    // on the computed similarity score in the outer query. Default
+    // pg_trgm threshold is 0.6 which is too strict for autocomplete
+    // typos. set_limit is per-transaction so this doesn't affect
+    // other queries; we run search inside an implicit transaction
+    // via $queryRaw.
+    //
+    // Effective minimum candidate similarity is the larger of
+    // pg_trgm threshold + the row's minScore filter further down.
+    // We pick 0.1 here as a lenient floor so the index hands back
+    // enough rows to rank.
+    await this.prisma.$executeRaw`SELECT set_limit(0.1)`;
+
     const rows = await this.prisma.$queryRaw<CandidateRow[]>`
       WITH latest AS (
         SELECT DISTINCT ON (entity)
           entity, attrs, geom, kind
         FROM observation
         WHERE scope = ${scope}
+        ${trgmFilterSql}
         ${filterSql}
         ORDER BY entity, valid_from DESC, tx_time DESC
       ),
@@ -295,6 +337,244 @@ export class GeocodingService {
    * return a synthetic 'default' id that the caller's scope build
    * handles uniformly.
    */
+  /**
+   * Rebuild the per-searchField GIN trigram indexes that power the
+   * geocoder's runtime query. Creates one partial index per
+   * configured searchField, scoped to the source data_layer's
+   * observation rows. Drops indexes for fields the geocoder no
+   * longer references so renaming or removing a searchField doesn't
+   * leave dead indexes around.
+   *
+   * Synchronous on purpose: the user just clicked Save and is
+   * waiting to see "indexes ready" before the geocoder is fast.
+   * On a 1M-row layer one GIN trigram index takes ~30-60 seconds;
+   * 2-3 searchFields total ~1-3 minutes one-time setup cost. The
+   * editor's UI shows a "Building search indexes..." progress
+   * indicator during the wait.
+   *
+   * Notes on the choice of partial vs full index:
+   *
+   *   - Full GIN on (attrs->>'field') would index every observation
+   *     row across every scope, including unrelated data_layers
+   *     that happen to have the same field name. Wasteful.
+   *
+   *   - Partial GIN with WHERE scope = '...' only includes the
+   *     source layer's rows. Smaller index, faster build, faster
+   *     query (planner can use the partial index when the query
+   *     also has scope = '...').
+   *
+   * The CREATE INDEX runs without CONCURRENTLY because partitioned
+   * parent tables (observation is partitioned by tx_time) don't
+   * support concurrent index builds in PG 16. The brief write lock
+   * on the source layer during build is acceptable for the
+   * one-time setup case; if it becomes a problem we can switch to
+   * the per-partition-concurrently pattern.
+   *
+   * Indexes are named `idx_geo_<itemIdHex>_<safeFieldName>` so the
+   * cleanup pass can identify and drop the ones this geocoder
+   * owns without false positives.
+   */
+  async rebuildIndexes(
+    user: AuthUser,
+    itemId: string,
+  ): Promise<{
+    created: string[];
+    kept: string[];
+    dropped: string[];
+    rowCount: number;
+    durationMs: number;
+  }> {
+    const start = Date.now();
+    const item = await this.items.get(user, itemId);
+    if (item.type !== 'geocoding_service') {
+      throw new BadRequestException(
+        `Item ${itemId} is not a geocoding_service.`,
+      );
+    }
+    if (!this.sharing.canAdmin(user, item)) {
+      throw new ForbiddenException(
+        'Only the owner or an org admin can rebuild geocoder indexes.',
+      );
+    }
+    if (!isGeocodingServiceData(item.data)) {
+      throw new BadRequestException(
+        'Geocoding service item has invalid configuration.',
+      );
+    }
+    const config: GeocodingServiceData = item.data;
+    if (config.searchFields.length === 0) {
+      // Nothing to index. Drop any leftover indexes from a
+      // previous configuration and report.
+      const dropped = await this.dropExistingGeocoderIndexes(itemId);
+      return {
+        created: [],
+        kept: [],
+        dropped,
+        rowCount: 0,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    const source = await this.items.get(user, config.sourceLayerId);
+    if (source.type !== 'data_layer') {
+      throw new BadRequestException(
+        'Geocoding service source must be a data_layer.',
+      );
+    }
+    const sublayerId = this.resolveSublayerId(source, config);
+    if (!sublayerId) {
+      throw new BadRequestException(
+        'Geocoding service source layer is missing or no longer has the configured sublayer.',
+      );
+    }
+    const scope = `data_layer:${source.id}:${sublayerId}`;
+
+    // Validate field names against schema before any DB work.
+    // Same check the runtime search uses.
+    const validatedFields = this.validateSearchFields(
+      source,
+      sublayerId,
+      config,
+    );
+
+    // Compute desired index names. Strip non-hex / underscore from
+    // both itemId and field name so the relation name stays inside
+    // Postgres's 63-character identifier limit and parses as a
+    // plain identifier without quoting.
+    const itemIdHex = itemId.replace(/-/g, '').slice(0, 16);
+    const desiredByField = new Map<string, string>();
+    for (const f of validatedFields) {
+      const safeName = f.name.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 30);
+      const indexName = `${GeocodingService.INDEX_NAME_PREFIX}_${itemIdHex}_${safeName}`;
+      desiredByField.set(f.name, indexName);
+    }
+    const desiredIndexNames = new Set(desiredByField.values());
+
+    // Find existing indexes that belong to this geocoder
+    // (anything named idx_geo_<itemIdHex>_*). Anything not in the
+    // desired set gets dropped.
+    const existingIndexes = await this.prisma.$queryRaw<
+      Array<{ indexname: string }>
+    >`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname LIKE ${`${GeocodingService.INDEX_NAME_PREFIX}_${itemIdHex}_%`}
+    `;
+    const existingNames = new Set(existingIndexes.map((r) => r.indexname));
+
+    const created: string[] = [];
+    const kept: string[] = [];
+    const dropped: string[] = [];
+
+    // Drop indexes the new config no longer needs.
+    for (const name of existingNames) {
+      if (!desiredIndexNames.has(name)) {
+        // Index names embedded into DDL aren't bound parameters
+        // (Postgres has no parameterizable DROP INDEX). We mint
+        // them ourselves from a sanitized hex string + safe
+        // field name regex, so the value is trusted -- but we
+        // still validate the name against our naming pattern
+        // before interpolating to keep the trust boundary
+        // explicit.
+        if (!/^idx_geo_[a-f0-9]+_[a-zA-Z0-9_]+$/.test(name)) {
+          this.log.warn(
+            `Refusing to DROP unexpected index name '${name}' that survived the pg_indexes filter.`,
+          );
+          continue;
+        }
+        await this.prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "${name}"`);
+        dropped.push(name);
+      }
+    }
+
+    // Create indexes missing for the current config. CREATE INDEX
+    // IF NOT EXISTS so the same call is idempotent across saves
+    // where searchFields didn't change.
+    for (const [fieldName, indexName] of desiredByField) {
+      if (existingNames.has(indexName)) {
+        kept.push(indexName);
+        continue;
+      }
+      // Name + field both validated above. We can safely
+      // interpolate them as identifiers.
+      if (!/^idx_geo_[a-f0-9]+_[a-zA-Z0-9_]+$/.test(indexName)) {
+        // Defensive: every desired name above passed the
+        // validator. If we got here it's a bug, not a security
+        // concern, but skip just in case.
+        this.log.warn(`Skipping invalid index name '${indexName}'`);
+        continue;
+      }
+      if (!/^[a-zA-Z0-9_]+$/.test(fieldName)) {
+        this.log.warn(`Skipping invalid field name '${fieldName}'`);
+        continue;
+      }
+      // The scope value comes from data we control (item.id +
+      // sublayerId from the validated source) but we still bind
+      // it as a parameter for safety. Field name is embedded
+      // into the index expression because Postgres has no way to
+      // parameterize a JSON path inside CREATE INDEX.
+      // pg_trgm.gin_trgm_ops is the trigram opclass that supports
+      // both similarity() and word_similarity() index lookups via
+      // the %, %>, and <% operators.
+      await this.prisma.$executeRawUnsafe(
+        `CREATE INDEX IF NOT EXISTS "${indexName}"
+         ON observation
+         USING gin ((attrs->>'${fieldName}') gin_trgm_ops)
+         WHERE scope = '${scope.replace(/'/g, "''")}'`,
+      );
+      created.push(indexName);
+    }
+
+    // Approximate row count (Postgres maintains a live estimate in
+    // pg_class.reltuples that's good enough for telling the user
+    // how big the indexed dataset is).
+    const countRows = await this.prisma.$queryRaw<
+      Array<{ count: bigint }>
+    >`
+      SELECT COUNT(*)::bigint AS count
+      FROM observation
+      WHERE scope = ${scope}
+    `;
+    const rowCount = Number(countRows[0]?.count ?? 0);
+
+    return {
+      created,
+      kept,
+      dropped,
+      rowCount,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  /**
+   * Drop every geocoder index owned by this item. Used by
+   * rebuildIndexes() when the geocoder has no searchFields left,
+   * and by item-delete cleanup elsewhere if we wire it in.
+   */
+  private async dropExistingGeocoderIndexes(
+    itemId: string,
+  ): Promise<string[]> {
+    const itemIdHex = itemId.replace(/-/g, '').slice(0, 16);
+    const existing = await this.prisma.$queryRaw<
+      Array<{ indexname: string }>
+    >`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname LIKE ${`${GeocodingService.INDEX_NAME_PREFIX}_${itemIdHex}_%`}
+    `;
+    const dropped: string[] = [];
+    for (const r of existing) {
+      if (!/^idx_geo_[a-f0-9]+_[a-zA-Z0-9_]+$/.test(r.indexname)) continue;
+      await this.prisma.$executeRawUnsafe(
+        `DROP INDEX IF EXISTS "${r.indexname}"`,
+      );
+      dropped.push(r.indexname);
+    }
+    return dropped;
+  }
+
   private resolveSublayerId(
     source: { data: unknown },
     config: GeocodingServiceData,

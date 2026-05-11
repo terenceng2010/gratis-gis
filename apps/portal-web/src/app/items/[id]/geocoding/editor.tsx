@@ -64,6 +64,19 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #74 perf followup: per-field GIN trigram indexes are rebuilt
+  // synchronously after save. For 1M-row layers this can take a
+  // few minutes; the UI surfaces an explicit "Building search
+  // indexes..." status so the user knows the save itself
+  // succeeded and the wait is on indexing.
+  const [indexBuilding, setIndexBuilding] = useState(false);
+  const [indexSummary, setIndexSummary] = useState<{
+    created: string[];
+    kept: string[];
+    dropped: string[];
+    rowCount: number;
+    durationMs: number;
+  } | null>(null);
 
   // Available source data_layer items. Loaded once when the editor
   // mounts so the source-picker dropdown is populated.
@@ -225,6 +238,7 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
     setError(null);
     setSaving(true);
     setSaved(false);
+    setIndexBuilding(false);
     try {
       const res = await fetch(`/api/portal/items/${itemId}`, {
         method: 'PATCH',
@@ -242,6 +256,52 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
         }
         setError(msg);
         return;
+      }
+      // Trigger the index rebuild (#74 perf followup). For
+      // sub-100K-row source layers this finishes in seconds; for
+      // 1M-row layers (WV parcels et al.) it can take 1-3 minutes
+      // one-time setup. UI surfaces a distinct "Building search
+      // indexes..." indicator so the user knows the save itself
+      // already succeeded -- the wait is on index creation, not
+      // on the geocoder config.
+      setIndexBuilding(true);
+      try {
+        const idxRes = await fetch(
+          `/api/portal/geocode/${itemId}/rebuild-indexes`,
+          { method: 'POST' },
+        );
+        if (!idxRes.ok) {
+          let msg = `Index build failed (HTTP ${idxRes.status}).`;
+          try {
+            const body = (await idxRes.text()) ?? '';
+            const parsed = JSON.parse(body) as { message?: unknown };
+            if (typeof parsed.message === 'string') msg = parsed.message;
+          } catch {
+            /* keep HTTP fallback */
+          }
+          // Surface as a warning rather than a save failure. The
+          // geocoder config DID save; queries just won't be
+          // index-accelerated. The next save (or a manual
+          // rebuild call) can retry.
+          setError(
+            `${msg} Your changes were saved, but queries against this geocoder will be slow until the index build succeeds.`,
+          );
+        } else {
+          const summary = (await idxRes.json()) as {
+            created: string[];
+            kept: string[];
+            dropped: string[];
+            rowCount: number;
+            durationMs: number;
+          };
+          setIndexSummary(summary);
+        }
+      } catch (err) {
+        setError(
+          `Index build failed: ${err instanceof Error ? err.message : String(err)}. Your changes were saved, but queries against this geocoder will be slow until the index build succeeds.`,
+        );
+      } finally {
+        setIndexBuilding(false);
       }
       setSaved(true);
       router.refresh();
@@ -535,7 +595,13 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
       {canEdit ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3">
           <div className="min-w-0 flex-1 text-xs">
-            {error ? (
+            {indexBuilding ? (
+              <p className="inline-flex items-center gap-1 text-muted">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Building search indexes (this can take a few minutes
+                for large layers)...
+              </p>
+            ) : error ? (
               <p className="text-danger" role="alert">
                 {error}
               </p>
@@ -543,6 +609,14 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
               <p className="inline-flex items-center gap-1 text-accent">
                 <Check className="h-3.5 w-3.5" />
                 Saved
+                {indexSummary && indexSummary.rowCount > 0 ? (
+                  <span className="text-muted">
+                    {' '}
+                    &middot; indexed{' '}
+                    {indexSummary.rowCount.toLocaleString()} rows in{' '}
+                    {(indexSummary.durationMs / 1000).toFixed(1)}s
+                  </span>
+                ) : null}
               </p>
             ) : hasChanges ? (
               <p className="text-muted">Unsaved changes.</p>
@@ -553,7 +627,7 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
           <button
             type="button"
             onClick={discard}
-            disabled={!hasChanges || saving}
+            disabled={!hasChanges || saving || indexBuilding}
             className="inline-flex h-9 items-center rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
           >
             Discard
@@ -561,11 +635,15 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
           <button
             type="button"
             onClick={() => void save()}
-            disabled={!hasChanges || saving}
+            disabled={!hasChanges || saving || indexBuilding}
             className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {saving ? 'Saving...' : 'Save'}
+            {saving || indexBuilding ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            {indexBuilding ? 'Indexing...' : saving ? 'Saving...' : 'Save'}
           </button>
         </div>
       ) : null}
