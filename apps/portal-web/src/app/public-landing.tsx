@@ -7,7 +7,9 @@ import {
   Database,
   Github,
   Globe,
+  Info,
   LogIn,
+  MessageCircle,
   MessageSquarePlus,
   RefreshCw,
   Smartphone,
@@ -113,6 +115,15 @@ export function PublicLanding({
           unauthenticated visitors still see it as their only
           surface for the org name + sign-in entry. */}
       {!isAuthenticated ? <TopBar orgName={org.name} /> : null}
+
+      {/* #141: public-testing banner. Rendered when the deploy is
+          in public-testing mode (NEXT_PUBLIC_PUBLIC_TESTING=1) so
+          visitors see test credentials + the daily-reset window
+          before anything else. Honest about the state of the
+          instance: nothing they do persists past the next reset. */}
+      {process.env.NEXT_PUBLIC_PUBLIC_TESTING === '1' ? (
+        <TestingBanner />
+      ) : null}
 
       {/* Schema.org JSON-LD so search engines / open-data
           aggregators can index this page's public items. Server
@@ -341,13 +352,88 @@ function ProjectAboutSection() {
             <MessageSquarePlus className="h-4 w-4" />
             Send feedback
           </a>
+          {/* #141: Discussions link for longer-form conversations
+              that aren't bug reports. Pairs with the Send feedback
+              button (which files an issue) so the user can pick
+              the right surface: short reproducible bug -> issue,
+              open-ended question or idea -> discussion. */}
+          <a
+            href={`${repoUrl}/discussions`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface-1 px-4 text-sm font-medium text-ink-1 hover:bg-surface-2"
+          >
+            <MessageCircle className="h-4 w-4" />
+            Discussions
+          </a>
           <span className="text-xs text-muted sm:ml-2">
-            Feedback opens a pre-filled issue on GitHub. We triage
-            from the same queue we ship from.
+            Feedback opens a pre-filled issue. Discussions is the
+            right place for open-ended questions or ideas.
           </span>
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * #141: Public-testing-mode banner. Rendered at the very top of
+ * the landing page (above the Hero) when the deploy sets
+ * NEXT_PUBLIC_PUBLIC_TESTING=1. Spells out:
+ *
+ *   - The instance is a test environment, not a production
+ *     deployment (so testers don't expect their data to persist).
+ *   - The three documented test users and their passwords
+ *     (matches what seed-test-users.sh provisions).
+ *   - The daily reset window (matches what
+ *     gg-reset-demo.timer fires at).
+ *
+ * Tone is informational, not alarming. Amber-styled because
+ * "heads up, this is a sandbox" reads better in amber than the
+ * danger red.
+ */
+function TestingBanner() {
+  return (
+    <div className="border-b border-amber-300 bg-amber-50 px-6 py-3 text-sm">
+      <div className="mx-auto flex w-full max-w-5xl items-start gap-3">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+        <div className="flex-1 text-amber-900">
+          <p className="font-medium">
+            This is a public test instance. Resets to a curated
+            golden state every day at 04:00 UTC.
+          </p>
+          <p className="mt-1 leading-relaxed">
+            Sign in with{' '}
+            <code className="rounded bg-amber-100 px-1 font-mono text-[12px]">
+              tester-admin
+            </code>
+            {' / '}
+            <code className="rounded bg-amber-100 px-1 font-mono text-[12px]">
+              Admin123!
+            </code>
+            ,{' '}
+            <code className="rounded bg-amber-100 px-1 font-mono text-[12px]">
+              tester-contributor
+            </code>
+            {' / '}
+            <code className="rounded bg-amber-100 px-1 font-mono text-[12px]">
+              Contributor123!
+            </code>
+            , or{' '}
+            <code className="rounded bg-amber-100 px-1 font-mono text-[12px]">
+              tester-viewer
+            </code>
+            {' / '}
+            <code className="rounded bg-amber-100 px-1 font-mono text-[12px]">
+              Viewer123!
+            </code>
+            . Items, users, and edits you create vanish at the next
+            reset. Feedback is welcome via the GitHub Issues link
+            below.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 

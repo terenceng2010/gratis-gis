@@ -1,0 +1,35 @@
+[Unit]
+Description=GratisGIS public-testing demo reset (#138)
+Documentation=https://github.com/palavido-dev/gratis-gis
+# Don't kick off the reset if docker isn't up; the script would
+# refuse anyway, but failing fast here gives a clearer journalctl
+# trail.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Reset is destructive; protect against accidental invocation by
+# requiring the public-testing env flag. The flag is set HERE
+# rather than in the script so the same shell script can be reused
+# manually with a different gate (e.g. PORTAL_PUBLIC_TESTING=1
+# sudo ./infra/restore-golden.sh) without us having to edit the
+# script.
+Environment=PORTAL_PUBLIC_TESTING=1
+WorkingDirectory=/opt/gratis-gis
+ExecStart=/opt/gratis-gis/infra/restore-golden.sh
+# A reset that hangs (docker exec stuck on a hung postgres backend,
+# tar wedged on a phantom file lock) shouldn't hold the timer hostage
+# forever. Past five minutes something is genuinely wrong.
+TimeoutStartSec=300
+# Don't auto-restart on failure: a failed reset leaves the stack in
+# a known-bad state and the next scheduled run would try again on
+# top of that. Better to leave the unit failed and surface it via
+# journalctl, where the operator can run the script manually and
+# debug.
+Restart=no
+# StandardOutput / StandardError -> journal as well as the file the
+# script tees to itself. Helpful when an operator opens journalctl
+# after a failure without knowing where the log file lives.
+StandardOutput=journal
+StandardError=journal
