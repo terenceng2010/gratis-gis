@@ -40,6 +40,8 @@ import { Legend } from './legend';
 import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
 import { SelectToolbar, type SelectToolMode } from './select-tool';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
+import { Layers as LayersIcon, Settings as SettingsIcon } from 'lucide-react';
 import {
   AccessMatrix,
   unresolvedPrincipal,
@@ -49,6 +51,12 @@ import { discoverLayerMetadata, type LayerMetadata } from './layer-metadata';
 
 interface Props {
   itemId: string;
+  /**
+   * Item title shown in the BuilderShell top bar. Comes from the
+   * parent detail page (`item.title`) so the builder doesn't need a
+   * separate fetch.
+   */
+  itemTitle: string;
   initial: MapData;
   canEdit: boolean;
   /**
@@ -129,6 +137,7 @@ function boundaryFitFor(
 
 export function MapEditor({
   itemId,
+  itemTitle,
   initial,
   canEdit,
   basemaps = [],
@@ -812,225 +821,234 @@ export function MapEditor({
     return () => window.removeEventListener('beforeunload', handler);
   }, [dirty]);
 
-  return (
-    <div className="flex flex-col gap-3">
+  // BuilderShell top bar right side. Single icon pill for the canvas
+  // overlay toggles (basemap menu / legend / attribute table / layer
+  // access), followed by a Saved indicator and a Save button when the
+  // user has edit rights. Read-only viewers see the pill without the
+  // basemap menu (which would imply edit) and access-matrix button,
+  // and no Save.
+  const canvasTogglePill = (
+    <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
       {canEdit ? (
-        <MapSettingsSection
-          canEdit={canEdit}
-          map={map}
-          geoBoundaries={geoBoundaries}
-          availableGeocoders={availableGeocoders}
-          setClipBoundaryId={setClipBoundaryId}
-          setDefaultExtentBoundaryId={setDefaultExtentBoundaryId}
-          setGeocoderId={setGeocoderId}
+        <div ref={basemapMenuRef} className="relative">
+          <button
+            type="button"
+            onClick={() => setBasemapMenuOpen((v) => !v)}
+            className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
+              basemapMenuOpen ? 'bg-purple-100 text-purple-800' : ''
+            }`}
+            title={`Basemap${selectedBasemap ? `: ${selectedBasemap.label}` : ''}`}
+            aria-label="Basemap"
+            aria-haspopup="menu"
+            aria-expanded={basemapMenuOpen}
+          >
+            <MapBaseIcon className="h-5 w-5" />
+          </button>
+          {basemapMenuOpen ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
+            >
+              <div className="border-b border-border bg-surface-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                Basemap
+              </div>
+              {basemaps.length === 0 ? (
+                <div className="px-3 py-2 italic text-muted">
+                  No basemaps available
+                </div>
+              ) : (
+                <ul className="max-h-72 overflow-auto py-1">
+                  {basemaps.map((b) => {
+                    const active = pickerValue === b.id;
+                    return (
+                      <li key={b.id}>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setBasemap(b.id);
+                            setBasemapMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
+                            active
+                              ? 'bg-purple-100 text-purple-800'
+                              : 'text-ink-1'
+                          }`}
+                        >
+                          <span className="truncate">{b.label}</span>
+                          {active ? (
+                            <span className="ml-auto text-[10px] uppercase tracking-wide">
+                              active
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <ToolbarIconToggle
+        Icon={List}
+        label="Legend"
+        active={legendOpen}
+        onClick={() => setLegendOpen((v) => !v)}
+      />
+      <ToolbarIconToggle
+        Icon={Table}
+        label="Attribute table"
+        active={tableOpen}
+        onClick={() => {
+          // Toolbar toggle is the unfocused path: clear any per-layer
+          // focus so the table defaults to the first-visible queryable
+          // layer. (#73)
+          setTableFocusLayerId(null);
+          setTableOpen((v) => !v);
+        }}
+      />
+      {canEdit ? (
+        <ToolbarIconToggle
+          Icon={ShieldCheck}
+          label="Layer access"
+          active={matrixOpen}
+          onClick={() => setMatrixOpen((v) => !v)}
         />
       ) : null}
-      {canEdit ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-1 p-3 shadow-card">
-          <div className="ml-auto flex items-center gap-2">
-            {/* #74: icon-only pill matching the Editor App runtime
-                toolbar. Basemap, Legend, Attributes, Layer access
-                are all single-glance toggles; labels were noisy and
-                made the map editor look out of family with the
-                Editor / Viewer / Survey runtimes. Tooltips preserve
-                discoverability; aria-pressed / aria-expanded keep
-                accessibility intact. */}
-            <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
-              <div ref={basemapMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setBasemapMenuOpen((v) => !v)}
-                  className={`inline-flex h-9 w-9 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink-0 ${
-                    basemapMenuOpen ? 'bg-purple-100 text-purple-800' : ''
-                  }`}
-                  title={`Basemap${selectedBasemap ? `: ${selectedBasemap.label}` : ''}`}
-                  aria-label="Basemap"
-                  aria-haspopup="menu"
-                  aria-expanded={basemapMenuOpen}
-                >
-                  <MapBaseIcon className="h-5 w-5" />
-                </button>
-                {basemapMenuOpen ? (
-                  <div
-                    role="menu"
-                    className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-overlay"
-                  >
-                    <div className="border-b border-border bg-surface-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                      Basemap
-                    </div>
-                    {basemaps.length === 0 ? (
-                      <div className="px-3 py-2 italic text-muted">
-                        No basemaps available
-                      </div>
-                    ) : (
-                      <ul className="max-h-72 overflow-auto py-1">
-                        {basemaps.map((b) => {
-                          const active = pickerValue === b.id;
-                          return (
-                            <li key={b.id}>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setBasemap(b.id);
-                                  setBasemapMenuOpen(false);
-                                }}
-                                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
-                                  active
-                                    ? 'bg-purple-100 text-purple-800'
-                                    : 'text-ink-1'
-                                }`}
-                              >
-                                <span className="truncate">{b.label}</span>
-                                {active ? (
-                                  <span className="ml-auto text-[10px] uppercase tracking-wide">
-                                    active
-                                  </span>
-                                ) : null}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-              <ToolbarIconToggle
-                Icon={List}
-                label="Legend"
-                active={legendOpen}
-                onClick={() => setLegendOpen((v) => !v)}
-              />
-              <ToolbarIconToggle
-                Icon={Table}
-                label="Attribute table"
-                active={tableOpen}
-                onClick={() => {
-                  // Toolbar toggle is the unfocused path: clear any
-                  // per-layer focus so the table defaults to the
-                  // first-visible queryable layer. (#73)
-                  setTableFocusLayerId(null);
-                  setTableOpen((v) => !v);
-                }}
-              />
-              <ToolbarIconToggle
-                Icon={ShieldCheck}
-                label="Layer access"
-                active={matrixOpen}
-                onClick={() => setMatrixOpen((v) => !v)}
-              />
-            </div>
-            {saved ? (
-              <span className="inline-flex items-center gap-1 text-xs text-success">
-                <Check className="h-3.5 w-3.5" />
-                Saved
-              </span>
-            ) : null}
-            <button
-              type="button"
-              onClick={save}
-              disabled={!dirty || saving}
-              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
-            >
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              Save map
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* Non-edit (viewer) toolbar -- icon-only pill, same style as
-           the canEdit path so the read view doesn't grow labels back
-           when admin rights are missing. */
-        <div className="flex items-center justify-end gap-2">
-          <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-1 p-1">
-            <ToolbarIconToggle
-              Icon={List}
-              label="Legend"
-              active={legendOpen}
-              onClick={() => setLegendOpen((v) => !v)}
-            />
-            <ToolbarIconToggle
-              Icon={Table}
-              label="Attribute table"
-              active={tableOpen}
-              onClick={() => {
-                // Toolbar toggle is the unfocused path: clear any
-                // per-layer focus so the table defaults to the
-                // first-visible queryable layer. (#73)
-                setTableFocusLayerId(null);
-                setTableOpen((v) => !v);
-              }}
-            />
-          </div>
-        </div>
-      )}
+    </div>
+  );
 
-      <div className="flex h-[600px] overflow-hidden rounded-lg border border-border shadow-card">
-        <div className="w-80 shrink-0">
-          <LayerPanel
-            layers={map.layers}
-            metadata={metadata}
-            canEdit={canEdit}
-            currentZoom={map.zoom}
-            onOpenAdd={() => setAddOpen(true)}
-            onAddGroup={addEmptyGroup}
-            onOpenAttributeTable={(layerId) => {
-              setTableFocusLayerId(layerId ?? null);
-              setTableOpen(true);
-            }}
-            onZoomToLayer={(layerId) => {
-              // Compute the bbox from the layer's cached feature
-              // collection. Metadata is populated as the canvas
-              // loads each layer; if it isn't ready yet, the action
-              // is a no-op rather than a flicker. (#72)
-              const meta = metadata[layerId];
-              const fc = meta?.featureCollection ?? null;
-              if (!fc || fc.features.length === 0) return;
-              let minX = Infinity,
-                minY = Infinity,
-                maxX = -Infinity,
-                maxY = -Infinity;
-              const visit = (
-                coords: number[] | number[][] | number[][][] | number[][][][],
-              ) => {
-                if (typeof coords[0] === 'number') {
-                  const c = coords as number[];
-                  if (typeof c[0] === 'number' && typeof c[1] === 'number') {
-                    minX = Math.min(minX, c[0]);
-                    minY = Math.min(minY, c[1]);
-                    maxX = Math.max(maxX, c[0]);
-                    maxY = Math.max(maxY, c[1]);
-                  }
-                  return;
-                }
-                for (const inner of coords as Array<unknown>) {
-                  visit(inner as Parameters<typeof visit>[0]);
-                }
-              };
-              for (const f of fc.features) {
-                if (!f.geometry) continue;
-                if (
-                  'coordinates' in f.geometry &&
-                  Array.isArray((f.geometry as { coordinates: unknown }).coordinates)
-                ) {
-                  visit(
-                    (f.geometry as { coordinates: number[][] }).coordinates,
-                  );
-                }
-              }
-              if (minX !== Infinity && maxX !== -Infinity) {
-                canvasRef.current?.zoomTo([minX, minY, maxX, maxY]);
-              }
-            }}
-            onChange={setLayers}
-          />
-        </div>
-        <div className="relative min-w-0 flex-1 p-2">
+  const toolbarRight = (
+    <>
+      {canvasTogglePill}
+      {canEdit ? (
+        <>
+          {saved ? (
+            <span className="inline-flex items-center gap-1 text-xs text-success">
+              <Check className="h-3.5 w-3.5" />
+              Saved
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={save}
+            disabled={!dirty || saving}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save map
+          </button>
+        </>
+      ) : null}
+    </>
+  );
+
+  // Left panel: layer list. Same component as before; the wrapping
+  // 320px fixed-width div goes away because BuilderShell owns the
+  // width now (and lets the user resize / pin).
+  const leftPanel = (
+    <LayerPanel
+      layers={map.layers}
+      metadata={metadata}
+      canEdit={canEdit}
+      currentZoom={map.zoom}
+      onOpenAdd={() => setAddOpen(true)}
+      onAddGroup={addEmptyGroup}
+      onOpenAttributeTable={(layerId) => {
+        setTableFocusLayerId(layerId ?? null);
+        setTableOpen(true);
+      }}
+      onZoomToLayer={(layerId) => {
+        // Compute the bbox from the layer's cached feature
+        // collection. Metadata is populated as the canvas loads
+        // each layer; if it isn't ready yet, the action is a no-op
+        // rather than a flicker. (#72)
+        const meta = metadata[layerId];
+        const fc = meta?.featureCollection ?? null;
+        if (!fc || fc.features.length === 0) return;
+        let minX = Infinity,
+          minY = Infinity,
+          maxX = -Infinity,
+          maxY = -Infinity;
+        const visit = (
+          coords: number[] | number[][] | number[][][] | number[][][][],
+        ) => {
+          if (typeof coords[0] === 'number') {
+            const c = coords as number[];
+            if (typeof c[0] === 'number' && typeof c[1] === 'number') {
+              minX = Math.min(minX, c[0]);
+              minY = Math.min(minY, c[1]);
+              maxX = Math.max(maxX, c[0]);
+              maxY = Math.max(maxY, c[1]);
+            }
+            return;
+          }
+          for (const inner of coords as Array<unknown>) {
+            visit(inner as Parameters<typeof visit>[0]);
+          }
+        };
+        for (const f of fc.features) {
+          if (!f.geometry) continue;
+          if (
+            'coordinates' in f.geometry &&
+            Array.isArray((f.geometry as { coordinates: unknown }).coordinates)
+          ) {
+            visit((f.geometry as { coordinates: number[][] }).coordinates);
+          }
+        }
+        if (minX !== Infinity && maxX !== -Infinity) {
+          canvasRef.current?.zoomTo([minX, minY, maxX, maxY]);
+        }
+      }}
+      onChange={setLayers}
+    />
+  );
+
+  // Right panel: map-level settings (view scope, default extent,
+  // search source). Only meaningful when canEdit; viewers see no
+  // right panel. BuilderShell handles the unpinned case gracefully
+  // (the rail's toggle button hides when there's no content).
+  const rightPanel = canEdit ? (
+    <MapSettingsSection
+      canEdit={canEdit}
+      map={map}
+      geoBoundaries={geoBoundaries}
+      availableGeocoders={availableGeocoders}
+      setClipBoundaryId={setClipBoundaryId}
+      setDefaultExtentBoundaryId={setDefaultExtentBoundaryId}
+      setGeocoderId={setGeocoderId}
+    />
+  ) : null;
+
+  return (
+    <>
+      <BuilderShell
+        storageKey="builder-shell:map"
+        backHref={`/items/${itemId}?view=meta`}
+        title={itemTitle}
+        icon={<MapBaseIcon className="h-4 w-4 text-muted" />}
+        toolbarRight={toolbarRight}
+        leftPanel={leftPanel}
+        leftPanelTitle="Layers"
+        leftRailIcon={<LayersIcon className="h-4 w-4" />}
+        rightPanel={rightPanel}
+        rightPanelTitle="Map settings"
+        rightRailIcon={<SettingsIcon className="h-4 w-4" />}
+      >
+        {/* Canvas + overlays. `absolute inset-0` over the BuilderShell
+            main slot guarantees the canvas fills regardless of
+            flexbox quirks, and gives the overlay components (legend,
+            attribute table, search bar, select toolbar) a single
+            relative anchor. MapLibre re-sizes when its container
+            does, so resizing the BuilderShell panels triggers the
+            map to re-fit live. */}
+        <div className="absolute inset-0">
           <MapCanvas
             ref={canvasRef}
             map={map}
@@ -1091,8 +1109,8 @@ export function MapEditor({
             mapBbox={mapBbox}
             onClose={() => {
               setTableOpen(false);
-              // Clear the focus pick on close so re-opening from
-              // the toolbar lands on the default-first-visible.
+              // Clear the focus pick on close so re-opening from the
+              // toolbar lands on the default-first-visible.
               setTableFocusLayerId(null);
             }}
             onZoomTo={(bbox) => canvasRef.current?.zoomTo(bbox)}
@@ -1102,15 +1120,20 @@ export function MapEditor({
               );
             }}
           />
+          {error ? (
+            <p
+              role="alert"
+              className="absolute bottom-2 left-2 rounded-md border border-danger/30 bg-surface-1 px-2 py-1 text-xs text-danger shadow-card"
+            >
+              {error}
+            </p>
+          ) : null}
         </div>
-      </div>
+      </BuilderShell>
 
-      {error ? (
-        <p role="alert" className="text-xs text-danger">
-          {error}
-        </p>
-      ) : null}
-
+      {/* Modal-style overlays render outside BuilderShell so they sit
+          above its z-20 layer. Both already use higher z-index (z-30,
+          z-40) and are positioned `fixed inset-0`. */}
       <AddLayerDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
@@ -1128,7 +1151,7 @@ export function MapEditor({
         onPatchAccess={patchLayerAccess}
         onGrantItemAccess={grantItemAccess}
       />
-    </div>
+    </>
   );
 }
 
