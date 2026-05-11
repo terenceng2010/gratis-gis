@@ -11,6 +11,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { useConfirm } from '@/components/dialog-provider';
 
 interface Attachment {
   id: string;
@@ -57,6 +58,7 @@ export function V3FeatureAttachments({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const confirm = useConfirm();
 
   const basePath = `/api/portal/items/${itemId}/layers/${layerId}/features/${featureId}/attachments`;
 
@@ -152,7 +154,13 @@ export function V3FeatureAttachments({
   }
 
   async function remove(a: Attachment) {
-    if (!confirm(`Delete ${a.fileName}?`)) return;
+    const ok = await confirm({
+      title: 'Delete attachment?',
+      message: `Delete ${a.fileName}? This cannot be undone.`,
+      variant: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     setError(null);
     const res = await fetch(`${basePath}/${a.id}`, { method: 'DELETE' });
     if (!res.ok) {

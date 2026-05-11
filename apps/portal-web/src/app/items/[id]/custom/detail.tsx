@@ -62,6 +62,7 @@ import { DEFAULT_MAP, migrateCustomAppData } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
+import { useConfirm } from '@/components/dialog-provider';
 
 interface Props {
   itemId: string;
@@ -1079,6 +1080,7 @@ function PageTabs({
 }) {
   const [renamingIdx, setRenamingIdx] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const confirm = useConfirm();
 
   function commitRename() {
     if (renamingIdx === null) return;
@@ -1178,15 +1180,16 @@ function PageTabs({
                         : 'Delete page'
                   }
                   disabled={pages.length === 1}
-                  onClick={() => {
+                  onClick={async () => {
                     if (pages.length === 1) return;
-                    if (
-                      p.widgets.length > 0 &&
-                      !confirm(
-                        `Delete "${p.title}" and its ${p.widgets.length} widget${p.widgets.length === 1 ? '' : 's'}? This cannot be undone.`,
-                      )
-                    ) {
-                      return;
+                    if (p.widgets.length > 0) {
+                      const ok = await confirm({
+                        title: 'Delete page?',
+                        message: `Delete "${p.title}" and its ${p.widgets.length} widget${p.widgets.length === 1 ? '' : 's'}? This cannot be undone.`,
+                        variant: 'danger',
+                        confirmLabel: 'Delete page',
+                      });
+                      if (!ok) return;
                     }
                     onRemove(i);
                   }}
@@ -3080,6 +3083,7 @@ function TabsWidgetConfig({
   canEdit: boolean;
   onChangeConfig: (patch: Record<string, unknown>) => void;
 }) {
+  const confirm = useConfirm();
   function update(idx: number, patch: Partial<(typeof config.tabs)[number]>) {
     const next = config.tabs.map((t, i) => (i === idx ? { ...t, ...patch } : t));
     onChangeConfig({ tabs: next });
@@ -3092,15 +3096,17 @@ function TabsWidgetConfig({
     next.splice(j, 0, moved!);
     onChangeConfig({ tabs: next });
   }
-  function remove(idx: number) {
+  async function remove(idx: number) {
     if (config.tabs.length <= 1) return; // always one tab minimum
-    if (
-      config.tabs[idx]!.widgets.length > 0 &&
-      !confirm(
-        `Delete tab "${config.tabs[idx]!.title}" and its ${config.tabs[idx]!.widgets.length} widget(s)?`,
-      )
-    ) {
-      return;
+    const tab = config.tabs[idx]!;
+    if (tab.widgets.length > 0) {
+      const ok = await confirm({
+        title: 'Delete tab?',
+        message: `Delete tab "${tab.title}" and its ${tab.widgets.length} widget${tab.widgets.length === 1 ? '' : 's'}?`,
+        variant: 'danger',
+        confirmLabel: 'Delete tab',
+      });
+      if (!ok) return;
     }
     onChangeConfig({ tabs: config.tabs.filter((_, i) => i !== idx) });
   }

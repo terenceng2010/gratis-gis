@@ -20,6 +20,7 @@ import type {
   FeatureField,
 } from '@gratis-gis/shared-types';
 import { V3FeatureAttachments } from './v3-feature-attachments';
+import { useConfirm } from '@/components/dialog-provider';
 
 /**
  * Inline feature browser + editor for a single v3 layer.
@@ -58,6 +59,7 @@ export function V3FeatureBrowser({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const confirm = useConfirm();
   const [attachmentsOpenFor, setAttachmentsOpenFor] = useState<string | null>(
     null,
   );
@@ -130,12 +132,14 @@ export function V3FeatureBrowser({
   }
 
   async function remove(feature: FeatureRecord) {
-    if (
-      !confirm(
-        `Delete this feature? This writes a tombstone (soft delete): the feature disappears from current queries but history is preserved.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: 'Delete this feature?',
+      message:
+        'This writes a tombstone (soft delete): the feature disappears from current queries but history is preserved.',
+      variant: 'danger',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     setError(null);
     const res = await fetch(
       `/api/portal/items/${itemId}/layers/${layer.id}/features/${feature.id}`,

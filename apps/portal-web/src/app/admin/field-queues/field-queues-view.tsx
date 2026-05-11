@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import { formatBytes } from '@/lib/offline-store';
+import { useConfirm } from '@/components/dialog-provider';
 
 /**
  * Per-deployment summary inside a single device's manifest. Mirrors
@@ -87,6 +88,7 @@ export function FieldQueuesView({
   const [showStale, setShowStale] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // row id being forgotten or 'bulk'
   const [error, setError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const visibleRows = useMemo(() => {
     const filtered = showStale
@@ -129,15 +131,15 @@ export function FieldQueuesView({
 
   const forgetAllStale = async () => {
     if (staleCount === 0) return;
-    if (
-      !confirm(
-        `Forget ${staleCount} manifest${
-          staleCount === 1 ? '' : 's'
-        } with empty queues last seen ${staleAfterDays}+ days ago? Each device will re-register if it's still in use.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: 'Forget stale device manifests?',
+      message: `Forget ${staleCount} manifest${
+        staleCount === 1 ? '' : 's'
+      } with empty queues last seen ${staleAfterDays}+ days ago? Each device will re-register if it's still in use.`,
+      variant: 'danger',
+      confirmLabel: 'Forget stale',
+    });
+    if (!ok) return;
     setBusy('bulk');
     setError(null);
     try {
@@ -243,6 +245,7 @@ function DeviceRow({
   disabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const confirm = useConfirm();
   const stuck = countQueued(row);
   const failed = countFailed(row);
   const oldest = oldestQueuedAt(row);
@@ -331,18 +334,18 @@ function DeviceRow({
           mirror. Next sync from that device re-creates the row. */}
       <button
         type="button"
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation();
-          if (
-            !confirm(
-              `Forget device ${row.deviceFingerprint.slice(
-                0,
-                8,
-              )} for ${row.fullName || row.username}?\n\nThis only removes the admin-side beacon record. The data on the device (${stuck} queued) is unaffected. The row will return on the next sync if the device is still in use.`,
-            )
-          ) {
-            return;
-          }
+          const ok = await confirm({
+            title: 'Forget this device manifest?',
+            message: `Forget device ${row.deviceFingerprint.slice(
+              0,
+              8,
+            )} for ${row.fullName || row.username}? This only removes the admin-side beacon record. The data on the device (${stuck} queued) is unaffected. The row will return on the next sync if the device is still in use.`,
+            variant: 'danger',
+            confirmLabel: 'Forget device',
+          });
+          if (!ok) return;
           onForget();
         }}
         disabled={disabled || forgetting}
