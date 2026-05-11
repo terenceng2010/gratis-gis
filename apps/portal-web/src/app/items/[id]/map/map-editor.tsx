@@ -8,7 +8,6 @@ import {
   Loader2,
   Map as MapBaseIcon,
   Save,
-  Search,
   ShieldCheck,
   Table,
 } from 'lucide-react';
@@ -36,6 +35,7 @@ import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas, type MapCanvasHandle } from './map-canvas';
 import { LayerPanel } from './layer-panel';
 import { AddLayerDialog } from './add-layer-dialog';
+import { MapSettingsSection } from './map-settings-section';
 import { Legend } from './legend';
 import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
@@ -274,25 +274,12 @@ export function MapEditor({
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [basemapMenuOpen]);
-  // Geocoder picker (#74). Same popover pattern as the basemap menu:
-  // a Search-icon toolbar button that opens a small menu listing
-  // "Default (Nominatim)" plus every geocoder the user can read
-  // (geocoding_service items + arcgis_geocode service items). Only
-  // rendered when at least one custom geocoder is available so the
-  // toolbar doesn't grow noise on orgs that haven't published any.
-  const [geocoderMenuOpen, setGeocoderMenuOpen] = useState(false);
-  const geocoderMenuRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!geocoderMenuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      const t = e.target as Node;
-      if (geocoderMenuRef.current && !geocoderMenuRef.current.contains(t)) {
-        setGeocoderMenuOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [geocoderMenuOpen]);
+  // Geocoder picker now lives in MapSettingsSection (#74 follow-up).
+  // The previous toolbar-icon dropdown was disjointed from the
+  // other map-level configuration knobs (view scope, default
+  // extent) -- consolidating into one section makes the grouping
+  // explicit and gives future map-wide settings (embed config,
+  // refresh interval, etc.) an obvious home.
   const [availableGeocoders, setAvailableGeocoders] = useState<
     Array<{ id: string; title: string; kind: 'internal' | 'arcgis' }>
   >([]);
@@ -723,15 +710,14 @@ export function MapEditor({
     markDirty();
   }
 
-  /** Current default-extent picker value: the boundary item UUID, or
-   *  empty string for "no default extent". */
-  const extentPickerValue = map.defaultExtentBoundaryId ?? '';
-
   /**
-   * #79: clip-boundary picker. Distinct from defaultExtent: this
+   * #79: clip-boundary setter. Distinct from defaultExtent: this
    * scopes the data the runtime SHOWS (every layer's read clipped
    * to the polygon), not just the camera. Trust posture explicitly
-   * NOT access control: see help text rendered below the picker.
+   * NOT access control: the section's help text spells this out.
+   * The current value is read directly from `map.clipBoundaryId`
+   * inside MapSettingsSection; no derived value needed here now
+   * that the inline picker is gone.
    */
   function setClipBoundaryId(value: string) {
     setMap((m) => {
@@ -744,7 +730,6 @@ export function MapEditor({
     });
     markDirty();
   }
-  const clipPickerValue = map.clipBoundaryId ?? '';
 
   function setLayers(next: MapLayer[]) {
     setMap((m) => ({ ...m, layers: next }));
@@ -830,57 +815,18 @@ export function MapEditor({
   return (
     <div className="flex flex-col gap-3">
       {canEdit ? (
+        <MapSettingsSection
+          canEdit={canEdit}
+          map={map}
+          geoBoundaries={geoBoundaries}
+          availableGeocoders={availableGeocoders}
+          setClipBoundaryId={setClipBoundaryId}
+          setDefaultExtentBoundaryId={setDefaultExtentBoundaryId}
+          setGeocoderId={setGeocoderId}
+        />
+      ) : null}
+      {canEdit ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-1 p-3 shadow-card">
-          <label
-            className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted"
-            title="View scope: layers in this map only show features inside the boundary. NOT access control -- the underlying layers still serve their full data. Use share geo limits or tier-level limits on the layer item to actually lock data down."
-          >
-            View scope
-            <select
-              value={clipPickerValue}
-              onChange={(e) => setClipBoundaryId(e.target.value)}
-              disabled={geoBoundaries.length === 0}
-              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm text-ink-1 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {/* #79: "View scope" intentionally not "Restrict to" /
-                  "Lock to" -- the clip is a UX convenience, not access
-                  control (the layer's data is still readable through
-                  the layer item). Authors who want real scoping use
-                  share or tier-level geo limits on the layer. */}
-              <option value="">{'(no clip)'}</option>
-              {geoBoundaries.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
-            Default extent
-            <select
-              value={extentPickerValue}
-              onChange={(e) => setDefaultExtentBoundaryId(e.target.value)}
-              disabled={geoBoundaries.length === 0}
-              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm text-ink-1 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
-              title={
-                geoBoundaries.length === 0
-                  ? 'Create a geo_boundary item to use it here'
-                  : 'Boundary that frames the map on first load'
-              }
-            >
-              {/* "Saved extent" reads cleaner to GIS authors than
-                  the MapLibre-inherited "camera" term (#168). The
-                  schema field is already `defaultExtentBoundaryId`
-                  so the user-visible label now matches. */}
-              <option value="">{'(use saved extent)'}</option>
-              {geoBoundaries.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.title}
-                </option>
-              ))}
-            </select>
-          </label>
-
           <div className="ml-auto flex items-center gap-2">
             {/* #74: icon-only pill matching the Editor App runtime
                 toolbar. Basemap, Legend, Attributes, Layer access
@@ -950,86 +896,6 @@ export function MapEditor({
                   </div>
                 ) : null}
               </div>
-              {availableGeocoders.length > 0 ? (
-                <div ref={geocoderMenuRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setGeocoderMenuOpen((v) => !v)}
-                    title="Search source"
-                    aria-label="Search source"
-                    aria-haspopup="menu"
-                    aria-expanded={geocoderMenuOpen}
-                    className={`inline-flex h-7 items-center justify-center rounded px-2 text-ink-1 hover:bg-surface-2 ${
-                      geocoderMenuOpen ? 'bg-purple-100 text-purple-800' : ''
-                    }`}
-                  >
-                    <Search className="h-4 w-4" />
-                  </button>
-                  {geocoderMenuOpen ? (
-                    <div
-                      role="menu"
-                      className="absolute right-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-md border border-border bg-surface-1 text-xs shadow-raised"
-                    >
-                      <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                        Search source
-                      </div>
-                      <ul className="max-h-72 overflow-auto py-1">
-                        <li>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setGeocoderId(null);
-                              setGeocoderMenuOpen(false);
-                            }}
-                            className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
-                              !map.search?.geocoderId
-                                ? 'bg-purple-100 text-purple-800'
-                                : 'text-ink-1'
-                            }`}
-                          >
-                            <span className="truncate">
-                              Default (Nominatim)
-                            </span>
-                            {!map.search?.geocoderId ? (
-                              <span className="ml-auto text-[10px] uppercase tracking-wide">
-                                active
-                              </span>
-                            ) : null}
-                          </button>
-                        </li>
-                        {availableGeocoders.map((g) => {
-                          const active = map.search?.geocoderId === g.id;
-                          return (
-                            <li key={g.id}>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setGeocoderId(g.id);
-                                  setGeocoderMenuOpen(false);
-                                }}
-                                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 ${
-                                  active
-                                    ? 'bg-purple-100 text-purple-800'
-                                    : 'text-ink-1'
-                                }`}
-                              >
-                                <span className="min-w-0 flex-1 truncate">
-                                  {g.title}
-                                </span>
-                                <span className="text-[10px] uppercase tracking-wide text-muted">
-                                  {g.kind === 'internal' ? 'internal' : 'ArcGIS'}
-                                </span>
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
               <ToolbarIconToggle
                 Icon={List}
                 label="Legend"
