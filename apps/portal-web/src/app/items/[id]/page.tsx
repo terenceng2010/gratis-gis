@@ -174,14 +174,15 @@ const accessIcon = {
 };
 
 export default async function ItemDetailPage({ params, searchParams }: Props) {
-  // Builder vs metadata view gate. Items with a studio-style builder
-  // (map, web_app, form) default to opening straight into the builder
-  // -- that's the work surface, and the metadata is rarely what the
-  // user opened the item to see. `?view=meta` flips to the metadata
-  // page, which the builder shell's back arrow points at so the user
-  // can reach sharing, deletion, version history, related items, etc.
-  // Non-studio item types ignore the param entirely.
-  const isMetaView = searchParams?.view === 'meta';
+  // Builder vs metadata view gate. Default is the metadata page
+  // (description, owner, tags, sharing, related items, version
+  // history) which matches how other tool-style items handle
+  // edit/configuration flows. `?view=configure` opens the
+  // full-screen BuilderShell for studio-style item types (map today,
+  // web_app and form to follow). The builder's back arrow returns
+  // here without the param. Non-studio item types ignore the gate
+  // entirely.
+  const isBuilderView = searchParams?.view === 'configure';
   // Phase 1: the two unconditional fetches in parallel. Item is the
   // only one that can legitimately 404 (item missing / not visible),
   // so we wrap with try/catch but still fan out alongside `me`.
@@ -543,7 +544,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
         </div>
       )}
 
-      {item.type === 'map' && !isMetaView ? (
+      {item.type === 'map' && isBuilderView ? (
         <MapEditor
           itemId={item.id}
           itemTitle={item.title}
@@ -556,22 +557,24 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             title: g.title,
           }))}
         />
-      ) : item.type === 'map' && isMetaView ? (
+      ) : item.type === 'map' && !isBuilderView ? (
         <section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-ink-0">Map editor</p>
+            <p className="text-sm font-medium text-ink-0">Map configuration</p>
             <p className="mt-0.5 text-xs text-muted">
-              Open the full-screen editor to add layers, configure
+              Open the full-screen builder to add layers, configure
               basemaps and search, and arrange the canvas.
             </p>
           </div>
-          <Link
-            href={`/items/${item.id}`}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground hover:opacity-90"
-          >
-            <Pencil className="h-4 w-4" />
-            Open editor
-          </Link>
+          {canManage ? (
+            <Link
+              href={`/items/${item.id}?view=configure`}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground hover:opacity-90"
+            >
+              <Pencil className="h-4 w-4" />
+              Configure
+            </Link>
+          ) : null}
         </section>
       ) : item.type === 'data_layer' ? (
         <>

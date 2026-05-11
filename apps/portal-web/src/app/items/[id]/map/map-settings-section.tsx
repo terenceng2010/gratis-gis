@@ -91,7 +91,7 @@ export function MapSettingsSection({
       </button>
 
       {open ? (
-        <div className="grid grid-cols-1 gap-4 border-t border-border p-4 sm:grid-cols-3">
+        <div className="flex flex-col gap-4 border-t border-border p-4">
           <SettingRow
             label="View scope"
             description={

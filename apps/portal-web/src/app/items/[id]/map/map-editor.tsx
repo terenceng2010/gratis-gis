@@ -1030,7 +1030,7 @@ export function MapEditor({
     <>
       <BuilderShell
         storageKey="builder-shell:map"
-        backHref={`/items/${itemId}?view=meta`}
+        backHref={`/items/${itemId}`}
         title={itemTitle}
         icon={<MapBaseIcon className="h-4 w-4 text-muted" />}
         toolbarRight={toolbarRight}
