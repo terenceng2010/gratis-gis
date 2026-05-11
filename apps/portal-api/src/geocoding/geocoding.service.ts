@@ -153,11 +153,35 @@ export class GeocodingService {
     // (just slower than the indexed `%` path).
     const fieldExpressions = validatedFields.map((f) => {
       const weight = Math.max(1, Math.min(10, f.weight ?? 1));
-      // similarity(text, $text) -> 0..1; multiply by weight/10
-      // so a weight=10 field outranks a weight=1 hit even on
-      // weaker similarity. Coalesce so a NULL field doesn't
-      // sink the row's whole score.
-      return Prisma.sql`COALESCE(public.similarity(attrs->>${f.name}, ${text}), 0) * ${weight} / 10.0`;
+      // pg_trgm.word_similarity(query, target) measures how well
+      // the query matches the closest WORD in the target. This is
+      // what autocomplete users expect: typing "Carlson" should
+      // match the owner string "CARLSON CHRISTAL DAWN ROBYN LEE &
+      // ALEXIS ANN" with a high score, even though that long
+      // string and "Carlson" have very different overall trigram
+      // content. similarity() (the obvious-looking choice) would
+      // score this around 0.13 because most of the long string's
+      // trigrams aren't in "Carlson"; word_similarity scores it
+      // near 1.0 because "Carlson" matches the word "CARLSON"
+      // exactly. We GREATEST() the per-field score against
+      // similarity() so an exact full-string match (the rare case
+      // where the user types the whole value) still ranks at the
+      // top instead of relying solely on word_similarity's
+      // boundary heuristics.
+      //
+      // Weight is applied as a straight multiplier, NOT divided by
+      // maxWeight: a weight=1 field that perfect-matches scores
+      // 1.0; a weight=5 field that perfect-matches scores 5.0.
+      // The minScore threshold filters on the same scale, so a
+      // default minScore of 0.1 catches the typical noise floor
+      // for any weighted field. (An earlier draft divided by 10,
+      // which made every unweighted match miss minScore by a hair
+      // -- visible as "no candidates" when the data clearly
+      // contained the term.)
+      return Prisma.sql`GREATEST(
+        COALESCE(public.word_similarity(${text}, attrs->>${f.name}), 0),
+        COALESCE(public.similarity(attrs->>${f.name}, ${text}), 0)
+      ) * ${weight}`;
     });
     // GREATEST(...) across all field expressions: the row's score
     // is its best field match. Prisma.join joins the fragments
