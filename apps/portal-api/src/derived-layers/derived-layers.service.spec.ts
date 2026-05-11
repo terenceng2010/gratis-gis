@@ -89,6 +89,7 @@ function makeDerivedItem(data: DerivedLayerData): Item {
     createdAt: new Date(),
     updatedAt: new Date(),
     deletedAt: null,
+    deletedCohortId: null,
     bbox: data.bbox,
     bboxSrs: 'EPSG:4326',
     publicGeoBoundaryId: null,

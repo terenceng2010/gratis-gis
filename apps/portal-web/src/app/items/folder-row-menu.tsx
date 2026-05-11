@@ -89,18 +89,80 @@ export function FolderRowMenu({
 
   async function moveToTrash() {
     if (!canEdit) return;
-    const ok = await confirm({
-      title: 'Move folder to trash?',
-      message: `Move "${folderTitle}" to the recycle bin? The folder's contents stay where they are; only the folder arrangement is removed.`,
-      confirmLabel: 'Move to trash',
-      variant: 'danger',
-    });
-    if (!ok) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/portal/items/${folderId}`, {
-        method: 'DELETE',
+      // Fetch the cascade preview first (#156) so the confirm
+      // dialog can list subfolders that will also be trashed.
+      // Preview failure is non-fatal: we'll fall through with an
+      // empty cascade and the api itself will refuse + 409 if a
+      // cascade is actually required.
+      let cascade: {
+        folders: Array<{ id: string; title: string }>;
+        unlinkedItemCount: number;
+      } | null = null;
+      try {
+        const previewRes = await fetch(
+          `/api/portal/items/${folderId}/delete-cascade`,
+        );
+        if (previewRes.ok) {
+          cascade = await previewRes.json();
+        }
+      } catch {
+        /* preview failed; continue with empty cascade */
+      }
+
+      const ok = await confirm({
+        title: 'Move folder to trash?',
+        message:
+          cascade && cascade.folders.length > 0
+            ? `Move "${folderTitle}" and the subfolders below to the recycle bin? Non-folder items inside stay where they are; only the folder arrangement is removed.`
+            : `Move "${folderTitle}" to the recycle bin? The folder's contents stay where they are; only the folder arrangement is removed.`,
+        confirmLabel: 'Move to trash',
+        variant: 'danger',
+        body:
+          cascade && cascade.folders.length > 0 ? (
+            <div className="rounded-md border border-danger/40 bg-danger/5 p-3 text-xs">
+              <p className="font-medium text-ink-0">
+                {cascade.folders.length === 1
+                  ? '1 subfolder will also be moved to trash:'
+                  : `${cascade.folders.length} subfolders will also be moved to trash:`}
+              </p>
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-ink-1">
+                {cascade.folders.slice(0, 12).map((f) => (
+                  <li key={f.id}>{f.title}</li>
+                ))}
+                {cascade.folders.length > 12 ? (
+                  <li className="text-muted">
+                    ...and {cascade.folders.length - 12} more.
+                  </li>
+                ) : null}
+              </ul>
+              {cascade.unlinkedItemCount > 0 ? (
+                <p className="mt-2 text-muted">
+                  {cascade.unlinkedItemCount === 1
+                    ? '1 other item inside will lose its folder reference, but the item itself stays.'
+                    : `${cascade.unlinkedItemCount} other items inside will lose their folder reference, but the items themselves stay.`}
+                </p>
+              ) : null}
+              <p className="mt-2 text-muted">
+                Subfolders that are also filed under another folder
+                will survive this delete and aren&rsquo;t listed.
+              </p>
+            </div>
+          ) : null,
       });
+      if (!ok) return;
+
+      // Cascade=true on the URL only when the preview surfaced a
+      // non-empty list. For the empty-cascade case (preview ok with
+      // no subfolders, or preview failed) the api still does the
+      // right thing -- it returns 200 on a no-cascade folder
+      // delete, and 409 when a cascade is required.
+      const needsCascade = (cascade?.folders.length ?? 0) > 0;
+      const url = needsCascade
+        ? `/api/portal/items/${folderId}?cascade=true`
+        : `/api/portal/items/${folderId}`;
+      const res = await fetch(url, { method: 'DELETE' });
       if (!res.ok) {
         await alert({
           tone: 'warn',

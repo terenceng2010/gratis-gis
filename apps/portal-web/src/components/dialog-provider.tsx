@@ -48,6 +48,12 @@ import { AlertTriangle, Info } from 'lucide-react';
 interface ConfirmOptions {
   title?: string;
   message: string;
+  /** Optional rich content rendered below the message. Used when the
+   *  confirm needs to surface a list or other structured info that
+   *  doesn't read well as a single sentence (e.g. cascade-delete
+   *  subfolder list, #156). Plain `message` stays the primary
+   *  prompt; `body` is supplemental detail. */
+  body?: React.ReactNode;
   /** Label on the primary action; defaults to "OK" / "Delete"
    *  depending on variant. */
   confirmLabel?: string;
@@ -211,9 +217,14 @@ function ConfirmDialog({
             {title}
           </h2>
         </DialogHeader>
-        <p className="px-5 pb-4 text-sm leading-relaxed text-ink-1">
+        <p className="px-5 pb-2 text-sm leading-relaxed text-ink-1">
           {opts.message}
         </p>
+        {opts.body ? (
+          <div className="px-5 pb-4 text-sm text-ink-1">{opts.body}</div>
+        ) : (
+          <div className="pb-2" />
+        )}
         <DialogFooter>
           <button
             type="button"

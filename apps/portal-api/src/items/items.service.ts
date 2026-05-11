@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type { ItemAccess, ItemType, PrincipalType, SharePermission } from '@prisma/client';
 import { ITEM_TYPES } from '@gratis-gis/shared-types';
@@ -71,6 +72,148 @@ export interface UpdateItemInput {
    */
   publicGeoBoundaryId?: string | null | undefined;
   orgGeoBoundaryId?: string | null | undefined;
+}
+
+/**
+ * Cascade-delete preview for a folder (#156). Lists the subfolders
+ * that would be soft-deleted alongside the target because their
+ * only non-trashed parent is in the cascade set, plus a count of
+ * non-folder items that would lose their folder reference (but
+ * stay intact themselves, since folders are a view, not a gate).
+ *
+ * Returned by previewFolderDeleteCascade() and also embedded in
+ * the 409 response body when remove() refuses a folder delete
+ * without `cascade=true`.
+ */
+export interface FolderDeleteCascadePreview {
+  /**
+   * Subfolders that will be soft-deleted alongside the parent.
+   * Excludes the root folder itself (the caller already knows
+   * it's being deleted). Order is BFS-walk order so a tree like
+   * A -> B -> C lists B before C.
+   */
+  folders: Array<{ id: string; title: string }>;
+  /**
+   * Count of non-folder items contained by the cascade set.
+   * Those items are not deleted; they only lose the folder
+   * reference once the trashed folder is purged. The count is
+   * surfaced in the confirmation dialog so the user knows the
+   * scope of the unlink side-effect.
+   */
+  unlinkedItemCount: number;
+}
+
+/**
+ * Pure cascade-walk used by previewFolderDeleteCascade(). Lives at
+ * module scope so it can be unit-tested without a Prisma client: the
+ * service method does the DB load and hands the folder list in.
+ *
+ * `folders` should contain every non-trashed folder in the org. Each
+ * entry's childItemIds is the folder's authoritative member list
+ * (smart folders should be passed in with childItemIds: []).
+ *
+ * Returns the cascade set excluding the root, plus the count of
+ * non-folder children that would lose their folder reference. The
+ * BFS respects multi-parent: a subfolder filed under both the
+ * trashed parent and an unrelated alive folder is preserved
+ * because at least one of its parents stays alive.
+ */
+export function computeFolderCascade(
+  rootId: string,
+  folders: Array<{ id: string; title: string; childItemIds: string[] }>,
+): FolderDeleteCascadePreview {
+  const folderIdSet = new Set(folders.map((f) => f.id));
+  const folderTitleById = new Map(folders.map((f) => [f.id, f.title]));
+  const childrenByFolder = new Map<string, string[]>(
+    folders.map((f) => [f.id, f.childItemIds]),
+  );
+  // child UUID -> set of parent folder UUIDs. Built by reading the
+  // childItemIds of every folder, so multi-parent surfaces naturally.
+  const parentsByChild = new Map<string, Set<string>>();
+  for (const f of folders) {
+    for (const kid of f.childItemIds) {
+      let bag = parentsByChild.get(kid);
+      if (!bag) {
+        bag = new Set<string>();
+        parentsByChild.set(kid, bag);
+      }
+      bag.add(f.id);
+    }
+  }
+
+  // Defensive: if the root isn't a folder in the supplied list,
+  // return the no-op preview so a stale id can't crash the BFS.
+  if (!folderIdSet.has(rootId)) {
+    return { folders: [], unlinkedItemCount: 0 };
+  }
+
+  // Pass 1: fixed-point cascade computation. Naive single-pass BFS
+  // is order-dependent in the multi-parent case -- if subfolder B
+  // has parents A and C, processing B before adding C to the
+  // cascade incorrectly classifies B as "survives". Iterating
+  // until no further folders are added removes the order
+  // dependence and produces the deterministic correct set:
+  // a folder cascades iff (a) it is reachable from the root and
+  // (b) every parent of it is in the cascade.
+  const cascadeSet = new Set<string>([rootId]);
+  // Iteration bound: the cascade can grow at most once per folder,
+  // so |folders|+1 iterations is a safe upper bound. We hit the
+  // bound only if the graph is pathological; normal trees stop in
+  // the first or second iteration.
+  let grew = true;
+  let safetyBudget = folders.length + 1;
+  while (grew && safetyBudget > 0) {
+    grew = false;
+    safetyBudget -= 1;
+    for (const f of folders) {
+      if (cascadeSet.has(f.id)) continue;
+      const parents = parentsByChild.get(f.id);
+      if (!parents || parents.size === 0) continue; // unreachable root.
+      // Must touch the cascade somewhere.
+      let touchesCascade = false;
+      let allParentsInCascade = true;
+      for (const p of parents) {
+        if (cascadeSet.has(p)) touchesCascade = true;
+        else allParentsInCascade = false;
+      }
+      if (!touchesCascade || !allParentsInCascade) continue;
+      cascadeSet.add(f.id);
+      grew = true;
+    }
+  }
+
+  // Pass 2: BFS the cascade in walk order to produce the
+  // user-facing list, and collect unique non-folder unlinks. The
+  // visited set guards against (a) revisiting cascade folders via
+  // multiple parents and (b) double-counting an item that's filed
+  // under two cascade folders.
+  const cascadeFolders: Array<{ id: string; title: string }> = [];
+  const unlinkedSet = new Set<string>();
+  const visited = new Set<string>([rootId]);
+  const queue: string[] = [rootId];
+  while (queue.length > 0) {
+    const here = queue.shift() as string;
+    const kids = childrenByFolder.get(here) ?? [];
+    for (const kidId of kids) {
+      if (visited.has(kidId)) continue;
+      visited.add(kidId);
+      if (folderIdSet.has(kidId)) {
+        if (cascadeSet.has(kidId)) {
+          cascadeFolders.push({
+            id: kidId,
+            title: folderTitleById.get(kidId) ?? '(untitled folder)',
+          });
+          queue.push(kidId);
+        }
+        // else: surviving subfolder, don't descend through it.
+      } else {
+        // Non-folder: count once per unique UUID.
+        unlinkedSet.add(kidId);
+      }
+    }
+  }
+
+  return { folders: cascadeFolders, unlinkedItemCount: unlinkedSet.size };
 }
 
 export interface ShareItemInput {
@@ -1249,19 +1392,154 @@ export class ItemsService {
    * in the database so it can be restored. A scheduled job purges rows
    * whose deletedAt is older than the retention window (see
    * docs/soft-delete.md).
+   *
+   * For folder items (#156), a non-empty cascade set requires
+   * opts.cascade=true. Without it, the call refuses with a 409 that
+   * carries the cascade preview so the frontend can show the user a
+   * list of subfolders that would be soft-deleted alongside the
+   * parent. With cascade=true, the parent and every orphan-only
+   * subfolder soft-delete together in a single transaction, stamped
+   * with a shared deletedCohortId so restore() can bring them back
+   * as a group later.
+   *
+   * Non-folder items in the parent are NOT cascaded; per the folder
+   * design (docs/folders.md), folder membership is a view, not an
+   * authoritative reference, so a data_layer / map / file in the
+   * trashed folder simply loses the folder reference once the folder
+   * is purged. The soft-delete itself doesn't touch those rows.
    */
-  async remove(user: AuthUser, id: string) {
+  async remove(
+    user: AuthUser,
+    id: string,
+    opts: { cascade?: boolean } = {},
+  ) {
     const item = await this.get(user, id);
     if (!this.sharing.canAdmin(user, item)) {
       throw new ForbiddenException('Only the owner or an org admin can delete an item');
     }
-    await this.prisma.item.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+
+    let cascadeFolderIds: string[] = [];
+    if (item.type === 'folder') {
+      const preview = await this.previewFolderDeleteCascade(user, id);
+      if (preview.folders.length > 0) {
+        if (!opts.cascade) {
+          // 409: the request would have side effects the caller
+          // didn't acknowledge. Frontend reads the response body's
+          // `cascade` field to populate its confirmation dialog,
+          // then retries with cascade=true.
+          throw new ConflictException({
+            message:
+              'This folder contains subfolders that would be orphaned. Acknowledge the cascade by retrying with ?cascade=true.',
+            cascade: preview,
+          });
+        }
+        cascadeFolderIds = preview.folders.map((f) => f.id);
+      }
+    }
+
+    const now = new Date();
+    if (cascadeFolderIds.length === 0) {
+      await this.prisma.item.update({
+        where: { id },
+        data: { deletedAt: now },
+      });
+      return;
+    }
+    // Cascade: one cohort UUID stamped on every row so restore can
+    // pull them back together.
+    const cohortId = randomUUID();
+    await this.prisma.item.updateMany({
+      where: { id: { in: [id, ...cascadeFolderIds] } },
+      data: { deletedAt: now, deletedCohortId: cohortId },
     });
   }
 
-  /** Restore a trashed item. Only the owner or an org admin can restore. */
+  /**
+   * Compute the set of subfolders that would be cascade-deleted if
+   * the given folder were trashed (#156).
+   *
+   * Algorithm:
+   *
+   *   - Load every non-trashed folder in the caller's org. For each,
+   *     read its `childItemIds` and build a parent map keyed by
+   *     child UUID.
+   *   - BFS from the root folder. For each visited folder, examine
+   *     its childItemIds:
+   *       * if the child is itself a folder AND every non-trashed
+   *         parent of that folder is already in the cascade set,
+   *         add it and continue the BFS down into it.
+   *       * if the child is a folder but has a parent outside the
+   *         cascade set, skip (it survives because it's still filed
+   *         under another folder).
+   *       * if the child is not a folder, increment unlinkedItemCount.
+   *
+   * The root folder itself is intentionally excluded from the
+   * returned `folders` list -- the caller already knows it's being
+   * deleted. The list contains only the subfolders the user wouldn't
+   * otherwise have noticed are about to disappear.
+   *
+   * Returns `{ folders: [], unlinkedItemCount: 0 }` for non-folder
+   * items so the call site can treat the preview as a no-op shape
+   * regardless of item type.
+   */
+  async previewFolderDeleteCascade(
+    user: AuthUser,
+    id: string,
+  ): Promise<FolderDeleteCascadePreview> {
+    const item = await this.get(user, id);
+    if (item.type !== 'folder') {
+      return { folders: [], unlinkedItemCount: 0 };
+    }
+
+    // Load every non-trashed folder in the org so we can resolve
+    // child-of relationships in memory. Org-scoped because folder
+    // membership never crosses orgs (every item has exactly one
+    // orgId). For typical org folder counts (dozens to a few
+    // hundred) this is cheap; if we ever hit five-figure folder
+    // counts per org this becomes a recursive CTE in PostgreSQL.
+    const allFolders = await this.prisma.item.findMany({
+      where: {
+        orgId: item.orgId,
+        type: 'folder',
+        deletedAt: null,
+      },
+      select: { id: true, title: true, data: true },
+    });
+
+    return computeFolderCascade(
+      id,
+      allFolders.map((f) => {
+        const data = f.data as unknown as {
+          childItemIds?: unknown;
+          smartQuery?: unknown;
+        } | null;
+        return {
+          id: f.id,
+          title: f.title,
+          // Smart folders compute membership from a query, not from
+          // childItemIds, so they never "own" their displayed
+          // contents and a delete cannot orphan anything via them.
+          // Treat as empty for cascade purposes.
+          childItemIds: data?.smartQuery
+            ? []
+            : Array.isArray(data?.childItemIds)
+              ? (data.childItemIds as unknown[]).filter(
+                  (x): x is string => typeof x === 'string',
+                )
+              : [],
+        };
+      }),
+    );
+  }
+
+  /**
+   * Restore a trashed item. Only the owner or an org admin can
+   * restore. When the trashed row carries a deletedCohortId (#156),
+   * every other row in the cohort restores in the same transaction,
+   * so a parent folder doesn't come back pointing at still-trashed
+   * subfolders. Rows in the cohort that the caller cannot admin
+   * are silently skipped; partial restore is preferable to a 403.
+   */
   async restore(user: AuthUser, id: string) {
     const item = await this.get(user, id, { includeTrashed: true });
     if (!item.deletedAt) {
@@ -1272,10 +1550,35 @@ export class ItemsService {
     if (!this.sharing.canAdmin(user, item)) {
       throw new ForbiddenException('Only the owner or an org admin can restore an item');
     }
-    return this.prisma.item.update({
-      where: { id },
-      data: { deletedAt: null },
+    if (!item.deletedCohortId) {
+      return this.prisma.item.update({
+        where: { id },
+        data: { deletedAt: null },
+      });
+    }
+
+    // Cohort restore. Pull every other still-trashed row in the
+    // cohort, filter to ones the caller can admin, restore them
+    // alongside the target in a single updateMany.
+    const cohort = await this.prisma.item.findMany({
+      where: {
+        deletedCohortId: item.deletedCohortId,
+        deletedAt: { not: null },
+      },
     });
+    const restoreIds = cohort
+      .filter((m) => this.sharing.canAdmin(user, m))
+      .map((m) => m.id);
+    // The target is always in restoreIds because canAdmin already
+    // passed above; updateMany also clears deletedCohortId so a
+    // future redelete starts a fresh cohort.
+    await this.prisma.item.updateMany({
+      where: { id: { in: restoreIds } },
+      data: { deletedAt: null, deletedCohortId: null },
+    });
+    // Return the originally-requested row in its restored state so
+    // the caller sees the same shape `update` would have returned.
+    return this.prisma.item.findUnique({ where: { id } });
   }
 
   /**

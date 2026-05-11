@@ -505,8 +505,39 @@ export class ItemsController {
   }
 
   @Delete(':id')
-  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.items.remove(user, id);
+  remove(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('cascade') cascade?: string,
+  ) {
+    // ?cascade=true acknowledges the folder-cascade preview (#156)
+    // so the service knows the client has shown the user the list
+    // of subfolders that will also be trashed. Any other value is
+    // treated as not-set rather than false to keep the contract
+    // strict (a stray `?cascade=foo` shouldn't accidentally
+    // authorise a cascade).
+    const cascadeFlag = cascade === 'true';
+    return this.items.remove(user, id, { cascade: cascadeFlag });
+  }
+
+  /**
+   * Return the cascade-delete preview for a folder (#156). For
+   * non-folder items the response is `{ folders: [], unlinkedItemCount: 0 }`
+   * so callers can render the same dialog shape uniformly.
+   *
+   * Callers fetch this before showing the soft-delete confirm
+   * dialog so they can list the subfolders that would be trashed
+   * alongside the parent. The DELETE call itself returns the same
+   * preview as a 409 body if invoked without cascade=true; this
+   * separate GET exists so the dialog can preview without needing
+   * to fail-and-retry.
+   */
+  @Get(':id/delete-cascade')
+  previewDeleteCascade(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ) {
+    return this.items.previewFolderDeleteCascade(user, id);
   }
 
   @Post(':id/restore')

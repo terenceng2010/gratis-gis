@@ -455,7 +455,11 @@ export default async function ItemDetailPage({ params }: Props) {
                 return item.ownerId.slice(0, 8);
               })()}
             />
-            <DeleteItemButton itemId={item.id} itemTitle={item.title} />
+            <DeleteItemButton
+              itemId={item.id}
+              itemTitle={item.title}
+              itemType={item.type}
+            />
           </div>
         ) : null}
       </header>
