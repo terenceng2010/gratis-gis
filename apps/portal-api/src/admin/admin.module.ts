@@ -2,6 +2,7 @@
 import { Module } from '@nestjs/common';
 
 import { AdminUsersController } from './admin-users.controller.js';
+import { AdminBasemapProbeController } from './admin-basemap-probe.controller.js';
 import { AdminBrandingController } from './admin-branding.controller.js';
 import { AdminCapabilitiesController } from './admin-capabilities.controller.js';
 import { AdminGuard } from './admin.guard.js';
@@ -41,6 +42,7 @@ import { FieldQueueAdminController } from '../field-queue/field-queue-admin.cont
   ],
   controllers: [
     AdminUsersController,
+    AdminBasemapProbeController,
     AdminBrandingController,
     AdminCapabilitiesController,
     HousekeepingController,
