@@ -28,6 +28,12 @@ export interface AdminUserRow {
    *  housekeeping cron flips Keycloak's enabled flag in bulk.
    *  Null = no auto-disable (default). */
   autoDisableAt: string | null;
+  /** Master-admin protection flag (#134). When true the API
+   *  refuses every mutation against this user (role change,
+   *  disable, delete, password reset). The view disables the
+   *  corresponding controls and shows a lock badge so the
+   *  affordance matches what the server will accept. */
+  isProtected: boolean;
   /** Populated by the invite flow when the user was created in
    *  Keycloak but the password-setup email could not be sent
    *  (typically because the realm SMTP isn't configured yet, or
@@ -46,9 +52,9 @@ export default async function AdminUsersPage() {
   // than seeing a 403 from the API. The backend controller also gates
   // with AdminGuard as the actual source of truth, so a sneaky client-
   // side nav or direct URL hit can't bypass it.
-  let me: { orgRole: string };
+  let me: { id: string; orgRole: string };
   try {
-    me = await apiFetch<{ orgRole: string }>('/api/users/me');
+    me = await apiFetch<{ id: string; orgRole: string }>('/api/users/me');
   } catch {
     redirect('/items');
   }
@@ -137,7 +143,7 @@ export default async function AdminUsersPage() {
           </div>
         </div>
       ) : (
-        <AdminUsersView initialUsers={users} />
+        <AdminUsersView initialUsers={users} currentUserId={me.id} />
       )}
     </div>
   );

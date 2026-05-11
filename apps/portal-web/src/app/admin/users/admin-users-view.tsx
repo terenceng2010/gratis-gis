@@ -8,6 +8,7 @@ import {
   Eye,
   KeyRound,
   Loader2,
+  Lock,
   MailPlus,
   Pencil,
   Plus,
@@ -41,9 +42,17 @@ type OrgRole = 'viewer' | 'contributor' | 'admin';
 
 interface Props {
   initialUsers: AdminUserRow[];
+  /**
+   * Caller's local user id (from /users/me). Used by the row
+   * renderer to disable mutation controls on the caller's own row
+   * so the server-side self-mutation refusal (#133) doesn't
+   * surprise them with a 400. Server still gates regardless; this
+   * is purely a "no broken affordances" UX layer.
+   */
+  currentUserId: string;
 }
 
-export function AdminUsersView({ initialUsers }: Props) {
+export function AdminUsersView({ initialUsers, currentUserId }: Props) {
   const confirm = useConfirm();
   const alert = useAlert();
   const [users, setUsers] = useState<AdminUserRow[]>(initialUsers);
@@ -62,6 +71,57 @@ export function AdminUsersView({ initialUsers }: Props) {
     user: AdminUserRow;
     items: Array<{ id: string; title: string; type: string }>;
   } | null>(null);
+
+  /**
+   * Live count of active admins in the org. "Active" mirrors the
+   * server-side definition in admin-users.controller.ts: orgRole
+   * === 'admin' AND enabled AND no past-due auto-disable. When
+   * this is 1 we disable role-change / disable / delete on the
+   * remaining admin so the UI doesn't offer an action the server
+   * would 400. Recomputes on every users-state change so a
+   * just-promoted user lifts the floor immediately.
+   */
+  const activeAdminCount = useMemo(() => {
+    const now = Date.now();
+    return users.reduce((n, u) => {
+      const role = (u.attributes?.org_role?.[0] ?? 'viewer') as OrgRole;
+      if (role !== 'admin') return n;
+      if (!u.enabled) return n;
+      if (u.autoDisableAt && new Date(u.autoDisableAt).getTime() <= now) return n;
+      return n + 1;
+    }, 0);
+  }, [users]);
+
+  /**
+   * Per-row guard. Returns a non-null string explaining why this
+   * action is disabled, or null when it's allowed. Mirrors the four
+   * server-side invariants so the message matches the (would-be)
+   * 400/403 the API would throw.
+   *
+   * `action` distinguishes between losing-an-admin actions (which
+   * trip the sole-admin floor) and non-losing actions (rename).
+   */
+  function guardReason(
+    u: AdminUserRow,
+    action: 'role' | 'disable' | 'delete' | 'reset' | 'edit',
+  ): string | null {
+    if (u.isProtected) {
+      return 'This account is protected; mutations are disabled.';
+    }
+    const isSelf = u.id === currentUserId;
+    if (isSelf && (action === 'role' || action === 'disable' || action === 'delete')) {
+      return 'You cannot change your own role, disable, or delete yourself. Ask another admin.';
+    }
+    const role = (u.attributes?.org_role?.[0] ?? 'viewer') as OrgRole;
+    const wouldLoseAdmin =
+      role === 'admin' &&
+      u.enabled &&
+      (action === 'role' || action === 'disable' || action === 'delete');
+    if (wouldLoseAdmin && activeAdminCount <= 1) {
+      return 'This is the last active admin in the org. Promote another user to admin first.';
+    }
+    return null;
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -356,11 +416,33 @@ export function AdminUsersView({ initialUsers }: Props) {
               filtered.map((u) => {
                 const role = (u.attributes?.org_role?.[0] ?? 'viewer') as OrgRole;
                 const busy = working === u.id;
+                const roleReason = guardReason(u, 'role');
+                const disableReason = guardReason(u, 'disable');
+                const deleteReason = guardReason(u, 'delete');
+                const resetReason = guardReason(u, 'reset');
+                const editReason = guardReason(u, 'edit');
                 return (
                   <tr key={u.id} className="border-t border-border">
                     <td className="px-3 py-2">
-                      <p className="font-medium text-ink-0">
+                      <p className="inline-flex items-center gap-1.5 font-medium text-ink-0">
                         {u.fullName || u.username}
+                        {u.isProtected ? (
+                          <span
+                            title="Protected master account: mutations are blocked at the API."
+                            className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
+                          >
+                            <Lock className="h-2.5 w-2.5" />
+                            Protected
+                          </span>
+                        ) : null}
+                        {u.id === currentUserId ? (
+                          <span
+                            title="This is you."
+                            className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent"
+                          >
+                            You
+                          </span>
+                        ) : null}
                       </p>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">
@@ -380,7 +462,8 @@ export function AdminUsersView({ initialUsers }: Props) {
                     <td className="px-3 py-2">
                       <select
                         value={role}
-                        disabled={busy}
+                        disabled={busy || roleReason !== null}
+                        title={roleReason ?? undefined}
                         onChange={(e) =>
                           void setRole(u, e.target.value as OrgRole)
                         }
@@ -426,8 +509,8 @@ export function AdminUsersView({ initialUsers }: Props) {
                         <button
                           type="button"
                           onClick={() => setEditing(u)}
-                          disabled={busy}
-                          title="Edit name / email"
+                          disabled={busy || editReason !== null}
+                          title={editReason ?? 'Edit name / email'}
                           className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
                         >
                           <Pencil className="h-3 w-3" />
@@ -436,8 +519,8 @@ export function AdminUsersView({ initialUsers }: Props) {
                         <button
                           type="button"
                           onClick={() => void sendReset(u)}
-                          disabled={busy}
-                          title="Send password-reset email"
+                          disabled={busy || resetReason !== null}
+                          title={resetReason ?? 'Send password-reset email'}
                           className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2 disabled:opacity-50"
                         >
                           {busy ? (
@@ -450,8 +533,11 @@ export function AdminUsersView({ initialUsers }: Props) {
                         <button
                           type="button"
                           onClick={() => void setEnabled(u, !u.enabled)}
-                          disabled={busy}
-                          title={u.enabled ? 'Disable user' : 'Enable user'}
+                          disabled={busy || disableReason !== null}
+                          title={
+                            disableReason ??
+                            (u.enabled ? 'Disable user' : 'Enable user')
+                          }
                           className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-surface-1 text-muted hover:bg-surface-2 hover:text-ink-1 disabled:opacity-50"
                         >
                           <UserMinus className="h-3 w-3" />
@@ -459,8 +545,8 @@ export function AdminUsersView({ initialUsers }: Props) {
                         <button
                           type="button"
                           onClick={() => void removeUser(u)}
-                          disabled={busy}
-                          title="Delete user (permanent)"
+                          disabled={busy || deleteReason !== null}
+                          title={deleteReason ?? 'Delete user (permanent)'}
                           className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-surface-1 text-muted hover:bg-danger/10 hover:text-danger disabled:opacity-50"
                         >
                           <Trash2 className="h-3 w-3" />

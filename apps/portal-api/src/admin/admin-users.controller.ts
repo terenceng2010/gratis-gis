@@ -50,6 +50,15 @@ export type AdminUserRep = KeycloakUserRep & {
    * the wire; null = no auto-disable (default).
    */
   autoDisableAt: string | null;
+  /**
+   * Master-admin protection flag (#134). When true, every API
+   * mutation against this user is refused. The frontend uses this
+   * to disable the Role / Disable / Delete / Reset controls and
+   * show a small lock badge so the affordance state matches what
+   * the server will accept. Always false for newly-created users;
+   * flip via direct DB only.
+   */
+  isProtected: boolean;
 };
 
 type OrgRole = 'viewer' | 'contributor' | 'admin';
@@ -128,7 +137,12 @@ export class AdminUsersController {
     const local = usernames.length
       ? await this.prisma.user.findMany({
           where: { username: { in: usernames } },
-          select: { username: true, lastSeenAt: true, autoDisableAt: true },
+          select: {
+            username: true,
+            lastSeenAt: true,
+            autoDisableAt: true,
+            isProtected: true,
+          },
         })
       : [];
     const byUsername = new Map(local.map((u) => [u.username, u]));
@@ -138,6 +152,7 @@ export class AdminUsersController {
         ...u,
         lastSeenAt: row?.lastSeenAt?.toISOString() ?? null,
         autoDisableAt: row?.autoDisableAt?.toISOString() ?? null,
+        isProtected: row?.isProtected ?? false,
       };
     });
   }
@@ -304,13 +319,18 @@ export class AdminUsersController {
     const local = username
       ? await this.prisma.user.findUnique({
           where: { username },
-          select: { lastSeenAt: true, autoDisableAt: true },
+          select: {
+            lastSeenAt: true,
+            autoDisableAt: true,
+            isProtected: true,
+          },
         })
       : null;
     return {
       ...kcUserAfter,
       lastSeenAt: local?.lastSeenAt?.toISOString() ?? null,
       autoDisableAt: local?.autoDisableAt?.toISOString() ?? null,
+      isProtected: local?.isProtected ?? false,
     };
   }
 
