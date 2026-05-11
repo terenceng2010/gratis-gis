@@ -3,10 +3,16 @@
 Thanks for considering contributing! This doc explains how the project is
 organized and how to propose changes.
 
-## Project is in active scaffolding
+## Project state
 
-We're in Phase 0. Expect the architecture to be fluid and the issue tracker
-to reflect near-term milestones from [ROADMAP.md](./ROADMAP.md).
+GratisGIS is in active pre-v1 development. The core portal, web maps,
+forms, dashboards, App Builder, field PWA, and the observation-log
+engine with Cedar policy authorization are all working today (see the
+status section in the [README](./README.md)). The architecture is
+stabilizing but expect the occasional pivot on internals; cross-app
+contracts in [packages/shared-types](./packages/shared-types) and the
+API surface are the parts we try hardest to keep settled. The issue
+tracker reflects near-term work from [ROADMAP.md](./ROADMAP.md).
 
 ## Branching & PRs
 

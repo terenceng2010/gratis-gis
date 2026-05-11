@@ -9,7 +9,28 @@ A self-hosted, open-source platform for geospatial portals: maps, layers, forms,
 field data collection, dashboards, and reports. Runs on your own infrastructure
 with no per-user fees, no proprietary file formats, and no vendor lock-in.
 
-**Status:** 🚧 Early scaffolding (Phase 0 / Portal MVP in progress)
+**Status:** Active development, pre-v1. The portal, web map authoring with
+PostGIS-backed data layers, vector-tile rendering for large datasets,
+Esri WebMap JSON import/export, form authoring + submissions, dashboards,
+App Builder (runtime + designer), the field PWA with offline support,
+derived-layer tools, and per-share row/column/geographic access controls
+are all working today. Underneath all of it is the observation-log engine
+plus Cedar-based geometry-aware authorization. ~400 backend tests, CI on
+every push.
+
+**Try it:** [gratisgis.org](https://gratisgis.org) hosts a public test
+instance during the open feedback period. The landing page lists test
+credentials and the daily-reset window. Items, users, and edits made by
+testers get rolled back every 24 hours to a curated golden state so
+everyone gets a clean slate. Found a bug or want to chat?
+[Open an issue](https://github.com/palavido-dev/gratis-gis/issues) or
+start a [Discussion](https://github.com/palavido-dev/gratis-gis/discussions).
+
+**A personal note:** This is a side project, not a startup. Built on
+nights and weekends by one person with kids, a full-time job, and three
+decades of GIS behind them, as a way to give back some of what working
+in this field has given me. See [/why](https://gratisgis.org/why) on the
+public instance for the longer version.
 
 ## Why GratisGIS
 
