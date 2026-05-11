@@ -143,6 +143,7 @@ import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
 import { VersionHistoryPanel } from './data-layer/version-history-panel';
 import { ComingSoon } from './coming-soon';
+import { BasemapEditor } from './basemap/editor';
 
 interface Props {
   params: { id: string };
@@ -879,6 +880,26 @@ export default async function ItemDetailPage({ params }: Props) {
             const canDownload = canManage || viewerCanDownload;
             return <FileDetail data={safe} canDownload={canDownload} />;
           })()}
+        </section>
+      ) : item.type === 'basemap' ? (
+        <section className="mb-6">
+          {/* #144: basemap detail editor. Wraps the same
+              BasemapConfigSection the new-item wizard uses
+              (including the Probe URL tab) so a misconfigured
+              basemap can be fixed in place rather than deleted
+              and recreated. Read-only viewers see the source
+              but can't edit it. Defensive read with isBasemapData
+              would be tidier, but the api guarantees the shape
+              for type='basemap' so the cast is safe in practice. */}
+          <BasemapEditor
+            itemId={item.id}
+            initial={
+              (item.data && typeof item.data === 'object'
+                ? item.data
+                : { version: 1, kind: 'tile-url' }) as BasemapData
+            }
+            canEdit={canManage}
+          />
         </section>
       ) : (
         <section className="mb-6">
