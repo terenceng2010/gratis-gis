@@ -129,17 +129,20 @@ describe('EngineService.writeMany', () => {
     expect(out.map((o) => (o.attrs as { i: number }).i)).toEqual([0, 1, 2]);
   });
 
-  it('issues one INSERT per 500-row chunk', async () => {
+  it('issues one INSERT per WRITE_BATCH_SIZE chunk', async () => {
     const { unsafeWrites, fake } = makeFakePrisma();
     const svc = new EngineService(fake);
-    // 1200 rows -> ceil(1200/500) = 3 INSERT statements.
-    const inputs = Array.from({ length: 1200 }, () => fixture());
+    // WRITE_BATCH_SIZE is 2000 (bumped from 500 in #114 to cut DB
+    // roundtrips). 4500 rows -> ceil(4500/2000) = 3 INSERT
+    // statements. Inputs deliberately exceeds 2 * batch + 1 so we
+    // cover both "full batch" and "partial-tail batch" shapes.
+    const inputs = Array.from({ length: 4500 }, () => fixture());
     await svc.writeMany(inputs);
     expect(unsafeWrites).toHaveLength(3);
-    // Spot-check the first chunk: 500 rows * 13 params = 6500 bound values.
-    expect(unsafeWrites[0]!.values).toHaveLength(500 * 13);
-    // Last chunk has the remaining 200 rows.
-    expect(unsafeWrites[2]!.values).toHaveLength(200 * 13);
+    // Spot-check the first chunk: 2000 rows * 13 params = 26000 bound values.
+    expect(unsafeWrites[0]!.values).toHaveLength(2000 * 13);
+    // Last chunk has the remaining 500 rows.
+    expect(unsafeWrites[2]!.values).toHaveLength(500 * 13);
   });
 
   it('rejects the whole batch when one observation fails validation', async () => {
