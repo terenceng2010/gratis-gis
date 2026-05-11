@@ -401,6 +401,13 @@ function DrawPanel({
       // TerraDraw stores Polygon features only, so a MultiPolygon
       // gets split into N Polygon features that the user can edit
       // independently. We rejoin them on finish.
+      //
+      // Bug fix: TerraDraw v1 validates each seeded feature's id
+      // as a UUID and silently throws when it isn't. The previous
+      // `existing-${i}` ids failed that check, which surfaced as
+      // "saved boundary doesn't render in the editor." Use proper
+      // UUIDs (crypto.randomUUID is available in modern browsers
+      // and on the SSR path) so TerraDraw accepts the seed.
       if (geometry) {
         try {
           const polys: number[][][][] =
@@ -408,8 +415,8 @@ function DrawPanel({
               ? [geometry.coordinates as unknown as number[][][]]
               : (geometry.coordinates as unknown as number[][][][]);
           draw.addFeatures(
-            polys.map((coords, i) => ({
-              id: `existing-${i}`,
+            polys.map((coords) => ({
+              id: crypto.randomUUID(),
               type: 'Feature' as const,
               geometry: {
                 type: 'Polygon' as const,
@@ -434,9 +441,58 @@ function DrawPanel({
               { padding: 40, duration: 0, maxZoom: 12 },
             );
           }
-        } catch {
-          // Bad shape coming from the DB shouldn't crash the editor;
-          // worst case the user just draws fresh.
+        } catch (err) {
+          // TerraDraw refused to seed the saved geometry (most
+          // likely a future shape constraint we don't know about
+          // yet). Fall back to rendering the polygon as a
+          // read-only maplibre layer so the user at least SEES
+          // their saved boundary instead of an empty map. They
+          // can still draw a new polygon to replace it; clearing
+          // the geometry through Clear or Upload paths will
+          // remove this preview as well because they re-enter
+          // the editor with fresh state.
+          // eslint-disable-next-line no-console
+          console.warn(
+            'TerraDraw rejected the seeded boundary geometry; falling back to a read-only preview layer.',
+            err,
+          );
+          const fallbackFeature: GeoJSON.Feature = {
+            type: 'Feature',
+            geometry: geometry as unknown as GeoJSON.Geometry,
+            properties: {},
+          };
+          const fallbackData: GeoJSON.FeatureCollection = {
+            type: 'FeatureCollection',
+            features: [fallbackFeature],
+          };
+          if (!m.getSource('boundary-fallback')) {
+            m.addSource('boundary-fallback', {
+              type: 'geojson',
+              data: fallbackData,
+            });
+            m.addLayer({
+              id: 'boundary-fallback-fill',
+              type: 'fill',
+              source: 'boundary-fallback',
+              paint: { 'fill-color': '#2563eb', 'fill-opacity': 0.2 },
+            });
+            m.addLayer({
+              id: 'boundary-fallback-line',
+              type: 'line',
+              source: 'boundary-fallback',
+              paint: { 'line-color': '#1d4ed8', 'line-width': 2 },
+            });
+          }
+          const b = computeBBox(geometry);
+          if (b) {
+            m.fitBounds(
+              [
+                [b[0], b[1]],
+                [b[2], b[3]],
+              ],
+              { padding: 40, duration: 0, maxZoom: 12 },
+            );
+          }
         }
         draw.setMode('select');
       } else {
