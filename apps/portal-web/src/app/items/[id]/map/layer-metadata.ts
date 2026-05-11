@@ -229,11 +229,10 @@ export async function discoverLayerMetadata(
         // user sees a generic discovery error.
       }
       if (declaredGeometry === null) {
-        // Authoritative table sublayer. Skip the geojson fetch
-        // entirely (the v3 endpoint refuses geojson on tables).
-        // Return the schema-derived fields so the inline editor
-        // can still resolve them; cartographic editors stay hidden
-        // via isTable=true.
+        // Authoritative table sublayer. The v3 geojson endpoint
+        // refuses geojson on tables anyway. Return the schema-
+        // derived fields so the inline editor can resolve them;
+        // cartographic editors stay hidden via isTable=true.
         return {
           ...EMPTY,
           fields: [...schemaFields].sort(),
@@ -241,70 +240,54 @@ export async function discoverLayerMetadata(
           loading: false,
         };
       }
-      const init: RequestInit = {};
-      if (signal) init.signal = signal;
-      const res = await fetch(
-        `/api/portal/items/${itemId}/layers/${layerKey}/geojson`,
-        init,
-      );
-      if (!res.ok) {
-        // Geojson fetch failed (typically a large layer timing out
-        // or being too big for the client). Don't lose the schema-
-        // derived field list just because the sample couldn't run;
-        // returning fields here keeps the labels editor and search
-        // field-inserter functional even when the feature sample
-        // didn't.
-        //
-        // We deliberately do NOT set `error` here when schema fields
-        // are available: the editor surfaces metadata.error as a red
-        // "Source returned 500" string under the filters / popups
-        // sections, which is alarming for the user and misleading
-        // (the layer is fine, only the sample couldn't run). When
-        // we have schema fields the layer authoring experience
-        // works end-to-end without the sample. Only surface error
-        // when we have nothing to give the editor.
-        if (signal?.aborted) return EMPTY;
-        const next: LayerMetadata = {
-          ...EMPTY,
-          fields: [...schemaFields].sort(),
-          geometryTypes:
-            declaredGeometry === 'point' ||
-            declaredGeometry === 'line' ||
-            declaredGeometry === 'polygon'
-              ? new Set([declaredGeometry])
-              : new Set<GeometryFamily>(),
-        };
-        if (schemaFields.length === 0) {
-          next.error = `Source returned ${res.status}`;
-        }
-        return next;
-      }
-      raw = await res.json();
-      // Seed the field set with the schema-derived names so any
-      // schema-declared field with no sampled values still appears
-      // in the inserter. The features loop below unions in any
-      // fields that show up in data but aren't in the schema
-      // (defensive: stale schema vs. freshly-imported data).
-      if (schemaFields.length > 0) {
-        (raw as { __schemaFields?: string[] }).__schemaFields = schemaFields;
-      }
-      // If the parent item told us the declared geometry but we
-      // sampled zero features, seed geometryTypes from the
-      // declaration so symbology / legend treat the empty layer as
-      // its true family. The features-driven loop below still wins
-      // for non-empty layers; this only kicks in when the layer is
-      // empty.
-      if (
-        declaredGeometry === 'point' ||
-        declaredGeometry === 'line' ||
-        declaredGeometry === 'polygon'
-      ) {
-        // Stash on raw for the post-loop merge below. We could
-        // build the Set here, but the existing code path constructs
-        // it from the features loop -- easier to merge after.
-        (raw as { __declaredGeometry?: GeometryFamily }).__declaredGeometry =
-          declaredGeometry;
-      }
+      // SKIP the /geojson sample on v3 data layers entirely.
+      //
+      // The sample was originally needed for:
+      //   - valuesByField (distinct values per field, used by the
+      //     unique-values renderer's category picker)
+      //   - sampleProperties (one feature's props, used by the
+      //     popup live-preview)
+      //   - featureCollection (cached at the metadata level for
+      //     downstream consumers like search bar + attribute table)
+      //
+      // Each of those was acceptable on small layers and a
+      // catastrophe on big ones. The 1.4M-row parcels dataset
+      // either 500s the /geojson endpoint outright (Postgres SHM
+      // pressure, OOM during JSON serialization) or returns a
+      // multi-gigabyte response that wedges the browser. There is
+      // no scenario where the sample is useful enough to justify
+      // those failure modes for the common authoring flows.
+      //
+      // What we return instead:
+      //   - fields: the schema-declared field list (always
+      //     reliable; comes from the parent item descriptor).
+      //   - geometryTypes: the declared geometry family.
+      //   - valuesByField: empty. The unique-values renderer's
+      //     category picker becomes a follow-up "fetch on demand
+      //     via /features-page?distinct=field" endpoint; for now
+      //     it shows "no distinct values cached yet" instead of
+      //     hanging the page.
+      //   - sampleProperties: null. Popup live-preview falls back
+      //     to placeholder text until the user hovers a real
+      //     feature on the map.
+      //   - featureCollection: null. Downstream consumers that
+      //     wanted full-layer feature data already moved off this
+      //     cache (attribute table -> /features-page, search bar
+      //     -> /features-page).
+      //
+      // This is the same architectural call as the attribute-
+      // table P13 fix: schema-direct beats full-table sample.
+      return {
+        ...EMPTY,
+        fields: [...schemaFields].sort(),
+        geometryTypes:
+          declaredGeometry === 'point' ||
+          declaredGeometry === 'line' ||
+          declaredGeometry === 'polygon'
+            ? new Set([declaredGeometry])
+            : new Set<GeometryFamily>(),
+        loading: false,
+      };
     } else {
       const url =
         layer.source.kind === 'geojson-url'
