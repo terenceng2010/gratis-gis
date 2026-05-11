@@ -492,6 +492,16 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
       setError('Probe the service first so we know which layers it offers.');
       return;
     }
+    if (arcgisService.serviceType === 'GeocodeServer') {
+      // The Add Layer dialog adds rendered map layers; a
+      // GeocodeServer has no sublayers to render (#75). Refuse
+      // explicitly rather than handing the runtime a layer-ref
+      // pointing at a geocoder.
+      setError(
+        'This URL points at an ArcGIS GeocodeServer; geocoders are added as a geocoding source, not as a map layer.',
+      );
+      return;
+    }
     if (arcgisLayerId == null) {
       setError('Pick a layer from the service.');
       return;
@@ -505,7 +515,12 @@ export function AddLayerDialog({ open, onClose, onAdd }: Props) {
         kind: 'arcgis-rest',
         url: arcgisService.url,
         layerId: arcgisLayerId,
-        serviceType: arcgisService.serviceType,
+        // Narrow: the GeocodeServer branch returned above so this
+        // assignment only runs for Map / Feature services, which
+        // is what the runtime's arcgis-rest layer kind expects.
+        serviceType: arcgisService.serviceType as
+          | 'MapServer'
+          | 'FeatureServer',
       }),
     );
     reset();

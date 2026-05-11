@@ -17,7 +17,10 @@
  * someone hits one in the wild. The code below detects the omission
  * and surfaces a clear error rather than silently rendering nothing.
  */
-export type ArcgisServiceType = 'MapServer' | 'FeatureServer';
+export type ArcgisServiceType =
+  | 'MapServer'
+  | 'FeatureServer'
+  | 'GeocodeServer';
 
 export interface ArcgisServiceDescription {
   url: string;
@@ -27,6 +30,22 @@ export interface ArcgisServiceDescription {
   layers: ArcgisServiceLayer[];
   /** Service-level spatial extent (lng/lat) if the server reported one. */
   bbox: [number, number, number, number] | null;
+  /** GeocodeServer (#75): multi-line address input shape lifted from
+   *  the server's `addressFields[]`. Empty array for non-geocoders. */
+  geocodeAddressFields?: Array<{
+    name: string;
+    alias?: string;
+    required?: boolean;
+  }>;
+  /** GeocodeServer (#75): name of the single-line address field, when
+   *  the server advertises one. */
+  geocodeSingleLineField?: string;
+  /** GeocodeServer (#75): ISO-style country codes the locator
+   *  indexes, when the server advertises a country list. */
+  geocodeCountries?: string[];
+  /** GeocodeServer (#75): lowercased capability tokens lifted from
+   *  the server's comma-separated `capabilities` string. */
+  geocodeCapabilities?: string[];
 }
 
 export interface ArcgisServiceLayer {
@@ -81,6 +100,14 @@ export async function describeArcgisService(
     mapName?: unknown;
     serviceDescription?: unknown;
     description?: unknown;
+    // GeocodeServer-only fields. ArcGIS GeocodeServer responses
+    // carry these instead of a `layers` array; describeArcgisService
+    // returns them on the description so the service-probe pipeline
+    // can route to the arcgis_geocode protocol.
+    addressFields?: unknown;
+    singleLineAddressField?: unknown;
+    countries?: unknown;
+    capabilities?: unknown;
   };
 
   const layers: ArcgisServiceLayer[] = [];
@@ -139,7 +166,107 @@ export async function describeArcgisService(
   if (typeof obj.description === 'string') {
     out.description = obj.description;
   }
+
+  // GeocodeServer-specific metadata (#75). Only meaningful when the
+  // URL ended in /GeocodeServer; for MapServer/FeatureServer these
+  // keys are absent in the response and the helpers below return
+  // undefined or empty.
+  if (serviceType === 'GeocodeServer') {
+    const addressFields = parseGeocodeAddressFields(obj.addressFields);
+    if (addressFields && addressFields.length > 0) {
+      out.geocodeAddressFields = addressFields;
+    }
+    const singleLine = parseGeocodeSingleLineField(obj.singleLineAddressField);
+    if (singleLine) out.geocodeSingleLineField = singleLine;
+    const countries = parseGeocodeCountries(obj.countries);
+    if (countries && countries.length > 0) out.geocodeCountries = countries;
+    const capabilities = parseGeocodeCapabilities(obj.capabilities);
+    if (capabilities && capabilities.length > 0) {
+      out.geocodeCapabilities = capabilities;
+    }
+  }
   return out;
+}
+
+/**
+ * Parse a GeocodeServer `addressFields[]` array. ArcGIS publishes
+ * each field as an object with `name`, `alias`, `required`, plus
+ * various format details we ignore (length, type, recognizedNames).
+ * Returns undefined if the input isn't a recognizable array shape
+ * so the caller's optional-field assignment is clean.
+ */
+function parseGeocodeAddressFields(
+  input: unknown,
+): Array<{ name: string; alias?: string; required?: boolean }> | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const out: Array<{ name: string; alias?: string; required?: boolean }> = [];
+  for (const f of input) {
+    if (!f || typeof f !== 'object') continue;
+    const row = f as { name?: unknown; alias?: unknown; required?: unknown };
+    if (typeof row.name !== 'string' || row.name.length === 0) continue;
+    const entry: { name: string; alias?: string; required?: boolean } = {
+      name: row.name,
+    };
+    if (typeof row.alias === 'string' && row.alias.length > 0) {
+      entry.alias = row.alias;
+    }
+    if (typeof row.required === 'boolean') entry.required = row.required;
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * Parse the GeocodeServer `singleLineAddressField` element. ArcGIS
+ * publishes this as a sibling object (same shape as one addressField)
+ * naming the field that accepts a single combined-address string.
+ * We only carry the `name`; the input shape (and any picklist of
+ * valid values) is the server's concern at request time.
+ */
+function parseGeocodeSingleLineField(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const obj = input as { name?: unknown };
+  return typeof obj.name === 'string' && obj.name.length > 0
+    ? obj.name
+    : undefined;
+}
+
+/**
+ * Parse the GeocodeServer `countries` field. ArcGIS publishes this
+ * as either an array of strings ("USA", "CAN") or a comma-separated
+ * string ("USA,CAN"). Normalize to an array of uppercase ISO-style
+ * codes, deduplicated.
+ */
+function parseGeocodeCountries(input: unknown): string[] | undefined {
+  if (Array.isArray(input)) {
+    const arr = input
+      .filter((c): c is string => typeof c === 'string' && c.length > 0)
+      .map((c) => c.trim().toUpperCase());
+    return [...new Set(arr)];
+  }
+  if (typeof input === 'string' && input.length > 0) {
+    const arr = input
+      .split(',')
+      .map((c) => c.trim().toUpperCase())
+      .filter((c) => c.length > 0);
+    return [...new Set(arr)];
+  }
+  return undefined;
+}
+
+/**
+ * Parse the GeocodeServer `capabilities` string. ArcGIS publishes
+ * this as a comma-separated string like "Geocode,ReverseGeocode,Suggest".
+ * Normalize to lowercase tokens so downstream feature gates can
+ * pattern-match without case juggling.
+ */
+function parseGeocodeCapabilities(input: unknown): string[] | undefined {
+  if (typeof input !== 'string' || input.length === 0) return undefined;
+  const toks = input
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => t.length > 0);
+  return toks.length > 0 ? [...new Set(toks)] : undefined;
 }
 
 /**
@@ -263,6 +390,7 @@ function splitServiceUrl(raw: string): {
 
 function detectServiceType(url: string): ArcgisServiceType {
   if (/\/FeatureServer\b/i.test(url)) return 'FeatureServer';
+  if (/\/GeocodeServer\b/i.test(url)) return 'GeocodeServer';
   return 'MapServer';
 }
 

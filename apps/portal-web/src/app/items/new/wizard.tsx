@@ -493,6 +493,17 @@ export function NewItemWizard() {
    */
   const applyProbeResult = useCallback(
     (desc: ArcgisServiceDescription) => {
+      // The legacy arcgis_service wizard branch wraps Map / Feature
+      // services only. A GeocodeServer URL is handled by the
+      // unified `service` item type's auto-probe (#75) instead;
+      // refuse it here so we never seed an arcgis_service item
+      // with a serviceType the runtime can't render.
+      if (desc.serviceType === 'GeocodeServer') {
+        setError(
+          'This URL points at an ArcGIS GeocodeServer. Switch to the Connected service type to create a geocoder item.',
+        );
+        return;
+      }
       setArcgisProbeResult(desc);
       if (!userEditedTitleRef.current && !title.trim() && desc.name) {
         setTitle(desc.name);
@@ -779,7 +790,14 @@ export function NewItemWizard() {
       const staged: ArcgisServiceData = {
         ...DEFAULT_ARCGIS_SERVICE,
         url: arcgisProbeResult.url,
-        serviceType: arcgisProbeResult.serviceType,
+        // applyProbeResult refuses GeocodeServer above, so any
+        // probeResult that reaches this assignment is always
+        // Map / Feature service. Narrow to keep the legacy
+        // arcgis_service item type happy after ArcgisServiceType
+        // grew GeocodeServer (#75).
+        serviceType: arcgisProbeResult.serviceType as
+          | 'MapServer'
+          | 'FeatureServer',
         layers: arcgisProbeResult.layers.map((l) => {
           const base: { id: number; name: string; geometryType?: string } = {
             id: l.id,

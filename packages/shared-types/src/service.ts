@@ -40,6 +40,7 @@ export type ServiceProtocol =
   | 'arcgis_map'
   | 'arcgis_feature'
   | 'arcgis_image'
+  | 'arcgis_geocode'
   | 'wms'
   | 'wfs'
   | 'wmts';
@@ -121,6 +122,52 @@ export interface ArcgisImageService extends ServiceDataBase {
   protocol: 'arcgis_image';
 }
 
+/**
+ * Per-input-field snapshot for an ArcGIS GeocodeServer (#75).
+ * Lifts the GeocodeServer's `addressFields[]` so the map / app
+ * picker UI can render a multi-line address form against the
+ * server's actual field names ("Street", "City", "ZIP", etc.)
+ * rather than assuming a fixed shape. `required` mirrors the
+ * server's flag; UIs should refuse to submit when a required
+ * field is empty.
+ */
+export interface ArcgisGeocodeFieldSnapshot {
+  /** Server-side field name; passed back verbatim on geocode calls. */
+  name: string;
+  /** Human-friendly alias when the server provided one; falls back
+   *  to `name`. */
+  alias?: string;
+  /** Whether the server requires this field be populated. */
+  required?: boolean;
+}
+
+/**
+ * ArcGIS GeocodeServer (#75). Service-level metadata describes the
+ * input shape (single-line address vs. multi-line address fields,
+ * which countries are indexed) and the supported capabilities
+ * (Geocode, ReverseGeocode, Suggest). Layers is always empty for
+ * geocoders -- the service exposes one endpoint per capability
+ * rather than a sublayer list -- but the base shape carries `layers`
+ * so we keep it for cross-protocol consumers.
+ */
+export interface ArcgisGeocodeService extends ServiceDataBase {
+  protocol: 'arcgis_geocode';
+  /** Multi-line address fields the server accepts. Empty for
+   *  single-line-only locators. */
+  addressFields?: ArcgisGeocodeFieldSnapshot[];
+  /** Single-line address field name (when the server supports the
+   *  combined-address mode, which most modern locators do). */
+  singleLineFieldName?: string;
+  /** ISO-style country codes the server's locator indexes, when
+   *  reported. Surfaced in the detail page so an operator can tell
+   *  whether the geocoder's coverage matches their org's data. */
+  supportedCountries?: string[];
+  /** Capability list the server advertises, normalized to lowercase
+   *  tokens: 'geocode', 'reversegeocode', 'suggest', 'standardization',
+   *  'batchgeocode'. */
+  capabilities?: string[];
+}
+
 export interface WmsService extends ServiceDataBase {
   protocol: 'wms';
   protocolVersion: '1.1.1' | '1.3.0';
@@ -156,6 +203,7 @@ export type ServiceData =
   | ArcgisMapService
   | ArcgisFeatureService
   | ArcgisImageService
+  | ArcgisGeocodeService
   | WmsService
   | WfsService
   | WmtsService;
@@ -183,6 +231,14 @@ export const DEFAULT_SERVICE: Record<ServiceProtocol, ServiceData> = {
     version: 1,
     protocol: 'arcgis_image',
     url: '',
+    layers: [],
+  },
+  arcgis_geocode: {
+    version: 1,
+    protocol: 'arcgis_geocode',
+    url: '',
+    // Geocoders have no sublayer concept; the empty array keeps the
+    // ServiceData shape uniform across protocols.
     layers: [],
   },
   wms: {
@@ -223,6 +279,8 @@ export function serviceProtocolLabel(p: ServiceProtocol): string {
       return 'ArcGIS Feature Service';
     case 'arcgis_image':
       return 'ArcGIS Image Service';
+    case 'arcgis_geocode':
+      return 'ArcGIS Geocoding Service';
     case 'wms':
       return 'WMS';
     case 'wfs':
@@ -243,6 +301,7 @@ export function isServiceData(value: unknown): value is ServiceData {
     v.protocol === 'arcgis_map' ||
     v.protocol === 'arcgis_feature' ||
     v.protocol === 'arcgis_image' ||
+    v.protocol === 'arcgis_geocode' ||
     v.protocol === 'wms' ||
     v.protocol === 'wfs' ||
     v.protocol === 'wmts'

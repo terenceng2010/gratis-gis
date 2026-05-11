@@ -73,7 +73,12 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
     ? {
         ...data,
         url: probeResult.url,
-        serviceType: probeResult.serviceType,
+        // The probe handler (above) refuses GeocodeServer results
+        // for the legacy arcgis_service editor and surfaces an
+        // error, so a probeResult that lands here is always
+        // MapServer or FeatureServer. Narrow explicitly to keep
+        // TypeScript happy after ArcgisServiceType grew GeocodeServer.
+        serviceType: probeResult.serviceType as 'MapServer' | 'FeatureServer',
         layers: probeResult.layers.map((l) => {
           const base: { id: number; name: string; geometryType?: string } = {
             id: l.id,
@@ -230,6 +235,17 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
         desc = await probeService(raw, controller.signal);
       }
       if (controller.signal.aborted) return;
+      // The legacy arcgis_service item type wraps Map/Feature
+      // services only. A GeocodeServer URL is valid input for the
+      // unified `service` item type (#75) but not for this editor;
+      // surface a clear redirect-to-the-right-flow message rather
+      // than silently mis-typing the existing item.
+      if (desc.serviceType === 'GeocodeServer') {
+        setError(
+          'This URL points at an ArcGIS GeocodeServer. Create a new "Connected service" item to use it as a geocoder; the legacy ArcGIS Service item type only wraps Map / Feature services.',
+        );
+        return;
+      }
       setProbeResult(desc);
     } catch (err) {
       if ((err as Error)?.name === 'AbortError') return;

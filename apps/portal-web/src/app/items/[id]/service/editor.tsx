@@ -257,7 +257,13 @@ export function ServiceEditor({ itemId, initial, canEdit }: Props) {
         />
       </section>
 
-      {/* Layer / feature-type picker. */}
+      {/* Geocoder details (#75): GeocodeServers have no sublayer
+          concept; render the address-field shape + capabilities
+          read-only instead of the layer picker, which would just
+          show "no layers" awkwardly. */}
+      {staged.protocol === 'arcgis_geocode' ? (
+        <GeocoderDetails data={staged} />
+      ) : (
       <section className="rounded-lg border border-border bg-surface-1 p-4 shadow-card">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h2 className="text-sm font-medium text-ink-0">
@@ -344,6 +350,7 @@ export function ServiceEditor({ itemId, initial, canEdit }: Props) {
           </ul>
         )}
       </section>
+      )}
 
       {/* Save / discard footer. */}
       {canEdit && hasChanges ? (
@@ -535,6 +542,73 @@ function ProtocolOptions({
   return null;
 }
 
+/**
+ * Read-only details card for an ArcGIS GeocodeServer (#75). Replaces
+ * the layer-picker section for `protocol === 'arcgis_geocode'` since
+ * a geocoder has no sublayer concept. Shows the address-field input
+ * shape, capability list, and country coverage the probe lifted from
+ * the server's `?f=json` response. Editing requires re-probing the
+ * source URL.
+ */
+function GeocoderDetails({ data }: { data: import('@gratis-gis/shared-types').ArcgisGeocodeService }) {
+  return (
+    <section className="rounded-lg border border-border bg-surface-1 p-4 shadow-card">
+      <h2 className="mb-3 text-sm font-medium text-ink-0">Geocoder details</h2>
+      <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+        <div className="rounded-md border border-border bg-surface-2 p-3">
+          <p className="text-muted">Single-line address field</p>
+          <p className="mt-0.5 font-mono text-ink-0">
+            {data.singleLineFieldName ?? <span className="text-muted">(none)</span>}
+          </p>
+        </div>
+        <div className="rounded-md border border-border bg-surface-2 p-3">
+          <p className="text-muted">Capabilities</p>
+          <p className="mt-0.5 text-ink-0">
+            {data.capabilities && data.capabilities.length > 0
+              ? data.capabilities.join(', ')
+              : <span className="text-muted">(not advertised)</span>}
+          </p>
+        </div>
+      </div>
+      {data.addressFields && data.addressFields.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-xs text-muted">Multi-line address fields</p>
+          <ul className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
+            {data.addressFields.map((f) => (
+              <li
+                key={f.name}
+                className="flex items-baseline gap-2 rounded border border-border bg-surface-2 px-2 py-1 text-xs"
+              >
+                <span className="font-mono text-ink-0">{f.name}</span>
+                {f.alias && f.alias !== f.name ? (
+                  <span className="text-muted">({f.alias})</span>
+                ) : null}
+                {f.required ? (
+                  <span className="rounded bg-accent/10 px-1 text-[10px] uppercase tracking-wide text-accent">
+                    required
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {data.supportedCountries && data.supportedCountries.length > 0 ? (
+        <div className="mt-3 text-xs">
+          <p className="text-muted">Supported countries</p>
+          <p className="mt-0.5 font-mono text-ink-1">
+            {data.supportedCountries.join(', ')}
+          </p>
+        </div>
+      ) : null}
+      <p className="mt-3 text-[11px] text-muted">
+        Re-probe the source URL to refresh these fields after the
+        server&rsquo;s configuration changes.
+      </p>
+    </section>
+  );
+}
+
 /** Word a protocol uses for the addressable units it advertises. */
 function layerWordFor(p: ServiceProtocol): string {
   if (p === 'wfs') return 'feature type';
@@ -549,7 +623,12 @@ function layerWordFor(p: ServiceProtocol): string {
 function capabilitiesUrlFor(d: ServiceData): string | null {
   if (!d.url) return null;
   const base = d.url.replace(/\?.*$/, '').replace(/\/+$/, '');
-  if (d.protocol === 'arcgis_map' || d.protocol === 'arcgis_feature' || d.protocol === 'arcgis_image') {
+  if (
+    d.protocol === 'arcgis_map' ||
+    d.protocol === 'arcgis_feature' ||
+    d.protocol === 'arcgis_image' ||
+    d.protocol === 'arcgis_geocode'
+  ) {
     return `${base}?f=json`;
   }
   if (d.protocol === 'wms') {

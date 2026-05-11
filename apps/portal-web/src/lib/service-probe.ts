@@ -133,12 +133,44 @@ async function tryArcgis(rawUrl: string): Promise<ArcgisServiceDescription> {
 }
 
 /** ArcGIS REST -> unified ServiceData. Maps MapServer to
- *  arcgis_map, FeatureServer to arcgis_feature. (Image servers can
- *  be added later when we add image support.) */
+ *  arcgis_map, FeatureServer to arcgis_feature, GeocodeServer to
+ *  arcgis_geocode (#75). (Image servers can be added later when we
+ *  add image support.) */
 function arcgisToServiceData(
   desc: ArcgisServiceDescription,
   probedAt: ISODateString,
 ): ServiceData {
+  // GeocodeServer carries no sublayers but does carry per-service
+  // address-field metadata. Route to the arcgis_geocode variant so
+  // the runtime can render a geocoder-shaped detail page + picker
+  // rather than the layer-list pattern the other protocols share.
+  if (desc.serviceType === 'GeocodeServer') {
+    const data: ServiceData = {
+      version: 1,
+      protocol: 'arcgis_geocode',
+      url: desc.url,
+      // Geocoders advertise no sublayers; the empty list keeps the
+      // ServiceData shape uniform across protocols.
+      layers: [],
+      probedAt,
+      ...(desc.bbox ? { bbox: desc.bbox } : {}),
+      ...(desc.name ? { serviceTitle: desc.name } : {}),
+      ...(desc.geocodeAddressFields && desc.geocodeAddressFields.length > 0
+        ? { addressFields: desc.geocodeAddressFields }
+        : {}),
+      ...(desc.geocodeSingleLineField
+        ? { singleLineFieldName: desc.geocodeSingleLineField }
+        : {}),
+      ...(desc.geocodeCountries && desc.geocodeCountries.length > 0
+        ? { supportedCountries: desc.geocodeCountries }
+        : {}),
+      ...(desc.geocodeCapabilities && desc.geocodeCapabilities.length > 0
+        ? { capabilities: desc.geocodeCapabilities }
+        : {}),
+    };
+    return data;
+  }
+
   const protocol =
     desc.serviceType === 'FeatureServer' ? 'arcgis_feature' : 'arcgis_map';
   const layers: ServiceLayerSnapshot[] = desc.layers.map((l) => {
