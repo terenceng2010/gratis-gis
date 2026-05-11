@@ -132,9 +132,17 @@ export function ItemsView({
   activeFolder = null,
   geoBoundaries = [],
 }: Props) {
-  const [viewMode, setViewMode] = useState<ViewMode>('card');
-  const [groupBy, setGroupBy] = useState<GroupBy>('none');
-  const [sortBy, setSortBy] = useState<SortBy>('updated-desc');
+  // Initial defaults match the "manage my own portal" workflow most
+  // users hit: a dense list grouped by type, A-Z so the same item is
+  // always in the same spot. The localStorage rehydrate below
+  // overrides these for returning users who picked something else.
+  // Cards stays available for the discovery contexts where it earns
+  // its place (Featured Items, basemap picker, map / dashboard
+  // browsing); it's just no longer the default for inventory
+  // management.
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [groupBy, setGroupBy] = useState<GroupBy>('type');
+  const [sortBy, setSortBy] = useState<SortBy>('title-asc');
   const [typeFilter, setTypeFilter] = useState<Set<ItemType>>(new Set());
   // #258: secondary facet for `web_app` items, surfaced in the
   // filter popover under Type. Lets "show me my editors" remain a
@@ -223,8 +231,10 @@ export function ItemsView({
   const router = useRouter();
 
   // Rehydrate persisted preferences on mount. Running this lazily
-  // (not as a useState initializer) keeps the component SSR-safe
-  // the first render always matches the server's ("card", "none").
+  // (not as a useState initializer) keeps the component SSR-safe:
+  // the first render always matches the server's defaults
+  // ("list", "type", "title-asc"); a returning user's localStorage
+  // picks overwrite them client-side before paint.
   useEffect(() => {
     try {
       const vm = localStorage.getItem(VIEW_MODE_KEY);
