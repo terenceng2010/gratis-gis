@@ -57,6 +57,7 @@ import {
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_GEOCODING_SERVICE,
+  DEFAULT_TILE_LAYER,
   DEFAULT_MAP,
   DEFAULT_FOLDER,
   DEFAULT_CUSTOM_APP,
@@ -189,6 +190,18 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Pick list',
         desc: 'Shared list of codes + labels referenced by fields, forms, and filters.',
         Icon: ListChecks,
+      },
+      {
+        // #179: tile_layer. Wraps a pre-rendered PMTiles file
+        // (single .pmtiles upload) and exposes it as a tile
+        // service consumable as a basemap. Sibling to Basemap
+        // because both back map rendering, but Tile layer is
+        // "I have the cache, just host it" while Basemap is
+        // "I have the URL or service, point at it."
+        value: 'tile_layer',
+        label: 'Tile layer',
+        desc: 'Upload a pre-rendered tile cache (PMTiles). Hosts the file and exposes a tile URL maps can use as a basemap.',
+        Icon: Layers,
       },
     ],
   },
@@ -1028,6 +1041,11 @@ export function NewItemWizard() {
         config: { template: 'custom', custom: DEFAULT_CUSTOM_APP },
       };
       data = webApp;
+    } else if (type === 'tile_layer') {
+      // #179: empty tile_layer. The file upload + metadata
+      // extraction happen on the detail page after create,
+      // mirroring how `file` items work today.
+      data = DEFAULT_TILE_LAYER;
     } else if (type === 'geocoding_service') {
       // #74: empty geocoding_service. The detail page hosts the
       // source-layer + search-fields config (which fields to

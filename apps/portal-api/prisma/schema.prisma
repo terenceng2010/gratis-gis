@@ -161,6 +161,10 @@ enum ItemType {
   /// vector layer + search-fields config and exposes a /geocode
   /// runtime endpoint for maps + apps to use as a search source.
   geocoding_service          @map("geocoding-service")
+  /// #179: pre-rendered tile cache wrapper. v1 accepts PMTiles
+  /// uploads; consumable as a basemap source via the API's
+  /// pmtiles:// proxy URL.
+  tile_layer                 @map("tile-layer")
 }
 
 // ---------- Tables ----------

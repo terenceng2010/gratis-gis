@@ -1,5 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { StyleSpecification } from 'maplibre-gl';
+import maplibregl from 'maplibre-gl';
+import { Protocol } from 'pmtiles';
+
+// Register the pmtiles:// protocol with MapLibre once per page
+// load (#179). MapLibre's setStyle / addSource use the protocol
+// transparently when a tile source's URL begins with pmtiles://,
+// so basemaps backed by a tile_layer item get range-served
+// straight from MinIO via the api's proxy endpoint with no
+// other plumbing.
+//
+// We do this at module load (rather than per-map mount) because
+// the protocol is global state on the maplibregl singleton; a
+// per-mount register+remove pair would race when multiple maps
+// share a page. The guard makes the module idempotent under HMR.
+declare global {
+  // eslint-disable-next-line no-var
+  var __ggPmtilesRegistered: boolean | undefined;
+}
+if (typeof globalThis.__ggPmtilesRegistered === 'undefined') {
+  const protocol = new Protocol();
+  maplibregl.addProtocol('pmtiles', protocol.tile);
+  globalThis.__ggPmtilesRegistered = true;
+}
 
 /**
  * Shape of a custom basemap row coming back from /api/basemaps.
@@ -48,6 +71,36 @@ export function customBasemapToStyle(b: CustomBasemap): CustomStyle {
   }
 
   if (b.sourceKind === 'xyz') {
+    // #179: pmtiles:// URLs use a different source shape. The
+    // pmtiles protocol returns a tile-JSON document when given
+    // the source `url` (no {z}/{x}/{y} template substitution),
+    // so we emit `url` instead of `tiles`. Both raster and
+    // vector PMTiles caches can land here; the inner content
+    // type is signalled by the cache file itself so we default
+    // to raster (the common basemap case). Vector pmtiles
+    // basemaps need their source-layer + style configured by
+    // the author and are out of v1 scope here -- the user
+    // would instead use a style.json (the 'vector-style' path).
+    if (b.url.startsWith('pmtiles://')) {
+      return {
+        kind: 'inline',
+        style: {
+          version: 8,
+          glyphs: DEFAULT_GLYPHS,
+          sources: {
+            raster: {
+              type: 'raster',
+              url: b.url,
+              tileSize: 256,
+              attribution: b.attribution || undefined,
+            },
+          },
+          layers: [
+            { id: 'raster-layer', type: 'raster', source: 'raster' },
+          ],
+        } as StyleSpecification,
+      };
+    }
     return {
       kind: 'inline',
       style: {

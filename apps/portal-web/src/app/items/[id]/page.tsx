@@ -145,6 +145,7 @@ import { VersionHistoryPanel } from './data-layer/version-history-panel';
 import { ComingSoon } from './coming-soon';
 import { BasemapEditor } from './basemap/editor';
 import { GeocodingServiceEditor } from './geocoding/editor';
+import { TileLayerEditor } from './tile-layer/editor';
 
 interface Props {
   params: { id: string };
@@ -885,6 +886,30 @@ export default async function ItemDetailPage({ params }: Props) {
             const canDownload = canManage || viewerCanDownload;
             return <FileDetail data={safe} canDownload={canDownload} />;
           })()}
+        </section>
+      ) : item.type === 'tile_layer' ? (
+        <section className="mb-6">
+          {/* #179: tile_layer detail editor. Upload a PMTiles
+              file, see metadata + preview, copy the pmtiles://
+              tile URL for use in basemaps. */}
+          <TileLayerEditor
+            itemId={item.id}
+            initial={
+              (item.data && typeof item.data === 'object'
+                ? item.data
+                : {
+                    version: 1,
+                    format: 'pmtiles',
+                    kind: 'raster',
+                    storageKey: '',
+                    storageUrl: '',
+                    fileName: '',
+                    sizeBytes: 0,
+                    uploadedAt: new Date(0).toISOString(),
+                  }) as import('@gratis-gis/shared-types').TileLayerData
+            }
+            canEdit={canManage}
+          />
         </section>
       ) : item.type === 'geocoding_service' ? (
         <section className="mb-6">

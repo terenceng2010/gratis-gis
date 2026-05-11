@@ -63,6 +63,7 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
   editor: PencilRuler,
   data_collection: ClipboardList,
   geocoding_service: MapPin,
+  tile_layer: Layers,
 };
 
 /**
@@ -97,6 +98,7 @@ const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   editor: 'Editor',
   data_collection: 'Data collection',
   geocoding_service: 'Geocoding service',
+  tile_layer: 'Tile layer',
 };
 
 export function getItemTypeLabel(t: ItemType): string {
@@ -131,6 +133,7 @@ const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
   editor: 'text-purple-600',
   data_collection: 'text-violet-700',
   geocoding_service: 'text-orange-700',
+  tile_layer: 'text-fuchsia-600',
 };
 
 /** Tailwind class combos for the tile background used in compact
@@ -160,6 +163,7 @@ const ITEM_TYPE_TILE: Record<ItemType, string> = {
   editor: 'bg-purple-500/90 text-white',
   data_collection: 'bg-violet-700/90 text-white',
   geocoding_service: 'bg-orange-600/90 text-white',
+  tile_layer: 'bg-fuchsia-500/90 text-white',
 };
 
 export function getItemTypeIcon(type: ItemType): LucideIcon {

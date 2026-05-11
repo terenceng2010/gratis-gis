@@ -101,6 +101,19 @@ export class AdminBasemapProbeController {
       );
     }
 
+    // (0) PMTiles URL (#179). pmtiles:// URLs are consumed by
+    // MapLibre's pmtiles protocol plugin (range-reads the
+    // underlying HTTP URL). They don't have {z}/{x}/{y}
+    // placeholders, so the XYZ-template check below would miss
+    // them, AND none of the OGC / ArcGIS probe branches can
+    // fetch a pmtiles: scheme. Short-circuit before any of that.
+    if (url.startsWith('pmtiles://')) {
+      return {
+        kind: 'tile-url',
+        tileUrl: url,
+      };
+    }
+
     // (1) XYZ tile template. Cheap; no network call.
     if (looksLikeXyzTemplate(url)) {
       return {

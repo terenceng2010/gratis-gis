@@ -45,6 +45,11 @@ export const ITEM_TYPES = [
   // two ways to publish a geocoder; both feed the same map-search
   // picker.
   'geocoding_service',
+  // #179: pre-rendered tile cache (PMTiles container in v1). Wraps
+  // one uploaded tile file + metadata extracted from its header at
+  // upload time. Consumable as a basemap source through its
+  // pmtiles:// URL.
+  'tile_layer',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];

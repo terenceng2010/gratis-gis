@@ -21,6 +21,7 @@ import { BackupModule } from './backup/backup.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { FeedbackModule } from './feedback/feedback.module.js';
 import { GeocodingModule } from './geocoding/geocoding.module.js';
+import { TileLayerModule } from './tile-layer/tile-layer.module.js';
 import { FormsModule } from './forms/forms.module.js';
 import { FieldQueueModule } from './field-queue/field-queue.module.js';
 import { EngineModule } from './engine/engine.module.js';
@@ -49,6 +50,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     NotificationsModule,
     FeedbackModule,
     GeocodingModule,
+    TileLayerModule,
     FormsModule,
     FieldQueueModule,
     EngineModule,

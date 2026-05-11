@@ -27,7 +27,12 @@ export type AssetKind =
   // #296: arbitrary file uploaded as the body of a `file` item (PDF,
   // CSV, image, zipped shapefile, etc.). Same any-MIME treatment as
   // feature-attachment; size cap bumped to fit larger documents.
-  | 'item-file';
+  | 'item-file'
+  // #179: PMTiles tile-cache upload for the tile_layer item. Larger
+  // size cap (several GB possible) because regional raster basemap
+  // caches legitimately get big; range-request friendly so we serve
+  // through MinIO without holding the whole file in memory.
+  | 'item-tile-layer';
 
 const ALLOWED_CONTENT_TYPES = new Set([
   'image/png',
@@ -47,6 +52,14 @@ const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
  *  these stand alone rather than ride along on a feature row. Still
  *  bounded so a runaway upload can't fill the bucket. */
 const FILE_ITEM_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+
+/** Tile-cache files for the tile_layer item type (#179). PMTiles
+ *  caches for regional / statewide imagery legitimately reach several
+ *  gigabytes (a WV-statewide 30cm orthophoto cache at z18 is ~5 GB).
+ *  We accept up to 8 GB so a typical state-scale cache fits with
+ *  headroom; operators can bump this server-side if they ingest
+ *  larger sets. */
+const TILE_LAYER_MAX_BYTES = 8 * 1024 * 1024 * 1024; // 8 GB
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB; thumbnails should be small.
 
@@ -208,7 +221,8 @@ export class StorageService implements OnModuleInit {
     // determines which rule applies.
     const isAttachment = kind === 'feature-attachment';
     const isFileItem = kind === 'item-file';
-    const anyMime = isAttachment || isFileItem;
+    const isTileLayer = kind === 'item-tile-layer';
+    const anyMime = isAttachment || isFileItem || isTileLayer;
     if (!anyMime && !ALLOWED_CONTENT_TYPES.has(contentType)) {
       throw new Error(`Unsupported content type: ${contentType}`);
     }
@@ -243,11 +257,13 @@ export class StorageService implements OnModuleInit {
       publicUrl,
       key,
       contentType,
-      maxBytes: isFileItem
-        ? FILE_ITEM_MAX_BYTES
-        : isAttachment
-          ? ATTACHMENT_MAX_BYTES
-          : MAX_UPLOAD_BYTES,
+      maxBytes: isTileLayer
+        ? TILE_LAYER_MAX_BYTES
+        : isFileItem
+          ? FILE_ITEM_MAX_BYTES
+          : isAttachment
+            ? ATTACHMENT_MAX_BYTES
+            : MAX_UPLOAD_BYTES,
     };
   }
 

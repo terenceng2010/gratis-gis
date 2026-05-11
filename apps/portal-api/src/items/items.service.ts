@@ -1647,17 +1647,18 @@ export class ItemsService {
         const tbl = `fs_${itemId.replace(/-/g, '')}`;
         await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tbl}"`);
       }
-    } else if (itemType === 'file') {
+    } else if (itemType === 'file' || itemType === 'tile_layer') {
+      // file + tile_layer both store a single MinIO object keyed
+      // by data.storageKey; cleanup is identical. Best-effort: a
+      // missing key, MinIO down, or transient permission error
+      // shouldn't block the item-row delete. Orphan accounting
+      // on the storage card surfaces any leaked object.
       const data = itemData as { storageKey?: string } | null;
       const key = data?.storageKey;
       if (typeof key === 'string' && key.length > 0) {
         try {
           await this.storage.deleteObject(key);
         } catch (err) {
-          // Best-effort. A missing key, MinIO down, or transient
-          // permission error shouldn't block the item-row delete.
-          // The orphan accounting on the storage card surfaces any
-          // leaked object.
           void err;
         }
       }
