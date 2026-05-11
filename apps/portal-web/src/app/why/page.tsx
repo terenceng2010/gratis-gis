@@ -65,7 +65,7 @@ export default async function WhyPage() {
 
         <header className="mt-6">
           <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-            Why GratisGIS
+            Why <span className="normal-case">GratisGIS</span>
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink-0 sm:text-4xl">
             A passion project, not a startup.
