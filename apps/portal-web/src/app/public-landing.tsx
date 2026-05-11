@@ -233,28 +233,6 @@ function ProjectAboutSection() {
   const repo =
     process.env.NEXT_PUBLIC_GITHUB_REPO ?? 'palavido-dev/gratis-gis';
   const repoUrl = `https://github.com/${repo}`;
-  // Pre-filled issue link: the labels list nudges feedback into a
-  // single triage queue without requiring the user to know our
-  // labelling conventions. Title is intentionally bare so the user
-  // owns the framing.
-  const feedbackUrl =
-    `${repoUrl}/issues/new?` +
-    `labels=feedback%2Calpha&` +
-    'title=&' +
-    'body=' +
-    encodeURIComponent(
-      [
-        '<!-- Thanks for trying GratisGIS. Tell us what worked, what didn\'t, what surprised you. Screenshots welcome. -->',
-        '',
-        '**What were you trying to do?**',
-        '',
-        '**What happened?**',
-        '',
-        '**What did you expect?**',
-        '',
-        '**Browser / device:**',
-      ].join('\n'),
-    );
 
   return (
     <section className="border-b border-border bg-surface-0 px-6 py-12">
@@ -343,20 +321,23 @@ function ProjectAboutSection() {
             <Github className="h-4 w-4" />
             View on GitHub
           </a>
-          <a
-            href={feedbackUrl}
-            target="_blank"
-            rel="noreferrer"
+          {/* #146: Send feedback goes to the in-portal /feedback
+              form rather than GitHub Issues. The whole point of
+              the form is that a tester without a GitHub account
+              can still leave a note. The form's "Prefer GitHub?"
+              section links out to Issues + Discussions for users
+              who want the richer surface. */}
+          <Link
+            href="/feedback"
             className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
           >
             <MessageSquarePlus className="h-4 w-4" />
             Send feedback
-          </a>
+          </Link>
           {/* #141: Discussions link for longer-form conversations
-              that aren't bug reports. Pairs with the Send feedback
-              button (which files an issue) so the user can pick
-              the right surface: short reproducible bug -> issue,
-              open-ended question or idea -> discussion. */}
+              that aren't bug reports. Requires a GitHub account
+              (anonymous Discussions doesn't exist), so the
+              in-portal feedback form sits in the primary slot. */}
           <a
             href={`${repoUrl}/discussions`}
             target="_blank"
@@ -367,8 +348,9 @@ function ProjectAboutSection() {
             Discussions
           </a>
           <span className="text-xs text-muted sm:ml-2">
-            Feedback opens a pre-filled issue. Discussions is the
-            right place for open-ended questions or ideas.
+            Send feedback goes to the maintainer&apos;s inbox; no
+            account required. Discussions is the GitHub place for
+            longer threads.
           </span>
         </div>
       </div>

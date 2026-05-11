@@ -93,6 +93,27 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   return null;
 }
 
+/**
+ * Anonymous-POST allowlist (#146). The /feedback endpoint on
+ * portal-api is decorated @Public() and is meant for any visitor
+ * (including unauthenticated public-test-instance testers) to
+ * leave a comment without needing a GitHub account or a portal
+ * sign-in. The BFF normally 401s unauthenticated non-GET
+ * requests; this allowlist makes specific POST paths fall
+ * through unauthenticated so portal-api's own @Public()
+ * decorator can take over.
+ *
+ * Keep this list TINY. Every entry is a public attack surface.
+ * Each path needs:
+ *   - portal-api side: @Public() decorator AND rate limit AND
+ *     honeypot or equivalent bot defense.
+ *   - portal-web side: explicit regex below, no parameters in
+ *     the path that could be smuggled into a different handler.
+ */
+function isAnonymousPostAllowed(suffix: string): boolean {
+  return suffix === 'feedback';
+}
+
 async function forward(req: NextRequest, pathSegments: string[]) {
   // Per-hop timing log behind the BFF_TIMING flag. Lets us split a
   // slow page load into "cookie + getServerSession" vs "upstream
@@ -119,7 +140,15 @@ async function forward(req: NextRequest, pathSegments: string[]) {
       ? publicRewriteForAnonymousGet(suffix)
       : null;
 
-  if (!session?.accessToken && !publicRewrite) {
+  // #146: tiny allowlist for anonymous POSTs (currently just
+  // /feedback). portal-api has @Public() on the matching route
+  // and rate-limits per IP + honeypot internally.
+  const allowAnonymousPost =
+    !session?.accessToken &&
+    req.method === 'POST' &&
+    isAnonymousPostAllowed(suffix);
+
+  if (!session?.accessToken && !publicRewrite && !allowAnonymousPost) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
@@ -148,6 +177,13 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   // notification (#229). Same allowlist pattern as x-editor-id.
   const dataCollectionId = req.headers.get('x-data-collection-id');
   if (dataCollectionId) headers['x-data-collection-id'] = dataCollectionId;
+  // Forward X-Forwarded-For so portal-api can see the real client
+  // IP (Caddy puts it on the incoming request; without this hop
+  // portal-api would see portal-web's container IP, which is
+  // useless for per-IP rate limiting on public endpoints like
+  // /feedback, #146).
+  const xff = req.headers.get('x-forwarded-for');
+  if (xff) headers['x-forwarded-for'] = xff;
 
   // Stream-forward the request body instead of buffering the full
   // payload into a single ArrayBuffer. Buffering blew up on large

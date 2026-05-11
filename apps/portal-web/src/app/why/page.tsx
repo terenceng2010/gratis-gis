@@ -158,27 +158,17 @@ export default async function WhyPage() {
             <Github className="h-4 w-4" />
             View on GitHub
           </a>
-          <a
-            href={`${repoUrl}/issues/new?labels=feedback%2Calpha&title=&body=${encodeURIComponent(
-              [
-                "<!-- Thanks for trying GratisGIS. Tell us what worked, what didn't, what surprised you. -->",
-                '',
-                '**What were you trying to do?**',
-                '',
-                '**What happened?**',
-                '',
-                '**What did you expect?**',
-                '',
-                '**Browser / device:**',
-              ].join('\n'),
-            )}`}
-            target="_blank"
-            rel="noreferrer"
+          {/* #146: in-portal /feedback so testers without a GitHub
+              account can leave a note. The page itself links out
+              to GitHub Issues + Discussions for users who want
+              the richer surface. */}
+          <Link
+            href="/feedback"
             className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90"
           >
             <MessageSquarePlus className="h-4 w-4" />
             Send feedback
-          </a>
+          </Link>
           <a
             href={`${repoUrl}/blob/main/CONTRIBUTING.md`}
             target="_blank"
