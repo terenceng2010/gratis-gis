@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Check,
+  Database,
+  Globe,
   GripVertical,
   Loader2,
   RefreshCw,
@@ -15,7 +17,9 @@ import {
 } from 'lucide-react';
 import type {
   DataLayerDataV3,
+  ExternalGeocodeAddressField,
   GeocodingServiceData,
+  GeocodingServiceMode,
   Item,
 } from '@gratis-gis/shared-types';
 
@@ -104,9 +108,20 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
   >(null);
   const [testError, setTestError] = useState<string | null>(null);
 
+  // External-arcgis-mode probe state. The author pastes a URL, clicks
+  // Probe; we hit POST /api/portal/geocode/probe-arcgis which calls
+  // findAddressCandidates' parent service ?f=json and lifts metadata.
+  // On success the returned fields land back in draft.
+  const [externalUrlInput, setExternalUrlInput] = useState(
+    initial.externalUrl ?? '',
+  );
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState<string | null>(null);
+
   const initialJson = JSON.stringify(initial);
   const draftJson = JSON.stringify(draft);
   const hasChanges = initialJson !== draftJson;
+  const mode: GeocodingServiceMode = draft.mode ?? 'internal';
 
   // Load the list of data_layer items the caller can pick from.
   // Source items the user can't read are filtered server-side
@@ -207,6 +222,141 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
     };
   }, [draft.sourceLayerId, draft.sourceSublayerId]);
 
+  /**
+   * Switch between internal and external-arcgis source modes. We
+   * clear the *other* mode's fields when flipping so a stale config
+   * from the prior mode doesn't survive into the saved item. The
+   * other-mode fields still exist in shared-types as optional, so
+   * leaving them set wouldn't fail validation, but it'd be
+   * confusing on the wire and during debug.
+   */
+  function setMode(next: GeocodingServiceMode) {
+    setError(null);
+    setDraft((d) => {
+      if (next === 'external-arcgis') {
+        const nextDraft: GeocodingServiceData = {
+          ...d,
+          mode: 'external-arcgis',
+          // Clear internal-mode config -- the shared-types interface
+          // keeps sourceLayerId required so we set it to '' (the
+          // server's runtime branch on mode='external-arcgis' never
+          // reads it).
+          sourceLayerId: '',
+          searchFields: [],
+        };
+        delete nextDraft.sourceSublayerId;
+        delete nextDraft.resultFields;
+        delete nextDraft.labelTemplate;
+        return nextDraft;
+      }
+      const nextDraft: GeocodingServiceData = {
+        ...d,
+        mode: 'internal',
+      };
+      // Clear external-mode config.
+      delete nextDraft.externalUrl;
+      delete nextDraft.externalServiceTitle;
+      delete nextDraft.externalAddressFields;
+      delete nextDraft.externalSingleLineFieldName;
+      delete nextDraft.externalSupportedCountries;
+      delete nextDraft.externalCapabilities;
+      delete nextDraft.externalAttribution;
+      return nextDraft;
+    });
+    setExternalUrlInput('');
+    setProbeError(null);
+  }
+
+  /**
+   * Probe the pasted ArcGIS GeocodeServer URL. On success the
+   * returned metadata lands in draft.external* fields so the user
+   * can review + save. On failure surface the message inline.
+   */
+  async function probeExternal() {
+    const url = externalUrlInput.trim();
+    if (!url) {
+      setProbeError('Paste a GeocodeServer URL first.');
+      return;
+    }
+    setProbeError(null);
+    setProbing(true);
+    try {
+      const res = await fetch('/api/portal/geocode/probe-arcgis', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      if (!res.ok) {
+        let msg = `Probe failed (HTTP ${res.status}).`;
+        try {
+          const body = (await res.text()) ?? '';
+          const parsed = JSON.parse(body) as { message?: unknown };
+          if (typeof parsed.message === 'string') msg = parsed.message;
+        } catch {
+          /* keep HTTP fallback */
+        }
+        setProbeError(msg);
+        return;
+      }
+      const result = (await res.json()) as {
+        externalUrl: string;
+        externalServiceTitle?: string;
+        externalAddressFields?: ExternalGeocodeAddressField[];
+        externalSingleLineFieldName?: string;
+        externalSupportedCountries?: string[];
+        externalCapabilities?: string[];
+        externalAttribution?: string;
+      };
+      setDraft((d) => {
+        const next: GeocodingServiceData = {
+          ...d,
+          mode: 'external-arcgis',
+          // sourceLayerId is required by the shared-types interface;
+          // external mode doesn't use it. Stays as empty string.
+          sourceLayerId: '',
+          searchFields: [],
+          externalUrl: result.externalUrl,
+        };
+        if (result.externalServiceTitle) {
+          next.externalServiceTitle = result.externalServiceTitle;
+        } else {
+          delete next.externalServiceTitle;
+        }
+        if (result.externalAddressFields && result.externalAddressFields.length > 0) {
+          next.externalAddressFields = result.externalAddressFields;
+        } else {
+          delete next.externalAddressFields;
+        }
+        if (result.externalSingleLineFieldName) {
+          next.externalSingleLineFieldName = result.externalSingleLineFieldName;
+        } else {
+          delete next.externalSingleLineFieldName;
+        }
+        if (result.externalSupportedCountries && result.externalSupportedCountries.length > 0) {
+          next.externalSupportedCountries = result.externalSupportedCountries;
+        } else {
+          delete next.externalSupportedCountries;
+        }
+        if (result.externalCapabilities && result.externalCapabilities.length > 0) {
+          next.externalCapabilities = result.externalCapabilities;
+        } else {
+          delete next.externalCapabilities;
+        }
+        if (result.externalAttribution) {
+          next.externalAttribution = result.externalAttribution;
+        } else {
+          delete next.externalAttribution;
+        }
+        return next;
+      });
+      setExternalUrlInput(result.externalUrl);
+    } catch (err) {
+      setProbeError(err instanceof Error ? err.message : 'Probe failed.');
+    } finally {
+      setProbing(false);
+    }
+  }
+
   function toggleSearchField(name: string) {
     setDraft((d) => {
       const exists = d.searchFields.find((f) => f.name === name);
@@ -282,13 +432,24 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
 
   async function save() {
     if (!canEdit || !hasChanges) return;
-    if (!draft.sourceLayerId) {
-      setError('Pick a source data layer.');
-      return;
-    }
-    if (draft.searchFields.length === 0) {
-      setError('Pick at least one field to search against.');
-      return;
+    // Mode-aware validation. Internal mode requires a source layer +
+    // at least one search field. External mode requires only that a
+    // GeocodeServer URL has been probed (probe is the gate that
+    // populates externalUrl + service title in draft).
+    if (mode === 'internal') {
+      if (!draft.sourceLayerId) {
+        setError('Pick a source data layer.');
+        return;
+      }
+      if (draft.searchFields.length === 0) {
+        setError('Pick at least one field to search against.');
+        return;
+      }
+    } else {
+      if (!draft.externalUrl) {
+        setError('Probe a GeocodeServer URL first.');
+        return;
+      }
     }
     setError(null);
     setSaving(true);
@@ -312,51 +473,49 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
         setError(msg);
         return;
       }
-      // Trigger the index rebuild (#74 perf followup). For
-      // sub-100K-row source layers this finishes in seconds; for
-      // 1M-row layers (WV parcels et al.) it can take 1-3 minutes
-      // one-time setup. UI surfaces a distinct "Building search
-      // indexes..." indicator so the user knows the save itself
-      // already succeeded -- the wait is on index creation, not
-      // on the geocoder config.
-      setIndexBuilding(true);
-      try {
-        const idxRes = await fetch(
-          `/api/portal/geocode/${itemId}/rebuild-indexes`,
-          { method: 'POST' },
-        );
-        if (!idxRes.ok) {
-          let msg = `Index build failed (HTTP ${idxRes.status}).`;
-          try {
-            const body = (await idxRes.text()) ?? '';
-            const parsed = JSON.parse(body) as { message?: unknown };
-            if (typeof parsed.message === 'string') msg = parsed.message;
-          } catch {
-            /* keep HTTP fallback */
-          }
-          // Surface as a warning rather than a save failure. The
-          // geocoder config DID save; queries just won't be
-          // index-accelerated. The next save (or a manual
-          // rebuild call) can retry.
-          setError(
-            `${msg} Your changes were saved, but queries against this geocoder will be slow until the index build succeeds.`,
+      // Trigger the index rebuild only for internal-mode geocoders.
+      // External-arcgis mode has no PostGIS data to index; the
+      // upstream server owns its own index strategy.
+      if (mode === 'internal') {
+        setIndexBuilding(true);
+        try {
+          const idxRes = await fetch(
+            `/api/portal/geocode/${itemId}/rebuild-indexes`,
+            { method: 'POST' },
           );
-        } else {
-          const summary = (await idxRes.json()) as {
-            created: string[];
-            kept: string[];
-            dropped: string[];
-            rowCount: number;
-            durationMs: number;
-          };
-          setIndexSummary(summary);
+          if (!idxRes.ok) {
+            let msg = `Index build failed (HTTP ${idxRes.status}).`;
+            try {
+              const body = (await idxRes.text()) ?? '';
+              const parsed = JSON.parse(body) as { message?: unknown };
+              if (typeof parsed.message === 'string') msg = parsed.message;
+            } catch {
+              /* keep HTTP fallback */
+            }
+            // Surface as a warning rather than a save failure. The
+            // geocoder config DID save; queries just won't be
+            // index-accelerated. The next save (or a manual
+            // rebuild call) can retry.
+            setError(
+              `${msg} Your changes were saved, but queries against this geocoder will be slow until the index build succeeds.`,
+            );
+          } else {
+            const summary = (await idxRes.json()) as {
+              created: string[];
+              kept: string[];
+              dropped: string[];
+              rowCount: number;
+              durationMs: number;
+            };
+            setIndexSummary(summary);
+          }
+        } catch (err) {
+          setError(
+            `Index build failed: ${err instanceof Error ? err.message : String(err)}. Your changes were saved, but queries against this geocoder will be slow until the index build succeeds.`,
+          );
+        } finally {
+          setIndexBuilding(false);
         }
-      } catch (err) {
-        setError(
-          `Index build failed: ${err instanceof Error ? err.message : String(err)}. Your changes were saved, but queries against this geocoder will be slow until the index build succeeds.`,
-        );
-      } finally {
-        setIndexBuilding(false);
       }
       setSaved(true);
       router.refresh();
@@ -372,6 +531,8 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
     setDraft(initial);
     setError(null);
     setSaved(false);
+    setProbeError(null);
+    setExternalUrlInput(initial.externalUrl ?? '');
   }
 
   async function runTest() {
@@ -415,6 +576,165 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* Source mode picker. Determines whether this geocoder
+          queries our own PostGIS (internal) or proxies to an
+          external ArcGIS GeocodeServer URL (external-arcgis). The
+          rest of the editor's sections are mode-aware: internal
+          mode shows the source layer + search fields; external mode
+          shows the URL + probed metadata. Options + Test work in
+          both modes. */}
+      <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
+        <div className="border-b border-border bg-surface-2 px-4 py-3">
+          <h3 className="text-sm font-medium text-ink-0">Source</h3>
+          <p className="mt-0.5 text-xs text-muted">
+            Use your own data layer, or proxy to an existing ArcGIS
+            GeocodeServer URL (e.g. a state-published locator).
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-2 p-4 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => canEdit && setMode('internal')}
+            disabled={!canEdit}
+            className={`flex items-start gap-3 rounded-lg border px-3 py-3 text-left transition ${
+              mode === 'internal'
+                ? 'border-accent bg-accent/5'
+                : 'border-border bg-surface-2 hover:bg-surface-1'
+            } disabled:opacity-50`}
+          >
+            <Database className="mt-0.5 h-4 w-4 shrink-0 text-ink-1" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ink-0">
+                Use your own data
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted">
+                Search a PostGIS data layer with per-field weights.
+                Indexes build automatically on save.
+              </p>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => canEdit && setMode('external-arcgis')}
+            disabled={!canEdit}
+            className={`flex items-start gap-3 rounded-lg border px-3 py-3 text-left transition ${
+              mode === 'external-arcgis'
+                ? 'border-accent bg-accent/5'
+                : 'border-border bg-surface-2 hover:bg-surface-1'
+            } disabled:opacity-50`}
+          >
+            <Globe className="mt-0.5 h-4 w-4 shrink-0 text-ink-1" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ink-0">
+                Use an existing ArcGIS GeocodeServer
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted">
+                Paste a GeocodeServer URL (e.g. a statewide composite
+                locator). We proxy queries to it.
+              </p>
+            </div>
+          </button>
+        </div>
+      </section>
+
+      {mode === 'external-arcgis' ? (
+        <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
+          <div className="border-b border-border bg-surface-2 px-4 py-3">
+            <h3 className="text-sm font-medium text-ink-0">
+              GeocodeServer URL
+            </h3>
+            <p className="mt-0.5 text-xs text-muted">
+              Paste the full URL of an ArcGIS GeocodeServer (path ends
+              in <span className="font-mono">/GeocodeServer</span>).
+              Probe to confirm reachability and lift the service&rsquo;s
+              metadata.
+            </p>
+          </div>
+          <div className="space-y-3 p-4">
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={externalUrlInput}
+                onChange={(e) => setExternalUrlInput(e.target.value)}
+                disabled={!canEdit || probing}
+                placeholder="https://services.example.gov/arcgis/rest/services/Geocode/MyLocator/GeocodeServer"
+                className="h-9 min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-2 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => void probeExternal()}
+                disabled={!canEdit || probing || externalUrlInput.trim().length === 0}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm hover:bg-surface-2 disabled:opacity-50"
+              >
+                {probing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Search className="h-4 w-4" />
+                )}
+                Probe
+              </button>
+            </div>
+            {probeError ? (
+              <p className="text-xs text-danger" role="alert">
+                {probeError}
+              </p>
+            ) : null}
+            {draft.externalUrl ? (
+              <div className="space-y-2 rounded-md border border-border bg-surface-2 p-3 text-xs">
+                <p className="text-ink-0">
+                  <span className="text-muted">Title:</span>{' '}
+                  <span className="font-medium">
+                    {draft.externalServiceTitle ?? '(no title)'}
+                  </span>
+                </p>
+                {draft.externalSingleLineFieldName ? (
+                  <p className="text-muted">
+                    Single-line field:{' '}
+                    <span className="font-mono text-ink-1">
+                      {draft.externalSingleLineFieldName}
+                    </span>
+                  </p>
+                ) : null}
+                {draft.externalAddressFields && draft.externalAddressFields.length > 0 ? (
+                  <p className="text-muted">
+                    Address fields:{' '}
+                    <span className="font-mono text-ink-1">
+                      {draft.externalAddressFields.map((f) => f.name).join(', ')}
+                    </span>
+                  </p>
+                ) : null}
+                {draft.externalSupportedCountries && draft.externalSupportedCountries.length > 0 ? (
+                  <p className="text-muted">
+                    Countries:{' '}
+                    <span className="font-mono text-ink-1">
+                      {draft.externalSupportedCountries.join(', ')}
+                    </span>
+                  </p>
+                ) : null}
+                {draft.externalCapabilities && draft.externalCapabilities.length > 0 ? (
+                  <p className="text-muted">
+                    Capabilities:{' '}
+                    <span className="font-mono text-ink-1">
+                      {draft.externalCapabilities.join(', ')}
+                    </span>
+                  </p>
+                ) : null}
+                {draft.externalAttribution ? (
+                  <p className="text-muted">
+                    Attribution:{' '}
+                    <span className="text-ink-1">
+                      {draft.externalAttribution}
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {mode === 'internal' ? (
+      <>
       <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
         <div className="border-b border-border bg-surface-2 px-4 py-3">
           <h3 className="text-sm font-medium text-ink-0">Source data layer</h3>
@@ -553,6 +873,8 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
           )}
         </div>
       </section>
+      </>
+      ) : null}
 
       <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
         <div className="border-b border-border bg-surface-2 px-4 py-3">
@@ -597,52 +919,63 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
               className="mt-0.5 h-8 w-full rounded-md border border-border bg-surface-1 px-2 font-mono"
             />
           </label>
-          <label className="block sm:col-span-2">
-            <span className="text-muted">Spatial constraint</span>
-            <select
-              value={typeof draft.bboxFilter === 'string' ? draft.bboxFilter : 'wsen'}
-              disabled={!canEdit}
-              onChange={(e) =>
-                setDraft((d) => ({
-                  ...d,
-                  bboxFilter: e.target.value as 'layer-bbox' | 'none',
-                }))
-              }
-              className="mt-0.5 h-8 w-full rounded-md border border-border bg-surface-1 px-2"
-            >
-              <option value="layer-bbox">
-                Constrain to source layer&rsquo;s bbox (recommended)
-              </option>
-              <option value="none">
-                No spatial constraint (search anywhere)
-              </option>
-            </select>
-          </label>
-          <label className="block sm:col-span-2">
-            <span className="text-muted">
-              Label template (use{' '}
-              <span className="font-mono">{'{fieldName}'}</span> placeholders)
-            </span>
-            <input
-              type="text"
-              value={draft.labelTemplate ?? ''}
-              disabled={!canEdit}
-              placeholder="{owner_name} ({street_address})"
-              onChange={(e) => {
-                const next = { ...draft };
-                if (e.target.value) {
-                  next.labelTemplate = e.target.value;
-                } else {
-                  delete next.labelTemplate;
-                }
-                setDraft(next);
-              }}
-              className="mt-0.5 h-8 w-full rounded-md border border-border bg-surface-1 px-2 font-mono"
-            />
-            <span className="mt-1 block text-[11px] text-muted">
-              Leave blank to join the search-field values with commas.
-            </span>
-          </label>
+          {mode === 'internal' ? (
+            <>
+              <label className="block sm:col-span-2">
+                <span className="text-muted">Spatial constraint</span>
+                <select
+                  value={typeof draft.bboxFilter === 'string' ? draft.bboxFilter : 'wsen'}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      bboxFilter: e.target.value as 'layer-bbox' | 'none',
+                    }))
+                  }
+                  className="mt-0.5 h-8 w-full rounded-md border border-border bg-surface-1 px-2"
+                >
+                  <option value="layer-bbox">
+                    Constrain to source layer&rsquo;s bbox (recommended)
+                  </option>
+                  <option value="none">
+                    No spatial constraint (search anywhere)
+                  </option>
+                </select>
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="text-muted">
+                  Label template (use{' '}
+                  <span className="font-mono">{'{fieldName}'}</span> placeholders)
+                </span>
+                <input
+                  type="text"
+                  value={draft.labelTemplate ?? ''}
+                  disabled={!canEdit}
+                  placeholder="{owner_name} ({street_address})"
+                  onChange={(e) => {
+                    const next = { ...draft };
+                    if (e.target.value) {
+                      next.labelTemplate = e.target.value;
+                    } else {
+                      delete next.labelTemplate;
+                    }
+                    setDraft(next);
+                  }}
+                  className="mt-0.5 h-8 w-full rounded-md border border-border bg-surface-1 px-2 font-mono"
+                />
+                <span className="mt-1 block text-[11px] text-muted">
+                  Leave blank to join the search-field values with commas.
+                </span>
+              </label>
+            </>
+          ) : (
+            <p className="text-[11px] text-muted sm:col-span-2">
+              Spatial extent and result labels are controlled by the
+              upstream GeocodeServer when using an external source.
+              The map picker can still pass a per-query bbox to clip
+              candidates to the visible extent.
+            </p>
+          )}
         </div>
       </section>
 
@@ -679,33 +1012,32 @@ export function GeocodingServiceEditor({ itemId, initial, canEdit }: Props) {
               <p className="text-muted">No changes.</p>
             )}
           </div>
-          {/* Rebuild indexes (#74 perf followup). Always enabled
-              when the user has edit access AND there's no
-              outstanding save in flight. Independent of
-              hasChanges so a user can re-run the rebuild on an
-              unchanged geocoder (or a geocoder that pre-dated the
-              rebuild path) without making a dummy edit first. */}
-          <button
-            type="button"
-            onClick={() => void rebuildOnly()}
-            disabled={
-              saving ||
-              indexBuilding ||
-              !draft.sourceLayerId ||
-              draft.searchFields.length === 0
-            }
-            title={
-              !draft.sourceLayerId
-                ? 'Pick a source layer first.'
-                : draft.searchFields.length === 0
-                  ? 'Pick at least one search field first.'
-                  : 'Rebuild the per-field search indexes against the saved configuration.'
-            }
-            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Rebuild indexes
-          </button>
+          {/* Rebuild indexes (#74 perf followup). Internal mode only.
+              External-arcgis geocoders have no local indexes to
+              rebuild; the upstream owns its own index strategy. */}
+          {mode === 'internal' ? (
+            <button
+              type="button"
+              onClick={() => void rebuildOnly()}
+              disabled={
+                saving ||
+                indexBuilding ||
+                !draft.sourceLayerId ||
+                draft.searchFields.length === 0
+              }
+              title={
+                !draft.sourceLayerId
+                  ? 'Pick a source layer first.'
+                  : draft.searchFields.length === 0
+                    ? 'Pick at least one search field first.'
+                    : 'Rebuild the per-field search indexes against the saved configuration.'
+              }
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Rebuild indexes
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={discard}

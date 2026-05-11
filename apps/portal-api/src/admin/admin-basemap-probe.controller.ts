@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { XMLParser } from 'fast-xml-parser';
 
 import { AdminGuard } from './admin.guard.js';
+import { isPrivateOrLoopbackHost } from '../common/net-guards.js';
 
 /**
  * Basemap-URL probe (#144). The admin pastes a URL into the
@@ -778,29 +779,6 @@ function looksLikeWms(parsed: URL): boolean {
   // Some servers expose `/wms` or `/services/wms` paths even
   // without an explicit service= param.
   if (/(^|\/)wms(\/|$)/i.test(parsed.pathname)) return true;
-  return false;
-}
-
-function isPrivateOrLoopbackHost(host: string): boolean {
-  // Numeric IPv4
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (m) {
-    const [, a, b] = m;
-    const aN = Number(a);
-    const bN = Number(b);
-    if (aN === 10) return true;
-    if (aN === 127) return true;
-    if (aN === 169 && bN === 254) return true;
-    if (aN === 172 && bN >= 16 && bN <= 31) return true;
-    if (aN === 192 && bN === 168) return true;
-    return false;
-  }
-  // IPv6 loopback / link-local / unique-local
-  if (host === '::1') return true;
-  if (host.startsWith('[::1]') || host.startsWith('[fc') || host.startsWith('[fd')) {
-    return true;
-  }
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
   return false;
 }
 

@@ -621,6 +621,20 @@ export function NewItemWizard() {
     setServiceProbing(true);
     try {
       const result = await autoProbeService(raw);
+      // Geocoders aren't viewable through the Connected Service item
+      // type; they're queried, not rendered as layers. The unified
+      // Geocoding Service item type (internal data layer OR external
+      // GeocodeServer URL) is where geocoder URLs live. Redirect the
+      // user there so they don't end up with a half-functional
+      // service item.
+      if (result.data.protocol === 'arcgis_geocode') {
+        setServiceProbeError(
+          'That URL points at an ArcGIS GeocodeServer. Cancel this and create a Geocoding service item instead. In the Geocoding service editor, pick "Use an existing ArcGIS GeocodeServer" and paste this URL.',
+        );
+        setServiceProbeResult(null);
+        setServiceSelectedLayerNames(new Set());
+        return;
+      }
       setServiceProbeResult(result);
       setServiceSelectedLayerNames(
         new Set(result.data.layers.map((l) => l.name)),

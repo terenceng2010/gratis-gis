@@ -17,6 +17,7 @@ import { ItemsService } from '../items/items.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import { isPrivateOrLoopbackHost } from '../common/net-guards.js';
 
 /**
  * Runtime engine for the geocoding_service item type (#74).
@@ -109,6 +110,19 @@ export class GeocodingService {
       );
     }
     const config: GeocodingServiceData = item.data;
+
+    // Branch on mode (#74 follow-up: external-arcgis support).
+    // Internal mode falls through to the data-layer search below;
+    // external-arcgis mode proxies to the upstream ArcGIS
+    // GeocodeServer's findAddressCandidates endpoint and reshapes
+    // the response into GeocodingCandidate[]. We treat missing
+    // mode as 'internal' for backward compat with items written
+    // before the field existed.
+    const mode = config.mode ?? 'internal';
+    if (mode === 'external-arcgis') {
+      return this.searchExternalArcgis(config, text, opts);
+    }
+
     if (config.searchFields.length === 0) {
       throw new BadRequestException(
         'Geocoding service has no search fields configured.',
@@ -573,6 +587,299 @@ export class GeocodingService {
       dropped.push(r.indexname);
     }
     return dropped;
+  }
+
+  /**
+   * Probe an ArcGIS GeocodeServer URL and return the metadata
+   * the editor needs to display + persist on the geocoding_service
+   * item. The author calls this from the detail editor when
+   * configuring an external-arcgis geocoder; on success the
+   * editor PATCHes the returned fields into item.data and the
+   * runtime is ready to forward queries.
+   *
+   * Refuses non-GeocodeServer URLs early so the user doesn't end
+   * up with a geocoding_service that points at something else.
+   * SSRF defense matches the basemap probe: private / loopback
+   * IPs are refused.
+   */
+  async probeExternalArcgis(
+    url: string,
+  ): Promise<{
+    externalUrl: string;
+    externalServiceTitle?: string;
+    externalAddressFields?: Array<{
+      name: string;
+      alias?: string;
+      required?: boolean;
+    }>;
+    externalSingleLineFieldName?: string;
+    externalSupportedCountries?: string[];
+    externalCapabilities?: string[];
+    externalAttribution?: string;
+  }> {
+    const trimmed = (url ?? '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('URL is required.');
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      throw new BadRequestException('Not a valid URL.');
+    }
+    if (isPrivateOrLoopbackHost(parsed.hostname)) {
+      throw new BadRequestException(
+        'Probing private / loopback addresses is not allowed.',
+      );
+    }
+    if (!/\/GeocodeServer\/?$/i.test(parsed.pathname)) {
+      throw new BadRequestException(
+        'URL must point at an ArcGIS GeocodeServer (path ends in /GeocodeServer).',
+      );
+    }
+    const base = parsed.toString().replace(/\/+$/, '');
+    const metaUrl = `${base}?f=json`;
+    const res = await fetch(metaUrl, {
+      headers: { 'user-agent': 'GratisGIS/geocoder-probe' },
+    });
+    if (!res.ok) {
+      throw new BadRequestException(
+        `GeocodeServer returned HTTP ${res.status}. Check the URL and that the server is reachable.`,
+      );
+    }
+    const meta = (await res.json()) as {
+      serviceDescription?: unknown;
+      mapName?: unknown;
+      copyrightText?: unknown;
+      addressFields?: unknown;
+      singleLineAddressField?: unknown;
+      countries?: unknown;
+      capabilities?: unknown;
+      currentVersion?: unknown;
+    };
+    if (typeof meta.currentVersion !== 'number') {
+      throw new BadRequestException(
+        'Response does not look like an ArcGIS REST service (no currentVersion field).',
+      );
+    }
+    const result: Awaited<ReturnType<typeof this.probeExternalArcgis>> = {
+      externalUrl: base,
+    };
+    const title =
+      typeof meta.mapName === 'string' && meta.mapName.trim().length > 0
+        ? meta.mapName.trim()
+        : typeof meta.serviceDescription === 'string' &&
+            meta.serviceDescription.trim().length > 0
+          ? meta.serviceDescription.trim()
+          : undefined;
+    if (title) result.externalServiceTitle = title;
+    const fields = this.parseAddressFields(meta.addressFields);
+    if (fields && fields.length > 0) result.externalAddressFields = fields;
+    const single = this.parseSingleLineField(meta.singleLineAddressField);
+    if (single) result.externalSingleLineFieldName = single;
+    const countries = this.parseCountries(meta.countries);
+    if (countries && countries.length > 0) {
+      result.externalSupportedCountries = countries;
+    }
+    const capabilities = this.parseCapabilities(meta.capabilities);
+    if (capabilities && capabilities.length > 0) {
+      result.externalCapabilities = capabilities;
+    }
+    if (
+      typeof meta.copyrightText === 'string' &&
+      meta.copyrightText.trim().length > 0
+    ) {
+      result.externalAttribution = meta.copyrightText.trim();
+    }
+    return result;
+  }
+
+  /**
+   * Proxy a search to an external ArcGIS GeocodeServer. Posts the
+   * query as `SingleLine=<text>` against findAddressCandidates,
+   * reshapes the response into GeocodingCandidate[].
+   *
+   * Why not just have the browser hit the upstream directly:
+   *
+   *   - CORS. Most public locators don't set permissive headers,
+   *     so direct browser fetches fail.
+   *   - Consistency. The map search bar treats every geocoder
+   *     source the same way regardless of internal vs external;
+   *     proxying through our /geocode endpoint keeps that uniform.
+   *   - Future caching. We can cache hot queries here without
+   *     surface changes to consumers.
+   */
+  private async searchExternalArcgis(
+    config: GeocodingServiceData,
+    text: string,
+    opts: { bbox?: [number, number, number, number]; limit?: number },
+  ): Promise<GeocodingCandidate[]> {
+    if (!config.externalUrl) {
+      throw new BadRequestException(
+        'External geocoder has no upstream URL configured.',
+      );
+    }
+    const base = config.externalUrl.replace(/\/+$/, '');
+    const params = new URLSearchParams();
+    // Most modern locators support `SingleLine`. If a locator
+    // only has multi-line fields (no singleLineAddressField), the
+    // server still accepts SingleLine on findAddressCandidates
+    // as of ArcGIS 10.3+; we don't try to split the query into
+    // multi-line fields client-side.
+    params.set('SingleLine', text);
+    params.set('f', 'json');
+    params.set('outFields', '*');
+    params.set('outSR', '4326');
+    const requestedLimit =
+      opts.limit ?? config.candidateLimit ?? GeocodingService.DEFAULT_CANDIDATES;
+    const maxLocations = Math.max(
+      1,
+      Math.min(GeocodingService.MAX_CANDIDATES, Math.floor(requestedLimit)),
+    );
+    params.set('maxLocations', String(maxLocations));
+    if (opts.bbox) {
+      // ArcGIS expects searchExtent as a JSON envelope in the
+      // service's spatial reference. We pass 4326 here; servers
+      // re-project internally. Format matches the documented
+      // envelope shape.
+      const [w, s, e, n] = opts.bbox;
+      params.set(
+        'searchExtent',
+        JSON.stringify({
+          xmin: w,
+          ymin: s,
+          xmax: e,
+          ymax: n,
+          spatialReference: { wkid: 4326 },
+        }),
+      );
+    }
+    const url = `${base}/findAddressCandidates?${params.toString()}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { 'user-agent': 'GratisGIS/geocoder' },
+      });
+    } catch (err) {
+      this.log.warn(
+        `External geocoder fetch failed for ${url}: ${err instanceof Error ? err.message : err}`,
+      );
+      throw new BadRequestException(
+        `Upstream geocoder unreachable: ${err instanceof Error ? err.message : 'network error'}`,
+      );
+    }
+    if (!res.ok) {
+      throw new BadRequestException(
+        `Upstream geocoder returned HTTP ${res.status}.`,
+      );
+    }
+    const body = (await res.json()) as {
+      candidates?: Array<{
+        address?: unknown;
+        score?: unknown;
+        location?: { x?: unknown; y?: unknown };
+        attributes?: Record<string, unknown>;
+      }>;
+      error?: { message?: unknown };
+    };
+    if (body.error && typeof body.error.message === 'string') {
+      throw new BadRequestException(
+        `Upstream geocoder error: ${body.error.message}`,
+      );
+    }
+    const rawCandidates = Array.isArray(body.candidates) ? body.candidates : [];
+    const minScore = Math.max(0, Math.min(100, (config.minScore ?? 0.1) * 100));
+    return rawCandidates
+      .map((c): GeocodingCandidate | null => {
+        const lng = c.location?.x;
+        const lat = c.location?.y;
+        if (typeof lng !== 'number' || typeof lat !== 'number') return null;
+        // ArcGIS returns score on a 0-100 scale; our wire shape
+        // uses 0-1. Normalize so consumers can sort with the
+        // same comparator regardless of geocoder source.
+        const rawScore = typeof c.score === 'number' ? c.score : 0;
+        if (rawScore < minScore) return null;
+        const label = typeof c.address === 'string' ? c.address : '(unnamed)';
+        const attrs = c.attributes ?? {};
+        // Use the address string as the featureId fallback when
+        // the upstream didn't provide a stable id; clients use
+        // this for click-through highlighting so any consistent
+        // value works.
+        const featureId =
+          typeof attrs['Ref_ID'] === 'string'
+            ? (attrs['Ref_ID'] as string)
+            : typeof attrs['ResultID'] === 'number'
+              ? String(attrs['ResultID'])
+              : label;
+        return {
+          featureId,
+          score: rawScore / 100,
+          label,
+          geom: { type: 'Point', coordinates: [lng, lat] },
+          attributes: attrs,
+        };
+      })
+      .filter((c): c is GeocodingCandidate => c !== null);
+  }
+
+  // ---- External-arcgis metadata parse helpers ----
+  // These mirror the parser helpers in the basemap probe path
+  // (#75 admin-basemap-probe.controller) but live here because
+  // they're consumed only by the geocoding service.
+
+  private parseAddressFields(
+    input: unknown,
+  ): Array<{ name: string; alias?: string; required?: boolean }> | undefined {
+    if (!Array.isArray(input)) return undefined;
+    const out: Array<{ name: string; alias?: string; required?: boolean }> = [];
+    for (const f of input) {
+      if (!f || typeof f !== 'object') continue;
+      const row = f as { name?: unknown; alias?: unknown; required?: unknown };
+      if (typeof row.name !== 'string' || row.name.length === 0) continue;
+      const entry: { name: string; alias?: string; required?: boolean } = {
+        name: row.name,
+      };
+      if (typeof row.alias === 'string' && row.alias.length > 0) {
+        entry.alias = row.alias;
+      }
+      if (typeof row.required === 'boolean') entry.required = row.required;
+      out.push(entry);
+    }
+    return out;
+  }
+
+  private parseSingleLineField(input: unknown): string | undefined {
+    if (!input || typeof input !== 'object') return undefined;
+    const obj = input as { name?: unknown };
+    return typeof obj.name === 'string' && obj.name.length > 0
+      ? obj.name
+      : undefined;
+  }
+
+  private parseCountries(input: unknown): string[] | undefined {
+    if (Array.isArray(input)) {
+      const arr = input
+        .filter((c): c is string => typeof c === 'string' && c.length > 0)
+        .map((c) => c.trim().toUpperCase());
+      return [...new Set(arr)];
+    }
+    if (typeof input === 'string' && input.length > 0) {
+      const arr = input
+        .split(',')
+        .map((c) => c.trim().toUpperCase())
+        .filter((c) => c.length > 0);
+      return [...new Set(arr)];
+    }
+    return undefined;
+  }
+
+  private parseCapabilities(input: unknown): string[] | undefined {
+    if (typeof input !== 'string' || input.length === 0) return undefined;
+    const toks = input
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0);
+    return toks.length > 0 ? [...new Set(toks)] : undefined;
   }
 
   private resolveSublayerId(

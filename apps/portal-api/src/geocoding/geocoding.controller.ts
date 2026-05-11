@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
@@ -72,6 +73,27 @@ export class GeocodingController {
     @Param('itemId') itemId: string,
   ) {
     return this.geocoding.rebuildIndexes(user, itemId);
+  }
+
+  /**
+   * Probe an ArcGIS GeocodeServer URL for the external-arcgis mode
+   * editor. Called from the detail editor when the author pastes a
+   * URL and clicks Probe; returns the metadata the editor needs to
+   * fill in (title, address fields, single-line field name,
+   * supported countries, capabilities, attribution) so the resulting
+   * geocoding_service item is configured without the author having
+   * to read the upstream's JSON document by hand.
+   *
+   * Auth: any logged-in user. We don't require admin on a specific
+   * item because the user is configuring a NEW item (or one they
+   * own); item-level authz fires when they actually save.
+   */
+  @Post('probe-arcgis')
+  async probeArcgis(@Body() body: { url?: string }) {
+    if (!body || typeof body.url !== 'string') {
+      throw new BadRequestException('Body must include { url: string }.');
+    }
+    return this.geocoding.probeExternalArcgis(body.url);
   }
 }
 

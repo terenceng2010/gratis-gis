@@ -71,8 +71,54 @@ export type GeocodingBboxFilter =
   | 'none'
   | { wsen: [number, number, number, number] };
 
+/**
+ * Where this geocoder's candidates come from. Two modes:
+ *
+ *   - 'internal': search the org's own PostGIS data_layer using
+ *     pg_trgm word_similarity. The author picks a source layer +
+ *     fields + weights. This is the use-your-own-data path.
+ *
+ *   - 'external-arcgis': proxy to a public ArcGIS GeocodeServer
+ *     (e.g. a state-published statewide locator like the WV WVU
+ *     Composite locator). The author pastes the URL; the runtime
+ *     forwards findAddressCandidates requests and reshapes the
+ *     response into the candidate shape maps consume. No data
+ *     layer needed; no per-field indexes; cap on use is whatever
+ *     the upstream service allows.
+ *
+ * Items written before this field existed default to 'internal'
+ * (matches the v1 behavior of geocoding_service); the read path
+ * treats `undefined` as 'internal' for backward compat.
+ */
+export type GeocodingServiceMode = 'internal' | 'external-arcgis';
+
+/**
+ * Address-field snapshot for external ArcGIS geocoders. Lifted
+ * from the server's `addressFields[]` at probe time so the map
+ * search UI can render the right inputs without re-hitting
+ * `?f=json` on every query. Mirrors ArcgisGeocodeFieldSnapshot
+ * from the legacy Connected Service path.
+ */
+export interface ExternalGeocodeAddressField {
+  name: string;
+  alias?: string;
+  required?: boolean;
+}
+
 export interface GeocodingServiceData {
   version: GeocodingServiceDataVersion;
+  /**
+   * Which source this geocoder uses. When omitted, treat as
+   * 'internal' (backward compat for items created before this
+   * field shipped).
+   */
+  mode?: GeocodingServiceMode;
+
+  // -------------------- internal-mode fields --------------------
+  // Required when mode === 'internal'; ignored otherwise. Left
+  // non-optional in the shared-types interface so existing
+  // internal-mode call sites continue to typecheck unchanged.
+
   /** UUID of the data_layer item that backs this geocoder. */
   sourceLayerId: string;
   /**
@@ -111,10 +157,38 @@ export interface GeocodingServiceData {
    *  `"{owner_name} ({street_address})"`. */
   labelTemplate?: string;
   probedAt?: ISODateString;
+
+  // -------------------- external-arcgis-mode fields --------------------
+  // Required when mode === 'external-arcgis'; ignored otherwise.
+
+  /** Base URL of the ArcGIS GeocodeServer (e.g.
+   *  `https://services.wvgis.wvu.edu/.../WV_Composite/GeocodeServer`).
+   *  The runtime appends `/findAddressCandidates?...&f=json`. */
+  externalUrl?: string;
+  /** Human-readable name lifted from the GeocodeServer's
+   *  `serviceDescription` / `mapName` at probe time. */
+  externalServiceTitle?: string;
+  /** Multi-line address fields the upstream server accepts. */
+  externalAddressFields?: ExternalGeocodeAddressField[];
+  /** Single-line address field name, when the server advertises
+   *  one. Most modern locators do; this is what the search bar
+   *  posts the user's query into. */
+  externalSingleLineFieldName?: string;
+  /** ISO-style country codes the locator indexes. Surfaced on the
+   *  detail page so the author can verify coverage. */
+  externalSupportedCountries?: string[];
+  /** Capabilities the upstream advertises (geocode,
+   *  reversegeocode, suggest, ...). */
+  externalCapabilities?: string[];
+  /** Attribution string the upstream advertises in `copyrightText`.
+   *  Surfaced on the search bar's footer when this geocoder is
+   *  the picked source. */
+  externalAttribution?: string;
 }
 
 export const DEFAULT_GEOCODING_SERVICE: GeocodingServiceData = {
   version: 1,
+  mode: 'internal',
   sourceLayerId: '',
   searchFields: [],
   candidateLimit: 10,
@@ -128,10 +202,19 @@ export function isGeocodingServiceData(
   if (!value || typeof value !== 'object') return false;
   const v = value as {
     version?: unknown;
+    mode?: unknown;
     sourceLayerId?: unknown;
     searchFields?: unknown;
+    externalUrl?: unknown;
   };
   if (v.version !== 1) return false;
+  // Two valid shapes: internal (sourceLayerId + searchFields) and
+  // external-arcgis (externalUrl). Either is enough.
+  const mode = typeof v.mode === 'string' ? v.mode : 'internal';
+  if (mode === 'external-arcgis') {
+    return typeof v.externalUrl === 'string' && v.externalUrl.length > 0;
+  }
+  // internal (or missing mode)
   if (typeof v.sourceLayerId !== 'string') return false;
   if (!Array.isArray(v.searchFields)) return false;
   return v.searchFields.every(
