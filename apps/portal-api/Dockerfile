@@ -101,7 +101,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Docker BUILDPLATFORM (amd64 -> Linux_x86_64; arm64 ->
 # Linux_arm64) so a multi-arch build picks the right binary.
 ARG TARGETARCH=amd64
-ARG PMTILES_VERSION=1.21.1
+ARG PMTILES_VERSION=1.30.2
 RUN set -eux; \
     case "${TARGETARCH}" in \
       amd64) PMTILES_ARCH=Linux_x86_64 ;; \
