@@ -137,6 +137,14 @@ export interface HousekeepingBundle {
     layerId: string;
     itemTitle: string;
     itemType: string | null;
+    /**
+     * Human-readable sublayer label from the item's
+     * data.layers[].label (with fallback to .name). Null when the
+     * item is a legacy v1/v2 shape with no per-layer titles or the
+     * storage key isn't in the parent's layer list. Renderer falls
+     * back to `layerId` so the column always has content.
+     */
+    layerTitle: string | null;
     /** True when the scope's observations exist but the parent
      *  item row is gone. Pre-cleanup-fix orphans show up here. */
     orphan: boolean;
@@ -1407,8 +1415,25 @@ function LargestDataLayersTable({
           return (
             <tr key={`${r.itemId}:${r.layerId}`}>
               <td className="px-4 py-2">{titleNode}</td>
-              <td className="px-4 py-2 font-mono text-[11px] text-muted">
-                {r.layerId}
+              <td className="px-4 py-2">
+                {r.layerTitle ? (
+                  <span className="inline-flex flex-col">
+                    <span className="text-ink-0">{r.layerTitle}</span>
+                    <span
+                      className="font-mono text-[10px] text-muted/70"
+                      title="Internal storage key"
+                    >
+                      {r.layerId}
+                    </span>
+                  </span>
+                ) : (
+                  <span
+                    className="font-mono text-[11px] text-muted"
+                    title="No human-readable title on this layer (legacy item shape or deleted layer entry)"
+                  >
+                    {r.layerId}
+                  </span>
+                )}
               </td>
               <td className="px-4 py-2 font-mono text-ink-0">
                 {formatBytes(r.approxBytes)}

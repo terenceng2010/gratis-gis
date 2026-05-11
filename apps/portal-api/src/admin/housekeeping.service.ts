@@ -567,14 +567,31 @@ export class HousekeepingService {
           .filter((s): s is string => typeof s === 'string'),
       ),
     );
+    // Pull `data` alongside the human-facing label so the admin
+    // surface can show the sublayer's authored title (e.g.
+    // "Parcels") instead of the internal storage key
+    // (`lyr_x2ga3naf`). The storage-key fallback still applies
+    // when a layer entry is missing, has no label, or the item
+    // is a non-v3 shape that never carries `data.layers[]`.
     const items =
       itemIds.length > 0
         ? await this.prisma.item.findMany({
             where: { id: { in: itemIds }, orgId },
-            select: { id: true, title: true, type: true },
+            select: { id: true, title: true, type: true, data: true },
           })
         : [];
     const itemById = new Map(items.map((i) => [i.id, i]));
+
+    // Walk `data.layers[]` for each item once so the per-scope
+    // resolution below is a Map.get instead of a linear scan.
+    // Both `label` (display name) and `name` (machine slug) are
+    // valid fall-throughs in that order; we prefer the label
+    // because that's what shows up in the legend and layer list.
+    const labelByItemAndLayer = new Map<string, Map<string, string>>();
+    for (const it of items) {
+      const layers = readSublayerLabels(it.data);
+      if (layers) labelByItemAndLayer.set(it.id, layers);
+    }
 
     // Filter to scopes whose items belong to the caller's org. An
     // org-admin shouldn't see another tenant's data sizes; a
@@ -585,6 +602,15 @@ export class HousekeepingService {
       layerId: string;
       itemTitle: string;
       itemType: string | null;
+      /**
+       * Human-readable layer label sourced from `data.layers[].label`
+       * (with fallback to `name`). Null when the item shape doesn't
+       * carry sublayer titles (legacy v1/v2) or when the storage key
+       * isn't in the item's layer list (e.g. soft-deleted sublayer).
+       * The frontend renders `layerTitle ?? layerId` so the column
+       * always has something.
+       */
+      layerTitle: string | null;
       orphan: boolean;
       rows: number;
       approxBytes: number;
@@ -594,21 +620,17 @@ export class HousekeepingService {
       if (!parsed) continue;
       const item = itemById.get(parsed.itemId) ?? null;
       const orphan = item === null;
-      // For non-orphans, gate on org match. For orphans we keep
-      // them in the list so the admin sees the disk impact and
-      // can run the cleanup migration; this is an admin-only
-      // surface so cross-org leakage isn't a concern.
-      if (item && item.id) {
-        // already filtered to orgId in findMany; safe to include.
-      }
       const rows = Number(r.rows);
       const approxBytes =
         totalRows > 0 ? Math.round((rows / totalRows) * totalBytes) : 0;
+      const layerTitle =
+        labelByItemAndLayer.get(parsed.itemId)?.get(parsed.layerId) ?? null;
       out.push({
         itemId: parsed.itemId,
         layerId: parsed.layerId,
         itemTitle: item ? item.title : '(deleted item)',
         itemType: item ? item.type : null,
+        layerTitle,
         orphan,
         rows,
         approxBytes,
@@ -1172,6 +1194,38 @@ function parseScope(scope: string): { itemId: string; layerId: string } | null {
   const layerId = parts[2];
   if (!itemId || !layerId) return null;
   return { itemId, layerId };
+}
+
+/**
+ * Project an item's `data` JSON down to a `layerId -> label` map for
+ * the Storage by data layer table. Returns null when the item isn't
+ * v3-shaped (no `data.layers[]`) so callers can fall back to the
+ * storage key. Tolerates partial shapes: a v3 item with `data.layers`
+ * but missing labels still resolves -- we prefer `label`, fall through
+ * to `name`, and skip entries that have neither. Untyped (uses `unknown`
+ * walks) because the column is a Prisma `Json` type at this layer;
+ * shared-types `DataLayerSublayer` is the authoritative schema but
+ * isn't a runtime guard.
+ */
+function readSublayerLabels(data: unknown): Map<string, string> | null {
+  if (!data || typeof data !== 'object') return null;
+  const layers = (data as { layers?: unknown }).layers;
+  if (!Array.isArray(layers)) return null;
+  const out = new Map<string, string>();
+  for (const raw of layers) {
+    if (!raw || typeof raw !== 'object') continue;
+    const obj = raw as Record<string, unknown>;
+    const id = typeof obj.id === 'string' ? obj.id : null;
+    if (!id) continue;
+    const label =
+      typeof obj.label === 'string' && obj.label.length > 0
+        ? obj.label
+        : typeof obj.name === 'string' && obj.name.length > 0
+          ? (obj.name as string)
+          : null;
+    if (label) out.set(id, label);
+  }
+  return out.size > 0 ? out : null;
 }
 
 function pickEffectiveActivity(
