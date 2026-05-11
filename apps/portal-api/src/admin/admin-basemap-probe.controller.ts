@@ -34,12 +34,20 @@ import { AdminGuard } from './admin.guard.js';
  *      copyrightText + thumbnail. Tile template becomes
  *      `{base}/tile/{z}/{y}/{x}` (Esri row-before-column order).
  *
- *   3. URL has `?service=WMS` (or path / file extension suggests
+ *   3. URL has `?service=WMTS`, contains a `/wmts/` path segment,
+ *      or ends in `WMTSCapabilities.xml` -> kind: 'tile-url';
+ *      fetch capabilities, pick the first Layer's RESTful
+ *      ResourceURL template (resourceType="tile"), substitute
+ *      {Layer}/{Style}/{TileMatrixSet} from the doc, rewrite
+ *      {TileMatrix}/{TileRow}/{TileCol} to MapLibre's
+ *      {z}/{y}/{x}, lift Title + AccessConstraints.
+ *
+ *   4. URL has `?service=WMS` (or path / file extension suggests
  *      WMS) -> kind: 'wms'; fetch GetCapabilities and surface
  *      Title + AccessConstraints + first layer name for the
  *      wmsConfig.
  *
- *   4. URL responds with `application/json` and the body looks
+ *   5. URL responds with `application/json` and the body looks
  *      like a MapLibre style (has `version`, `sources`, `layers`)
  *      -> kind: 'style-url'.
  *
@@ -106,7 +114,21 @@ export class AdminBasemapProbeController {
       }
     }
 
-    // (3) WMS GetCapabilities.
+    // (3) WMTS GetCapabilities. Checked BEFORE WMS because some
+    // servers expose both at adjacent paths and a WMTS URL with
+    // ?service=WMTS would otherwise miss; the WMS detector keys on
+    // /wms path or service=WMS, which doesn't overlap with /wmts.
+    if (looksLikeWmts(parsed)) {
+      try {
+        return await this.probeWmts(parsed);
+      } catch (err) {
+        this.log.warn(
+          `WMTS probe failed for ${url}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // (4) WMS GetCapabilities.
     if (looksLikeWms(parsed)) {
       try {
         return await this.probeWms(parsed);
@@ -117,7 +139,7 @@ export class AdminBasemapProbeController {
       }
     }
 
-    // (4) MapLibre style.json.
+    // (5) MapLibre style.json.
     try {
       const styleResult = await this.probeStyle(url);
       if (styleResult) return styleResult;
@@ -130,7 +152,8 @@ export class AdminBasemapProbeController {
     throw new BadRequestException(
       'Could not detect a recognized basemap format at that URL. ' +
         'Supported: XYZ tile template ({z}/{x}/{y} placeholders), ArcGIS ' +
-        'MapServer, WMS GetCapabilities, or MapLibre style.json.',
+        'MapServer, WMTS GetCapabilities, WMS GetCapabilities, or MapLibre ' +
+        'style.json.',
     );
   }
 
@@ -232,6 +255,110 @@ export class AdminBasemapProbeController {
     };
   }
 
+  private async probeWmts(parsed: URL): Promise<BasemapProbeResult> {
+    // WMTS exposes capabilities two ways:
+    //   * RESTful:  .../wmts/1.0.0/WMTSCapabilities.xml
+    //   * KVP:      .../wmts?service=WMTS&request=GetCapabilities&version=1.0.0
+    // If the caller already pasted the capabilities document URL we
+    // use it verbatim; otherwise we synthesize the KVP form.
+    const lowerPath = parsed.pathname.toLowerCase();
+    const looksLikeCapsDoc = lowerPath.endsWith('wmtscapabilities.xml');
+    const capsUrl = looksLikeCapsDoc
+      ? parsed.toString()
+      : `${parsed.origin}${parsed.pathname}?service=WMTS&request=GetCapabilities&version=1.0.0`;
+    const res = await fetchWithTimeout(capsUrl, 10_000);
+    if (!res.ok) {
+      throw new Error(`WMTS GetCapabilities returned ${res.status}`);
+    }
+    const xml = await res.text();
+
+    // Service-level title + attribution. Most WMTS docs use the
+    // OWS namespace prefix (ows:Title) but a few servers omit it,
+    // so we try both.
+    const title =
+      matchXmlText(xml, 'ows:Title') || matchXmlText(xml, 'Title');
+    const attribution =
+      matchXmlText(xml, 'AccessConstraints') ||
+      matchXmlText(xml, 'ows:AccessConstraints') ||
+      matchXmlText(xml, 'ows:ProviderName');
+
+    // Walk to the first <Layer>...</Layer> block. WMTS docs often
+    // list many layers (different products / styles); we pick the
+    // first as "the basemap" and let the admin edit the resulting
+    // URL by hand if they want a different one.
+    const layerBlock = xml.match(/<Layer\b[\s\S]*?<\/Layer>/i)?.[0];
+    if (!layerBlock) {
+      throw new Error('No <Layer> found in WMTS capabilities');
+    }
+
+    // The RESTful binding exposes one or more <ResourceURL
+    // format="image/png" resourceType="tile" template="..."/>
+    // elements inside the Layer. We want the first one whose
+    // resourceType is "tile" (FeatureInfo URLs also live here).
+    const resourceUrlRe =
+      /<ResourceURL\b[^>]*?\bresourceType="tile"[^>]*?\btemplate="([^"]+)"[^>]*\/?>/i;
+    const resourceUrlMatch = resourceUrlRe.exec(layerBlock);
+    let template = resourceUrlMatch?.[1];
+
+    // Fallback for servers that only expose KVP tile URLs: we
+    // could synthesize a GetTile KVP request here, but those are
+    // server-side rendered (one request per tile, no template
+    // semantics) and MapLibre can't consume them as an XYZ source
+    // directly. Tell the operator that the layer isn't RESTful
+    // rather than handing back something broken.
+    if (!template) {
+      throw new Error(
+        'WMTS layer has no RESTful ResourceURL template; this ' +
+          'server only supports KVP GetTile, which MapLibre cannot ' +
+          'consume as a vector/raster tile source.',
+      );
+    }
+
+    // The template uses WMTS placeholders. Substitute the ones we
+    // can resolve from the capabilities document (Layer, Style,
+    // TileMatrixSet) and rewrite the XYZ-equivalent ones into
+    // MapLibre's {z}/{x}/{y} syntax.
+    const layerIdentifier =
+      firstTextInBlock(layerBlock, 'ows:Identifier') ||
+      firstTextInBlock(layerBlock, 'Identifier');
+    if (layerIdentifier) {
+      template = template.replace(/\{Layer\}/g, layerIdentifier);
+    }
+    // First <Style>...<Identifier>X</Identifier>...</Style>.
+    const styleBlock = /<Style\b[\s\S]*?<\/Style>/i.exec(layerBlock)?.[0];
+    const styleIdentifier = styleBlock
+      ? firstTextInBlock(styleBlock, 'ows:Identifier') ||
+        firstTextInBlock(styleBlock, 'Identifier') ||
+        'default'
+      : 'default';
+    template = template.replace(/\{Style\}/g, styleIdentifier);
+    // First <TileMatrixSetLink><TileMatrixSet>X</TileMatrixSet>...
+    const tmsRef =
+      firstTextInBlock(layerBlock, 'TileMatrixSet') ||
+      firstTextInBlock(layerBlock, 'ows:TileMatrixSet');
+    if (tmsRef) {
+      template = template.replace(/\{TileMatrixSet\}/g, tmsRef);
+    }
+    // Coordinate placeholders. WMTS's {TileMatrix} is the zoom
+    // level (assuming a Google-compatible matrix set, which is the
+    // common case for web basemaps); {TileRow} is y, {TileCol} is
+    // x. If the matrix set isn't Google-compatible the resulting
+    // tiles will be misaligned, but that's true for any XYZ-style
+    // wrapper around WMTS and the admin can pick a different
+    // TileMatrixSet if needed.
+    template = template
+      .replace(/\{TileMatrix\}/g, '{z}')
+      .replace(/\{TileRow\}/g, '{y}')
+      .replace(/\{TileCol\}/g, '{x}');
+
+    return {
+      kind: 'tile-url',
+      tileUrl: template,
+      ...(title ? { title } : {}),
+      ...(attribution ? { attribution } : {}),
+    };
+  }
+
   private async probeStyle(url: string): Promise<BasemapProbeResult | null> {
     const res = await fetchWithTimeout(url, 10_000);
     if (!res.ok) return null;
@@ -305,6 +432,18 @@ function looksLikeArcgisMapServer(parsed: URL): boolean {
   return /\/MapServer\/?$/i.test(parsed.pathname);
 }
 
+function looksLikeWmts(parsed: URL): boolean {
+  const qs = parsed.searchParams;
+  const service = (qs.get('service') ?? qs.get('SERVICE') ?? '').toLowerCase();
+  if (service === 'wmts') return true;
+  // Path-based detection: `/wmts/` segment, or a capabilities
+  // document filename. Case-insensitive because some servers
+  // serve `WMTSCapabilities.xml` and others `wmtscapabilities.xml`.
+  if (/(^|\/)wmts(\/|$)/i.test(parsed.pathname)) return true;
+  if (/wmtscapabilities\.xml$/i.test(parsed.pathname)) return true;
+  return false;
+}
+
 function looksLikeWms(parsed: URL): boolean {
   const qs = parsed.searchParams;
   const service = (qs.get('service') ?? qs.get('SERVICE') ?? '').toLowerCase();
@@ -320,6 +459,20 @@ function matchXmlText(xml: string, tag: string): string | undefined {
   const m = re.exec(xml);
   if (!m || !m[1]) return undefined;
   // Strip surrounding whitespace + collapse internal whitespace.
+  const v = m[1].replace(/\s+/g, ' ').trim();
+  return v.length > 0 ? v : undefined;
+}
+
+function firstTextInBlock(block: string, tag: string): string | undefined {
+  // Like matchXmlText but scoped to an inner XML fragment. Useful
+  // when a parent block (a <Layer> or <Style>) has many siblings
+  // with the same tag at different depths and we want the first
+  // *direct or nested* occurrence inside this block, not the
+  // whole document.
+  const safeTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`<${safeTag}[^>]*>([\\s\\S]*?)</${safeTag}>`, 'i');
+  const m = re.exec(block);
+  if (!m || !m[1]) return undefined;
   const v = m[1].replace(/\s+/g, ' ').trim();
   return v.length > 0 ? v : undefined;
 }
