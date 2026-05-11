@@ -267,6 +267,48 @@ export class StorageService implements OnModuleInit {
     };
   }
 
+  /**
+   * Upload a local file (path on the api container's filesystem)
+   * directly to MinIO as a given asset kind (#179). Used by the
+   * tile-layer conversion pipeline: it produces a converted
+   * .pmtiles in a temp dir, then asks us to put it in object
+   * storage. Streams the file rather than buffering, so multi-GB
+   * tile caches don't blow up the api's heap.
+   *
+   * Returns the storage key + public URL the same way
+   * presignUpload would, so the caller can persist them on the
+   * tile_layer item.
+   */
+  async uploadLocalFile(
+    kind: AssetKind,
+    localPath: string,
+    contentType = 'application/octet-stream',
+  ): Promise<{ key: string; publicUrl: string }> {
+    if (!this.bootstrapped) {
+      try {
+        await this.ensureBucket();
+        this.bootstrapped = true;
+      } catch (err) {
+        this.log.warn(
+          `Storage still not ready: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+    const { createReadStream, statSync } = await import('node:fs');
+    const stats = statSync(localPath);
+    const key = `${kind}/${randomUUID()}`;
+    const cmd = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ContentType: contentType,
+      ContentLength: stats.size,
+      Body: createReadStream(localPath),
+    });
+    await this.client.send(cmd);
+    const publicUrl = `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
+    return { key, publicUrl };
+  }
+
   /** Delete an object by key. Idempotent. Used when a feature
    *  attachment row is removed so we don't leak bytes in MinIO. */
   async deleteObject(key: string): Promise<void> {

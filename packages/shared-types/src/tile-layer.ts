@@ -37,9 +37,30 @@
  */
 import type { ISODateString } from './ids';
 
-/** Recognized container formats. Single value for v1; the union
- *  reserves room for `mbtiles` and `tpk` in follow-ups. */
+/**
+ * Recognized container formats AT REST in MinIO. After the
+ * upload + conversion pipeline runs, every tile_layer's file is
+ * stored as PMTiles regardless of what the user uploaded; the
+ * `originalFormat` field below records what they sent us.
+ *
+ * We unify on PMTiles at rest because the serving path
+ * (range-request friendly, zero per-tile compute) only works for
+ * PMTiles. MBTiles + zipped XYZ ingestion exists for user
+ * convenience, not because we'd ever serve those formats
+ * directly.
+ */
 export type TileLayerFormat = 'pmtiles';
+
+/**
+ * Container formats accepted at upload. The ingest path converts
+ * non-pmtiles inputs to pmtiles via the pmtiles Go CLI before
+ * persisting. TPK / TPKX are documented out of v1 ingest because
+ * Esri's bundle format needs its own extraction pipeline.
+ */
+export type TileLayerOriginalFormat =
+  | 'pmtiles'
+  | 'mbtiles'
+  | 'xyz-zip';
 
 /** Raster vs vector tile content. Lifted from the PMTiles header
  *  at upload time; consumers read this to decide whether to
@@ -50,8 +71,26 @@ export type TileLayerDataVersion = 1;
 
 export interface TileLayerData {
   version: TileLayerDataVersion;
-  /** Container format. Only `pmtiles` in v1. */
+  /** Container format stored in MinIO. Always 'pmtiles' after
+   *  ingest (regardless of original upload format). */
   format: TileLayerFormat;
+  /**
+   * Container format the user originally uploaded. Surfaced on
+   * the detail page so the author can see whether a conversion
+   * ran. Missing on items that pre-date this field; treat
+   * absence as 'pmtiles' for backward compat.
+   */
+  originalFormat?: TileLayerOriginalFormat;
+  /** Original upload filename before conversion (e.g.
+   *  "wv-parcels.mbtiles"). Useful for re-download / debugging. */
+  originalFileName?: string;
+  /** Size of the original upload in bytes. May differ from
+   *  sizeBytes when the conversion shrinks/grows the file. */
+  originalSizeBytes?: number;
+  /** Milliseconds spent in the conversion step. Surfaced on the
+   *  detail page so authors can see the one-time conversion cost
+   *  separately from the upload time. */
+  conversionMs?: number;
   /** Raster vs vector content. Lifted from the PMTiles header. */
   kind: TileLayerKind;
   /** MinIO object key. Used for delete cleanup. */

@@ -15,6 +15,11 @@ import { ItemsService } from '../items/items.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import {
+  cleanupConversion,
+  convertToPmtiles,
+  detectOriginalFormat,
+} from './tile-conversion.js';
 
 /**
  * Service for the tile_layer item type (#179).
@@ -97,11 +102,69 @@ export class TileLayerService {
     ) {
       throw new BadRequestException('sizeBytes must be a positive number');
     }
-    if (!input.fileName.toLowerCase().endsWith('.pmtiles')) {
+    // Detect upload format. detectOriginalFormat throws a
+    // BadRequest-readable error for TPK / unknown extensions; we
+    // re-wrap it as a Nest exception so the response shape stays
+    // consistent.
+    let originalFormat;
+    try {
+      originalFormat = detectOriginalFormat(input.fileName);
+    } catch (err) {
       throw new BadRequestException(
-        'Only .pmtiles files are supported in v1. MBTiles and TPK ingestion are tracked as follow-ups.',
+        err instanceof Error ? err.message : 'Unsupported file type',
       );
     }
+
+    // For non-pmtiles uploads, run the converter to produce a
+    // .pmtiles file we can serve through the range-request path.
+    // For pmtiles uploads this is a no-op (the bytes are already
+    // in MinIO at the right shape). Either way, after this block
+    // `effectiveStorageKey` / `effectiveStorageUrl` point at the
+    // serving file.
+    let effectiveStorageKey = input.storageKey;
+    let effectiveStorageUrl = input.storageUrl;
+    let conversionMs = 0;
+    let conversionWorkDir = '';
+    try {
+      if (originalFormat !== 'pmtiles') {
+        const conv = await convertToPmtiles(input.storageUrl, input.fileName);
+        conversionWorkDir = conv.workDir;
+        conversionMs = conv.durationMs;
+        // Upload the converted .pmtiles back to MinIO under a
+        // fresh key. The original upload (mbtiles / zip) is
+        // deleted once the new key is in place; we keep only the
+        // converted serving format on long-term storage.
+        if (conv.outputPath) {
+          const uploaded = await this.storage.uploadLocalFile(
+            'item-tile-layer',
+            conv.outputPath,
+            'application/octet-stream',
+          );
+          effectiveStorageKey = uploaded.key;
+          effectiveStorageUrl = uploaded.publicUrl;
+          // Best-effort delete of the original upload. A failed
+          // delete leaks bytes in MinIO but doesn't break the
+          // tile_layer item; the orphan accounting card surfaces
+          // it. Tracked separately from the item lifecycle.
+          try {
+            await this.storage.deleteObject(input.storageKey);
+          } catch (err) {
+            this.log.warn(
+              `Failed to delete original upload ${input.storageKey}: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      // Clean up any temp dir the converter created before
+      // re-raising. The original upload stays in MinIO so the
+      // user can retry without re-uploading.
+      if (conversionWorkDir) await cleanupConversion(conversionWorkDir);
+      throw new BadRequestException(
+        `Conversion failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (conversionWorkDir) await cleanupConversion(conversionWorkDir);
 
     // Read the PMTiles header via HTTP range requests against the
     // MinIO public URL. The pmtiles library handles directory
@@ -110,13 +173,13 @@ export class TileLayerService {
     let header: Header | null = null;
     let metadata: Record<string, unknown> = {};
     try {
-      const source = new FetchRangeSource(input.storageUrl);
+      const source = new FetchRangeSource(effectiveStorageUrl);
       const pmt = new PMTiles(source);
       header = await pmt.getHeader();
       metadata = (await pmt.getMetadata()) as Record<string, unknown>;
     } catch (err) {
       this.log.warn(
-        `Failed to parse PMTiles header at ${input.storageUrl}: ${err instanceof Error ? err.message : err}`,
+        `Failed to parse PMTiles header at ${effectiveStorageUrl}: ${err instanceof Error ? err.message : err}`,
       );
       // Best-effort: keep the upload but persist with empty
       // metadata so the user can still try (the file might be
@@ -129,12 +192,24 @@ export class TileLayerService {
       version: 1,
       format: 'pmtiles',
       kind: tileType === 'mvt' ? 'vector' : 'raster',
-      storageKey: input.storageKey,
-      storageUrl: input.storageUrl,
-      fileName: input.fileName,
+      storageKey: effectiveStorageKey,
+      storageUrl: effectiveStorageUrl,
+      // Display name strips the original extension and replaces
+      // with .pmtiles to reflect what's actually stored, but we
+      // also keep the original filename below for provenance.
+      fileName:
+        originalFormat === 'pmtiles'
+          ? input.fileName
+          : input.fileName.replace(/\.(mbtiles|zip)$/i, '.pmtiles'),
       sizeBytes: input.sizeBytes,
       uploadedAt: new Date().toISOString() as ISODateString,
+      originalFormat,
     };
+    if (originalFormat !== 'pmtiles') {
+      data.originalFileName = input.fileName;
+      data.originalSizeBytes = input.sizeBytes;
+      data.conversionMs = conversionMs;
+    }
     // Only persist metadata fields that came back populated;
     // exactOptionalPropertyTypes refuses undefined assignments to
     // optional string/number fields, so we omit instead.

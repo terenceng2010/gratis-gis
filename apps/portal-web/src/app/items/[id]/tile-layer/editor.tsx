@@ -76,10 +76,21 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
     // Reset the input so the same file can be selected twice (a
     // re-upload of the same name shouldn't be silently ignored).
     ev.target.value = '';
-    if (!file.name.toLowerCase().endsWith('.pmtiles')) {
-      setUploadError(
-        'Only .pmtiles files are supported in v1. MBTiles + TPK ingestion is tracked as a follow-up.',
-      );
+    const lower = file.name.toLowerCase();
+    const supported =
+      lower.endsWith('.pmtiles') ||
+      lower.endsWith('.mbtiles') ||
+      lower.endsWith('.zip');
+    if (!supported) {
+      if (lower.endsWith('.tpk') || lower.endsWith('.tpkx')) {
+        setUploadError(
+          'TPK / TPKX support is on the roadmap. For now: export your tile cache to MBTiles (or convert from TPK with the pmtiles CLI) and upload that. Supported today: .pmtiles, .mbtiles, .zip (XYZ tile directory).',
+        );
+      } else {
+        setUploadError(
+          'Supported formats: .pmtiles, .mbtiles, .zip (XYZ tile directory).',
+        );
+      }
       return;
     }
     await runUpload(file);
@@ -207,11 +218,14 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
         <div className="border-b border-border bg-surface-2 px-4 py-3">
           <h3 className="text-sm font-medium text-ink-0">Tile cache file</h3>
           <p className="mt-0.5 text-xs text-muted">
-            Upload a PMTiles file. Range-served straight from object
-            storage; no per-tile compute on the API. MBTiles and TPK
-            ingestion are tracked as follow-ups -- convert your file
-            to PMTiles for now (the open-source <code>pmtiles</code>{' '}
-            CLI does this in one command).
+            Upload a tile cache file. Accepted formats:{' '}
+            <strong>.pmtiles</strong> (served as-is),{' '}
+            <strong>.mbtiles</strong> (converted to PMTiles
+            server-side at upload), and <strong>.zip</strong>{' '}
+            containing an XYZ <code>{'{z}/{x}/{y}'}</code> tile
+            directory (also converted). At rest everything is
+            PMTiles for range-served, zero-per-tile-compute
+            serving. TPK / TPKX support is on the roadmap.
           </p>
         </div>
         <div className="space-y-3 p-4 text-sm">
@@ -255,12 +269,12 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
                   ? `Uploading ${uploadProgress}%...`
                   : ready
                     ? 'Replace file'
-                    : 'Upload .pmtiles'}
+                    : 'Upload tile cache'}
               </button>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pmtiles"
+                accept=".pmtiles,.mbtiles,.zip"
                 onChange={(e) => void onFileChange(e)}
                 className="hidden"
               />
@@ -302,6 +316,18 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
               }
             />
             <Metric label="Size on disk" value={humanSize(data.sizeBytes)} />
+            {data.originalFormat && data.originalFormat !== 'pmtiles' ? (
+              <Metric
+                label="Original upload"
+                value={`${originalFormatLabel(data.originalFormat)}${
+                  data.originalFileName ? ` (${data.originalFileName})` : ''
+                }${
+                  typeof data.conversionMs === 'number'
+                    ? ` · converted in ${(data.conversionMs / 1000).toFixed(1)}s`
+                    : ''
+                }`}
+              />
+            ) : null}
             <Metric
               label="Bbox"
               value={
@@ -505,6 +531,19 @@ function TilePreview({ data }: { data: TileLayerData }) {
       <div ref={containerRef} className="h-[420px] w-full bg-surface-0" />
     </section>
   );
+}
+
+function originalFormatLabel(
+  fmt: 'pmtiles' | 'mbtiles' | 'xyz-zip',
+): string {
+  switch (fmt) {
+    case 'pmtiles':
+      return 'PMTiles';
+    case 'mbtiles':
+      return 'MBTiles';
+    case 'xyz-zip':
+      return 'XYZ tile directory (zip)';
+  }
 }
 
 function humanSize(bytes: number): string {

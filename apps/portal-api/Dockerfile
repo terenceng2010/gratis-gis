@@ -94,6 +94,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 
+# #179: pmtiles Go CLI for converting MBTiles / zipped XYZ tile
+# directories into PMTiles at upload time. Single static binary
+# (~10 MB), no transitive deps. Pinned to a known-good release;
+# bump explicitly. The architecture suffix is mapped from the
+# Docker BUILDPLATFORM (amd64 -> Linux_x86_64; arm64 ->
+# Linux_arm64) so a multi-arch build picks the right binary.
+ARG TARGETARCH=amd64
+ARG PMTILES_VERSION=1.21.1
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) PMTILES_ARCH=Linux_x86_64 ;; \
+      arm64) PMTILES_ARCH=Linux_arm64 ;; \
+      *) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/pmtiles.tar.gz \
+      "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_${PMTILES_ARCH}.tar.gz"; \
+    tar -xzf /tmp/pmtiles.tar.gz -C /tmp pmtiles; \
+    mv /tmp/pmtiles /usr/local/bin/pmtiles; \
+    chmod +x /usr/local/bin/pmtiles; \
+    rm /tmp/pmtiles.tar.gz; \
+    /usr/local/bin/pmtiles version
+
 # Drop privileges. Postgres connections, file uploads, and GDAL all
 # work fine for a non-root user.
 RUN groupadd -r app && useradd -r -g app -m -d /home/app app

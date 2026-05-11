@@ -200,7 +200,7 @@ const TYPE_GROUPS: TypeGroup[] = [
         // "I have the URL or service, point at it."
         value: 'tile_layer',
         label: 'Tile layer',
-        desc: 'Upload a pre-rendered tile cache (PMTiles). Hosts the file and exposes a tile URL maps can use as a basemap.',
+        desc: 'Upload a pre-rendered tile cache (PMTiles, MBTiles, or zipped XYZ tile directory). Hosts the file and exposes a tile URL maps can use as a basemap.',
         Icon: Layers,
       },
     ],
