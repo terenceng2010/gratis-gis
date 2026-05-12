@@ -272,6 +272,44 @@
   border-top-color: hsl(var(--danger));
 }
 
+/* Themed-app container widget styling. When a content widget renders
+   inside an app-bar / dock-panel / slideout / foldable-group, the
+   container's wrapper carries a `data-*-child` attribute. These
+   rules strip the widget's own card chrome (background, border,
+   shadow, rounded corners) so the widget reads as part of the
+   container instead of as a separate floating box.
+
+   Targets ToolWidgetSlot's button (class `group/tool` -> CSS
+   `group\/tool`) and the standard widget card wrappers. Specificity
+   stays low so authors who want a per-widget treatment can still
+   override at the widget level. */
+[data-app-bar-child] button.group\/tool {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+[data-app-bar-child] button.group\/tool:hover {
+  background: hsl(var(--app-surface-2, var(--surface-2)));
+}
+[data-app-bar-child] button.group\/tool[aria-pressed='true'] {
+  background: hsl(var(--app-accent, var(--accent)) / 0.1);
+  color: hsl(var(--app-accent, var(--accent)));
+}
+
+/* Dock-panel and foldable-group children: their own card chrome
+   would double the chrome (panel + widget border = busy). Strip
+   the rounded border + background so the widget content sits flush
+   inside the container's own region. */
+[data-dock-panel-child] > section,
+[data-dock-panel-child] > div.rounded-md,
+[data-foldable-child] > section,
+[data-foldable-child] > div.rounded-md {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 /* #259 slice 4: print mode for the Editor / Viewer runtime. The Print
    button on the runtime adds the `print-runtime` class to <body> just
    before invoking window.print() and removes it after. While the
