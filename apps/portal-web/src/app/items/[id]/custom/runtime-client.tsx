@@ -675,6 +675,12 @@ const KIND_TOOL_LABEL: Record<string, string> = {
 function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
   const ctx = useContext(CustomMapsContext);
   const [open, setOpen] = useState(false);
+  // Trigger ref so the popover can anchor itself below the actual
+  // button instead of always pinning to the runtime container's
+  // top edge. Without this, a tool button inside an app-bar opens
+  // a popover that overlaps the bar (anchored at top-right of the
+  // runtime, which IS the bar's vertical band).
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const Icon = KIND_ICON[widget.kind] ?? SquareIcon;
   const label = KIND_TOOL_LABEL[widget.kind] ?? widget.kind;
   const arrangement = widgetPanelArrangement(widget);
@@ -694,6 +700,7 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-pressed={open}
@@ -721,6 +728,7 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
         <ToolPopover
           arrangement={arrangement}
           containerRef={ctx.runtimeContainerRef}
+          triggerRef={triggerRef}
           title={label}
           icon={Icon}
           onClose={() => setOpen(false)}
@@ -749,6 +757,7 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
 function ToolPopover({
   arrangement,
   containerRef,
+  triggerRef,
   title,
   icon: Icon,
   onClose,
@@ -756,6 +765,14 @@ function ToolPopover({
 }: {
   arrangement: PanelArrangement;
   containerRef: RefObject<HTMLDivElement>;
+  /**
+   * Trigger button ref. When set, the floating popover anchors
+   * below the button (right-aligned to its right edge) instead of
+   * pinning to the runtime container's anchor corner. This is what
+   * stops a tool button inside an app-bar from opening a popover
+   * that overlaps the bar itself.
+   */
+  triggerRef?: RefObject<HTMLButtonElement>;
   title: string;
   icon: typeof MapIcon;
   onClose: () => void;
@@ -789,12 +806,21 @@ function ToolPopover({
 
   // Click-outside via a transparent backdrop. Lower z-index than
   // the popover itself so the popover stays interactive.
+  // When a triggerRef is provided AND placement is floating, anchor
+  // the popover to the trigger button's actual rect (drop below the
+  // button, align with its right edge by default). This is the path
+  // that stops app-bar tools from opening a popover that lands on
+  // top of the bar itself. Falls back to the static anchor logic
+  // when no trigger is available (or for fixed / docked-bottom).
   const positionStyle = computePopoverPosition({
     anchor,
     width,
     height,
     offsetX,
     offsetY,
+    triggerRef: triggerRef ?? null,
+    containerRef,
+    placement,
   });
 
   const animationClass =
@@ -1035,15 +1061,76 @@ function DockedBottomPopover({
  */
 function computePopoverPosition({
   anchor,
+  width,
+  height,
   offsetX,
   offsetY,
+  triggerRef,
+  containerRef,
+  placement,
 }: {
   anchor: PanelAnchor;
   width: number;
   height: number;
   offsetX: number;
   offsetY: number;
+  triggerRef?: RefObject<HTMLButtonElement> | null;
+  containerRef?: RefObject<HTMLDivElement>;
+  placement?: string;
 }): React.CSSProperties {
+  // Trigger-anchored path: when we have a trigger button and the
+  // popover is floating, position the popover relative to the
+  // trigger's bounding box (drop below it, right-aligned to its
+  // right edge). This is what we want for AGO-style tool buttons:
+  // the menu opens directly under the icon you just clicked, not
+  // at a fixed corner of the app shell.
+  if (
+    triggerRef?.current &&
+    containerRef?.current &&
+    (placement === 'floating' || placement === undefined)
+  ) {
+    const trig = triggerRef.current.getBoundingClientRect();
+    const cont = containerRef.current.getBoundingClientRect();
+    const top = trig.bottom - cont.top + 4;
+    // Default to right-aligning the popover with the trigger button
+    // for top-right anchors; left-align for top-left; center for the
+    // rest. This keeps the popover visually attached to the button
+    // edge the user actually clicked.
+    const [, horiz] = anchor.split('-') as [string, string];
+    const containerW = cont.width;
+    let left: number;
+    if (horiz === 'left') {
+      left = Math.max(offsetX, trig.left - cont.left);
+    } else if (horiz === 'right') {
+      // Right-align: popover's right edge sits at trigger's right
+      // edge. Clamp left to keep the popover inside the container.
+      const desiredRight = trig.right - cont.left;
+      left = Math.min(
+        Math.max(offsetX, desiredRight - width),
+        containerW - width - offsetX,
+      );
+    } else {
+      // Center on trigger's center.
+      const center = (trig.left + trig.right) / 2 - cont.left;
+      left = Math.min(
+        Math.max(offsetX, center - width / 2),
+        containerW - width - offsetX,
+      );
+    }
+    // Keep the popover from running off the bottom of the runtime;
+    // if the trigger is near the bottom, flip above the trigger.
+    const containerH = cont.height;
+    if (top + height > containerH - offsetY) {
+      const flipped = trig.top - cont.top - height - 4;
+      if (flipped >= offsetY) {
+        return { top: flipped, left };
+      }
+    }
+    return { top, left };
+  }
+
+  // Static-anchor fallback. Used for fixed-placement popovers and
+  // for callers that didn't supply a triggerRef (legacy paths).
   const [vert, horiz] = anchor.split('-') as [
     'top' | 'middle' | 'bottom',
     'left' | 'center' | 'right',
@@ -1062,6 +1149,11 @@ function computePopoverPosition({
     const t = style.transform ?? '';
     style.transform = (t ? `${t} ` : '') + 'translateX(-50%)';
   }
+  // Reference width/height so a future tweak (e.g. clamping to
+  // container bounds in the static path too) has them available
+  // without changing the signature.
+  void width;
+  void height;
   return style;
 }
 

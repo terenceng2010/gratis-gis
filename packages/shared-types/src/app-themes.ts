@@ -75,6 +75,21 @@ export interface AppThemeTokens {
     '--app-accent-ink': string;
     /** Hover state for accent surfaces. Bare HSL. */
     '--app-accent-hover': string;
+    /**
+     * App-bar surface. Decoupled from surface-1 so each theme can
+     * brand its header independently (navy banner over off-white
+     * body, etc.) without changing the body card color. The Default
+     * theme keeps this neutral; Slate/Aurora/Forest/Paper use bolder
+     * choices so the header reads as branded chrome — the way AGO
+     * apps do.
+     */
+    '--app-header-bg': string;
+    /** Text color readable on the header bg. Bare HSL. */
+    '--app-header-ink': string;
+    /** Muted/subtitle text on header. Bare HSL. */
+    '--app-header-muted': string;
+    /** Border under the header. Bare HSL. */
+    '--app-header-border': string;
     /** Status colors. Bare HSL. */
     '--app-success': string;
     '--app-warn': string;
@@ -105,23 +120,27 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     description: 'Portal-matching neutral palette with the system accent.',
     swatch: 'hsl(210 40% 96%)',
     tokens: {
-      '--app-surface-0': '0 0% 100%',
-      '--app-surface-1': '210 40% 98%',
-      '--app-surface-2': '210 40% 96%',
+      '--app-surface-0': '210 25% 96%',
+      '--app-surface-1': '0 0% 100%',
+      '--app-surface-2': '210 25% 92%',
       '--app-ink-0': '222 47% 11%',
       '--app-ink-1': '222 47% 11%',
-      '--app-muted': '215 20% 50%',
-      '--app-border': '214 32% 91%',
+      '--app-muted': '215 20% 45%',
+      '--app-border': '214 25% 86%',
       '--app-accent': '221 83% 53%',
       '--app-accent-ink': '0 0% 100%',
       '--app-accent-hover': '221 83% 47%',
+      '--app-header-bg': '221 83% 53%',
+      '--app-header-ink': '0 0% 100%',
+      '--app-header-muted': '210 50% 88%',
+      '--app-header-border': '221 83% 40%',
       '--app-success': '142 72% 29%',
       '--app-warn': '35 92% 50%',
       '--app-danger': '0 72% 51%',
       '--app-info': '199 89% 48%',
       '--app-radius': '0.5rem',
       '--app-shadow-card':
-        '0 1px 2px rgba(15, 15, 16, 0.04), 0 1px 1px rgba(15, 15, 16, 0.03)',
+        '0 1px 2px rgba(15, 15, 16, 0.06), 0 1px 1px rgba(15, 15, 16, 0.04)',
       '--app-shadow-overlay':
         '0 10px 40px -10px rgba(15, 15, 16, 0.25), 0 2px 8px -2px rgba(15, 15, 16, 0.08)',
       '--app-density': '1',
@@ -133,8 +152,8 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     swatch: 'hsl(217 33% 17%)',
     tokens: {
       '--app-surface-0': '220 26% 14%',
-      '--app-surface-1': '217 33% 17%',
-      '--app-surface-2': '215 28% 22%',
+      '--app-surface-1': '217 33% 19%',
+      '--app-surface-2': '215 28% 24%',
       '--app-ink-0': '213 31% 91%',
       '--app-ink-1': '213 31% 91%',
       '--app-muted': '215 16% 65%',
@@ -142,6 +161,10 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
       '--app-accent': '239 84% 67%',
       '--app-accent-ink': '220 26% 14%',
       '--app-accent-hover': '239 84% 73%',
+      '--app-header-bg': '222 47% 9%',
+      '--app-header-ink': '213 31% 95%',
+      '--app-header-muted': '215 20% 65%',
+      '--app-header-border': '239 84% 50%',
       '--app-success': '142 64% 52%',
       '--app-warn': '35 92% 58%',
       '--app-danger': '0 74% 62%',
@@ -156,26 +179,30 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
   },
   aurora: {
     label: 'Aurora',
-    description: 'Off-white surfaces, teal accent, generous spacing.',
+    description: 'Soft teal surfaces, teal accent, generous spacing.',
     swatch: 'hsl(180 30% 95%)',
     tokens: {
-      '--app-surface-0': '180 30% 97%',
-      '--app-surface-1': '180 30% 99%',
-      '--app-surface-2': '180 25% 94%',
+      '--app-surface-0': '180 30% 94%',
+      '--app-surface-1': '0 0% 100%',
+      '--app-surface-2': '180 25% 88%',
       '--app-ink-0': '195 60% 11%',
       '--app-ink-1': '195 60% 18%',
-      '--app-muted': '195 15% 45%',
-      '--app-border': '180 20% 86%',
+      '--app-muted': '195 15% 42%',
+      '--app-border': '180 18% 80%',
       '--app-accent': '173 80% 36%',
       '--app-accent-ink': '0 0% 100%',
       '--app-accent-hover': '173 80% 30%',
+      '--app-header-bg': '173 80% 28%',
+      '--app-header-ink': '180 30% 97%',
+      '--app-header-muted': '180 25% 80%',
+      '--app-header-border': '173 80% 20%',
       '--app-success': '151 65% 32%',
       '--app-warn': '35 92% 50%',
       '--app-danger': '0 72% 51%',
       '--app-info': '199 89% 48%',
       '--app-radius': '0.75rem',
       '--app-shadow-card':
-        '0 2px 4px rgba(15, 60, 60, 0.06), 0 1px 2px rgba(15, 60, 60, 0.04)',
+        '0 2px 4px rgba(15, 60, 60, 0.08), 0 1px 2px rgba(15, 60, 60, 0.06)',
       '--app-shadow-overlay':
         '0 16px 48px -12px rgba(15, 60, 60, 0.28), 0 4px 12px -4px rgba(15, 60, 60, 0.12)',
       '--app-density': '1.1',
@@ -183,46 +210,54 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
   },
   forest: {
     label: 'Forest',
-    description: 'Warm cream surfaces, forest green accent. Field-ready.',
-    swatch: 'hsl(45 33% 95%)',
+    description: 'Warm cream surfaces, forest green chrome. Field-ready.',
+    swatch: 'hsl(150 55% 32%)',
     tokens: {
-      '--app-surface-0': '45 33% 97%',
-      '--app-surface-1': '45 33% 99%',
-      '--app-surface-2': '45 25% 93%',
+      '--app-surface-0': '45 35% 92%',
+      '--app-surface-1': '45 50% 97%',
+      '--app-surface-2': '45 30% 86%',
       '--app-ink-0': '150 40% 12%',
       '--app-ink-1': '150 40% 18%',
-      '--app-muted': '30 10% 45%',
-      '--app-border': '45 20% 85%',
+      '--app-muted': '30 10% 42%',
+      '--app-border': '45 22% 78%',
       '--app-accent': '150 55% 32%',
       '--app-accent-ink': '45 33% 97%',
       '--app-accent-hover': '150 55% 26%',
+      '--app-header-bg': '150 45% 22%',
+      '--app-header-ink': '45 50% 96%',
+      '--app-header-muted': '90 20% 75%',
+      '--app-header-border': '150 55% 14%',
       '--app-success': '142 72% 29%',
       '--app-warn': '35 92% 50%',
       '--app-danger': '0 72% 51%',
       '--app-info': '199 89% 48%',
       '--app-radius': '0.375rem',
       '--app-shadow-card':
-        '0 1px 2px rgba(60, 30, 0, 0.06), 0 1px 1px rgba(60, 30, 0, 0.04)',
+        '0 1px 2px rgba(60, 30, 0, 0.08), 0 1px 1px rgba(60, 30, 0, 0.05)',
       '--app-shadow-overlay':
-        '0 10px 40px -10px rgba(60, 30, 0, 0.22), 0 2px 8px -2px rgba(60, 30, 0, 0.1)',
+        '0 10px 40px -10px rgba(60, 30, 0, 0.25), 0 2px 8px -2px rgba(60, 30, 0, 0.12)',
       '--app-density': '1',
     },
   },
   paper: {
     label: 'Paper',
     description: 'High-contrast print-style palette. Reports, public maps.',
-    swatch: 'hsl(0 0% 99%)',
+    swatch: 'hsl(0 0% 7%)',
     tokens: {
-      '--app-surface-0': '0 0% 100%',
-      '--app-surface-1': '0 0% 99%',
-      '--app-surface-2': '0 0% 96%',
+      '--app-surface-0': '0 0% 96%',
+      '--app-surface-1': '0 0% 100%',
+      '--app-surface-2': '0 0% 92%',
       '--app-ink-0': '0 0% 7%',
       '--app-ink-1': '0 0% 15%',
-      '--app-muted': '0 0% 40%',
-      '--app-border': '0 0% 86%',
+      '--app-muted': '0 0% 38%',
+      '--app-border': '0 0% 80%',
       '--app-accent': '0 0% 7%',
       '--app-accent-ink': '0 0% 100%',
       '--app-accent-hover': '0 0% 20%',
+      '--app-header-bg': '0 0% 7%',
+      '--app-header-ink': '0 0% 98%',
+      '--app-header-muted': '0 0% 65%',
+      '--app-header-border': '0 0% 0%',
       '--app-success': '142 72% 29%',
       '--app-warn': '35 92% 50%',
       '--app-danger': '0 72% 51%',

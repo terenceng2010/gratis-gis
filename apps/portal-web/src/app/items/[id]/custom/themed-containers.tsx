@@ -78,15 +78,31 @@ export function AppBar({
   const subtitle = config.subtitle;
   const logoUrl = config.logoUrl ?? fallbackLogoUrl;
 
-  // Variant styling map. 'elevated' is the default solid bar with a
-  // subtle bottom border; 'glass' is translucent with backdrop blur
-  // for map-first layouts; 'flat' is borderless flush.
+  // Variant styling map. 'elevated' is the default branded bar
+  // using --app-header-* tokens so each theme stamps its own
+  // identity at the top (Forest green, Slate near-black, Paper
+  // black, Aurora teal). 'glass' stays translucent over the body
+  // surface for map-first layouts (good when the author wants the
+  // map to read as the dominant surface). 'flat' is borderless on
+  // surface-1 for sparse, content-first apps.
   const variantClass =
     variant === 'glass'
-      ? 'bg-[hsl(var(--app-surface-1)/0.7)] backdrop-blur supports-[backdrop-filter]:bg-[hsl(var(--app-surface-1)/0.6)] border-b border-[hsl(var(--app-border)/0.6)]'
+      ? 'bg-[hsl(var(--app-surface-1)/0.7)] backdrop-blur supports-[backdrop-filter]:bg-[hsl(var(--app-surface-1)/0.6)] border-b border-[hsl(var(--app-border)/0.6)] text-[hsl(var(--app-ink-0))]'
       : variant === 'flat'
-        ? 'bg-[hsl(var(--app-surface-1))]'
-        : 'bg-[hsl(var(--app-surface-1))] border-b border-[hsl(var(--app-border))] shadow-[var(--app-shadow-card)]';
+        ? 'bg-[hsl(var(--app-surface-1))] text-[hsl(var(--app-ink-0))]'
+        : 'bg-[hsl(var(--app-header-bg))] text-[hsl(var(--app-header-ink))] border-b border-[hsl(var(--app-header-border))] shadow-[var(--app-shadow-card)]';
+
+  // Whether this variant renders on the branded header surface
+  // (elevated default). When true, child text uses header ink for
+  // contrast against the header background; otherwise it stays on
+  // body-ink tokens.
+  const onHeaderSurface = variant !== 'glass' && variant !== 'flat';
+  const titleInkClass = onHeaderSurface
+    ? 'text-[hsl(var(--app-header-ink))]'
+    : 'text-[hsl(var(--app-ink-0))]';
+  const subtitleInkClass = onHeaderSurface
+    ? 'text-[hsl(var(--app-header-muted))]'
+    : 'text-[hsl(var(--app-muted))]';
 
   return (
     <header
@@ -110,12 +126,14 @@ export function AppBar({
         {title || subtitle ? (
           <div className="min-w-0">
             {title ? (
-              <p className="truncate text-base font-semibold leading-tight text-[hsl(var(--app-ink-0))]">
+              <p
+                className={`truncate text-base font-semibold leading-tight ${titleInkClass}`}
+              >
                 {title}
               </p>
             ) : null}
             {subtitle ? (
-              <p className="truncate text-xs text-[hsl(var(--app-muted))]">
+              <p className={`truncate text-xs ${subtitleInkClass}`}>
                 {subtitle}
               </p>
             ) : null}
