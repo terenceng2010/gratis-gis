@@ -64,6 +64,7 @@ import {
   Slideout,
 } from './themed-containers';
 import { applyAppTheme, resolveAssetRefSync } from '@gratis-gis/shared-types';
+import { createPortal } from 'react-dom';
 import {
   MapCanvas,
   type MapCanvasHandle,
@@ -375,9 +376,18 @@ export function CustomRuntimeClient({
 
   return (
     <CustomMapsContext.Provider value={ctxValue}>
+      {/* Viewport-fit container. h-screen (was h-full + min-h) so
+          the app's whole vertical extent is exactly the viewport
+          height — header + page tabs (when present) + canvas slot
+          all distribute within that, and the canvas slot's
+          overflow-hidden keeps widgets from pushing the page taller.
+          End users see the app fitted to their screen with no
+          vertical scroll; widgets that have more content than they
+          can show (an attribute table with many rows, a long layer
+          list) handle their own internal scrolling. */}
       <div
         ref={themeRootRef}
-        className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col bg-[hsl(var(--app-surface-0))] text-[hsl(var(--app-ink-0))]"
+        className="flex h-screen flex-col overflow-hidden bg-[hsl(var(--app-surface-0))] text-[hsl(var(--app-ink-0))]"
       >
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">
@@ -435,7 +445,14 @@ export function CustomRuntimeClient({
           </nav>
         )}
 
-        <div className="relative flex-1 overflow-auto bg-surface-0 p-3">
+        {/* Viewport-fit canvas (user feedback: apps should fit the
+            screen, never scroll vertically). The parent is flex-1
+            of a flex-col page (header + nav + this container), so
+            its height resolves to "viewport - chrome". No
+            overflow-auto -- if a widget's content exceeds its
+            allotted grid cell, the widget handles its own internal
+            scrolling. */}
+        <div className="relative flex-1 overflow-hidden bg-surface-0 p-3">
           {totalWidgets === 0 ? (
             <div className="flex h-full items-center justify-center">
               <div className="max-w-md rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center shadow-card">
@@ -460,10 +477,23 @@ export function CustomRuntimeClient({
               ref={runtimeContainerRef}
               className="relative grid h-full w-full"
               style={{
-                // Matches the designer's v3 grid (48 cols x 12px
-                // rows). Old v1/v2 apps are migrated on load via
-                // migrateCustomAppData in the page entry, so the
-                // runtime always sees v3 coordinates here.
+                // Viewport-fit grid: 48 cols x N rows of 1fr each,
+                // where N = the highest row+rowSpan used by any
+                // widget. Rows are proportional (not pixel-fixed)
+                // so the whole app fills the available viewport
+                // height without scrolling. A widget at rowSpan=60
+                // in a 64-row grid takes 60/64 = ~94% of the
+                // canvas height; the same template on a taller or
+                // shorter screen scales proportionally.
+                //
+                // Trade-off vs. the designer's 12px-row model:
+                // the designer canvas is pixel-tall (designer
+                // shows authoring affordances, room for the
+                // user's eye to plan), but the runtime is
+                // viewport-tall (end user sees a coherent app
+                // fitted to their screen).
+                gridTemplateColumns: 'repeat(48, minmax(0, 1fr))',
+                gridTemplateRows: `repeat(${totalRows}, minmax(0, 1fr))`,
                 //
                 // The earlier 1400px fixed-width experiment was
                 // reverted: it broke on narrow viewports (toolbar
@@ -473,9 +503,10 @@ export function CustomRuntimeClient({
                 // dock-panel, slideout) that handle their own
                 // responsive sizing inside the grid, so the grid
                 // doesn't need a fixed width to look right.
-                gridTemplateColumns: 'repeat(48, minmax(0, 1fr))',
-                gridAutoRows: `minmax(12px, auto)`,
-                minHeight: `${totalRows * 12}px`,
+                //
+                // (gridTemplateColumns and gridTemplateRows are
+                // declared above this block; this comment block
+                // captures the historical context.)
                 gap: '6px',
               }}
             >
@@ -776,14 +807,18 @@ function ToolPopover({
   // runtime container, with a collapse/expand control in the header.
   // Mirrors the map item's attribute-table dock pattern. Anchor /
   // width / offsets are ignored here; only height applies.
-  // Collapse state is ephemeral (not persisted on the widget config):
-  // an author-saved layout always opens un-collapsed, and the user
-  // can toggle while interacting. The full open behavior is owned by
-  // the parent toggle button, which clicks-to-show; this collapse
-  // shrinks to a header-only sliver without unmounting the panel
-  // (so query, layer pick, sort etc. survive).
+  //
+  // Portaling: the popover is rendered into the runtime container
+  // (via createPortal) so its `position: absolute` resolves to the
+  // runtime root rather than the nearest positioned ancestor of the
+  // calling ToolWidgetSlot. Without the portal, a tool button
+  // living inside an app-bar would have its docked-bottom panel
+  // anchor to the BAR's bottom edge (a 48px-tall sliver), not to
+  // the bottom of the whole runtime viewport.
   if (placement === 'docked-bottom') {
-    return (
+    const container = containerRef.current ?? null;
+    if (!container) return null;
+    return createPortal(
       <DockedBottomPopover
         title={title}
         icon={Icon}
@@ -792,7 +827,8 @@ function ToolPopover({
         onClose={handleClose}
       >
         {children}
-      </DockedBottomPopover>
+      </DockedBottomPopover>,
+      container,
     );
   }
 
@@ -823,14 +859,15 @@ function ToolPopover({
     );
   }
 
-  // Floating: portal-style. The container ref might not yet be
-  // mounted; in that case we render relative to the document body
-  // as a fallback, which gives the same visual outcome on a
-  // single-pane runtime layout.
+  // Floating: render via portal into the runtime container so the
+  // popover's CSS anchors (top/right/bottom/left) line up with the
+  // runtime root, regardless of where the calling ToolWidgetSlot
+  // sits in the DOM (top-level page grid, inside an app-bar's flex
+  // row, inside a dock-panel's column, etc.).
   const container = containerRef.current ?? null;
   if (!container) return null;
 
-  return (
+  return createPortal(
     <>
       <button
         type="button"
@@ -855,7 +892,8 @@ function ToolPopover({
         <ToolPopoverHeader title={title} icon={Icon} onClose={handleClose} />
         <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       </div>
-    </>
+    </>,
+    container,
   );
 }
 
@@ -2531,7 +2569,17 @@ function renderWidgetInContainer(widget: CustomWidget): React.ReactNode {
   if (isToolDisplayWidget(widget) && widgetDisplayMode(widget) === 'tool') {
     return <ToolWidgetSlot widget={widget} />;
   }
-  return renderWidget(widget);
+  // Suppress the inner widget's WidgetFrame header when rendered
+  // inside a container. The container (foldable-group, dock-panel,
+  // slideout) provides its own labeling, so the widget's
+  // self-titled card chrome would double up (the screenshot showed
+  // "Layers" twice — once as the foldable-group title and again as
+  // the LayerList's own WidgetFrame title).
+  return (
+    <SuppressFrameHeaderContext.Provider value={true}>
+      {renderWidget(widget)}
+    </SuppressFrameHeaderContext.Provider>
+  );
 }
 
 /**
