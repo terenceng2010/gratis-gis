@@ -59,6 +59,7 @@ import { AttributeTable } from '../map/attribute-table';
 import type { LayerMetadata } from '../map/layer-metadata';
 import {
   AppBar,
+  AppBarContext,
   DockPanel,
   FoldableGroup,
   Slideout,
@@ -674,6 +675,13 @@ const KIND_TOOL_LABEL: Record<string, string> = {
  */
 function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
   const ctx = useContext(CustomMapsContext);
+  // When inside an app-bar, render the trigger as a flat header-ink
+  // icon link rather than a raised white pill. The white-pill
+  // treatment is correct on the canvas but reads as "stuck-on
+  // buttons" when stacked on a colored header (the screenshot
+  // showed Search/Basemap/Print/AttrTable as cramped white tiles
+  // on the green Forest header).
+  const inAppBar = useContext(AppBarContext);
   const [open, setOpen] = useState(false);
   // Trigger ref so the popover can anchor itself below the actual
   // button instead of always pinning to the runtime container's
@@ -705,11 +713,29 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
         onClick={() => setOpen((v) => !v)}
         aria-pressed={open}
         title={label}
-        className={`group/tool flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-md border bg-surface-1 shadow-sm transition-all ${
-          open
-            ? 'border-ink-0 text-ink-0 ring-2 ring-ink-0/10'
-            : 'border-border text-ink-1 hover:-translate-y-0.5 hover:border-ink-1 hover:shadow-md'
-        }`}
+        className={
+          inAppBar
+            ? // Flat header-ink treatment for tools sitting in an
+              // app-bar. The bar already provides the surface; the
+              // trigger should read as part of the bar, not as a
+              // separately framed pill. Active state uses the
+              // header-ink color at full opacity with a subtle
+              // backdrop wash; idle uses a slightly faded ink so
+              // active vs. inactive reads clearly.
+              `group/tool flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors ${
+                open
+                  ? 'bg-[hsl(var(--app-header-ink)/0.16)] text-[hsl(var(--app-header-ink))]'
+                  : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.1)] hover:text-[hsl(var(--app-header-ink))]'
+              }`
+            : // Canvas treatment: raised white pill with shadow.
+              // This is the right read when the trigger sits on the
+              // page grid (surface-0) without surrounding chrome.
+              `group/tool flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-md border bg-surface-1 shadow-sm transition-all ${
+                open
+                  ? 'border-ink-0 text-ink-0 ring-2 ring-ink-0/10'
+                  : 'border-border text-ink-1 hover:-translate-y-0.5 hover:border-ink-1 hover:shadow-md'
+              }`
+        }
       >
         <Icon
           className={`h-5 w-5 transition-transform ${

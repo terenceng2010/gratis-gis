@@ -22,7 +22,7 @@
  * advanced-mode author can rearrange + add + remove without
  * touching a separate framework.
  */
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown as ChevronDownIcon,
   ChevronRight as ChevronRightIcon,
@@ -47,6 +47,16 @@ import type {
  * design-time preview for children without touching this file).
  */
 export type RenderChild = (child: CustomWidget) => React.ReactNode;
+
+/**
+ * AppBarContext signals to descendant widgets that they're being
+ * rendered inside an app-bar (vs. inline on the page grid). Tool
+ * widgets check this so they can swap their raised white-pill
+ * treatment for a flat, header-colored treatment — the difference
+ * between a "button that floats on a page" and an "icon link in a
+ * navy nav bar".
+ */
+export const AppBarContext = createContext<boolean>(false);
 
 // ---- App bar ----------------------------------------------------
 
@@ -105,62 +115,62 @@ export function AppBar({
     : 'text-[hsl(var(--app-muted))]';
 
   return (
-    <header
-      className={`flex h-full w-full items-center gap-3 px-4 ${variantClass} ${
-        sticky ? 'sticky top-0 z-10' : ''
-      }`}
-      style={{ minHeight: 48 }}
-    >
-      {/* Left: logo + title block. Logo is optional; title is the
-          primary label. Subtitle stacks under the title for a
-          two-line hero treatment when the author wants context. */}
-      <div className="flex min-w-0 items-center gap-3">
-        {logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={logoUrl}
-            alt=""
-            className="h-7 w-7 shrink-0 rounded object-contain"
-          />
-        ) : null}
-        {title || subtitle ? (
-          <div className="min-w-0">
-            {title ? (
-              <p
-                className={`truncate text-base font-semibold leading-tight ${titleInkClass}`}
-              >
-                {title}
-              </p>
-            ) : null}
-            {subtitle ? (
-              <p className={`truncate text-xs ${subtitleInkClass}`}>
-                {subtitle}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+    <AppBarContext.Provider value={onHeaderSurface}>
+      <header
+        className={`flex h-full w-full items-center gap-3 px-4 ${variantClass} ${
+          sticky ? 'sticky top-0 z-10' : ''
+        }`}
+      >
+        {/* Left: logo + title block. Logo is optional; title is the
+            primary label. Subtitle stacks under the title for a
+            two-line hero treatment when the author wants context.
+            The inner block uses `flex flex-col justify-center` so a
+            single-line title is vertically centered against the bar
+            rather than baseline-pinned to the top. */}
+        <div className="flex min-w-0 items-center gap-3 self-stretch">
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={logoUrl}
+              alt=""
+              className="h-7 w-7 shrink-0 self-center rounded object-contain"
+            />
+          ) : null}
+          {title || subtitle ? (
+            <div className="flex min-w-0 flex-col justify-center">
+              {title ? (
+                <p
+                  className={`truncate text-base font-semibold leading-tight ${titleInkClass}`}
+                >
+                  {title}
+                </p>
+              ) : null}
+              {subtitle ? (
+                <p className={`truncate text-xs leading-tight ${subtitleInkClass}`}>
+                  {subtitle}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
-      {/* Right: children flex row. Spacing comes from the container,
-          not the children, so individual widgets don't need to know
-          they're in a bar. The grow spacer pushes content right; if
-          the author wants a left-anchored item they can drop a
-          spacer widget after the desired child. */}
-      <div className="flex flex-1 items-center justify-end gap-2">
-        {config.widgets.map((child) => (
-          <div
-            key={child.id}
-            className="flex shrink-0 items-center"
-            // Inline children render their own chrome but the bar
-            // overrides any rounded-card frame they'd normally
-            // bring (tool buttons want a flat bar treatment).
-            data-app-bar-child
-          >
-            {renderChild(child)}
-          </div>
-        ))}
-      </div>
-    </header>
+        {/* Right: children flex row. Each child renders flat (no
+            raised pill) so the bar reads as a coherent banner. Tool
+            widgets inside this provider see AppBarContext=true and
+            switch from white-pill to flat header-ink treatment. */}
+        <div className="flex flex-1 items-stretch justify-end gap-1">
+          {config.widgets.map((child) => (
+            <div
+              key={child.id}
+              className="flex shrink-0 items-stretch"
+              data-app-bar-child
+            >
+              {renderChild(child)}
+            </div>
+          ))}
+        </div>
+      </header>
+    </AppBarContext.Provider>
   );
 }
 
@@ -179,12 +189,19 @@ interface DockPanelRenderProps {
  */
 export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
   const collapsible = config.collapsible !== false;
-  const widthPx = config.widthPx ?? 280;
   const [collapsed, setCollapsed] = useState(config.defaultCollapsed ?? false);
   const side = config.side;
   const title = config.title;
 
-  const effectiveWidth = collapsed ? 44 : widthPx;
+  // The dock fills its grid cell. config.widthPx is treated as a
+  // designer-time hint (what colSpan the template chose to match);
+  // at runtime the grid layout is the source of truth so an
+  // author who picks a wider colSpan gets a wider dock with no
+  // empty stripe between the dock and the canvas (the previous
+  // pixel-fixed `width` left a gap whenever the grid cell was
+  // wider than 280px). Collapsed state keeps the panel surface
+  // visible but hides the body so the user still sees a coherent
+  // panel rather than a hollow strip of page background.
   const borderSide = side === 'left' ? 'border-r' : 'border-l';
   // When the dock has no title configured, the header degrades to a
   // bare collapse-handle row — author opted into "let the children
@@ -197,8 +214,7 @@ export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
 
   return (
     <aside
-      className={`relative flex h-full shrink-0 flex-col overflow-hidden bg-[hsl(var(--app-surface-1))] ${borderSide} border-[hsl(var(--app-border))]`}
-      style={{ width: effectiveWidth, transition: 'width 160ms ease-out' }}
+      className={`relative flex h-full w-full shrink-0 flex-col overflow-hidden bg-[hsl(var(--app-surface-1))] ${borderSide} border-[hsl(var(--app-border))]`}
     >
       {showHeader ? (
         // Header: optional title + collapse handle. When collapsed,
