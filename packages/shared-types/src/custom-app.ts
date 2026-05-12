@@ -73,7 +73,33 @@ export interface CustomAppData {
     /** Background color for the app shell (between widgets). */
     background?: string;
   };
+  /**
+   * Named theme preset. When set, the runtime + designer apply the
+   * preset's CSS-variable token bundle at the app root so every
+   * widget renders with a consistent palette / typography /
+   * spacing. Independent of the older `theme.accent` /
+   * `theme.background` overrides which still apply on top.
+   *
+   * Presets are defined in `app-themes.ts` (Default, Slate, Aurora,
+   * Forest, etc.) so authors can pick a vibe without becoming
+   * designers, while still being able to override individual tokens
+   * via the older `theme` block when they want pixel control.
+   */
+  themePresetId?: AppThemePresetId;
 }
+
+/**
+ * Built-in theme presets shipped with the portal. The actual token
+ * values live in `app-themes.ts`; this union is the wire-stable id
+ * authors save. New presets add new values; renames need a migration
+ * step.
+ */
+export type AppThemePresetId =
+  | 'default'
+  | 'slate'
+  | 'aurora'
+  | 'forest'
+  | 'paper';
 
 export interface CustomPage {
   /** Stable id; URL-safe so future "named page" routing is possible. */
@@ -184,7 +210,22 @@ export type CustomWidgetKind =
   // tabs. Anti-EB: deliberately simpler than EB's Section + Views
   // pair, just one widget that renders a tab strip and routes
   // child widgets into the active tab.
-  | 'tabs';
+  | 'tabs'
+  // Themed-app containers. These hold OTHER widgets (just like
+  // 'tabs') but render them inside a themed chrome region — an
+  // app-bar across the top of the page, a docked panel on a side,
+  // a slideout drawer, or a collapsible group. The author drops
+  // an existing widget kind (search, layer-list, etc.) INTO the
+  // container; the container handles spacing + chrome + theme
+  // styling so individual widgets stop looking like separate
+  // floating boxes. The same building blocks are available in
+  // both the templated and freeform flows — templates are just
+  // pre-configured CustomAppData instances with containers
+  // already laid out.
+  | 'app-bar'
+  | 'dock-panel'
+  | 'slideout'
+  | 'foldable-group';
 
 // ---- Tool-mode display (#364) ----------------------------------
 
@@ -301,7 +342,11 @@ export type CustomWidgetConfig =
   | BookmarkWidgetConfig
   | CoordinatesWidgetConfig
   | MyLocationWidgetConfig
-  | TabsWidgetConfig;
+  | TabsWidgetConfig
+  | AppBarWidgetConfig
+  | DockPanelWidgetConfig
+  | SlideoutWidgetConfig
+  | FoldableGroupWidgetConfig;
 
 export interface MapWidgetConfig {
   kind: 'map';
@@ -657,6 +702,150 @@ export interface TabsWidgetConfig {
     /** Child widgets for this tab. Rendered in document order. */
     widgets: CustomWidget[];
   }>;
+}
+
+// ---- Themed-app container widgets -----------------------------
+//
+// All four containers below share the same pattern: their config
+// includes a `widgets: CustomWidget[]` array of children, and the
+// container's renderer places those children inside themed chrome
+// (an app bar, a side dock, a slideout drawer, a foldable group).
+// Child widgets are full CustomWidget instances — the same building
+// blocks the freeform canvas uses — so anything available in a
+// template is available in custom mode, and vice versa.
+//
+// Children inside a container ignore `layout.col / row / colSpan /
+// rowSpan` — the container's own layout (row / column / stacked)
+// determines child placement. The grid coords stay on the widget
+// object so the same widget can be dragged out of a container back
+// onto the page grid without losing position metadata.
+
+/**
+ * App bar. Renders as a horizontal strip across the top of its grid
+ * cell (typically `col=1, colSpan=48, row=1, rowSpan=4` for a
+ * full-width top bar). Children stack as a flex row with consistent
+ * spacing + theme styling, so an author can drop logo + title +
+ * search + user menu into it and they look like one cohesive bar
+ * rather than five separate widget boxes.
+ *
+ * Why a dedicated kind rather than a generic flex container: the
+ * app-bar imposes opinionated chrome (single-row layout, fixed
+ * height, sticky / non-sticky behavior, theme-driven background
+ * blur) that authors don't have to think about. Drop a widget in,
+ * it looks right.
+ */
+export interface AppBarWidgetConfig {
+  kind: 'app-bar';
+  /** Child widgets rendered as a flex row inside the bar. */
+  widgets: CustomWidget[];
+  /**
+   * Optional logo image rendered at the left of the bar before the
+   * first child. The portal's branding logo when omitted (matches
+   * the portal chrome's logo treatment, so apps stay on-brand
+   * without authors having to upload).
+   */
+  logoUrl?: string;
+  /**
+   * Title rendered next to the logo. Falls back to the item's own
+   * title when omitted, so most authors don't have to set this.
+   */
+  title?: string;
+  /** Optional subtitle / tagline below the title. */
+  subtitle?: string;
+  /**
+   * When true (the default), the bar stays anchored to the top of
+   * the runtime viewport even as the page scrolls. Authors who want
+   * a hero-style scroll-away bar set this to false.
+   */
+  sticky?: boolean;
+  /**
+   * Visual variant for the bar's chrome. 'elevated' is the default
+   * (subtle shadow, solid surface); 'glass' is a translucent /
+   * blurred bar for map-first layouts; 'flat' is a borderless flush
+   * bar for minimal themes.
+   */
+  variant?: 'elevated' | 'glass' | 'flat';
+}
+
+/**
+ * Dock panel. Renders as a fixed-width column along the left or
+ * right edge of its grid cell (typically `colSpan=8, rowSpan=full`
+ * for a left dock). Children stack vertically; the container
+ * handles spacing, dividers between sibling widgets, and the
+ * collapse-to-rail affordance.
+ *
+ * The dock can be either always-open (the default; takes space on
+ * the page) or collapsible-to-rail (the panel shrinks to a 40px
+ * icon rail when collapsed and expands on click). The rail icons
+ * come from each child widget's per-kind icon registry.
+ */
+export interface DockPanelWidgetConfig {
+  kind: 'dock-panel';
+  /** Side of the parent the dock attaches to. Determines collapse-
+   *  to-rail direction and inner divider styling. */
+  side: 'left' | 'right';
+  /** Child widgets rendered as a flex column inside the dock. */
+  widgets: CustomWidget[];
+  /** Header label shown at the top of the dock. */
+  title?: string;
+  /**
+   * When true, the dock shows a collapse handle at the top; clicking
+   * shrinks the dock to a narrow icon rail. Children fold into
+   * their kind-specific icon. Defaults to true for left docks (room
+   * to spare for the map) and true for right docks (consistency).
+   */
+  collapsible?: boolean;
+  /**
+   * Initial collapsed state. The runtime tracks live state from
+   * here; the author's pick is the default that ships with the app.
+   */
+  defaultCollapsed?: boolean;
+  /** Width in CSS px when open. Default 280. */
+  widthPx?: number;
+}
+
+/**
+ * Slideout drawer. Hidden by default; opens via a trigger button
+ * the slideout itself stamps at the edge of the runtime container.
+ * Used for "tools" drawers that the author doesn't want to take
+ * permanent space.
+ */
+export interface SlideoutWidgetConfig {
+  kind: 'slideout';
+  /** Edge the drawer slides in from. */
+  edge: 'left' | 'right' | 'top' | 'bottom';
+  /** Child widgets stacked inside the drawer. */
+  widgets: CustomWidget[];
+  /** Trigger button label. Visible at the edge of the runtime when
+   *  the drawer is closed; clicking opens. Defaults to "Tools". */
+  triggerLabel?: string;
+  /** Icon hint for the trigger. Falls back to a default per edge. */
+  triggerIcon?: 'menu' | 'layers' | 'tools' | 'filter';
+  /** Width (left/right edges) or height (top/bottom) in CSS px when
+   *  open. Default 320. */
+  sizePx?: number;
+}
+
+/**
+ * Foldable group. A simple container with a header + chevron that
+ * collapses / expands a stack of child widgets. Use for grouping
+ * related controls into a labeled accordion section (Layers +
+ * Legend together under "Layers"; Bookmark + Coordinates together
+ * under "Navigation").
+ *
+ * Authors typically nest these inside a dock-panel or a slideout so
+ * a deep tool tree fits in a small side dock.
+ */
+export interface FoldableGroupWidgetConfig {
+  kind: 'foldable-group';
+  /** Header label rendered with the chevron. */
+  title: string;
+  /** Optional secondary text under the title. */
+  subtitle?: string;
+  /** Child widgets stacked inside when expanded. */
+  widgets: CustomWidget[];
+  /** Initial open state. Defaults to true. */
+  defaultOpen?: boolean;
 }
 
 /**

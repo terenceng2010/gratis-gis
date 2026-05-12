@@ -2407,6 +2407,21 @@ function WidgetConfigForm({
           onChangeConfig={onChangeConfig}
         />
       );
+    // Themed-app containers. MVP: properties surface is minimal —
+    // the templates pre-configure these, and the advanced-mode
+    // editor lets the author tweak the JSON via raw config until
+    // we ship dedicated property panels. (Filed as follow-up.)
+    case 'app-bar':
+    case 'dock-panel':
+    case 'slideout':
+    case 'foldable-group':
+      return (
+        <p className="px-3 py-2 text-xs italic text-muted">
+          Container properties (children, layout) are edited in
+          Advanced mode in this MVP. Templated apps ship with
+          containers preconfigured.
+        </p>
+      );
     default: {
       const _exhaustive: never = widget.config;
       void _exhaustive;
@@ -3669,6 +3684,21 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
     case 'tabs':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
+    // Themed-app containers each fill a different region of the
+    // canvas by default. app-bar runs full-width along the top
+    // (4 rows tall, ~48 px). dock-panel covers the left rail
+    // (12 cols wide, full visible height). slideout overlays the
+    // canvas so its grid placement is just an anchor (small
+    // footprint). foldable-group nests inside other containers in
+    // practice; its standalone default is a small stack.
+    case 'app-bar':
+      return { col: 1, row: 1, colSpan: 48, rowSpan: 4 };
+    case 'dock-panel':
+      return { col: 1, row: 5, colSpan: 12, rowSpan: 40 };
+    case 'slideout':
+      return { col: 1, row: 1, colSpan: 4, rowSpan: 4 };
+    case 'foldable-group':
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 8 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
@@ -4020,6 +4050,57 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
               widgets: [],
             },
           ],
+        },
+      };
+    // Themed-app containers stamped fresh with empty child lists.
+    // Templates use these with pre-filled children; from-scratch
+    // authors add children via Advanced mode editing.
+    case 'app-bar':
+      return {
+        id,
+        kind,
+        layout,
+        config: { kind: 'app-bar', widgets: [], sticky: true, variant: 'elevated' },
+      };
+    case 'dock-panel':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'dock-panel',
+          side: 'left',
+          widgets: [],
+          title: 'Panel',
+          collapsible: true,
+          defaultCollapsed: false,
+          widthPx: 280,
+        },
+      };
+    case 'slideout':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'slideout',
+          edge: 'left',
+          widgets: [],
+          triggerLabel: 'Tools',
+          triggerIcon: 'tools',
+          sizePx: 320,
+        },
+      };
+    case 'foldable-group':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'foldable-group',
+          title: 'Group',
+          widgets: [],
+          defaultOpen: true,
         },
       };
     default: {

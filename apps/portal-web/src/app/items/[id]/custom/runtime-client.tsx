@@ -58,6 +58,12 @@ import type { SelectToolMode } from '../map/select-tool';
 import { AttributeTable } from '../map/attribute-table';
 import type { LayerMetadata } from '../map/layer-metadata';
 import {
+  AppBar,
+  DockPanel,
+  FoldableGroup,
+  Slideout,
+} from './themed-containers';
+import {
   MapCanvas,
   type MapCanvasHandle,
 } from '../map/map-canvas';
@@ -1032,6 +1038,18 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <MyLocationWidgetRender widget={widget} />;
     case 'tabs':
       return <TabsWidgetRender widget={widget} />;
+    // Themed-app containers. Each holds an array of child widgets
+    // and renders them inside themed chrome (top bar, side dock,
+    // slideout drawer, foldable group). The actual rendering lives
+    // in themed-containers.tsx alongside the renderer registry.
+    case 'app-bar':
+      return <AppBarWidgetRender widget={widget} />;
+    case 'dock-panel':
+      return <DockPanelWidgetRender widget={widget} />;
+    case 'slideout':
+      return <SlideoutWidgetRender widget={widget} />;
+    case 'foldable-group':
+      return <FoldableGroupWidgetRender widget={widget} />;
     default: {
       const _exhaustive: never = widget.kind;
       void _exhaustive;
@@ -2471,6 +2489,35 @@ function TabsWidgetRender({ widget }: { widget: CustomWidget }) {
   );
 }
 
+// ---- Themed-app containers (#22) ----------------------------------
+
+/**
+ * Render wrappers for the themed-app container widgets. Each
+ * delegates to the themed-containers.tsx component, passing
+ * `renderWidget` as the child renderer so containers can recurse
+ * into any widget kind without importing the renderer registry
+ * themselves.
+ */
+function AppBarWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'app-bar') return null;
+  return <AppBar config={widget.config} renderChild={renderWidget} />;
+}
+
+function DockPanelWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'dock-panel') return null;
+  return <DockPanel config={widget.config} renderChild={renderWidget} />;
+}
+
+function SlideoutWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'slideout') return null;
+  return <Slideout config={widget.config} renderChild={renderWidget} />;
+}
+
+function FoldableGroupWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'foldable-group') return null;
+  return <FoldableGroup config={widget.config} renderChild={renderWidget} />;
+}
+
 // ---- Shared frame ----------------------------------------------------------
 
 /**
@@ -2534,4 +2581,12 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   'my-location': LocateIcon,
   // #362 layout container.
   tabs: ChevronRight,
+  // Themed-app containers (#22). Icons mirror the designer's
+  // PALETTE_TILES; the runtime currently renders containers via
+  // their own components so this is only used as a lookup
+  // fallback.
+  'app-bar': SquareIcon,
+  'dock-panel': SquareIcon,
+  slideout: SquareIcon,
+  'foldable-group': ChevronDown,
 };
