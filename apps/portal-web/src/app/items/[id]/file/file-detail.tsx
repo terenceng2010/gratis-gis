@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { Download, FileText, ImageIcon, FileType2 } from 'lucide-react';
 import type { FileData } from '@gratis-gis/shared-types';
+import { CopyUrlButton } from './copy-url-button';
 
 /**
  * File item detail body (#296). Two parts:
@@ -35,6 +36,14 @@ export function FileDetail({ data, canDownload }: { data: FileData; canDownload:
             ) : null}
           </div>
         </div>
+        {data.storageUrl ? (
+          // Copy URL is available to anyone who can see the item.
+          // The URL itself isn't a secret — it's the public-ish
+          // MinIO link that the runtime resolves for embedded
+          // images. Gating is by item visibility (the item-detail
+          // page already 404s for users who can't see it).
+          <CopyUrlButton url={data.storageUrl} />
+        ) : null}
         {canDownload && data.storageUrl ? (
           <a
             // Anchor `download` only honors a same-origin filename hint
