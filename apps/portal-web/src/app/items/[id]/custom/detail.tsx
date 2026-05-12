@@ -1000,6 +1000,38 @@ const PALETTE_TILES: Array<{
     hint: 'Container with multiple tabs of widgets',
     category: 'layout',
   },
+  // Themed-app containers. These hold OTHER widgets and render
+  // them inside opinionated themed chrome. Templates use these for
+  // the chrome; freeform authors drop them to build the same
+  // shapes themselves.
+  {
+    kind: 'app-bar',
+    label: 'App bar',
+    Icon: Square,
+    hint: 'Top bar across the page; holds title + tool buttons',
+    category: 'layout',
+  },
+  {
+    kind: 'dock-panel',
+    label: 'Dock panel',
+    Icon: ListTree,
+    hint: 'Side dock; vertical stack of widgets with collapse',
+    category: 'layout',
+  },
+  {
+    kind: 'slideout',
+    label: 'Slideout',
+    Icon: Settings,
+    hint: 'Drawer that slides in from an edge on click',
+    category: 'layout',
+  },
+  {
+    kind: 'foldable-group',
+    label: 'Foldable group',
+    Icon: ChevronRight,
+    hint: 'Collapsible header + child widgets stacked below',
+    category: 'layout',
+  },
 ];
 
 function Palette({ canEdit }: { canEdit: boolean }) {
