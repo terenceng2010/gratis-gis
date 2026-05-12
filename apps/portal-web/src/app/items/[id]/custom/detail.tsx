@@ -863,6 +863,50 @@ const PALETTE_CATEGORIES: Array<{
   },
 ];
 
+/**
+ * Theme preset list rendered in the right-rail App settings panel.
+ * Keep in sync with the AppThemePresetId union in shared-types;
+ * adding a new preset there means adding an entry here so it
+ * shows up in the picker.
+ */
+const APP_THEME_OPTIONS: Array<{
+  id: AppThemePresetId;
+  label: string;
+  description: string;
+  swatch: string;
+}> = [
+  {
+    id: 'default',
+    label: 'Default',
+    description: 'Portal-matching neutral palette.',
+    swatch: 'hsl(210 40% 96%)',
+  },
+  {
+    id: 'slate',
+    label: 'Slate',
+    description: 'Cool gray + indigo. Technical.',
+    swatch: 'hsl(217 33% 17%)',
+  },
+  {
+    id: 'aurora',
+    label: 'Aurora',
+    description: 'Off-white + teal. Generous spacing.',
+    swatch: 'hsl(180 30% 95%)',
+  },
+  {
+    id: 'forest',
+    label: 'Forest',
+    description: 'Cream + forest green. Field-ready.',
+    swatch: 'hsl(45 33% 95%)',
+  },
+  {
+    id: 'paper',
+    label: 'Paper',
+    description: 'High-contrast print-style. Reports, public maps.',
+    swatch: 'hsl(0 0% 99%)',
+  },
+];
+
 const PALETTE_TILES: Array<{
   kind: CustomWidgetKind;
   label: string;
@@ -1910,6 +1954,49 @@ function AppProperties({
         <p className="text-sm font-medium text-ink-0">App settings</p>
       </div>
       <div className="space-y-4 p-4 text-sm">
+        {/* Theme preset picker. Sets CSS variables at the app root
+            (designer Canvas + runtime container) so every widget
+            inside picks up the preset's color / typography /
+            density tokens. Live preview: changing the dropdown
+            restyles the canvas immediately. */}
+        <Field
+          label="Theme"
+          hint="Visual preset applied to every widget inside the app."
+        >
+          <div className="grid grid-cols-1 gap-1.5">
+            {APP_THEME_OPTIONS.map((opt) => {
+              const active = (app.themePresetId ?? 'default') === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => onUpdateApp({ themePresetId: opt.id })}
+                  aria-pressed={active}
+                  className={`flex items-center gap-2 rounded-md border bg-surface-1 px-2 py-1.5 text-left transition-colors ${
+                    active
+                      ? 'border-accent ring-2 ring-accent/30'
+                      : 'border-border hover:bg-surface-2'
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  <span
+                    className="h-4 w-4 shrink-0 rounded-sm border border-border"
+                    style={{ background: opt.swatch }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-ink-0">
+                      {opt.label}
+                    </p>
+                    <p className="truncate text-[11px] text-muted">
+                      {opt.description}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
         <Field
           label="Default map"
           hint="Map widgets that don't set their own use this for basemap + viewport."
