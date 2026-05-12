@@ -128,11 +128,30 @@ interface TypeOption {
 interface TypeGroup {
   label: string;
   options: TypeOption[];
+  /**
+   * Tailwind class fragment driving the per-group icon tile color
+   * used in the new-item wizard cards. User feedback: every type
+   * card used the portal's single accent color regardless of
+   * category, making it hard to scan which group a card belonged
+   * to at a glance. Each group now gets its own hue:
+   *
+   *   - Data    : sky blue        (raw sources)
+   *   - Maps    : emerald          (composed visualizations)
+   *   - Apps    : amber            (interactive surfaces)
+   *   - Analysis: violet           (computed derivatives)
+   *   - Organize: slate            (structural / meta)
+   *
+   * The format is `bg-<color>-500/10 text-<color>-700` so the icon
+   * sits on a tinted tile that matches the rest of the portal's
+   * card-with-icon vocabulary.
+   */
+  iconTileClass: string;
 }
 
 const TYPE_GROUPS: TypeGroup[] = [
   {
     label: 'Data',
+    iconTileClass: 'bg-sky-500/10 text-sky-700',
     options: [
       {
         // Basemap lives under Data rather than Maps because it's a
@@ -210,6 +229,7 @@ const TYPE_GROUPS: TypeGroup[] = [
   },
   {
     label: 'Maps',
+    iconTileClass: 'bg-emerald-500/10 text-emerald-700',
     options: [
       {
         value: 'map',
@@ -221,6 +241,7 @@ const TYPE_GROUPS: TypeGroup[] = [
   },
   {
     label: 'Apps',
+    iconTileClass: 'bg-amber-500/10 text-amber-700',
     options: [
       {
         value: 'dashboard',
@@ -274,6 +295,7 @@ const TYPE_GROUPS: TypeGroup[] = [
   },
   {
     label: 'Analysis',
+    iconTileClass: 'bg-violet-500/10 text-violet-700',
     options: [
       {
         value: 'derived_layer',
@@ -285,6 +307,7 @@ const TYPE_GROUPS: TypeGroup[] = [
   },
   {
     label: 'Organize',
+    iconTileClass: 'bg-slate-500/10 text-slate-700',
     options: [
       {
         value: 'folder',
@@ -1426,7 +1449,15 @@ export function NewItemWizard() {
       <div className="space-y-8">
         {TYPE_GROUPS.map((group) => (
           <section key={group.label}>
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted">
+            {/* Group header inherits the group color via a small
+                bullet swatch + the icon-tile class for the chip
+                background, so the eye associates each section's
+                cards with their hue at a glance. */}
+            <h2 className="mb-3 inline-flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted">
+              <span
+                aria-hidden="true"
+                className={`inline-block h-2.5 w-2.5 rounded-full ${group.iconTileClass}`}
+              />
               {group.label}
             </h2>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1439,7 +1470,9 @@ export function NewItemWizard() {
                     onClick={() => pickType(opt.value)}
                     className="flex items-start gap-3 rounded-lg border border-border bg-surface-1 p-4 text-left shadow-card transition-colors hover:border-accent/50 hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-accent/30"
                   >
-                    <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+                    <span
+                      className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${group.iconTileClass}`}
+                    >
                       <Icon className="h-5 w-5" />
                     </span>
                     <span className="min-w-0">
@@ -1463,6 +1496,15 @@ export function NewItemWizard() {
   // step === 'details'
   const typeOption = TYPE_OPTIONS.find((o) => o.value === type);
   const TypeIcon = typeOption?.Icon ?? Sparkles;
+  // Look up which group this type belongs to so the selected-type
+  // header inherits the same color the user clicked in the gallery.
+  // Keeps the visual handoff coherent: "the blue thing I picked is
+  // still blue on the next step."
+  const typeGroup = type
+    ? TYPE_GROUPS.find((g) => g.options.some((o) => o.value === type))
+    : undefined;
+  const typeIconTileClass =
+    typeGroup?.iconTileClass ?? 'bg-accent/10 text-accent';
 
   return (
     <div className="space-y-8">
@@ -1470,7 +1512,9 @@ export function NewItemWizard() {
           without forcing a full page nav. */}
       <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 px-4 py-3">
         <div className="flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-md bg-accent/10 text-accent">
+          <span
+            className={`flex h-9 w-9 items-center justify-center rounded-md ${typeIconTileClass}`}
+          >
             <TypeIcon className="h-5 w-5" />
           </span>
           <div>
