@@ -14,21 +14,27 @@
  * The token names are stable wire shapes. New themes add new
  * entries; renaming a theme requires a migration step on any
  * persisted CustomAppData that references it (none ship yet).
+ *
+ * Color token format: bare HSL components ("210 40% 96%"), NOT
+ * the full `hsl(...)` wrapper. This is so consumers can wrap with
+ * Tailwind's arbitrary-value syntax and apply opacity modifiers,
+ * e.g. `bg-[hsl(var(--app-surface-1)/0.7)]`. If we stored the full
+ * `hsl(...)` value, consumers would produce invalid `hsl(hsl(...))`.
+ * Non-color tokens (radius, shadows, density) are full CSS values.
  */
 import type { AppThemePresetId } from './custom-app';
 
 /**
- * Token values for one theme preset. All values are CSS strings
- * compatible with the `hsl(...)` / `rgb(...)` / `#...` forms.
- * Components inside the app render through Tailwind utility
- * classes that resolve these tokens, so swapping the preset
- * automatically restyles every widget.
+ * Token values for one theme preset. Color values are bare HSL
+ * components (e.g. "210 40% 96%"); non-color values are full CSS
+ * strings (lengths, shadows, multipliers). See module docstring
+ * for the rationale behind this split.
  *
  * Tokens grouped:
  *   - Surface ladder: app shell, cards, popovers (with their ink
  *     pairs that always meet AA contrast against their surface).
  *   - Accent: primary actions, focus rings, active states.
- *   - Status: success, warn, danger, info — kept theme-agnostic
+ *   - Status: success, warn, danger, info kept theme-agnostic
  *     enough that all themes use similar hues so a user doesn't
  *     mistake "error" for the brand color.
  *   - Border + muted: chrome / dividers / secondary text.
@@ -43,32 +49,33 @@ export interface AppThemeTokens {
   description: string;
   /**
    * Hue character for the preset; used by the picker's swatch
-   * preview. Format: `hsl(h s% l%)` of the dominant surface.
+   * preview. Format: full `hsl(h s% l%)` (the swatch is rendered
+   * with inline style, not via the token system).
    */
   swatch: string;
   /** Token values applied via `style.setProperty` at the app root. */
   tokens: {
-    /** Page background (between widgets). */
+    /** Page background (between widgets). Bare HSL components. */
     '--app-surface-0': string;
-    /** Elevated card background (widget shells). */
+    /** Elevated card background (widget shells). Bare HSL. */
     '--app-surface-1': string;
-    /** Input / popover background (one step elevated again). */
+    /** Input / popover background (one step elevated again). Bare HSL. */
     '--app-surface-2': string;
-    /** Text color readable on surface-0. */
+    /** Text color readable on surface-0. Bare HSL. */
     '--app-ink-0': string;
-    /** Text color readable on surface-1. */
+    /** Text color readable on surface-1. Bare HSL. */
     '--app-ink-1': string;
-    /** Muted / secondary text. */
+    /** Muted / secondary text. Bare HSL. */
     '--app-muted': string;
-    /** Borders + dividers. */
+    /** Borders + dividers. Bare HSL. */
     '--app-border': string;
-    /** Primary accent for buttons, focus rings, active states. */
+    /** Primary accent for buttons, focus rings, active states. Bare HSL. */
     '--app-accent': string;
-    /** Text color readable on accent backgrounds. */
+    /** Text color readable on accent backgrounds. Bare HSL. */
     '--app-accent-ink': string;
-    /** Hover state for accent surfaces. */
+    /** Hover state for accent surfaces. Bare HSL. */
     '--app-accent-hover': string;
-    /** Status colors. */
+    /** Status colors. Bare HSL. */
     '--app-success': string;
     '--app-warn': string;
     '--app-danger': string;
@@ -88,6 +95,9 @@ export interface AppThemeTokens {
  * Registry of built-in theme presets. Add a new preset by adding
  * an entry here AND adding its id to the AppThemePresetId union
  * in custom-app.ts.
+ *
+ * Color tokens are bare HSL components; consumers wrap with
+ * `hsl(var(--app-*))` (see module docstring).
  */
 export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
   default: {
@@ -95,20 +105,20 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     description: 'Portal-matching neutral palette with the system accent.',
     swatch: 'hsl(210 40% 96%)',
     tokens: {
-      '--app-surface-0': 'hsl(0 0% 100%)',
-      '--app-surface-1': 'hsl(210 40% 98%)',
-      '--app-surface-2': 'hsl(210 40% 96%)',
-      '--app-ink-0': 'hsl(222 47% 11%)',
-      '--app-ink-1': 'hsl(222 47% 11%)',
-      '--app-muted': 'hsl(215 20% 50%)',
-      '--app-border': 'hsl(214 32% 91%)',
-      '--app-accent': 'hsl(221 83% 53%)',
-      '--app-accent-ink': 'hsl(0 0% 100%)',
-      '--app-accent-hover': 'hsl(221 83% 47%)',
-      '--app-success': 'hsl(142 72% 29%)',
-      '--app-warn': 'hsl(35 92% 50%)',
-      '--app-danger': 'hsl(0 72% 51%)',
-      '--app-info': 'hsl(199 89% 48%)',
+      '--app-surface-0': '0 0% 100%',
+      '--app-surface-1': '210 40% 98%',
+      '--app-surface-2': '210 40% 96%',
+      '--app-ink-0': '222 47% 11%',
+      '--app-ink-1': '222 47% 11%',
+      '--app-muted': '215 20% 50%',
+      '--app-border': '214 32% 91%',
+      '--app-accent': '221 83% 53%',
+      '--app-accent-ink': '0 0% 100%',
+      '--app-accent-hover': '221 83% 47%',
+      '--app-success': '142 72% 29%',
+      '--app-warn': '35 92% 50%',
+      '--app-danger': '0 72% 51%',
+      '--app-info': '199 89% 48%',
       '--app-radius': '0.5rem',
       '--app-shadow-card':
         '0 1px 2px rgba(15, 15, 16, 0.04), 0 1px 1px rgba(15, 15, 16, 0.03)',
@@ -122,20 +132,20 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     description: 'Cool gray + indigo accent. Technical, engineering-forward.',
     swatch: 'hsl(217 33% 17%)',
     tokens: {
-      '--app-surface-0': 'hsl(220 26% 14%)',
-      '--app-surface-1': 'hsl(217 33% 17%)',
-      '--app-surface-2': 'hsl(215 28% 22%)',
-      '--app-ink-0': 'hsl(213 31% 91%)',
-      '--app-ink-1': 'hsl(213 31% 91%)',
-      '--app-muted': 'hsl(215 16% 65%)',
-      '--app-border': 'hsl(215 28% 28%)',
-      '--app-accent': 'hsl(239 84% 67%)',
-      '--app-accent-ink': 'hsl(220 26% 14%)',
-      '--app-accent-hover': 'hsl(239 84% 73%)',
-      '--app-success': 'hsl(142 64% 52%)',
-      '--app-warn': 'hsl(35 92% 58%)',
-      '--app-danger': 'hsl(0 74% 62%)',
-      '--app-info': 'hsl(199 89% 58%)',
+      '--app-surface-0': '220 26% 14%',
+      '--app-surface-1': '217 33% 17%',
+      '--app-surface-2': '215 28% 22%',
+      '--app-ink-0': '213 31% 91%',
+      '--app-ink-1': '213 31% 91%',
+      '--app-muted': '215 16% 65%',
+      '--app-border': '215 28% 28%',
+      '--app-accent': '239 84% 67%',
+      '--app-accent-ink': '220 26% 14%',
+      '--app-accent-hover': '239 84% 73%',
+      '--app-success': '142 64% 52%',
+      '--app-warn': '35 92% 58%',
+      '--app-danger': '0 74% 62%',
+      '--app-info': '199 89% 58%',
       '--app-radius': '0.5rem',
       '--app-shadow-card':
         '0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 1px rgba(0, 0, 0, 0.3)',
@@ -149,20 +159,20 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     description: 'Off-white surfaces, teal accent, generous spacing.',
     swatch: 'hsl(180 30% 95%)',
     tokens: {
-      '--app-surface-0': 'hsl(180 30% 97%)',
-      '--app-surface-1': 'hsl(180 30% 99%)',
-      '--app-surface-2': 'hsl(180 25% 94%)',
-      '--app-ink-0': 'hsl(195 60% 11%)',
-      '--app-ink-1': 'hsl(195 60% 18%)',
-      '--app-muted': 'hsl(195 15% 45%)',
-      '--app-border': 'hsl(180 20% 86%)',
-      '--app-accent': 'hsl(173 80% 36%)',
-      '--app-accent-ink': 'hsl(0 0% 100%)',
-      '--app-accent-hover': 'hsl(173 80% 30%)',
-      '--app-success': 'hsl(151 65% 32%)',
-      '--app-warn': 'hsl(35 92% 50%)',
-      '--app-danger': 'hsl(0 72% 51%)',
-      '--app-info': 'hsl(199 89% 48%)',
+      '--app-surface-0': '180 30% 97%',
+      '--app-surface-1': '180 30% 99%',
+      '--app-surface-2': '180 25% 94%',
+      '--app-ink-0': '195 60% 11%',
+      '--app-ink-1': '195 60% 18%',
+      '--app-muted': '195 15% 45%',
+      '--app-border': '180 20% 86%',
+      '--app-accent': '173 80% 36%',
+      '--app-accent-ink': '0 0% 100%',
+      '--app-accent-hover': '173 80% 30%',
+      '--app-success': '151 65% 32%',
+      '--app-warn': '35 92% 50%',
+      '--app-danger': '0 72% 51%',
+      '--app-info': '199 89% 48%',
       '--app-radius': '0.75rem',
       '--app-shadow-card':
         '0 2px 4px rgba(15, 60, 60, 0.06), 0 1px 2px rgba(15, 60, 60, 0.04)',
@@ -176,20 +186,20 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     description: 'Warm cream surfaces, forest green accent. Field-ready.',
     swatch: 'hsl(45 33% 95%)',
     tokens: {
-      '--app-surface-0': 'hsl(45 33% 97%)',
-      '--app-surface-1': 'hsl(45 33% 99%)',
-      '--app-surface-2': 'hsl(45 25% 93%)',
-      '--app-ink-0': 'hsl(150 40% 12%)',
-      '--app-ink-1': 'hsl(150 40% 18%)',
-      '--app-muted': 'hsl(30 10% 45%)',
-      '--app-border': 'hsl(45 20% 85%)',
-      '--app-accent': 'hsl(150 55% 32%)',
-      '--app-accent-ink': 'hsl(45 33% 97%)',
-      '--app-accent-hover': 'hsl(150 55% 26%)',
-      '--app-success': 'hsl(142 72% 29%)',
-      '--app-warn': 'hsl(35 92% 50%)',
-      '--app-danger': 'hsl(0 72% 51%)',
-      '--app-info': 'hsl(199 89% 48%)',
+      '--app-surface-0': '45 33% 97%',
+      '--app-surface-1': '45 33% 99%',
+      '--app-surface-2': '45 25% 93%',
+      '--app-ink-0': '150 40% 12%',
+      '--app-ink-1': '150 40% 18%',
+      '--app-muted': '30 10% 45%',
+      '--app-border': '45 20% 85%',
+      '--app-accent': '150 55% 32%',
+      '--app-accent-ink': '45 33% 97%',
+      '--app-accent-hover': '150 55% 26%',
+      '--app-success': '142 72% 29%',
+      '--app-warn': '35 92% 50%',
+      '--app-danger': '0 72% 51%',
+      '--app-info': '199 89% 48%',
       '--app-radius': '0.375rem',
       '--app-shadow-card':
         '0 1px 2px rgba(60, 30, 0, 0.06), 0 1px 1px rgba(60, 30, 0, 0.04)',
@@ -203,20 +213,20 @@ export const APP_THEMES: Record<AppThemePresetId, AppThemeTokens> = {
     description: 'High-contrast print-style palette. Reports, public maps.',
     swatch: 'hsl(0 0% 99%)',
     tokens: {
-      '--app-surface-0': 'hsl(0 0% 100%)',
-      '--app-surface-1': 'hsl(0 0% 99%)',
-      '--app-surface-2': 'hsl(0 0% 96%)',
-      '--app-ink-0': 'hsl(0 0% 7%)',
-      '--app-ink-1': 'hsl(0 0% 15%)',
-      '--app-muted': 'hsl(0 0% 40%)',
-      '--app-border': 'hsl(0 0% 86%)',
-      '--app-accent': 'hsl(0 0% 7%)',
-      '--app-accent-ink': 'hsl(0 0% 100%)',
-      '--app-accent-hover': 'hsl(0 0% 20%)',
-      '--app-success': 'hsl(142 72% 29%)',
-      '--app-warn': 'hsl(35 92% 50%)',
-      '--app-danger': 'hsl(0 72% 51%)',
-      '--app-info': 'hsl(199 89% 48%)',
+      '--app-surface-0': '0 0% 100%',
+      '--app-surface-1': '0 0% 99%',
+      '--app-surface-2': '0 0% 96%',
+      '--app-ink-0': '0 0% 7%',
+      '--app-ink-1': '0 0% 15%',
+      '--app-muted': '0 0% 40%',
+      '--app-border': '0 0% 86%',
+      '--app-accent': '0 0% 7%',
+      '--app-accent-ink': '0 0% 100%',
+      '--app-accent-hover': '0 0% 20%',
+      '--app-success': '142 72% 29%',
+      '--app-warn': '35 92% 50%',
+      '--app-danger': '0 72% 51%',
+      '--app-info': '199 89% 48%',
       '--app-radius': '0.25rem',
       '--app-shadow-card': 'none',
       '--app-shadow-overlay':

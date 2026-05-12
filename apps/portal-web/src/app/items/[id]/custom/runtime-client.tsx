@@ -166,6 +166,19 @@ interface CustomMapsCtx {
 
 const CustomMapsContext = createContext<CustomMapsCtx | null>(null);
 
+/**
+ * Runtime-info context. Carries app-shell metadata that container
+ * widgets (app-bar, etc.) want as fallbacks when their own config
+ * leaves a slot blank — e.g. an app-bar with no `title` set should
+ * fall back to the item's own title rather than render an empty
+ * header. Keeping this separate from CustomMapsContext so a render
+ * test that needs only the item title can mount one provider.
+ */
+interface RuntimeInfoCtx {
+  itemTitle: string;
+}
+const RuntimeInfoContext = createContext<RuntimeInfoCtx | null>(null);
+
 function useBoundMap(
   mapWidgetId: string,
 ): {
@@ -375,6 +388,7 @@ export function CustomRuntimeClient({
   );
 
   return (
+    <RuntimeInfoContext.Provider value={{ itemTitle }}>
     <CustomMapsContext.Provider value={ctxValue}>
       {/* Viewport-fit container. h-screen (was h-full + min-h) so
           the app's whole vertical extent is exactly the viewport
@@ -535,6 +549,7 @@ export function CustomRuntimeClient({
         </div>
       </div>
     </CustomMapsContext.Provider>
+    </RuntimeInfoContext.Provider>
   );
 }
 
@@ -1169,33 +1184,55 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
         <p className="p-2 text-xs italic text-muted">No layers.</p>
       ) : (
         <ul className="space-y-0.5 p-1.5">
-          {(state.mapData.layers ?? []).map((l) => (
-            <li
-              key={l.id}
-              className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
-            >
-              <input
-                type="checkbox"
-                checked={l.visible !== false}
-                disabled={!allowToggle}
-                onChange={(e) =>
-                  update((cur) => ({
-                    ...cur,
-                    mapData: {
-                      ...cur.mapData,
-                      layers: (cur.mapData.layers ?? []).map((x) =>
-                        x.id === l.id ? { ...x, visible: e.target.checked } : x,
-                      ),
-                    },
-                  }))
-                }
-                className="h-3 w-3"
-              />
-              <span className="flex-1 truncate text-ink-1" title={l.title}>
-                {l.title}
-              </span>
-            </li>
-          ))}
+          {(state.mapData.layers ?? []).map((l) => {
+            // Legend swatch inline with the row. Falls back through
+            // point > line > polygon-fill > a neutral indigo so
+            // every layer renders some color cue rather than a blank
+            // gap. Combining the swatch into the layer row replaces
+            // the separate Legend widget that templates used to
+            // stamp underneath the Layers list — same information,
+            // half the vertical space, and the toggle + identity sit
+            // on the same line.
+            const swatchColor =
+              l.style?.point?.color ??
+              l.style?.line?.color ??
+              l.style?.polygon?.fillColor ??
+              '#6366f1';
+            return (
+              <li
+                key={l.id}
+                className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={l.visible !== false}
+                  disabled={!allowToggle}
+                  onChange={(e) =>
+                    update((cur) => ({
+                      ...cur,
+                      mapData: {
+                        ...cur.mapData,
+                        layers: (cur.mapData.layers ?? []).map((x) =>
+                          x.id === l.id
+                            ? { ...x, visible: e.target.checked }
+                            : x,
+                        ),
+                      },
+                    }))
+                  }
+                  className="h-3 w-3"
+                />
+                <span
+                  aria-hidden
+                  className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border"
+                  style={{ backgroundColor: swatchColor }}
+                />
+                <span className="flex-1 truncate text-ink-1" title={l.title}>
+                  {l.title}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
     </WidgetFrame>
@@ -2590,8 +2627,24 @@ function renderWidgetInContainer(widget: CustomWidget): React.ReactNode {
  * when placed on the page grid.
  */
 function AppBarWidgetRender({ widget }: { widget: CustomWidget }) {
+  // Pull itemTitle from the runtime-info context so a template that
+  // didn't set its own title (the common case after we removed the
+  // baked-in "Parcel Viewer" strings) falls back to the item's name.
+  // Item title is the most useful identity in a portal context; the
+  // app-bar's `title` slot then only needs to be set when the author
+  // wants something different from the item name.
+  const info = useContext(RuntimeInfoContext);
   if (widget.config.kind !== 'app-bar') return null;
-  return <AppBar config={widget.config} renderChild={renderWidgetInContainer} />;
+  // Only spread fallbackTitle when defined — exactOptionalPropertyTypes
+  // rejects explicit `undefined` for optional string props.
+  const fallback = info?.itemTitle ? { fallbackTitle: info.itemTitle } : {};
+  return (
+    <AppBar
+      config={widget.config}
+      {...fallback}
+      renderChild={renderWidgetInContainer}
+    />
+  );
 }
 
 function DockPanelWidgetRender({ widget }: { widget: CustomWidget }) {

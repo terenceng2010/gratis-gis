@@ -168,42 +168,55 @@ export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
 
   const effectiveWidth = collapsed ? 44 : widthPx;
   const borderSide = side === 'left' ? 'border-r' : 'border-l';
+  // When the dock has no title configured, the header degrades to a
+  // bare collapse-handle row — author opted into "let the children
+  // (foldable groups, etc.) label themselves", so we don't stamp a
+  // redundant wrapping label like the older "Map tools" treatment.
+  // When `collapsible=false` AND no title is set, the header drops
+  // out entirely so the dock is just its body.
+  const hasTitle = Boolean(title && title.trim().length > 0);
+  const showHeader = hasTitle || collapsible;
 
   return (
     <aside
       className={`relative flex h-full shrink-0 flex-col overflow-hidden bg-[hsl(var(--app-surface-1))] ${borderSide} border-[hsl(var(--app-border))]`}
       style={{ width: effectiveWidth, transition: 'width 160ms ease-out' }}
     >
-      {/* Header: title + collapse handle. When collapsed, the handle
-          becomes the only interactive surface; clicking expands. */}
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[hsl(var(--app-border))] px-2">
-        {collapsed ? null : (
-          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--app-muted))]">
-            {title ?? 'Panel'}
-          </span>
-        )}
-        {collapsible ? (
-          <button
-            type="button"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label={collapsed ? 'Expand panel' : 'Collapse panel'}
-            aria-expanded={!collapsed}
-            className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded text-[hsl(var(--app-muted))] hover:bg-[hsl(var(--app-surface-2))] hover:text-[hsl(var(--app-ink-0))]"
-          >
-            {side === 'left' ? (
-              collapsed ? (
-                <ChevronRightIcon className="h-3.5 w-3.5" />
+      {showHeader ? (
+        // Header: optional title + collapse handle. When collapsed,
+        // the handle becomes the only interactive surface; clicking
+        // expands. When `hasTitle=false`, the row contains just the
+        // collapse button right-aligned so the children butt right
+        // against the top edge with no chrome between them.
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[hsl(var(--app-border))] px-2">
+          {hasTitle && !collapsed ? (
+            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--app-muted))]">
+              {title}
+            </span>
+          ) : null}
+          {collapsible ? (
+            <button
+              type="button"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={collapsed ? 'Expand panel' : 'Collapse panel'}
+              aria-expanded={!collapsed}
+              className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded text-[hsl(var(--app-muted))] hover:bg-[hsl(var(--app-surface-2))] hover:text-[hsl(var(--app-ink-0))]"
+            >
+              {side === 'left' ? (
+                collapsed ? (
+                  <ChevronRightIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDownIcon className="h-3.5 w-3.5 rotate-90" />
+                )
+              ) : collapsed ? (
+                <ChevronRightIcon className="h-3.5 w-3.5 rotate-180" />
               ) : (
-                <ChevronDownIcon className="h-3.5 w-3.5 rotate-90" />
-              )
-            ) : collapsed ? (
-              <ChevronRightIcon className="h-3.5 w-3.5 rotate-180" />
-            ) : (
-              <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
-            )}
-          </button>
-        ) : null}
-      </header>
+                <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
+              )}
+            </button>
+          ) : null}
+        </header>
+      ) : null}
 
       {/* Body: children stack vertically with a divider between
           siblings. When collapsed, only the kind icons render; the

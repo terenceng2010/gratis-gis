@@ -182,18 +182,14 @@ function parcelViewerSeed(): CustomAppData {
     panelArrangement: toolPanel('top-right'),
   });
 
-  // Dock-panel children: Layers + Legend as panel-mode widgets
-  // (they're inside the dock's own column layout already; no need
-  // for popovers). Bound to the same Map widget the toolbar uses.
+  // Dock-panel children: a Layers list as a panel-mode widget (it's
+  // already inside the dock's own column layout; no popover needed).
+  // The LayerList renders its own legend swatches inline per row so
+  // we don't need a separate Legend widget in the dock.
   const layerList = childWidget('layer-list', {
     kind: 'layer-list',
     mapWidgetId: mapId,
     allowToggle: true,
-    displayMode: 'panel',
-  });
-  const legend = childWidget('legend', {
-    kind: 'legend',
-    mapWidgetId: mapId,
     displayMode: 'panel',
   });
 
@@ -205,8 +201,11 @@ function parcelViewerSeed(): CustomAppData {
     config: {
       kind: 'app-bar',
       widgets: [search, basemap, attrTable, print],
-      title: 'Parcel Viewer',
-      subtitle: 'Click a parcel to see ownership details',
+      // No baked-in title here. The runtime falls back to the item's
+      // own title via RuntimeInfoContext, so the app-bar takes its
+      // identity from the item the author named — re-saving the
+      // template instance as "Public Parcels" automatically updates
+      // the header, no second edit needed.
       sticky: true,
       variant: 'elevated',
     },
@@ -227,14 +226,11 @@ function parcelViewerSeed(): CustomAppData {
           widgets: [layerList],
           defaultOpen: true,
         }),
-        childWidget('foldable-group', {
-          kind: 'foldable-group',
-          title: 'Legend',
-          widgets: [legend],
-          defaultOpen: false,
-        }),
       ],
-      title: 'Map tools',
+      // No dock title — foldable group already labels its contents,
+      // so a wrapping "Map tools" header reads as redundant chrome.
+      // The collapse handle still renders so the user can rail-fold
+      // the panel to give the map full width.
       collapsible: true,
       defaultCollapsed: false,
       widthPx: 280,
@@ -299,7 +295,7 @@ function publicInfoMapSeed(): CustomAppData {
     config: {
       kind: 'app-bar',
       widgets: [search, layerList, basemap],
-      title: 'Community Map',
+      // No baked-in title — runtime falls back to the item's title.
       sticky: true,
       variant: 'glass',
     },
@@ -378,7 +374,7 @@ function fieldInspectionSeed(): CustomAppData {
     config: {
       kind: 'app-bar',
       widgets: [search, myLocation, attrTable],
-      title: 'Field Inspection',
+      // No baked-in title — runtime falls back to the item's title.
       sticky: true,
       variant: 'elevated',
     },
