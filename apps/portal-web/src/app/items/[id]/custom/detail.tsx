@@ -58,7 +58,12 @@ import type {
   ViewerTarget,
   WebAppData,
 } from '@gratis-gis/shared-types';
-import { DEFAULT_MAP, migrateCustomAppData } from '@gratis-gis/shared-types';
+import {
+  DEFAULT_MAP,
+  applyAppTheme,
+  migrateCustomAppData,
+} from '@gratis-gis/shared-types';
+import type { AppThemePresetId } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
@@ -666,6 +671,7 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
               previewBasemaps={previewBasemaps}
               widgetMapData={widgetMapData}
               activeTabIdxByWidget={activeTabIdxByWidget}
+              themePresetId={app.themePresetId}
               onSetActiveTabIdx={setActiveTabIdx}
               onSelect={setSelectedWidgetId}
               onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
@@ -1253,26 +1259,15 @@ function PageTabs({
 const ROW_HEIGHT_PX = 12;
 const GRID_COLS = 48;
 /**
- * Fixed canvas working width for WYSIWYG between designer and
- * runtime. The designer's canvas pane and the runtime's app
- * container both cap at this width and center on wider viewports.
- * User feedback: previously the runtime canvas filled the viewport
- * (~1900px) while the designer was constrained by BuilderShell
- * panels (~1300px), so the same widget colSpan rendered at very
- * different pixel widths in the two views ("design mode icons look
- * small, runtime icons are big blocky").
- *
- * 1400px is the matching width: wide enough that a Map + toolbar
- * has room to breathe, narrow enough that even 1366px-wide laptops
- * see the full layout without horizontal scroll. Smaller viewports
- * scroll horizontally in both the designer and the runtime (same
- * pattern Webflow + EB use for fixed-canvas layouts).
+ * Floor for the canvas's working width. On viewports narrower than
+ * this the designer pane scrolls horizontally instead of squeezing
+ * the 48-column grid into a sliver. The earlier 1400px fixed-width
+ * experiment was reverted (broke narrow viewports + made wide
+ * displays cramped); the new model is responsive container widgets
+ * inside a flexible grid, so the grid's min-width is just a
+ * scrollability floor, not a layout cap.
  */
-const CANVAS_WORKING_WIDTH_PX = 1400;
-/** Kept as an alias for the migration period; callers that
- *  previously used MIN_WIDTH now get the same value as the
- *  fixed working width. */
-const CANVAS_MIN_WIDTH_PX = CANVAS_WORKING_WIDTH_PX;
+const CANVAS_MIN_WIDTH_PX = 1200;
 
 /**
  * Active drag-or-resize gesture state. The canvas owns one of these
@@ -1309,6 +1304,7 @@ function Canvas({
   previewBasemaps,
   widgetMapData,
   activeTabIdxByWidget,
+  themePresetId,
   onSetActiveTabIdx,
   onSelect,
   onCanvasDrop,
@@ -1321,6 +1317,12 @@ function Canvas({
   previewBasemaps: CustomBasemap[];
   widgetMapData: Record<string, MapData>;
   activeTabIdxByWidget: Record<string, number>;
+  /**
+   * Theme preset to apply at the canvas root (CSS variables). Lets
+   * the in-canvas widgets render with the same theme they'd use at
+   * runtime so the designer preview is WYSIWYG across theme changes.
+   */
+  themePresetId: AppThemePresetId | undefined;
   onSetActiveTabIdx: (widgetId: string, idx: number) => void;
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
@@ -1328,6 +1330,17 @@ function Canvas({
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
+  // Theme root for live preview of theme tokens. applyAppTheme sets
+  // CSS variables on this element so every in-canvas widget that
+  // reads var(--app-*) tokens picks up the current preset. Effect
+  // re-runs whenever the preset id changes so swapping themes in
+  // the right rail updates the preview live.
+  const themeRootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (themeRootRef.current) {
+      applyAppTheme(themeRootRef.current, themePresetId);
+    }
+  }, [themePresetId]);
 
   // Compute the canvas's grid extent from the widgets' bottom-most
   // row so dropping a widget below the current content extends the
@@ -1445,7 +1458,10 @@ function Canvas({
   }, [gesture, onWidgetLayout]);
 
   return (
-    <div className="relative flex flex-1 overflow-hidden rounded-lg border border-border bg-surface-1">
+    <div
+      ref={themeRootRef}
+      className="relative flex flex-1 overflow-hidden rounded-lg border border-border bg-[hsl(var(--app-surface-0))]"
+    >
       <div
         ref={canvasRef}
         onDragOver={onDragOver}
@@ -1465,15 +1481,18 @@ function Canvas({
             with horizontal scroll" pattern); on wider viewports the
             grid expands naturally to fill the canvas pane. */}
         <div
-          className="mx-auto grid w-full"
+          className="grid w-full"
           style={{
             gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
             gridAutoRows: `${ROW_HEIGHT_PX}px`,
-            // Fixed working width: designer + runtime both cap here so
-            // a widget's colSpan renders at the same physical width in
-            // both views. Wider viewports get centered margin.
-            maxWidth: `${CANVAS_WORKING_WIDTH_PX}px`,
-            minWidth: `${CANVAS_WORKING_WIDTH_PX}px`,
+            // Earlier fixed 1400px width experiment was reverted:
+            // it broke narrow viewports (toolbar widgets ended up
+            // off-screen) and made map-first layouts cramped on
+            // wide displays. The new direction is responsive
+            // container widgets (app-bar, dock-panel, slideout)
+            // that handle their own layout inside the grid, so the
+            // grid itself can scale with the viewport.
+            minWidth: `${CANVAS_MIN_WIDTH_PX}px`,
             minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
             gap: '6px',
           }}

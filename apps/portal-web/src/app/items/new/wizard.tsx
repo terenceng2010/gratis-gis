@@ -65,8 +65,11 @@ import {
   DEFAULT_SURVEY,
   DEFAULT_VIEWER,
   ITEM_TYPES,
+  APP_TEMPLATES,
+  getAppTemplate,
   serviceProtocolLabel,
 } from '@gratis-gis/shared-types';
+import type { AppTemplateId } from '@gratis-gis/shared-types';
 import { ImageUploader } from '@/components/image-uploader';
 import {
   describeArcgisService,
@@ -355,6 +358,15 @@ export function NewItemWizard() {
   const [tagsText, setTagsText] = useState('');
   const [access, setAccess] = useState<ItemAccess>('private');
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  // Custom Web App template selection. When the user lands on the
+  // Custom Web App type, they pick a template (Parcel Viewer, Public
+  // Info Map, Field Inspection, Blank). The template's seed()
+  // generates the initial CustomAppData on submit. Defaults to
+  // 'blank' so a user who skips the gallery still gets the
+  // current behavior (empty page).
+  const [customAppTemplateId, setCustomAppTemplateId] =
+    useState<AppTemplateId>('parcel-viewer');
 
   // ArcGIS-specific state. Probe result is staged until Create fires.
   // `userEditedTitle` guards us from clobbering a title the user typed
@@ -1044,15 +1056,17 @@ export function NewItemWizard() {
       };
       data = webApp;
     } else if (type === 'custom') {
-      // #261: Custom Web App template (drag-drop designer over a
-      // 12-column grid). Same WebAppData wrapper pattern; the
-      // designer surfaces on the detail page once the item exists.
-      // DEFAULT_CUSTOM_APP ships with one empty page, no widgets;
-      // the designer prompts to drop the first widget on open.
+      // #261 + themed-app MVP: Custom Web App seeded from one of
+      // the built-in templates. Templates are pre-configured
+      // CustomAppData instances (theme + widgets + containers in
+      // place); authors land on a wizard gallery, pick one, and
+      // get a ready-to-customize app. The Blank template
+      // preserves the previous "empty page" behavior.
+      const template = getAppTemplate(customAppTemplateId);
       const webApp: WebAppData = {
         version: 1,
         template: 'custom',
-        config: { template: 'custom', custom: DEFAULT_CUSTOM_APP },
+        config: { template: 'custom', custom: template.seed() },
       };
       data = webApp;
     } else if (type === 'tile_layer') {
@@ -1475,6 +1489,67 @@ export function NewItemWizard() {
           Change type
         </button>
       </div>
+
+      {/* Custom Web App template gallery. Shown before the
+          metadata fields when the user picked the Custom Web App
+          type, so they're committing to a starting point before
+          they title + describe the app. Templates are pre-
+          configured CustomAppData instances (theme, containers,
+          widgets already in place); the author lands in the
+          designer with a working app to customize, not a blank
+          canvas. The Blank template preserves the previous
+          empty-page behavior for advanced users. */}
+      {type === 'custom' ? (
+        <section>
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
+            Start from a template
+          </label>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {APP_TEMPLATES.map((tpl) => {
+              const active = customAppTemplateId === tpl.id;
+              return (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => setCustomAppTemplateId(tpl.id)}
+                  aria-pressed={active}
+                  className={`flex flex-col items-start gap-1.5 rounded-lg border bg-surface-1 p-3 text-left transition-colors ${
+                    active
+                      ? 'border-accent ring-2 ring-accent/30'
+                      : 'border-border hover:border-ink-1 hover:bg-surface-2'
+                  }`}
+                >
+                  <span className="text-sm font-semibold text-ink-0">
+                    {tpl.label}
+                  </span>
+                  <span className="text-xs text-muted">{tpl.description}</span>
+                  <span className="mt-1 text-[11px] italic text-muted">
+                    {tpl.use}
+                  </span>
+                  {tpl.tags.length > 0 ? (
+                    <span className="mt-1 flex flex-wrap gap-1">
+                      {tpl.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center rounded-full border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-muted">
+            Every template is a pre-configured Custom Web App. After
+            create, open the app and use Advanced mode to rearrange
+            widgets, add new ones, swap themes, or rebuild the
+            layout from scratch.
+          </p>
+        </section>
+      ) : null}
 
       {/* Metadata (thumbnail, title, description, tags, visibility) runs
           above the type-specific builder so the item's identity is

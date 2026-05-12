@@ -29,6 +29,7 @@ export * from './viewer';
 export * from './survey';
 export * from './custom-app';
 export * from './app-themes';
+export * from './app-templates';
 export * from './web-app';
 export * from './data-collection';
 export * from './file';

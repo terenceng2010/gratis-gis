@@ -63,6 +63,7 @@ import {
   FoldableGroup,
   Slideout,
 } from './themed-containers';
+import { applyAppTheme } from '@gratis-gis/shared-types';
 import {
   MapCanvas,
   type MapCanvasHandle,
@@ -222,6 +223,16 @@ export function CustomRuntimeClient({
   // this so "fixed" placement docks to the runtime viewport rather
   // than the browser one.
   const runtimeContainerRef = useRef<HTMLDivElement | null>(null);
+  // Theme root ref. applyAppTheme sets CSS custom properties here
+  // so every descendant widget that reads `var(--app-*)` tokens
+  // picks up the configured theme preset. Effect re-runs whenever
+  // `themePresetId` changes (designer live-preview, eventually).
+  const themeRootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (themeRootRef.current) {
+      applyAppTheme(themeRootRef.current, app.themePresetId);
+    }
+  }, [app.themePresetId]);
   const safePageIdx = Math.min(activePageIdx, app.pages.length - 1);
   const page = app.pages[safePageIdx]!;
   const totalWidgets = app.pages.reduce((n, p) => n + p.widgets.length, 0);
@@ -364,7 +375,10 @@ export function CustomRuntimeClient({
 
   return (
     <CustomMapsContext.Provider value={ctxValue}>
-      <div className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col bg-surface-0">
+      <div
+        ref={themeRootRef}
+        className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col bg-[hsl(var(--app-surface-0))] text-[hsl(var(--app-ink-0))]"
+      >
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">
             <Link
@@ -444,25 +458,23 @@ export function CustomRuntimeClient({
           ) : (
             <div
               ref={runtimeContainerRef}
-              className="relative mx-auto grid h-full"
+              className="relative grid h-full w-full"
               style={{
                 // Matches the designer's v3 grid (48 cols x 12px
                 // rows). Old v1/v2 apps are migrated on load via
                 // migrateCustomAppData in the page entry, so the
                 // runtime always sees v3 coordinates here.
+                //
+                // The earlier 1400px fixed-width experiment was
+                // reverted: it broke on narrow viewports (toolbar
+                // widgets ended up off-screen) and made map-first
+                // layouts feel cramped on wide displays. The new
+                // direction is container widgets (app-bar,
+                // dock-panel, slideout) that handle their own
+                // responsive sizing inside the grid, so the grid
+                // doesn't need a fixed width to look right.
                 gridTemplateColumns: 'repeat(48, minmax(0, 1fr))',
                 gridAutoRows: `minmax(12px, auto)`,
-                // Fixed working width so a widget's colSpan renders
-                // at the same physical width in the designer and
-                // the runtime. Without this the runtime canvas
-                // filled the viewport (often ~1900px on desktops)
-                // while the designer canvas was constrained by the
-                // BuilderShell panels (~1300px), making the same
-                // widget look much bigger at runtime than the
-                // author intended ("design mode icons small,
-                // runtime icons big blocky").
-                maxWidth: '1400px',
-                minWidth: '1400px',
                 minHeight: `${totalRows * 12}px`,
                 gap: '6px',
               }}
