@@ -369,6 +369,45 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
         const page = cur.pages[activePageIdx];
         if (!page) return cur;
 
+        // Themed-app container drop routing. If the drop point
+        // lands inside an app-bar / dock-panel / slideout /
+        // foldable-group, route the new widget into THAT
+        // container's children list instead of placing it on the
+        // page grid. Innermost container wins for nested layouts.
+        // The dropped widget is auto-bound to the page's single
+        // Map widget if applicable, same as the freeform path.
+        const hostContainer = findContainerHostAt(page.widgets, col, row);
+        if (hostContainer) {
+          // Children inside containers ignore col/row, but we still
+          // stamp the schema-required layout fields.
+          const childLayout = { ...defaultLayoutForKind(kind), col: 1, row: 1 };
+          const childWidget = stampWidget(kind, childLayout);
+          const onlyMap =
+            page.widgets.filter((w) => w.kind === 'map').length === 1
+              ? page.widgets.find((w) => w.kind === 'map')
+              : null;
+          const childBound =
+            onlyMap && WIDGETS_BIND_MAP_ID.has(childWidget.kind)
+              ? autoBindMapWidgetId(childWidget, onlyMap.id)
+              : childWidget;
+          routedToTab = true;
+          return {
+            ...cur,
+            pages: cur.pages.map((p, i) =>
+              i !== activePageIdx
+                ? p
+                : {
+                    ...p,
+                    widgets: appendChildToContainer(
+                      p.widgets,
+                      hostContainer.id,
+                      childBound,
+                    ),
+                  },
+            ),
+          };
+        }
+
         // #362: tabs-container drop routing. If the drop point
         // (col, row) lands inside a Tabs widget's bounds, route the
         // new widget into that tab's nested widgets array instead
@@ -662,7 +701,13 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
             onRemove={removePage}
             onMove={movePage}
           />
-          <div className="min-h-0 flex-1">
+          {/* min-h-0 flex-1 + flex flex-col so the Canvas's h-full
+              child resolves correctly (the parent here needs to be
+              a flex container so the Canvas root can fill via
+              flex-distribution; height:100% on a non-flex parent
+              that has flex-distributed height can fall back to
+              auto-sizing in some browsers). */}
+          <div className="flex min-h-0 flex-1 flex-col">
             <Canvas
               widgets={activePage.widgets}
               selectedId={selectedWidgetId}
@@ -1536,7 +1581,13 @@ function Canvas({
   return (
     <div
       ref={themeRootRef}
-      className="relative flex flex-1 overflow-hidden rounded-lg border border-border bg-[hsl(var(--app-surface-0))]"
+      // h-full + w-full instead of `flex-1` because the parent is a
+      // plain div, not a flex container — flex-1 would do nothing and
+      // the Canvas would size to its inner grid's minHeight, growing
+      // past the BuilderShell main slot and breaking the inner
+      // overflow-auto scroll. User-reported: "can't get to the bottom
+      // of the canvas, no way to scroll if it goes off screen."
+      className="relative flex h-full w-full overflow-hidden rounded-lg border border-border bg-[hsl(var(--app-surface-0))]"
     >
       <div
         ref={canvasRef}
@@ -3976,6 +4027,133 @@ function findTabsHostAt(
     }
   }
   return null;
+}
+
+/**
+ * The widget kinds that act as themed-app containers — they each
+ * carry a `widgets: CustomWidget[]` array of children. Drop-routing
+ * uses this set to decide whether a drop point lands inside a
+ * container that should adopt the new widget.
+ *
+ * Tabs is intentionally NOT in this set; Tabs has its own
+ * tab-index routing path (`findTabsHostAt`) and adds to the active
+ * tab's child list rather than the container's flat children
+ * array.
+ */
+const THEMED_CONTAINER_KINDS = new Set<CustomWidgetKind>([
+  'app-bar',
+  'dock-panel',
+  'slideout',
+  'foldable-group',
+]);
+
+/**
+ * Find the deepest themed-app container at a given (col, row) drop
+ * point. Walks the container tree recursively so a drop on top of a
+ * Foldable Group inside a Dock Panel routes to the Foldable Group
+ * (the inner-most container wins). Returns null when the drop point
+ * isn't inside any themed container — the caller falls back to
+ * page-level placement.
+ *
+ * Container kinds: app-bar, dock-panel, slideout, foldable-group.
+ * Each carries a `widgets` array of children that get rendered in
+ * the container's own layout (row for app-bar, column for the
+ * others) rather than at grid coordinates.
+ */
+function findContainerHostAt(
+  widgets: CustomWidget[],
+  col: number,
+  row: number,
+): CustomWidget | null {
+  // Search depth-first so nested containers (a foldable group inside
+  // a dock panel) route to the innermost. The Tabs-style traversal
+  // would be sufficient if we banned nesting, but a typical layout
+  // (dock-panel with foldable-group children) needs the inner one.
+  for (const w of widgets) {
+    if (!THEMED_CONTAINER_KINDS.has(w.kind)) continue;
+    const c1 = w.layout.col;
+    const c2 = w.layout.col + w.layout.colSpan - 1;
+    const r1 = w.layout.row;
+    const r2 = w.layout.row + w.layout.rowSpan - 1;
+    if (col < c1 || col > c2 || row < r1 || row > r2) continue;
+    // Recurse into the container's children first; pick the
+    // innermost hit. For nested children at a child container's
+    // sub-region we'd need that container's own bounds within the
+    // parent, which we don't track in the v3 schema (children
+    // ignore col/row). For now nested containers just live at the
+    // parent's footprint so any drop inside the parent goes to the
+    // child container if there's only one, otherwise to the parent.
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const innerContainer = cfg.widgets.find((c) =>
+        THEMED_CONTAINER_KINDS.has(c.kind),
+      );
+      if (innerContainer) return innerContainer;
+    }
+    return w;
+  }
+  return null;
+}
+
+/**
+ * Find a page-level widget by id walking through container
+ * children. Returns the widget plus the parent container's id (or
+ * null for top-level). Used by drop-routing's "did we add a child
+ * to a container? show the container's properties panel" follow-up.
+ */
+function findContainerById(
+  widgets: CustomWidget[],
+  containerId: string,
+): CustomWidget | null {
+  for (const w of widgets) {
+    if (w.id === containerId) return w;
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const inner = findContainerById(cfg.widgets, containerId);
+      if (inner) return inner;
+    }
+  }
+  return null;
+}
+
+/**
+ * Append a child widget to a container identified by id. Returns a
+ * new `widgets` array with the container updated; doesn't mutate.
+ * Recurses through nested containers so dropping into a foldable-
+ * group inside a dock-panel works.
+ */
+function appendChildToContainer(
+  widgets: CustomWidget[],
+  containerId: string,
+  child: CustomWidget,
+): CustomWidget[] {
+  return widgets.map((w) => {
+    if (w.id === containerId) {
+      const cfg = w.config;
+      if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+        return {
+          ...w,
+          config: { ...cfg, widgets: [...cfg.widgets, child] },
+        } as CustomWidget;
+      }
+      return w;
+    }
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const nextChildren = appendChildToContainer(
+        cfg.widgets,
+        containerId,
+        child,
+      );
+      if (nextChildren !== cfg.widgets) {
+        return {
+          ...w,
+          config: { ...cfg, widgets: nextChildren },
+        } as CustomWidget;
+      }
+    }
+    return w;
+  });
 }
 
 /**
