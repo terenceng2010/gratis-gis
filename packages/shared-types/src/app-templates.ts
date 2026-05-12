@@ -117,25 +117,33 @@ function toolPanel(anchor: 'top-right' | 'bottom-center' | 'top-center') {
  * Forest / Paper in the right rail.
  */
 function parcelViewerSeed(): CustomAppData {
+  // Stamp the map widget id first so every map-bound child can
+  // reference it. Without this, the seed leaves mapWidgetId='' on
+  // every child and the runtime shows "No bound map" for Layers,
+  // Search, Basemap, etc.
+  const mapId = wid();
+
   // App-bar children: Search + Basemaps + Attribute Table button +
-  // Print. All as tool-mode widgets so they render as buttons
-  // inside the bar.
+  // Print. All as tool-mode widgets so they render as icon buttons
+  // inside the bar (renderWidgetInContainer in the runtime wraps
+  // tool-mode children in a ToolWidgetSlot).
   const search = childWidget('search', {
     kind: 'search',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     geocodingEnabled: true,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-center'),
   });
   const basemap = childWidget('basemap-gallery', {
     kind: 'basemap-gallery',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-right'),
   });
   const attrTable = childWidget('attribute-table', {
     kind: 'attribute-table',
     targetIndex: 0,
+    syncWithMapWidgetId: mapId,
     displayMode: 'tool',
     panelArrangement: {
       placement: 'docked-bottom',
@@ -149,22 +157,23 @@ function parcelViewerSeed(): CustomAppData {
   });
   const print = childWidget('print', {
     kind: 'print',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-right'),
   });
 
-  // Dock-panel children: Layers + Basemaps as foldable groups so
-  // both fit in a 280px-wide dock without overwhelming.
+  // Dock-panel children: Layers + Legend as panel-mode widgets
+  // (they're inside the dock's own column layout already; no need
+  // for popovers). Bound to the same Map widget the toolbar uses.
   const layerList = childWidget('layer-list', {
     kind: 'layer-list',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     allowToggle: true,
     displayMode: 'panel',
   });
   const legend = childWidget('legend', {
     kind: 'legend',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     displayMode: 'panel',
   });
 
@@ -212,7 +221,7 @@ function parcelViewerSeed(): CustomAppData {
     },
   };
   const map: CustomWidget = {
-    id: wid(),
+    id: mapId,
     kind: 'map',
     layout: { col: 13, row: 5, colSpan: 36, rowSpan: 60 },
     config: { kind: 'map' },
@@ -241,22 +250,23 @@ function parcelViewerSeed(): CustomAppData {
  * about your community" style apps.
  */
 function publicInfoMapSeed(): CustomAppData {
+  const mapId = wid();
   const search = childWidget('search', {
     kind: 'search',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     geocodingEnabled: true,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-center'),
   });
   const basemap = childWidget('basemap-gallery', {
     kind: 'basemap-gallery',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-right'),
   });
   const layerList = childWidget('layer-list', {
     kind: 'layer-list',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     allowToggle: true,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-right'),
@@ -275,7 +285,7 @@ function publicInfoMapSeed(): CustomAppData {
     },
   };
   const map: CustomWidget = {
-    id: wid(),
+    id: mapId,
     kind: 'map',
     layout: { col: 1, row: 5, colSpan: 48, rowSpan: 60 },
     config: { kind: 'map' },
@@ -303,16 +313,17 @@ function publicInfoMapSeed(): CustomAppData {
  * Theme: Slate (dark, technical).
  */
 function fieldInspectionSeed(): CustomAppData {
+  const mapId = wid();
   const search = childWidget('search', {
     kind: 'search',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     geocodingEnabled: true,
     displayMode: 'tool',
     panelArrangement: toolPanel('top-center'),
   });
   const myLocation = childWidget('my-location', {
     kind: 'my-location',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     zoomLevel: 16,
     keepMarker: true,
     displayMode: 'tool',
@@ -321,6 +332,7 @@ function fieldInspectionSeed(): CustomAppData {
   const attrTable = childWidget('attribute-table', {
     kind: 'attribute-table',
     targetIndex: 0,
+    syncWithMapWidgetId: mapId,
     displayMode: 'tool',
     panelArrangement: {
       placement: 'docked-bottom',
@@ -334,7 +346,7 @@ function fieldInspectionSeed(): CustomAppData {
   });
   const layerList = childWidget('layer-list', {
     kind: 'layer-list',
-    mapWidgetId: '',
+    mapWidgetId: mapId,
     allowToggle: true,
     displayMode: 'panel',
   });
@@ -372,7 +384,7 @@ function fieldInspectionSeed(): CustomAppData {
     },
   };
   const map: CustomWidget = {
-    id: wid(),
+    id: mapId,
     kind: 'map',
     layout: { col: 1, row: 5, colSpan: 48, rowSpan: 60 },
     config: { kind: 'map' },

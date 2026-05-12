@@ -2512,30 +2512,62 @@ function TabsWidgetRender({ widget }: { widget: CustomWidget }) {
 // ---- Themed-app containers (#22) ----------------------------------
 
 /**
+ * Render a child widget inside a container. Tool-mode children
+ * render through ToolWidgetSlot (icon button + popover with the
+ * widget's panel content inside) so the Search widget inside an
+ * app-bar appears as a search icon button — not as a full inline
+ * search input. Panel-mode children fall through to the standard
+ * renderer.
+ *
+ * Without this dispatch, every container child rendered via
+ * `renderWidget(widget)` which always picks the widget's full
+ * panel UI. Result: an app-bar holding Search + Basemap +
+ * AttributeTable rendered all three's full content inline,
+ * blowing the bar's height and ignoring the author's tool-mode
+ * config. The container thus needs to honor displayMode the same
+ * way the top-level WidgetSlot does.
+ */
+function renderWidgetInContainer(widget: CustomWidget): React.ReactNode {
+  if (isToolDisplayWidget(widget) && widgetDisplayMode(widget) === 'tool') {
+    return <ToolWidgetSlot widget={widget} />;
+  }
+  return renderWidget(widget);
+}
+
+/**
  * Render wrappers for the themed-app container widgets. Each
- * delegates to the themed-containers.tsx component, passing
- * `renderWidget` as the child renderer so containers can recurse
- * into any widget kind without importing the renderer registry
- * themselves.
+ * delegates to the themed-containers.tsx component, passing the
+ * tool-aware child renderer so the same widget kind renders as
+ * an icon button inside an app-bar but as a full inline card
+ * when placed on the page grid.
  */
 function AppBarWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'app-bar') return null;
-  return <AppBar config={widget.config} renderChild={renderWidget} />;
+  return <AppBar config={widget.config} renderChild={renderWidgetInContainer} />;
 }
 
 function DockPanelWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'dock-panel') return null;
-  return <DockPanel config={widget.config} renderChild={renderWidget} />;
+  return (
+    <DockPanel config={widget.config} renderChild={renderWidgetInContainer} />
+  );
 }
 
 function SlideoutWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'slideout') return null;
-  return <Slideout config={widget.config} renderChild={renderWidget} />;
+  return (
+    <Slideout config={widget.config} renderChild={renderWidgetInContainer} />
+  );
 }
 
 function FoldableGroupWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'foldable-group') return null;
-  return <FoldableGroup config={widget.config} renderChild={renderWidget} />;
+  return (
+    <FoldableGroup
+      config={widget.config}
+      renderChild={renderWidgetInContainer}
+    />
+  );
 }
 
 // ---- Shared frame ----------------------------------------------------------
