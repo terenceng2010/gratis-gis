@@ -22,12 +22,32 @@
  */
 import type { CustomAppData, CustomWidget } from './custom-app';
 
-/** Stable id for a template; persisted in analytics + wizard URLs. */
+/**
+ * Stable id for a template; persisted in analytics + wizard URLs.
+ * Names describe the LAYOUT / INTENT of the template (sidebar
+ * explorer, showcase map, compact drawer, blank) rather than a
+ * specific data topic. Topic examples live in the template's
+ * description + use lines instead — a "Sidebar Explorer" is just
+ * as good for asset inventories as it is for parcel viewers, so
+ * locking the name to one topic narrows the apparent fit.
+ *
+ * The earlier topic-named ids (parcel-viewer, public-info-map,
+ * field-inspection) are kept as aliases so any in-flight test
+ * apps that referenced them still resolve. New saves write the
+ * layout-named ids.
+ */
 export type AppTemplateId =
+  | 'blank-canvas'
+  | 'sidebar-explorer'
+  | 'showcase-map'
+  | 'compact-drawer'
+  // Legacy aliases for templates created before the layout-named
+  // rename. Kept resolvable; getAppTemplate maps these to their
+  // new equivalents.
   | 'blank'
   | 'parcel-viewer'
-  | 'field-inspection'
-  | 'public-info-map';
+  | 'public-info-map'
+  | 'field-inspection';
 
 /**
  * Metadata + seed function for one template. The seed is a function
@@ -426,40 +446,59 @@ function blankSeed(): CustomAppData {
  */
 export const APP_TEMPLATES: readonly AppTemplate[] = [
   {
-    id: 'parcel-viewer',
-    label: 'Parcel Viewer',
-    description: 'Public-facing parcel lookup with search + ownership details.',
-    use: 'Cities, counties, assessors publishing parcel + ownership data.',
-    tags: ['public', 'lookup', 'parcels'],
+    id: 'sidebar-explorer',
+    label: 'Sidebar Explorer',
+    description:
+      'Top bar with map tools, collapsible side panel with layers + legend, full-bleed map, attribute table that slides up from the bottom on demand.',
+    use: 'Parcel viewers, asset inventories, environmental layer browsers, anything "show me this data layer with click-to-inspect details".',
+    tags: ['sidebar', 'browse', 'inspect'],
     seed: parcelViewerSeed,
   },
   {
-    id: 'public-info-map',
-    label: 'Public Info Map',
-    description: 'Map-first layout for community / civic information sharing.',
-    use: 'Trails, parks, public projects, "what is happening near me".',
-    tags: ['public', 'map-first', 'minimal'],
+    id: 'showcase-map',
+    label: 'Showcase Map',
+    description:
+      'Map-first layout with minimal chrome. Glass-style top bar floats over the map; search, layers, and basemap as overlay buttons.',
+    use: 'Community maps, public information portals, project showcases, story maps, "look at this map" presentations.',
+    tags: ['map-first', 'minimal', 'public'],
     seed: publicInfoMapSeed,
   },
   {
-    id: 'field-inspection',
-    label: 'Field Inspection',
-    description: 'Internal-staff layout for field data review + record entry.',
-    use: 'Asset inspections, environmental monitoring, field surveys.',
-    tags: ['internal', 'data-entry', 'mobile-ready'],
+    id: 'compact-drawer',
+    label: 'Compact Drawer',
+    description:
+      'Map fills the screen; a tool drawer slides in from the edge on demand. Smaller permanent chrome footprint for mobile / focused workflows.',
+    use: 'Field-staff apps, mobile-friendly maps, inspection workflows, anywhere screen real estate is at a premium.',
+    tags: ['mobile', 'drawer', 'compact'],
     seed: fieldInspectionSeed,
   },
   {
-    id: 'blank',
-    label: 'Blank App',
-    description: 'Start from scratch with an empty canvas and the default theme.',
-    use: 'When the existing templates do not match the use case.',
+    id: 'blank-canvas',
+    label: 'Blank Canvas',
+    description:
+      'Empty page with the default theme. No containers, no widgets — start from scratch in advanced mode.',
+    use: 'When none of the layouts above fit, or you want full control from the first widget drop.',
     tags: ['advanced'],
     seed: blankSeed,
   },
 ];
 
-/** Look up a template by id. Returns the Blank template as a fallback. */
+/**
+ * Look up a template by id. Maps legacy topic-named ids
+ * (parcel-viewer, public-info-map, field-inspection, blank) to
+ * their layout-named successors so already-created apps keep
+ * resolving. Returns Blank Canvas as a final fallback.
+ */
 export function getAppTemplate(id: AppTemplateId): AppTemplate {
-  return APP_TEMPLATES.find((t) => t.id === id) ?? APP_TEMPLATES[3]!;
+  const legacyMap: Record<string, AppTemplateId> = {
+    'parcel-viewer': 'sidebar-explorer',
+    'public-info-map': 'showcase-map',
+    'field-inspection': 'compact-drawer',
+    blank: 'blank-canvas',
+  };
+  const resolved = legacyMap[id] ?? id;
+  return (
+    APP_TEMPLATES.find((t) => t.id === resolved) ??
+    APP_TEMPLATES[APP_TEMPLATES.length - 1]!
+  );
 }

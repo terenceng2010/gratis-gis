@@ -360,13 +360,13 @@ export function NewItemWizard() {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
 
   // Custom Web App template selection. When the user lands on the
-  // Custom Web App type, they pick a template (Parcel Viewer, Public
-  // Info Map, Field Inspection, Blank). The template's seed()
-  // generates the initial CustomAppData on submit. Defaults to
-  // 'blank' so a user who skips the gallery still gets the
-  // current behavior (empty page).
+  // Custom Web App type, they pick a template (Sidebar Explorer,
+  // Showcase Map, Compact Drawer, Blank Canvas). The template's
+  // seed() generates the initial CustomAppData on submit. Defaults
+  // to 'sidebar-explorer' so a user who hits Create without
+  // touching the gallery gets the most-flexible starting point.
   const [customAppTemplateId, setCustomAppTemplateId] =
-    useState<AppTemplateId>('parcel-viewer');
+    useState<AppTemplateId>('sidebar-explorer');
 
   // ArcGIS-specific state. Probe result is staged until Create fires.
   // `userEditedTitle` guards us from clobbering a title the user typed
