@@ -438,16 +438,25 @@ export function CustomRuntimeClient({
           ) : (
             <div
               ref={runtimeContainerRef}
-              className="relative grid h-full w-full"
+              className="relative mx-auto grid h-full"
               style={{
                 // Matches the designer's v3 grid (48 cols x 12px
                 // rows). Old v1/v2 apps are migrated on load via
                 // migrateCustomAppData in the page entry, so the
-                // runtime always sees v3 coordinates here. Grid
-                // resolution bumped from 24x24 to 48x12 (user
-                // feedback on toolbar-button snap granularity).
+                // runtime always sees v3 coordinates here.
                 gridTemplateColumns: 'repeat(48, minmax(0, 1fr))',
                 gridAutoRows: `minmax(12px, auto)`,
+                // Fixed working width so a widget's colSpan renders
+                // at the same physical width in the designer and
+                // the runtime. Without this the runtime canvas
+                // filled the viewport (often ~1900px on desktops)
+                // while the designer canvas was constrained by the
+                // BuilderShell panels (~1300px), making the same
+                // widget look much bigger at runtime than the
+                // author intended ("design mode icons small,
+                // runtime icons big blocky").
+                maxWidth: '1400px',
+                minWidth: '1400px',
                 minHeight: `${totalRows * 12}px`,
                 gap: '6px',
               }}
@@ -515,11 +524,23 @@ function WidgetSlot({ widget }: { widget: CustomWidget }) {
   // grid cell + a popover panel anchored per panelArrangement.
   // Panel-mode widgets render inline using the existing card chrome.
   const isToolMode = isToolDisplayWidget(widget) && widgetDisplayMode(widget) === 'tool';
+  // Stacking. Map and Tabs widgets (the "container" kinds) sit at
+  // z-index 0; tool widgets sit at z-index 10; other panel widgets
+  // sit at z-index 5. CSS Grid's source-order stacking is unreliable
+  // when an overlapping child creates its own stacking context (e.g.
+  // MapLibre's WebGL canvas via transform), so explicit z-index +
+  // position: relative is needed to keep toolbar buttons above the
+  // map when they overlap. The `position: relative` is required for
+  // z-index to take effect on grid items.
+  const isContainer = widget.kind === 'map' || widget.kind === 'tabs';
+  const zIndex = isToolMode ? 10 : isContainer ? 0 : 5;
   return (
     <section
       style={{
         gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
         gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
+        position: 'relative',
+        zIndex,
       }}
       className={
         isToolMode

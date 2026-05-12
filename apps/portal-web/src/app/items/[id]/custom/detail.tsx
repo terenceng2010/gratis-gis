@@ -1253,13 +1253,26 @@ function PageTabs({
 const ROW_HEIGHT_PX = 12;
 const GRID_COLS = 48;
 /**
- * Floor for the canvas's working width. On viewports narrower than
- * this the canvas pane scrolls horizontally instead of squeezing the
- * 48-column grid into a sliver. Sized so each column gets ~25px,
- * fine enough that an icon-only tool button (~36-48px wide) covers
- * just two columns, leaving plenty of granularity for placement.
+ * Fixed canvas working width for WYSIWYG between designer and
+ * runtime. The designer's canvas pane and the runtime's app
+ * container both cap at this width and center on wider viewports.
+ * User feedback: previously the runtime canvas filled the viewport
+ * (~1900px) while the designer was constrained by BuilderShell
+ * panels (~1300px), so the same widget colSpan rendered at very
+ * different pixel widths in the two views ("design mode icons look
+ * small, runtime icons are big blocky").
+ *
+ * 1400px is the matching width: wide enough that a Map + toolbar
+ * has room to breathe, narrow enough that even 1366px-wide laptops
+ * see the full layout without horizontal scroll. Smaller viewports
+ * scroll horizontally in both the designer and the runtime (same
+ * pattern Webflow + EB use for fixed-canvas layouts).
  */
-const CANVAS_MIN_WIDTH_PX = 1200;
+const CANVAS_WORKING_WIDTH_PX = 1400;
+/** Kept as an alias for the migration period; callers that
+ *  previously used MIN_WIDTH now get the same value as the
+ *  fixed working width. */
+const CANVAS_MIN_WIDTH_PX = CANVAS_WORKING_WIDTH_PX;
 
 /**
  * Active drag-or-resize gesture state. The canvas owns one of these
@@ -1452,11 +1465,15 @@ function Canvas({
             with horizontal scroll" pattern); on wider viewports the
             grid expands naturally to fill the canvas pane. */}
         <div
-          className="grid w-full"
+          className="mx-auto grid w-full"
           style={{
             gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
             gridAutoRows: `${ROW_HEIGHT_PX}px`,
-            minWidth: `${CANVAS_MIN_WIDTH_PX}px`,
+            // Fixed working width: designer + runtime both cap here so
+            // a widget's colSpan renders at the same physical width in
+            // both views. Wider viewports get centered margin.
+            maxWidth: `${CANVAS_WORKING_WIDTH_PX}px`,
+            minWidth: `${CANVAS_WORKING_WIDTH_PX}px`,
             minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
             gap: '6px',
           }}
