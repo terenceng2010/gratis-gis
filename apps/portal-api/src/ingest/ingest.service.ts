@@ -241,8 +241,41 @@ export class IngestService {
           }>;
           featureCount: number;
         }> = [];
+        // GPKG-specific: build a quick lookup of which tables the
+        // file registers as feature layers vs auxiliary tables. The
+        // GeoPackage spec ships an extension model (NGA style
+        // extension, etc.) that stamps `nga_*` / `gpkg_*` /
+        // `rtree_*` auxiliary tables alongside the actual feature
+        // data. GDAL's GPKG driver exposes some of them as
+        // zero-geometry layers, which would otherwise show up in
+        // the data_layer wizard as anonymous "TABLE" entries
+        // alongside the real layers. (Reported by user: a GPKG
+        // with one rivers layer + four NGA style tables came in
+        // with `rivers` shown as a non-spatial table because GDAL
+        // reported its geomType as wkbUnknown.)
+        //
+        // The fix queries gpkg_contents through the dataset's
+        // executeSQL hook (which gdal-async exposes via
+        // `dataset.executeSQL`) to keep only tables registered
+        // with data_type='features'. Non-GPKG drivers skip this
+        // entirely and use the plain layer enumeration.
+        const featureTableAllowlist =
+          driver === 'GPKG' ? readGpkgFeatureTables(ds) : null;
+
         for (let i = 0; i < layerCount; i += 1) {
           const layer = ds.layers.get(i);
+          if (
+            featureTableAllowlist !== null &&
+            !featureTableAllowlist.has(layer.name)
+          ) {
+            // Skip GPKG aux tables (NGA style, gpkg internals,
+            // rtree spatial indexes, etc.) that aren't registered
+            // as features in gpkg_contents. The data_layer wizard
+            // is for SPATIAL data; non-feature tables belong in
+            // a separate "related tables" surface that doesn't
+            // exist yet.
+            continue;
+          }
           const fields: Array<{
             name: string;
             type: 'string' | 'number' | 'boolean' | 'date';
@@ -252,12 +285,32 @@ export class IngestService {
             const def = layer.fields.get(f);
             fields.push({ name: def.name, type: gdalTypeToSimple(def.type) });
           }
+          // Geometry type detection. The declared geomType is
+          // authoritative when it's a specific WKB type (Point,
+          // LineString, Polygon, etc.). When it's wkbUnknown (0),
+          // wkbGeometry (used by GPKG layers registered with the
+          // generic 'GEOMETRY' type), or wkbNone (100, attribute-
+          // only), the layer's declared type isn't useful and we
+          // need to peek at the first feature's actual geometry
+          // to decide. Without the peek, a GPKG layer with
+          // geometry_type_name='GEOMETRY' shows up as a TABLE in
+          // the wizard even though every row carries a real
+          // LineString / MultiPolygon / etc. geometry.
+          let geometryType = gdalGeomToSimple(layer.geomType);
+          if (geometryType === null) {
+            geometryType = peekFirstFeatureGeomType(layer);
+          }
           out.push({
             name: layer.name,
-            geometryType: gdalGeomToSimple(layer.geomType),
+            geometryType,
             fields,
             featureCount: layer.features.count(),
           });
+        }
+        if (out.length === 0) {
+          throw new BadRequestException(
+            'The file contains no spatial layers we can import. Only feature tables (with geometry) are supported.',
+          );
         }
         return { driver, layers: out };
       } finally {
@@ -687,6 +740,95 @@ function gdalGeomToSimple(
   if (s.includes('line') || s.includes('curve')) return 'line';
   if (s.includes('polygon') || s.includes('surface')) return 'polygon';
   return null;
+}
+
+/**
+ * GPKG-specific filter: query `gpkg_contents` through gdal-async's
+ * `executeSQL` hook to identify which tables are registered as
+ * feature layers (data_type='features'). The data_layer wizard
+ * uses this to skip auxiliary tables (NGA style extension's
+ * `nga_*` tables, gpkg internals, rtree spatial-index tables,
+ * tile pyramids, etc.) that GDAL otherwise exposes as
+ * zero-geometry layers.
+ *
+ * Returns a Set of allowed table names. If anything goes wrong
+ * (no gpkg_contents, executeSQL fails, etc.) we return an empty
+ * set rather than failing — the caller treats null vs empty
+ * differently: null skips filtering entirely (non-GPKG drivers);
+ * empty set means "we tried to filter and nothing qualified."
+ *
+ * The any-cast is because gdal-async's TypeScript declarations
+ * don't currently surface executeSQL; the method is available at
+ * runtime on the Dataset object.
+ */
+function readGpkgFeatureTables(ds: unknown): Set<string> {
+  const set = new Set<string>();
+  try {
+    const sql = `
+      SELECT table_name FROM gpkg_contents WHERE data_type = 'features'
+    `;
+    // gdal-async exposes executeSQL on the Dataset; the result is a
+    // virtual Layer with one row per result. Iterate it to collect
+    // table names. We release the result layer immediately so the
+    // virtual layer doesn't leak.
+    const dataset = ds as {
+      executeSQL: (sql: string) => {
+        features: { forEach: (cb: (f: unknown) => void) => void };
+      };
+      releaseResultSet?: (layer: unknown) => void;
+    };
+    const result = dataset.executeSQL(sql);
+    result.features.forEach((f) => {
+      const feature = f as { fields: { get: (name: string) => unknown } };
+      const tableName = feature.fields.get('table_name');
+      if (typeof tableName === 'string' && tableName.length > 0) {
+        set.add(tableName);
+      }
+    });
+    // Best-effort cleanup; many gdal-async builds don't expose
+    // releaseResultSet directly. The result layer is gc'd anyway
+    // when the dataset closes.
+    if (typeof dataset.releaseResultSet === 'function') {
+      try {
+        dataset.releaseResultSet(result);
+      } catch {
+        /* non-fatal */
+      }
+    }
+  } catch {
+    // No gpkg_contents (malformed GPKG?) or executeSQL not
+    // available. Fall through to "everything passes" by treating
+    // missing filter as null at the call site.
+  }
+  return set;
+}
+
+/**
+ * Read the first feature's geometry from a GDAL layer and classify
+ * it as point / line / polygon. Used when the layer's DECLARED
+ * geometry type is unknown (wkbUnknown / wkbGeometry / 'GEOMETRY' in
+ * GeoPackage parlance) but the rows themselves carry real
+ * geometries. Without this, GPKG layers registered with the
+ * generic 'GEOMETRY' type show up as zero-geometry tables.
+ *
+ * Returns null when the layer has no features or none of them have
+ * geometry — in that case the layer probably IS attribute-only.
+ */
+function peekFirstFeatureGeomType(
+  layer: unknown,
+): 'point' | 'line' | 'polygon' | null {
+  try {
+    const l = layer as {
+      features: {
+        first: () => { geometry: { name: string } | null } | null;
+      };
+    };
+    const first = l.features.first();
+    if (!first || !first.geometry) return null;
+    return gdalGeomToSimple(first.geometry.name);
+  } catch {
+    return null;
+  }
 }
 
 /**
