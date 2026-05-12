@@ -16,7 +16,9 @@ import {
 import {
   ArrowLeft,
   Bookmark as BookmarkIcon,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Crosshair as CrosshairIcon,
   Image as ImageIcon,
   Layers as LayersIcon,
@@ -438,13 +440,15 @@ export function CustomRuntimeClient({
               ref={runtimeContainerRef}
               className="relative grid h-full w-full"
               style={{
-                // #357: matches the designer's v2 grid (24 cols x
-                // 24px rows). Old v1 apps are migrated on load via
+                // Matches the designer's v3 grid (48 cols x 12px
+                // rows). Old v1/v2 apps are migrated on load via
                 // migrateCustomAppData in the page entry, so the
-                // runtime always sees v2 coordinates here.
-                gridTemplateColumns: 'repeat(24, minmax(0, 1fr))',
-                gridAutoRows: `minmax(24px, auto)`,
-                minHeight: `${totalRows * 24}px`,
+                // runtime always sees v3 coordinates here. Grid
+                // resolution bumped from 24x24 to 48x12 (user
+                // feedback on toolbar-button snap granularity).
+                gridTemplateColumns: 'repeat(48, minmax(0, 1fr))',
+                gridAutoRows: `minmax(12px, auto)`,
+                minHeight: `${totalRows * 12}px`,
                 gap: '6px',
               }}
             >
@@ -589,6 +593,7 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
   const Icon = KIND_ICON[widget.kind] ?? SquareIcon;
   const label = KIND_TOOL_LABEL[widget.kind] ?? widget.kind;
   const arrangement = widgetPanelArrangement(widget);
+  const iconOnly = arrangement.labelMode === 'icon-only';
 
   // Esc closes; click outside closes (handled by ToolPopover via
   // an overlay catcher).
@@ -620,7 +625,12 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
           }`}
           strokeWidth={1.75}
         />
-        <span className="text-[10px] font-medium leading-none">{label}</span>
+        {/* labelMode='icon-only' compresses the button to just the
+            icon; the title attribute above keeps discoverability via
+            hover tooltip + screen-reader aria-label. */}
+        {iconOnly ? null : (
+          <span className="text-[10px] font-medium leading-none">{label}</span>
+        )}
       </button>
       {open && ctx && (
         <ToolPopover
@@ -723,6 +733,30 @@ function ToolPopover({
       ? 'fixed'
       : 'absolute';
 
+  // Docked-bottom: full-width strip along the bottom edge of the
+  // runtime container, with a collapse/expand control in the header.
+  // Mirrors the map item's attribute-table dock pattern. Anchor /
+  // width / offsets are ignored here; only height applies.
+  // Collapse state is ephemeral (not persisted on the widget config):
+  // an author-saved layout always opens un-collapsed, and the user
+  // can toggle while interacting. The full open behavior is owned by
+  // the parent toggle button, which clicks-to-show; this collapse
+  // shrinks to a header-only sliver without unmounting the panel
+  // (so query, layer pick, sort etc. survive).
+  if (placement === 'docked-bottom') {
+    return (
+      <DockedBottomPopover
+        title={title}
+        icon={Icon}
+        height={arrangement.height ?? 280}
+        animationClass={animationClass}
+        onClose={handleClose}
+      >
+        {children}
+      </DockedBottomPopover>
+    );
+  }
+
   // For floating, render relative to the runtime container so the
   // CSS anchors (top/right/bottom/left) line up. We achieve that by
   // creating an overlay div that's `position:absolute inset-0`
@@ -790,10 +824,17 @@ function ToolPopoverHeader({
   title,
   icon: Icon,
   onClose,
+  collapsed,
+  onToggleCollapsed,
 }: {
   title: string;
   icon: typeof MapIcon;
   onClose: () => void;
+  /** When provided, render a collapse/expand chevron alongside the
+   *  close button. Used by the docked-bottom popover so the user can
+   *  shrink the panel to a header sliver without dismissing it. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
   return (
     <header className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-1 px-3 py-2">
@@ -801,6 +842,21 @@ function ToolPopoverHeader({
       <span className="flex-1 truncate text-sm font-semibold text-ink-0">
         {title}
       </span>
+      {onToggleCollapsed ? (
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? 'Expand panel' : 'Collapse panel'}
+          aria-expanded={!collapsed}
+          className="rounded p-1 text-muted transition-colors hover:bg-surface-2 hover:text-ink-1"
+        >
+          {collapsed ? (
+            <ChevronUp className="h-3.5 w-3.5" strokeWidth={2} />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} />
+          )}
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onClose}
@@ -810,6 +866,72 @@ function ToolPopoverHeader({
         <XIcon className="h-3.5 w-3.5" strokeWidth={2} />
       </button>
     </header>
+  );
+}
+
+/**
+ * Docked-bottom popover. Full-width strip along the bottom of the
+ * runtime container with a collapse handle in the header. Mirrors
+ * the map item's attribute-table dock so attribute-table widgets
+ * configured as `placement: 'docked-bottom'` render the same way the
+ * user knows from the map viewer.
+ *
+ * Collapse state is local: an open panel shrinks to a header-only
+ * sliver but the inner content stays mounted so per-instance state
+ * (query, layer-pick, sort) survives the collapse.
+ */
+function DockedBottomPopover({
+  title,
+  icon,
+  height,
+  animationClass,
+  onClose,
+  children,
+}: {
+  title: string;
+  icon: typeof MapIcon;
+  height: number;
+  animationClass: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  // Header row is approximately 36 px (py-2 + 16px content). When
+  // collapsed we render at that height; expanded uses the configured
+  // panel height.
+  const HEADER_HEIGHT = 36;
+  const effectiveHeight = collapsed ? HEADER_HEIGHT : Math.max(HEADER_HEIGHT, height);
+  return (
+    <div
+      role="dialog"
+      aria-label={title}
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: effectiveHeight,
+      }}
+      className={`z-50 flex flex-col overflow-hidden border-t border-border bg-surface-1 shadow-overlay ${animationClass}`}
+    >
+      <ToolPopoverHeader
+        title={title}
+        icon={icon}
+        onClose={onClose}
+        collapsed={collapsed}
+        onToggleCollapsed={() => setCollapsed((v) => !v)}
+      />
+      {/* Content stays mounted while collapsed (just clipped) so the
+          inner state (query strings, scroll position, etc.) doesn't
+          reset every time the user toggles. */}
+      <div
+        className="min-h-0 flex-1 overflow-hidden"
+        aria-hidden={collapsed}
+        style={collapsed ? { visibility: 'hidden' } : undefined}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 

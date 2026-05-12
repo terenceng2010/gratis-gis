@@ -1245,17 +1245,19 @@ function PageTabs({
 
 // ---- Canvas -----------------------------------------------------------------
 
-// #357: doubled grid resolution. The schema bumped from version 1 to
-// 2 (12-col + 48px row -> 24-col + 24px row) for finer drag/snap.
+// Doubled grid resolution. Each schema bump halves the cell size:
+//   v1 (12-col + 48px row) -> v2 (24-col + 24px row, #357)
+//   v2 (24-col + 24px row) -> v3 (48-col + 12px row, user feedback
+//   on tool-button snap being too coarse).
 // Existing apps are migrated on load via migrateCustomAppData.
-const ROW_HEIGHT_PX = 24;
-const GRID_COLS = 24;
+const ROW_HEIGHT_PX = 12;
+const GRID_COLS = 48;
 /**
  * Floor for the canvas's working width. On viewports narrower than
  * this the canvas pane scrolls horizontally instead of squeezing the
- * 24-column grid into a sliver. Sized so each column gets ~50px,
- * which is the floor below which Map / AttributeTable widgets start
- * to look unusable in a real layout.
+ * 48-column grid into a sliver. Sized so each column gets ~25px,
+ * fine enough that an icon-only tool button (~36-48px wide) covers
+ * just two columns, leaving plenty of granularity for placement.
  */
 const CANVAS_MIN_WIDTH_PX = 1200;
 
@@ -1581,14 +1583,23 @@ function WidgetCard({
         // #364: tool-mode card. Compact icon + tiny label, no
         // title bar / summary chrome. Mirrors the runtime tool
         // button so the canvas matches what authors will publish.
+        // labelMode='icon-only' drops the caption (matching the
+        // runtime), letting the button be sized at just the icon's
+        // worth of space.
         <div
           className="flex h-full w-full flex-col items-center justify-center gap-1 p-1"
           title={`${label} (tool)${summary ? ` · ${summary}` : ''}`}
         >
           <Icon className="h-5 w-5 text-ink-1" strokeWidth={1.75} />
-          <span className="truncate text-[10px] font-medium text-muted">
-            {label}
-          </span>
+          {(() => {
+            const cfg = widget.config as { panelArrangement?: { labelMode?: string } };
+            const iconOnly = cfg.panelArrangement?.labelMode === 'icon-only';
+            return iconOnly ? null : (
+              <span className="truncate text-[10px] font-medium text-muted">
+                {label}
+              </span>
+            );
+          })()}
         </div>
       ) : (
         <>
@@ -3287,77 +3298,54 @@ function ToolModeSection({
 
       {mode === 'tool' && (
         <>
+          <p className="pt-1 text-sm font-medium text-ink-0">Tool button</p>
+          <Field label="Label">
+            <div className="flex rounded-md border border-border bg-surface-1 p-0.5">
+              {(
+                [
+                  ['icon-and-label', 'Icon + label'],
+                  ['icon-only', 'Icon only'],
+                ] as const
+              ).map(([m, lbl]) => {
+                const active = (pa.labelMode ?? 'icon-and-label') === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={!canEdit}
+                    onClick={() => patchArrangement({ labelMode: m })}
+                    aria-pressed={active}
+                    className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+                      active
+                        ? 'bg-surface-2 text-ink-0'
+                        : 'text-muted hover:text-ink-1'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    {lbl}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs leading-snug text-muted">
+              {(pa.labelMode ?? 'icon-and-label') === 'icon-and-label'
+                ? 'Icon plus a small caption below.'
+                : 'Just the icon. Title hover + screen-reader label preserved.'}
+            </p>
+          </Field>
+
           <p className="pt-1 text-sm font-medium text-ink-0">
             Panel arrangement
           </p>
 
-          <Field label="Anchor" hint="Where the popover docks within the runtime container.">
-            <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-surface-2 p-1.5">
-              {ANCHOR_GRID.flat().map((a) => (
-                <button
-                  key={a}
-                  type="button"
-                  disabled={!canEdit}
-                  onClick={() => patchArrangement({ anchor: a })}
-                  aria-pressed={anchor === a}
-                  title={ANCHOR_LABELS[a]}
-                  className={`flex h-7 w-full items-center justify-center rounded transition-colors ${
-                    anchor === a
-                      ? 'bg-ink-0 text-surface-1'
-                      : 'bg-surface-1 text-muted hover:bg-surface-2 hover:text-ink-1'
-                  } disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                </button>
-              ))}
-            </div>
-          </Field>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Width (px)">
-              <NumberInput
-                value={pa.width ?? 360}
-                min={120}
-                max={1200}
-                disabled={!canEdit}
-                onChange={(v) => patchArrangement({ width: v })}
-              />
-            </Field>
-            <Field label="Height (px)">
-              <NumberInput
-                value={pa.height ?? 480}
-                min={64}
-                max={1200}
-                disabled={!canEdit}
-                onChange={(v) => patchArrangement({ height: v })}
-              />
-            </Field>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Offset X (px)">
-              <NumberInput
-                value={pa.offsetX ?? 0}
-                min={-400}
-                max={400}
-                disabled={!canEdit}
-                onChange={(v) => patchArrangement({ offsetX: v })}
-              />
-            </Field>
-            <Field label="Offset Y (px)">
-              <NumberInput
-                value={pa.offsetY ?? 0}
-                min={-400}
-                max={400}
-                disabled={!canEdit}
-                onChange={(v) => patchArrangement({ offsetY: v })}
-              />
-            </Field>
-          </div>
-
           <Field label="Placement">
             <div className="flex rounded-md border border-border bg-surface-1 p-0.5">
-              {(['floating', 'fixed'] as const).map((p) => (
+              {(
+                [
+                  ['floating', 'Floating'],
+                  ['fixed', 'Fixed'],
+                  ['docked-bottom', 'Docked'],
+                ] as const
+              ).map(([p, lbl]) => (
                 <button
                   key={p}
                   type="button"
@@ -3370,16 +3358,99 @@ function ToolModeSection({
                       : 'text-muted hover:text-ink-1'
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
-                  {p === 'floating' ? 'Floating' : 'Fixed'}
+                  {lbl}
                 </button>
               ))}
             </div>
             <p className="text-xs leading-snug text-muted">
               {placement === 'floating'
                 ? 'Floats over the runtime container. Scrolls with the page.'
-                : 'Pinned to the browser viewport. Stays put on scroll.'}
+                : placement === 'fixed'
+                  ? 'Pinned to the browser viewport. Stays put on scroll.'
+                  : 'Full-width strip docked along the bottom of the runtime, with a collapse handle. Width / anchor / offsets are ignored in this mode.'}
             </p>
           </Field>
+
+          {placement === 'docked-bottom' ? (
+            // Docked mode: only height matters. Anchor / width /
+            // offsets are ignored because the panel always spans
+            // the full width along the bottom edge.
+            <Field label="Height (px)">
+              <NumberInput
+                value={pa.height ?? 280}
+                min={120}
+                max={800}
+                disabled={!canEdit}
+                onChange={(v) => patchArrangement({ height: v })}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field label="Anchor" hint="Where the popover docks within the runtime container.">
+                <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-surface-2 p-1.5">
+                  {ANCHOR_GRID.flat().map((a) => (
+                    <button
+                      key={a}
+                      type="button"
+                      disabled={!canEdit}
+                      onClick={() => patchArrangement({ anchor: a })}
+                      aria-pressed={anchor === a}
+                      title={ANCHOR_LABELS[a]}
+                      className={`flex h-7 w-full items-center justify-center rounded transition-colors ${
+                        anchor === a
+                          ? 'bg-ink-0 text-surface-1'
+                          : 'bg-surface-1 text-muted hover:bg-surface-2 hover:text-ink-1'
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Width (px)">
+                  <NumberInput
+                    value={pa.width ?? 360}
+                    min={120}
+                    max={1200}
+                    disabled={!canEdit}
+                    onChange={(v) => patchArrangement({ width: v })}
+                  />
+                </Field>
+                <Field label="Height (px)">
+                  <NumberInput
+                    value={pa.height ?? 480}
+                    min={64}
+                    max={1200}
+                    disabled={!canEdit}
+                    onChange={(v) => patchArrangement({ height: v })}
+                  />
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Offset X (px)">
+                  <NumberInput
+                    value={pa.offsetX ?? 0}
+                    min={-400}
+                    max={400}
+                    disabled={!canEdit}
+                    onChange={(v) => patchArrangement({ offsetX: v })}
+                  />
+                </Field>
+                <Field label="Offset Y (px)">
+                  <NumberInput
+                    value={pa.offsetY ?? 0}
+                    min={-400}
+                    max={400}
+                    disabled={!canEdit}
+                    onChange={(v) => patchArrangement({ offsetY: v })}
+                  />
+                </Field>
+              </div>
+            </>
+          )}
 
           <Field label="Animation">
             <select

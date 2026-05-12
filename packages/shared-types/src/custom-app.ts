@@ -32,10 +32,14 @@ import type { ViewerTarget } from './viewer';
 export interface CustomAppData {
   /** Schema version. Bumped from 1 to 2 (#357) when the canvas grid
    *  resolution doubled (12 -> 24 columns, 48px -> 24px row height)
-   *  for finer drag/snap. Migration multiplies every widget's
-   *  col / row / colSpan / rowSpan by 2 on load and rewrites
-   *  version=2 on the next save. */
-  version: 1 | 2;
+   *  for finer drag/snap. Bumped again from 2 to 3 (user feedback:
+   *  toolbar buttons could only snap to a column-width gap from the
+   *  canvas edge or to the edge itself, with no in-between
+   *  position) when the grid doubled again to 48 columns + 12px
+   *  rows. Migration multiplies every widget's col / row / colSpan /
+   *  rowSpan by 2 per version bump and rewrites the version on the
+   *  next save. */
+  version: 1 | 2 | 3;
   /**
    * Optional reference to a `map` item the canvas-style widgets
    * (MapWidget) inherit basemap + viewport from. Individual widgets
@@ -200,7 +204,24 @@ export type PanelAnchor =
  *   - 'fixed': position fixed, relative to the browser viewport.
  *     Stays put on scroll. Useful for sticky tool panels.
  */
-export type PanelPlacement = 'floating' | 'fixed';
+/**
+ * Where the popover panel anchors at runtime when a tool-mode
+ * widget is clicked:
+ *   - 'floating': inside the runtime container at one of nine
+ *     anchor corners + an offset (the default; gives the author
+ *     full control over position).
+ *   - 'fixed': pinned to the browser viewport rather than the
+ *     runtime container; useful when the app is embedded in a
+ *     scrolling parent.
+ *   - 'docked-bottom': full-width strip docked along the bottom
+ *     edge of the runtime container, height configurable.
+ *     Mirrors the map item's attribute-table dock; the runtime
+ *     renders a collapse/expand handle so the user can shrink it
+ *     to a header strip without losing the layer / query state
+ *     inside. Width / anchor / offsetX are ignored in this mode;
+ *     only the height applies.
+ */
+export type PanelPlacement = 'floating' | 'fixed' | 'docked-bottom';
 
 /**
  * Open/close transition for tool-mode panels.
@@ -221,15 +242,30 @@ export type PanelAnimation = 'none' | 'fade' | 'slide';
 export interface PanelArrangement {
   placement?: PanelPlacement;
   anchor?: PanelAnchor;
-  /** Width in CSS pixels. Default 360. */
+  /** Width in CSS pixels. Default 360. Ignored when
+   *  placement = 'docked-bottom' (the panel always spans the
+   *  runtime container's full width). */
   width?: number;
   /** Height in CSS pixels. Default 480. */
   height?: number;
   /** Pixel nudge from the anchor corner. Positive values move the
-   *  panel inward; the runtime applies the sign for each anchor. */
+   *  panel inward; the runtime applies the sign for each anchor.
+   *  Ignored when placement = 'docked-bottom'. */
   offsetX?: number;
   offsetY?: number;
   animation?: PanelAnimation;
+  /**
+   * Label rendering for the tool button. 'icon-and-label' (the
+   * default) shows the icon plus a small caption underneath, the
+   * way Esri Experience Builder's tool buttons render. 'icon-only'
+   * drops the caption and falls back to a tooltip + aria-label,
+   * so the button can compress to a single icon's worth of space.
+   * Useful when packing many tools onto a tight toolbar.
+   *
+   * Only relevant when the widget is in tool display mode; ignored
+   * for panel-mode widgets.
+   */
+  labelMode?: 'icon-and-label' | 'icon-only';
 }
 
 /**
@@ -628,7 +664,7 @@ export interface TabsWidgetConfig {
  * the designer prompts the author to drop a widget on first open.
  */
 export const DEFAULT_CUSTOM_APP: CustomAppData = {
-  version: 2,
+  version: 3,
   targets: [],
   pages: [
     {
@@ -640,35 +676,55 @@ export const DEFAULT_CUSTOM_APP: CustomAppData = {
 };
 
 /**
- * Migrate a CustomAppData to the latest schema version. v1 -> v2
+ * Migrate a CustomAppData to the latest schema version. Each bump
  * doubles every widget layout coordinate so the same physical layout
- * round-trips through the new 24-column / 24px-row designer grid.
+ * round-trips through a finer designer grid: v1 (12 col / 48px row)
+ * -> v2 (24 col / 24px row) -> v3 (48 col / 12px row). v3 was driven
+ * by user feedback that the toolbar-button snap was too coarse.
  *
- * Idempotent: calling on an already-v2 app is a no-op. Caller should
+ * Idempotent: calling on an already-current app is a no-op. Chain
+ * upgrades (a v1 app gets v1->v2 then v2->v3 on load). Caller should
  * persist the result back to the item on the next save (the
  * designer's setApp(initial) flow handles that automatically).
  *
  * Recurses through Tabs widgets (#362) so nested children also pick
- * up the v2 grid coordinates.
+ * up the new grid coordinates.
  */
 export function migrateCustomAppData(data: CustomAppData): CustomAppData {
-  if (data.version === 2) return data;
-  return {
-    ...data,
-    version: 2,
-    pages: data.pages.map((p) => ({
-      ...p,
-      widgets: p.widgets.map(migrateWidgetV1toV2),
-    })),
-  };
+  let cur = data;
+  if (cur.version === 1) {
+    cur = {
+      ...cur,
+      version: 2,
+      pages: cur.pages.map((p) => ({
+        ...p,
+        widgets: p.widgets.map(migrateWidgetDoubleLayout),
+      })),
+    };
+  }
+  if (cur.version === 2) {
+    cur = {
+      ...cur,
+      version: 3,
+      pages: cur.pages.map((p) => ({
+        ...p,
+        widgets: p.widgets.map(migrateWidgetDoubleLayout),
+      })),
+    };
+  }
+  return cur;
 }
 
-function migrateWidgetV1toV2(w: CustomWidget): CustomWidget {
+/**
+ * Double every layout coordinate. Used for both the v1->v2 and the
+ * v2->v3 jump: each grid bump doubled both the column count and the
+ * row resolution, so the same multiplier preserves the visual layout
+ * across versions.
+ */
+function migrateWidgetDoubleLayout(w: CustomWidget): CustomWidget {
   const next: CustomWidget = {
     ...w,
     layout: {
-      // v1 grid was 12 cols x 48px rows; v2 is 24 x 24. Doubling
-      // every coordinate keeps the visual layout identical.
       col: ((w.layout.col - 1) * 2) + 1,
       row: ((w.layout.row - 1) * 2) + 1,
       colSpan: w.layout.colSpan * 2,
@@ -680,7 +736,7 @@ function migrateWidgetV1toV2(w: CustomWidget): CustomWidget {
       ...w.config,
       tabs: w.config.tabs.map((t) => ({
         ...t,
-        widgets: t.widgets.map(migrateWidgetV1toV2),
+        widgets: t.widgets.map(migrateWidgetDoubleLayout),
       })),
     };
   }
