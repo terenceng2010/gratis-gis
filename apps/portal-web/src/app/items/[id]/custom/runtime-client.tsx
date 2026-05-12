@@ -63,7 +63,7 @@ import {
   FoldableGroup,
   Slideout,
 } from './themed-containers';
-import { applyAppTheme } from '@gratis-gis/shared-types';
+import { applyAppTheme, resolveAssetRefSync } from '@gratis-gis/shared-types';
 import {
   MapCanvas,
   type MapCanvasHandle,
@@ -2002,8 +2002,16 @@ function ChartPlot({
 
 function ImageWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'image') return null;
-  const { url, alt, objectFit, href, openInNewTab } = widget.config;
-  if (!url) {
+  const { asset, url, alt, objectFit, href, openInNewTab } = widget.config;
+  // Resolve the image source. New configs use the `asset` AssetRef
+  // (file-item id or external URL); legacy configs use the bare
+  // `url` field. Resolution priority: asset's cachedUrl ->
+  // legacy url. File-item refs whose cachedUrl is missing fall
+  // through to the no-image placeholder until the runtime fetches
+  // the current storageUrl (filed as follow-up; for now we rely on
+  // the designer pre-warming the cache when picking).
+  const resolvedUrl = resolveAssetRefSync(asset ?? null) ?? url ?? null;
+  if (!resolvedUrl) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-surface-2/40 text-xs text-muted">
         No image set
@@ -2016,7 +2024,7 @@ function ImageWidgetRender({ widget }: { widget: CustomWidget }) {
   // the broken-image icon and no script runs.
   const imgEl = (
     <img
-      src={url}
+      src={resolvedUrl}
       alt={alt ?? ''}
       className="h-full w-full"
       style={{ objectFit: objectFit ?? 'contain' }}

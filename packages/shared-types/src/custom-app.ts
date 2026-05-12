@@ -28,6 +28,7 @@
  */
 
 import type { ViewerTarget } from './viewer';
+import type { AssetRef } from './asset-ref';
 
 export interface CustomAppData {
   /** Schema version. Bumped from 1 to 2 (#357) when the canvas grid
@@ -509,7 +510,21 @@ export interface BasemapGalleryWidgetConfig {
  */
 export interface ImageWidgetConfig {
   kind: 'image';
-  /** Image URL. http(s) only. */
+  /**
+   * Image source. New code paths use the AssetRef discriminated
+   * union (file-item id with cached URL, OR a direct external URL)
+   * so the system knows which apps depend on which File items.
+   * The legacy `url?: string` field below is preserved for older
+   * configs that haven't been resaved; runtime + designer fall
+   * back to it when `asset` is missing.
+   */
+  asset?: AssetRef;
+  /**
+   * Legacy direct URL. Kept for back-compat with existing saved
+   * widgets; new configs save through `asset` (AssetPicker emits
+   * an AssetRef). The runtime resolves `asset` first, falls back
+   * to `url` when `asset` is missing.
+   */
   url?: string;
   /** Alt text for accessibility. Empty alt is fine for purely
    *  decorative images; the runtime falls back to '' when omitted. */

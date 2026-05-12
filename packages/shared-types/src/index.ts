@@ -30,6 +30,7 @@ export * from './survey';
 export * from './custom-app';
 export * from './app-themes';
 export * from './app-templates';
+export * from './asset-ref';
 export * from './web-app';
 export * from './data-collection';
 export * from './file';

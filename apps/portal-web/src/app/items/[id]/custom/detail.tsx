@@ -63,7 +63,8 @@ import {
   applyAppTheme,
   migrateCustomAppData,
 } from '@gratis-gis/shared-types';
-import type { AppThemePresetId } from '@gratis-gis/shared-types';
+import type { AppThemePresetId, AssetRef } from '@gratis-gis/shared-types';
+import { AssetPicker } from '@/components/asset-picker';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
@@ -2718,23 +2719,53 @@ function ImageWidgetConfig({
   canEdit,
   onChangeConfig,
 }: {
-  config: { kind: 'image'; url?: string; alt?: string; objectFit?: 'contain' | 'cover' | 'fill' | 'none'; href?: string; openInNewTab?: boolean };
+  config: {
+    kind: 'image';
+    asset?: AssetRef;
+    url?: string;
+    alt?: string;
+    objectFit?: 'contain' | 'cover' | 'fill' | 'none';
+    href?: string;
+    openInNewTab?: boolean;
+  };
   canEdit: boolean;
   onChangeConfig: (patch: Record<string, unknown>) => void;
 }) {
+  // The Image widget previously stored a bare `url`. New saves
+  // store `asset` (AssetRef) instead so the system knows whether
+  // the source is a portal File item (governed, can detect
+  // dependencies on delete, can refresh bytes without re-saving the
+  // app) or an external URL. Existing configs that only have `url`
+  // get promoted to an external-url AssetRef when the author edits;
+  // the runtime still falls back to `url` for un-promoted legacy
+  // configs so we don't break shipped apps.
+  const currentAsset: AssetRef | null =
+    config.asset ??
+    (config.url ? { kind: 'external-url', url: config.url } : null);
   return (
     <div className="space-y-3">
-      <Field label="Image URL" hint="Paste an https URL. Local upload is a follow-up.">
-        <input
-          type="url"
-          value={config.url ?? ''}
-          disabled={!canEdit}
-          placeholder="https://..."
-          onChange={(e) => onChangeConfig({ url: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
-        />
-      </Field>
-      <Field label="Alt text" hint="Describe the image for screen readers. Leave blank if decorative.">
+      <AssetPicker
+        value={currentAsset}
+        onChange={(next) => {
+          if (!next) {
+            // Clearing clears both fields so a legacy `url` doesn't
+            // stick around shadowing the cleared state.
+            onChangeConfig({ asset: undefined, url: undefined });
+            return;
+          }
+          // Stamp the new asset and clear the legacy `url` field so
+          // there's a single source of truth going forward.
+          onChangeConfig({ asset: next, url: undefined });
+        }}
+        acceptMimePrefixes={['image/']}
+        disabled={!canEdit}
+        label="Image source"
+        hint="Pick from your portal files, paste a URL, or upload a new one (uploads become File items so they're governed)."
+      />
+      <Field
+        label="Alt text"
+        hint="Describe the image for screen readers. Leave blank if decorative."
+      >
         <input
           type="text"
           value={config.alt ?? ''}
@@ -2756,7 +2787,10 @@ function ImageWidgetConfig({
           <option value="none">None (actual size)</option>
         </select>
       </Field>
-      <Field label="Click target (optional)" hint="When set, the image becomes a link.">
+      <Field
+        label="Click target (optional)"
+        hint="When set, the image becomes a link."
+      >
         <input
           type="url"
           value={config.href ?? ''}
