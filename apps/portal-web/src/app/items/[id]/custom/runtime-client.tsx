@@ -448,7 +448,24 @@ export function CustomRuntimeClient({
                 gap: '6px',
               }}
             >
-              {page.widgets.map((w) => (
+              {/* User-reported bug: widgets placed on top of a Map
+                  widget (overlapping grid cells) sometimes vanished at
+                  runtime. Root cause: CSS Grid items with overlapping
+                  cells paint in DOM source order, and the user's
+                  page.widgets array often had the Map widget AFTER
+                  earlier-placed tool buttons (typical authoring flow:
+                  drop a few toolbar buttons, then add the big Map
+                  widget). Map rendered last -> Map painted on top ->
+                  earlier widgets got covered.
+
+                  Fix: sort the render order so Map widgets always
+                  paint first (underneath) and everything else paints
+                  on top. The persisted array order is unchanged so
+                  saved apps don't churn; this is purely a render-time
+                  layering pass. Tabs containers also get the
+                  "underneath" treatment because their inner widgets
+                  share the same overlap semantics. */}
+              {sortForOverlapStacking(page.widgets).map((w) => (
                 <WidgetSlot key={w.id} widget={w} />
               ))}
             </div>
@@ -457,6 +474,36 @@ export function CustomRuntimeClient({
       </div>
     </CustomMapsContext.Provider>
   );
+}
+
+/**
+ * Re-order widgets for runtime rendering so overlapping cells paint
+ * in the right z-order. The persisted array order is the AUTHOR's
+ * order (which determines selection-cycle, page navigation, etc. in
+ * the designer); render order is independent.
+ *
+ * Rendering rule: Map widgets and Tabs containers paint UNDERNEATH
+ * everything else. Without this, a user who drops a couple of
+ * toolbar buttons and then adds a Map widget ends up with the Map
+ * covering those buttons at runtime because the Map's section comes
+ * LATER in DOM source order and CSS Grid paints later items on top.
+ *
+ * Within each tier we preserve the author's order so two overlapping
+ * Map widgets (rare) still stack predictably and two overlapping
+ * toolbar buttons (also rare; the designer doesn't auto-collide)
+ * keep the author-visible order.
+ */
+function sortForOverlapStacking(widgets: CustomWidget[]): CustomWidget[] {
+  const beneath: CustomWidget[] = [];
+  const above: CustomWidget[] = [];
+  for (const w of widgets) {
+    if (w.kind === 'map' || w.kind === 'tabs') {
+      beneath.push(w);
+    } else {
+      above.push(w);
+    }
+  }
+  return [...beneath, ...above];
 }
 
 function WidgetSlot({ widget }: { widget: CustomWidget }) {
