@@ -372,6 +372,53 @@ export class DataLayerFeaturesController {
     return this.v3.pageFeatures(itemId, layerId, opts);
   }
 
+  /**
+   * #30: union bbox of the named features.  Powers the
+   * AttributeTable's "Zoom to selected" button in server-paged
+   * mode (where /features-page strips geometry from the response,
+   * so the client cannot compute a bbox locally).  Returns null
+   * when none of the requested ids have geometry; the client
+   * surfaces a friendly "no extent" message instead of zooming.
+   */
+  @Get('selection-extent')
+  async selectionExtent(
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('entityIds') entityIds?: string,
+    @Query('clip') clip?: string,
+  ): Promise<{ bbox: [number, number, number, number] | null }> {
+    const { geoLimit } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'read',
+    );
+    if (!entityIds) return { bbox: null };
+    const ids = entityIds
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) =>
+        /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+          s,
+        ),
+      )
+      .slice(0, 1000);
+    if (ids.length === 0) return { bbox: null };
+    const opts: {
+      entityIds: string[];
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+    } = { entityIds: ids };
+    if (geoLimit) opts.geoLimit = geoLimit;
+    if (clip) {
+      const geom = await this.resolveBoundaryGeometry(clip);
+      if (geom) opts.boundaryClip = geom;
+    }
+    const bbox = await this.v3.selectionExtent(itemId, layerId, opts);
+    return { bbox };
+  }
+
   /** GeoJSON view of a single layer: the map editor's overlay source
    *  hits this per-layer URL for v3 items, the same way v2 items use
    *  /items/:id/geojson. */

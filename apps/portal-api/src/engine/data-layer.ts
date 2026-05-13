@@ -741,6 +741,95 @@ export class DataLayerEngine {
   }
 
   /**
+   * #30: union bbox of the named features in WGS84.  Used by the
+   * AttributeTable's "Zoom to selected" affordance in server-paged
+   * mode: /features-page strips geometry to keep the payload small,
+   * so the client cannot compute a bbox locally and falls back to
+   * this endpoint.  Returns null when none of the requested entities
+   * have geometry (table layers, or selection of all-null-geom rows)
+   * so the caller can surface a friendly "no extent" message.
+   *
+   * Geo-limit and boundary-clip filters are applied the same way
+   * pageFeatures applies them, so a user with a clipped view of a
+   * layer can't zoom to a feature outside their clip via this
+   * endpoint.
+   */
+  async selectionExtent(args: {
+    itemId: string;
+    layerId: string;
+    entityIds: string[];
+    geoLimit?: GeoJsonGeometry;
+    boundaryClip?: GeoJsonGeometry;
+  }): Promise<[number, number, number, number] | null> {
+    if (args.entityIds.length === 0) return null;
+    const scope = this.scope(args.itemId, args.layerId);
+    // Same UUID coercion + cap as pageFeatures so the planner sees
+    // a safe IN list.
+    const ids = args.entityIds.slice(0, 1000);
+
+    const filters: Prisma.Sql[] = [];
+    if (args.geoLimit !== undefined) {
+      const json = JSON.stringify(args.geoLimit);
+      filters.push(
+        Prisma.sql`AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+      );
+    }
+    if (args.boundaryClip !== undefined) {
+      const json = JSON.stringify(args.boundaryClip);
+      filters.push(
+        Prisma.sql`AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+      );
+    }
+    const filterExtras =
+      filters.length > 0 ? Prisma.join(filters, ' ') : Prisma.empty;
+
+    // Pick the latest observation per entity (DISTINCT ON), then
+    // aggregate ST_Extent over the resulting geometries.  The outer
+    // SELECT uses ST_Extent which returns a `box2d`; we read its
+    // bounds via ST_XMin/ST_YMin/ST_XMax/ST_YMax to get plain
+    // numbers back to JS without a custom Prisma type.
+    interface ExtentRow {
+      xmin: number | null;
+      ymin: number | null;
+      xmax: number | null;
+      ymax: number | null;
+    }
+    const rows = await this.prisma.$queryRaw<ExtentRow[]>`
+      WITH current AS (
+        SELECT DISTINCT ON (entity)
+          entity, geom
+        FROM observation
+        WHERE scope = ${scope}
+          AND valid_to IS NULL
+          AND kind <> 'delete'
+          AND geom IS NOT NULL
+          AND entity = ANY(ARRAY[${Prisma.join(
+            ids.map((id) => Prisma.sql`${id}::uuid`),
+          )}])
+          ${filterExtras}
+        ORDER BY entity, valid_from DESC, tx_time DESC
+      )
+      SELECT
+        ST_XMin(ST_Extent(geom)) AS xmin,
+        ST_YMin(ST_Extent(geom)) AS ymin,
+        ST_XMax(ST_Extent(geom)) AS xmax,
+        ST_YMax(ST_Extent(geom)) AS ymax
+      FROM current
+    `;
+    const r = rows[0];
+    if (
+      !r ||
+      r.xmin === null ||
+      r.ymin === null ||
+      r.xmax === null ||
+      r.ymax === null
+    ) {
+      return null;
+    }
+    return [r.xmin, r.ymin, r.xmax, r.ymax];
+  }
+
+  /**
    * Build a Mapbox Vector Tile for one layer at a given z/x/y. The
    * tile contains the layer's current-state features clipped to the
    * tile envelope.

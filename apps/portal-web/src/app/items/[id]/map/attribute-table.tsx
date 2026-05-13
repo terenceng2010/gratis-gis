@@ -847,8 +847,47 @@ export function AttributeTable({
   }
 
   function zoomToSelection() {
-    const bbox = bboxOfKeySet(activeSelection);
-    if (bbox) onZoomTo(bbox);
+    // Two paths.  In client-mode the AttributeTable already has the
+    // features (with geometry) in memory, so bboxOfKeySet computes
+    // the union without a round-trip.  In server-paged mode the
+    // /features-page response strips geometry to keep payloads
+    // small, so we hit the dedicated /selection-extent endpoint
+    // which runs ST_Extent against the entities in PostGIS and
+    // returns the bbox.  Either way: if the bbox resolves, fly
+    // there; if not, no-op (server-side may return null when the
+    // selected features are all non-spatial).
+    const localBbox = bboxOfKeySet(activeSelection);
+    if (localBbox) {
+      onZoomTo(localBbox);
+      return;
+    }
+    if (!serverMode || !serverItemId || !serverLayerKey) return;
+    // Selection in server-paged mode is a Set keyed by entity uuid
+    // (string).  Filter for the uuid-shaped entries so a stray
+    // numeric key (from a mixed-mode flow) doesn't slip past
+    // request validation.  Cap at 1000 to match the controller.
+    const UUID_RE =
+      /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    const ids = [...activeSelection]
+      .filter((v): v is string => typeof v === 'string' && UUID_RE.test(v))
+      .slice(0, 1000)
+      .join(',');
+    if (ids.length === 0) return;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/portal/items/${serverItemId}/layers/${serverLayerKey}/selection-extent?entityIds=${encodeURIComponent(ids)}`,
+          { cache: 'no-store' },
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          bbox: [number, number, number, number] | null;
+        };
+        if (body.bbox) onZoomTo(body.bbox);
+      } catch {
+        // Best-effort: a network blip should not derail the table.
+      }
+    })();
   }
 
   /**

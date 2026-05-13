@@ -256,6 +256,34 @@ export class DataLayerFeaturesService {
   }
 
   /**
+   * #30: union bbox of a set of feature ids.  Powers "Zoom to
+   * selected" in the attribute table when running against a v3
+   * layer in server-paged mode (where /features-page strips
+   * geometry so the client cannot compute a bbox locally).
+   */
+  async selectionExtent(
+    itemId: string,
+    layerId: string,
+    args: {
+      entityIds: string[];
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+    },
+  ): Promise<[number, number, number, number] | null> {
+    return this.dataLayer.selectionExtent({
+      itemId,
+      layerId,
+      entityIds: args.entityIds,
+      ...(args.geoLimit !== undefined
+        ? { geoLimit: args.geoLimit as GeoJsonGeometry }
+        : {}),
+      ...(args.boundaryClip !== undefined
+        ? { boundaryClip: args.boundaryClip as GeoJsonGeometry }
+        : {}),
+    });
+  }
+
+  /**
    * Vector-tile bytes for one layer at z/x/y (#115 P12).
    *
    * Pure read-through to DataLayerEngine.mvtTile. Kept here so the
