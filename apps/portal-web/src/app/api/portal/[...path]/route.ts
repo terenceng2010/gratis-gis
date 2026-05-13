@@ -9,6 +9,7 @@
  */
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { authOptions, type SessionWithToken } from '@/lib/auth';
 
 const API_BASE = process.env.PORTAL_API_URL ?? 'http://localhost:4000';
@@ -238,6 +239,32 @@ async function forward(req: NextRequest, pathSegments: string[]) {
         `session=${tSession - t0}ms upstream=${tUpstream - tSession}ms ` +
         `(streaming through)`,
     );
+  }
+  // Bust the Next.js Router Cache for the items list (and the
+  // specific item detail page when present) after any successful
+  // mutating call on an `items/...` path.  Without this, a thumbnail
+  // / title edit only shows up in /items after the 30s default cache
+  // window expires; users edit, navigate back, and stare at a stale
+  // card thinking nothing happened.
+  //
+  // Cheap and best-effort: revalidatePath only invalidates the
+  // server-side render cache; subsequent navigations re-render the
+  // page server-side from a fresh apiFetch (which is already
+  // `cache: 'no-store'`).
+  if (
+    upstream.ok &&
+    (req.method === 'POST' ||
+      req.method === 'PATCH' ||
+      req.method === 'PUT' ||
+      req.method === 'DELETE') &&
+    /^items(\/|$)/.test(suffix)
+  ) {
+    revalidatePath('/items');
+    const idMatch = /^items\/([^/]+)/.exec(suffix);
+    if (idMatch?.[1]) {
+      revalidatePath(`/items/${idMatch[1]}`);
+      revalidatePath(`/items/${idMatch[1]}/edit`);
+    }
   }
   return new NextResponse(upstream.body, {
     status: upstream.status,

@@ -151,21 +151,28 @@ export function ItemCard({
   //   2. caller-supplied per-type fallbackIcon on a type-colored tile
   //   3. legacy initials badge (back-compat for callers that haven't
   //      opted into type icons yet)
+  //
+  // Slot is a fixed 3:2 aspect ratio (matches the auto-thumbnail
+  // SVG's viewBox) so cards never crop the bottom of the title bar
+  // when the column width changes.  Previous fixed-height h-32 slot
+  // cropped aggressively on wider columns.
   let thumbnail: ReactNode;
   if (item.thumbnailUrl) {
     thumbnail = (
-      <img
-        src={item.thumbnailUrl}
-        alt=""
-        className="h-32 w-full rounded-md object-cover"
-      />
+      <div className="aspect-[3/2] w-full overflow-hidden rounded-md">
+        <img
+          src={item.thumbnailUrl}
+          alt=""
+          className="h-full w-full object-cover"
+        />
+      </div>
     );
   } else if (fallbackIcon) {
     const tileBg = typeTileBg[item.type] ?? 'bg-slate-500/90 text-white';
     thumbnail = (
       <div
         className={cn(
-          'flex h-32 w-full items-center justify-center overflow-hidden rounded-md',
+          'flex aspect-[3/2] w-full items-center justify-center overflow-hidden rounded-md',
           tileBg,
         )}
       >
@@ -176,7 +183,7 @@ export function ItemCard({
     );
   } else {
     thumbnail = (
-      <div className="h-32 w-full overflow-hidden rounded-md">
+      <div className="aspect-[3/2] w-full overflow-hidden rounded-md">
         <EntityBadge
           label={item.title}
           seed={item.id}
