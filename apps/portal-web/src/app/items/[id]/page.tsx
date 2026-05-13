@@ -1031,7 +1031,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
       ) : item.type === 'theme' ? (
         <AppThemeDetail
           itemId={item.id}
-          blueprint={
+          initialBlueprint={
             (item.data && typeof item.data === 'object'
               ? item.data
               : { version: 1, swatch: '', tokens: {} }) as {
@@ -1041,6 +1041,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             }
           }
           seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
+          canEdit={canManage}
         />
       ) : (
         <section className="mb-6">
