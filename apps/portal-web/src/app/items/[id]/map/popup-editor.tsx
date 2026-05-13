@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 'use client';
 
-import { useMemo, useRef } from 'react';
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
+import { useMemo } from 'react';
+import { ArrowDown, ArrowUp, Trash2 } from 'lucide-react';
 import type { MapLayerPopup } from '@gratis-gis/shared-types';
 import type { LayerMetadata } from './layer-metadata';
+import { TemplateInput } from './template-input';
 
 interface Props {
   value: MapLayerPopup;
@@ -93,58 +94,22 @@ function TitleEditor({
   metadata: LayerMetadata;
   onPatch: (p: Partial<MapLayerPopup>) => void;
 }) {
-  const ref = useRef<HTMLInputElement>(null);
-
-  function insertField(field: string) {
-    const input = ref.current;
-    if (!input) return;
-    const token = `{{${field}}}`;
-    const start = input.selectionStart ?? value.titleTemplate.length;
-    const end = input.selectionEnd ?? value.titleTemplate.length;
-    const next =
-      value.titleTemplate.slice(0, start) +
-      token +
-      value.titleTemplate.slice(end);
-    onPatch({ titleTemplate: next });
-    requestAnimationFrame(() => {
-      input.focus();
-      const caret = start + token.length;
-      input.setSelectionRange(caret, caret);
-    });
-  }
-
+  const sample = useMemo(
+    () => metadata.sampleProperties ?? synthesizeSample(metadata),
+    [metadata],
+  );
   return (
     <div>
       <label className="mb-1 block text-[10px] uppercase tracking-wide text-muted">
         Title template
       </label>
-      <div className="flex gap-2">
-        <input
-          ref={ref}
-          type="text"
-          value={value.titleTemplate}
-          onChange={(e) => onPatch({ titleTemplate: e.target.value })}
-          placeholder={`{{name}}  (defaults to layer title)`}
-          className="h-8 min-w-0 flex-1 rounded border border-border bg-surface-1 px-2 font-mono text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
-        />
-        {metadata.fields.length > 0 ? (
-          <select
-            value=""
-            onChange={(e) => {
-              if (e.target.value) insertField(e.target.value);
-              e.target.value = '';
-            }}
-            className="h-8 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
-          >
-            <option value="">Insert field...</option>
-            {metadata.fields.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-        ) : null}
-      </div>
+      <TemplateInput
+        value={value.titleTemplate}
+        onChange={(next) => onPatch({ titleTemplate: next })}
+        fields={metadata.fields}
+        sampleProperties={sample}
+        placeholder={`{{name}}  (defaults to layer title)`}
+      />
     </div>
   );
 }
@@ -267,99 +232,26 @@ function TemplateEditor({
   metadata: LayerMetadata;
   onPatch: (p: Partial<MapLayerPopup>) => void;
 }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-
-  function insert(text: string) {
-    const el = ref.current;
-    if (!el) return;
-    const start = el.selectionStart ?? value.bodyTemplate.length;
-    const end = el.selectionEnd ?? value.bodyTemplate.length;
-    const next =
-      value.bodyTemplate.slice(0, start) + text + value.bodyTemplate.slice(end);
-    onPatch({ bodyTemplate: next });
-    requestAnimationFrame(() => {
-      el.focus();
-      const caret = start + text.length;
-      el.setSelectionRange(caret, caret);
-    });
-  }
-
   // Live preview: render the body against a sample feature, falling
   // back to a synthetic one if the layer hasn't loaded any yet.
   const sample = useMemo(
     () => metadata.sampleProperties ?? synthesizeSample(metadata),
     [metadata],
   );
-  const preview = useMemo(
-    () => renderPreview(value.bodyTemplate, sample),
-    [value.bodyTemplate, sample],
-  );
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {metadata.fields.length > 0 ? (
-          <select
-            value=""
-            onChange={(e) => {
-              if (e.target.value) insert(`{{${e.target.value}}}`);
-              e.target.value = '';
-            }}
-            className="h-8 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
-          >
-            <option value="">Insert field...</option>
-            {metadata.fields.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <select
-          value=""
-          onChange={(e) => {
-            if (e.target.value) insert(e.target.value);
-            e.target.value = '';
-          }}
-          className="h-8 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
-        >
-          <option value="">Insert formatter...</option>
-          <option value="| upper">| upper</option>
-          <option value="| lower">| lower</option>
-          <option value="| number">| number</option>
-          <option value="| currency:USD">| currency:USD</option>
-          <option value="| date:short">| date:short</option>
-          <option value="| date:medium">| date:medium</option>
-        </select>
-        <button
-          type="button"
-          onClick={() => insert('<br>')}
-          className="h-8 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
-        >
-          +line break
-        </button>
-      </div>
-
-      <textarea
-        ref={ref}
+      <TemplateInput
         value={value.bodyTemplate}
-        onChange={(e) => onPatch({ bodyTemplate: e.target.value })}
+        onChange={(next) => onPatch({ bodyTemplate: next })}
+        fields={metadata.fields}
+        sampleProperties={sample}
         placeholder={`<strong>{{name}}</strong><br>\nCategory: {{category}}<br>\nFloors: {{floors | number}}`}
+        multiline
         rows={6}
-        className="w-full rounded border border-border bg-surface-0 px-2 py-1.5 font-mono text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+        previewAsHtml
+        extraInserts={[{ label: '+line break', insert: '<br>' }]}
       />
-
-      <div>
-        <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
-          Preview
-        </div>
-        <div
-          className="gg-popup rounded border border-dashed border-border bg-surface-1 p-3"
-          /* eslint-disable-next-line react/no-danger */
-          dangerouslySetInnerHTML={{ __html: preview }}
-        />
-      </div>
-
       <p className="text-[11px] text-muted">
         <code className="rounded bg-surface-2 px-1">{`{{field}}`}</code> reads
         a property;{' '}
@@ -395,71 +287,16 @@ function ModeBtn({
   );
 }
 
+/**
+ * Build a sample feature for the live preview when the canvas hasn't
+ * loaded a real one yet.  Each known field gets either the first
+ * cached value or a `<field>` placeholder so the template renders
+ * readably while the author is typing.
+ */
 function synthesizeSample(metadata: LayerMetadata): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of metadata.fields) {
     out[f] = metadata.valuesByField[f]?.[0] ?? `<${f}>`;
   }
   return out;
-}
-
-/**
- * Render a template string against sample properties, mirroring the
- * canvas's runtime renderer so preview matches what the user will see
- * at click time. Kept small and dependency-free.
- */
-function renderPreview(
-  template: string,
-  props: Record<string, unknown>,
-): string {
-  if (!template) return '<em class="gg-popup-empty">(empty template)</em>';
-  return template.replace(
-    /\{\{\s*([\w.-]+)\s*(?:\|\s*([\w.-]+)(?:\s*:\s*([^}]+))?\s*)?\}\}/g,
-    (_, key: string, formatter?: string, arg?: string) => {
-      const raw = props[key];
-      if (raw === undefined || raw === null) return '';
-      const str = String(raw);
-      const fmt = formatter?.toLowerCase();
-      let out = str;
-      if (fmt === 'upper') out = str.toUpperCase();
-      else if (fmt === 'lower') out = str.toLowerCase();
-      else if (fmt === 'number') {
-        const n = Number(str);
-        if (!Number.isNaN(n)) out = n.toLocaleString();
-      } else if (fmt === 'currency') {
-        const n = Number(str);
-        if (!Number.isNaN(n)) {
-          try {
-            out = n.toLocaleString(undefined, {
-              style: 'currency',
-              currency: arg?.trim() || 'USD',
-            });
-          } catch {
-            out = n.toLocaleString();
-          }
-        }
-      } else if (fmt === 'date') {
-        const d = new Date(str);
-        if (!Number.isNaN(d.getTime())) {
-          const style =
-            (arg?.trim() as 'short' | 'long' | 'full' | undefined) ?? 'medium';
-          try {
-            out = d.toLocaleDateString(undefined, { dateStyle: style });
-          } catch {
-            out = d.toLocaleDateString();
-          }
-        }
-      }
-      return escapeHtml(out);
-    },
-  );
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
