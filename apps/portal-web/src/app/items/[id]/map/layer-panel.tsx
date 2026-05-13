@@ -43,6 +43,7 @@ import { RendererEditor } from './renderer-editor';
 import { FilterEditor } from './filter-editor';
 import { PopupEditor } from './popup-editor';
 import { LabelsEditor } from './labels-editor';
+import { TemplateInput } from './template-input';
 import { makeEmptyGroupLayer, uniqueGroupTitle } from './group-factory';
 import { isTableLayer, type LayerMetadata } from './layer-metadata';
 import { LayerSwatch } from './layer-swatch';
@@ -1220,7 +1221,7 @@ function LayerRow({
                 </div>
                 <SearchConfig
                   value={layer.search}
-                  fields={metadata.fields}
+                  metadata={metadata}
                   onChange={(search) => onPatch({ search })}
                 />
                 <p className="mt-2 text-[11px] text-muted">
@@ -1331,13 +1332,14 @@ function MenuItem({
  */
 function SearchConfig({
   value,
-  fields,
+  metadata,
   onChange,
 }: {
   value: MapLayerSearch;
-  fields: string[];
+  metadata: LayerMetadata;
   onChange: (next: MapLayerSearch) => void;
 }) {
+  const fields = metadata.fields;
   function patch(p: Partial<MapLayerSearch>) {
     onChange({ ...value, ...p });
   }
@@ -1349,6 +1351,19 @@ function SearchConfig({
     patch({ fields: value.fields.filter((f) => f !== name) });
   }
   const unpicked = fields.filter((f) => !value.fields.includes(f));
+
+  // Result-label preview uses the same synthesized sample row the
+  // popup editor does so the author sees what the search-results
+  // dropdown will show at runtime.  Falling back to a <field>
+  // placeholder per column when no real feature is loaded yet
+  // keeps the preview readable while typing.
+  const sample = metadata.sampleProperties ?? (() => {
+    const out: Record<string, unknown> = {};
+    for (const f of fields) {
+      out[f] = metadata.valuesByField[f]?.[0] ?? `<${f}>`;
+    }
+    return out;
+  })();
 
   return (
     <div className="mt-3 border-t border-border pt-3">
@@ -1430,12 +1445,12 @@ function SearchConfig({
             <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
               Result label (optional)
             </div>
-            <input
-              type="text"
+            <TemplateInput
               value={value.labelTemplate}
-              onChange={(e) => patch({ labelTemplate: e.target.value })}
+              onChange={(next) => patch({ labelTemplate: next })}
+              fields={fields}
+              sampleProperties={sample}
               placeholder={`{{apn}}: {{situs}}`}
-              className="h-7 w-full rounded border border-border bg-surface-1 px-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
             />
             <p className="mt-1 text-[11px] text-muted">
               Same{' '}
