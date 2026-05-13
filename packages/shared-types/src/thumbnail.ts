@@ -27,14 +27,31 @@ export interface ThumbnailDesign {
   version: 1;
   /**
    * Background fill color as a CSS color string.  Hex, rgb(), or hsl()
-   * all work.  Stored as a full CSS color (not bare HSL components)
-   * because the SVG renderer needs a single drop-in string and these
-   * blobs are also consumed by a future client-side designer preview
-   * where authors pick via a color input that emits hex.
+   * all work.  Renders as the bottom layer; visible wherever the
+   * background image (if any) leaves space and through the
+   * semi-transparent sidebar / title bar overlays.
    */
   background: string;
+  /**
+   * Optional full-bleed background image, either an absolute URL or
+   * a `data:` URL.  Renders above the background color and below
+   * the sidebar + title-bar overlays.  Honors `backgroundOpacity`
+   * so the underlying color can show through.
+   */
+  backgroundImage?: string | null;
+  /**
+   * Background image opacity (0..1).  Defaults to 1 (fully visible).
+   * Lets the author fade the image so the chrome reads cleanly.
+   */
+  backgroundOpacity?: number;
   /** Sidebar strip fill color. */
   sidebar: string;
+  /**
+   * Sidebar fill opacity (0..1).  Defaults to 1.  Lower values let
+   * the background bleed through, mimicking AGO's polished
+   * thumbnail look.
+   */
+  sidebarOpacity?: number;
   /**
    * Optional override of the type-label text shown in the sidebar.
    * When null / missing the renderer falls back to whatever the
@@ -43,19 +60,30 @@ export interface ThumbnailDesign {
    */
   sidebarLabelOverride?: string | null;
   /**
-   * Optional full-bleed background image, either an absolute URL or
-   * a `data:` URL.  When set, renders behind the sidebar and title
-   * overlays.  Future basemap-thumbnail path uses this to render a
-   * sample-tile rendering of the basemap as the bg (#67).
+   * Title-bar fill color.  The title overlay sits across the bottom
+   * of the canvas behind the item title text.  Defaults to the
+   * sidebar color when unset so an author who only edits sidebar
+   * still gets a coordinated palette.
    */
-  backgroundImage?: string | null;
+  titleBar?: string;
+  /**
+   * Title-bar fill opacity (0..1).  Defaults to ~0.85 so the title
+   * stays legible while letting the background tease through.
+   */
+  titleBarOpacity?: number;
+  /**
+   * Optional logo image URL (absolute or `data:`).  Renders in the
+   * top-right of the background area, above the title bar.  Null /
+   * missing = no logo.
+   */
+  logo?: string | null;
 }
 
 /**
  * Per-item-type default colors used to seed a new item's thumbnail
- * design.  Mirrors the ItemCard tile palette in @gratis-gis/ui so
- * cards and thumbnails feel visually coherent.  Background is a
- * desaturated tint of the sidebar color so the two work as a pair.
+ * design.  Sidebar drives the type-coded right-side strip and the
+ * title-bar tint; background is a desaturated tint of the same hue
+ * so the two work as a pair when there's no background image.
  */
 const TYPE_PALETTE: Record<string, { sidebar: string; background: string }> = {
   map: { sidebar: '#10b981', background: '#ecfdf5' },
@@ -90,15 +118,26 @@ const TYPE_PALETTE: Record<string, { sidebar: string; background: string }> = {
  * Build the default thumbnail design for a newly-created item.  The
  * caller is responsible for passing the item's type; title is read
  * live by the renderer at request time, not baked in here.
+ *
+ * Defaults reach for a polished out-of-the-box look that resembles
+ * the AGO Story Map template that inspired the redesign: full-bleed
+ * background color, type-coded sidebar at ~95% opacity, title bar
+ * across the bottom at ~80% opacity so the background reads
+ * through.
  */
 export function defaultThumbnailDesign(type: ItemType): ThumbnailDesign {
   const palette = TYPE_PALETTE[type] ?? { sidebar: '#475569', background: '#f8fafc' };
   return {
     version: 1,
     background: palette.background,
-    sidebar: palette.sidebar,
-    sidebarLabelOverride: null,
     backgroundImage: null,
+    backgroundOpacity: 1,
+    sidebar: palette.sidebar,
+    sidebarOpacity: 0.95,
+    sidebarLabelOverride: null,
+    titleBar: palette.sidebar,
+    titleBarOpacity: 0.8,
+    logo: null,
   };
 }
 
@@ -106,20 +145,27 @@ export function defaultThumbnailDesign(type: ItemType): ThumbnailDesign {
  * Render a thumbnail SVG.  Returns a complete `<svg>` document
  * string ready for `Content-Type: image/svg+xml`.
  *
- * Layout (viewBox 600x400, 3:2 aspect):
+ * Four-layer composition (AGO Story Map style), viewBox 600x400:
  *
- *   +---------+-------------------------------+
- *   |         |                               |
- *   | sidebar |     title (auto-wrapped)      |
- *   | label   |     centered                  |
- *   |         |                               |
- *   +---------+-------------------------------+
+ *   +---------------------------------------+--+
+ *   |   [logo]                              |  |
+ *   |                                       |  |
+ *   |        background (image or color)    |s |
+ *   |                                       |i |
+ *   |                                       |d |
+ *   |                                       |e |
+ *   +---------------------------------------+b |
+ *   |   title text on title bar (transp.)   |ar|
+ *   +---------------------------------------+--+
  *
- * The sidebar is a 120-px-wide strip.  Title autosizes between 32
- * and 56 px based on string length, and wraps at word boundaries
- * across up to three lines (longer titles truncate with an
- * ellipsis on the third line).  Sidebar label uses 22 px text
- * vertically stacked at the top of the sidebar.
+ * Layer order (bottom to top):
+ *   1. background color (always)
+ *   2. background image (optional, honors backgroundOpacity)
+ *   3. title bar (semi-transparent strip across the bottom)
+ *   4. sidebar (semi-transparent strip on the right, overlaps title bar)
+ *   5. logo (optional, top-left of background area)
+ *   6. title text (on title bar, right of sidebar)
+ *   7. rotated type label (on sidebar)
  */
 export function renderThumbnailSvg(args: {
   title: string;
@@ -129,89 +175,121 @@ export function renderThumbnailSvg(args: {
 }): string {
   const { title, typeLabel, design } = args;
   const label = design.sidebarLabelOverride ?? typeLabel;
-  const titleColor = pickContrastColor(design.background);
+
+  // Effective opacities + colors with sensible fallbacks so older
+  // rows without the new fields still render.
+  const bgImageOpacity = clamp01(design.backgroundOpacity ?? 1);
+  const sidebarOpacity = clamp01(design.sidebarOpacity ?? 0.95);
+  const titleBarColor = design.titleBar ?? design.sidebar;
+  const titleBarOpacity = clamp01(design.titleBarOpacity ?? 0.8);
+
+  // Layout: right-side sidebar so the AGO-template look feels
+  // familiar to authors coming from there.
+  const W = 600;
+  const H = 400;
+  const sidebarWidth = 70;
+  const sidebarX = W - sidebarWidth;
+  const titleBarHeight = 90;
+  const titleBarY = H - titleBarHeight;
+  const titleAreaLeft = 24;
+  const titleAreaWidth = sidebarX - titleAreaLeft - 24;
+
+  // Title color reads on the title bar, not the bare background,
+  // so contrast picks against the bar's effective tint.
+  const titleColor = pickContrastColor(titleBarColor);
   const labelColor = pickContrastColor(design.sidebar);
 
-  const sidebarWidth = 120;
-  const padding = 24;
-  const mainWidth = 600 - sidebarWidth;
-  const mainLeft = sidebarWidth;
-  const mainCenterX = mainLeft + mainWidth / 2;
-
-  const { lines, fontSize } = wrapTitle(title, mainWidth - padding * 2);
+  const { lines, fontSize } = wrapTitle(title, titleAreaWidth, titleBarHeight);
   const lineHeight = fontSize * 1.15;
   const blockHeight = lineHeight * lines.length;
-  const blockTop = (400 - blockHeight) / 2 + fontSize * 0.85;
+  // Vertically center the title block inside the title bar.
+  const blockTop =
+    titleBarY + (titleBarHeight - blockHeight) / 2 + fontSize * 0.82;
+
+  // Logo position: top-left corner of the main area, with comfortable
+  // padding.  64x64 max; the <image> preserves aspect ratio.
+  const logoSize = 88;
+  const logoX = 20;
+  const logoY = 20;
+
+  // Rotated type label: anchor on the sidebar center, rotate -90
+  // around that anchor so the text runs from bottom to top.  Bumps
+  // the font size a touch since the label is the primary affordance
+  // on the sidebar.
+  const labelSize = 22;
+  const labelCx = sidebarX + sidebarWidth / 2;
+  // Center vertically within the part of the sidebar that's not
+  // covered by the title bar so the label doesn't collide with it.
+  const labelCy = (titleBarY) / 2 + 30;
 
   const bgImageHref = design.backgroundImage;
+  const logoHref = design.logo;
 
-  // Vertical sidebar label: stack two lines if the label has a space
-  // and the second word is short enough to fit.  Single line otherwise,
-  // top-aligned with comfortable padding.
-  const labelLines = splitLabel(label);
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${escapeXml(label)}: ${escapeXml(title)}">
-  <rect width="600" height="400" fill="${escapeXml(design.background)}"/>
-  ${bgImageHref ? `<image href="${escapeXml(bgImageHref)}" x="${mainLeft}" y="0" width="${mainWidth}" height="400" preserveAspectRatio="xMidYMid slice"/>` : ''}
-  <rect x="0" y="0" width="${sidebarWidth}" height="400" fill="${escapeXml(design.sidebar)}"/>
-  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="${labelColor}" text-anchor="middle">
-    ${labelLines
-      .map(
-        (line, i) =>
-          `<text x="${sidebarWidth / 2}" y="${36 + i * 26}" font-size="20" font-weight="600">${escapeXml(line)}</text>`,
-      )
-      .join('\n    ')}
-  </g>
-  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="${titleColor}" text-anchor="middle" font-weight="700">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${escapeXml(label)}: ${escapeXml(title)}">
+  <rect width="${W}" height="${H}" fill="${escapeXml(design.background)}"/>
+  ${
+    bgImageHref
+      ? `<image href="${escapeXml(bgImageHref)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" opacity="${bgImageOpacity}"/>`
+      : ''
+  }
+  <rect x="0" y="${titleBarY}" width="${W}" height="${titleBarHeight}" fill="${escapeXml(titleBarColor)}" fill-opacity="${titleBarOpacity}"/>
+  <rect x="${sidebarX}" y="0" width="${sidebarWidth}" height="${H}" fill="${escapeXml(design.sidebar)}" fill-opacity="${sidebarOpacity}"/>
+  ${
+    logoHref
+      ? `<image href="${escapeXml(logoHref)}" x="${logoX}" y="${logoY}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet"/>`
+      : ''
+  }
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="${titleColor}" font-weight="700">
     ${lines
       .map(
         (line, i) =>
-          `<text x="${mainCenterX}" y="${blockTop + i * lineHeight}" font-size="${fontSize}">${escapeXml(line)}</text>`,
+          `<text x="${titleAreaLeft}" y="${blockTop + i * lineHeight}" font-size="${fontSize}">${escapeXml(line)}</text>`,
       )
       .join('\n    ')}
+  </g>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="${labelColor}" font-weight="600" letter-spacing="0.08em">
+    <text x="${labelCx}" y="${labelCy}" font-size="${labelSize}" text-anchor="middle" transform="rotate(-90 ${labelCx} ${labelCy})">${escapeXml(label.toUpperCase())}</text>
   </g>
 </svg>`;
 }
 
-/**
- * Split a label into 1-2 stacked words for the sidebar.  Two-word
- * labels like "Data layer" wrap to two lines; longer labels stay on
- * one line so they don't tower out of the strip.
- */
-function splitLabel(label: string): string[] {
-  const words = label.trim().split(/\s+/);
-  if (words.length <= 1) return [label.trim()];
-  if (words.length === 2 && words.every((w) => w.length <= 9)) {
-    return words;
-  }
-  return [label.trim()];
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
 }
 
 /**
- * Word-wrap the title across up to three lines and pick a font size
- * that fits.  Character widths are estimated by the average glyph
- * advance at the chosen font size (≈ 0.55 em for the system stack);
- * close enough for layout without a real font-metrics lookup.
+ * Word-wrap the title across up to two lines (the title bar is
+ * deliberately short so the title doesn't tower over the background
+ * image).  Picks the largest font that fits in the available width
+ * and line count.  Character widths are estimated at ~0.55 em for
+ * the system stack; close enough for layout without a real font-
+ * metrics lookup.
  */
 function wrapTitle(
   title: string,
   maxWidthPx: number,
+  maxHeightPx: number,
 ): { lines: string[]; fontSize: number } {
   const cleaned = title.trim() || '(Untitled)';
-  // Try font sizes from largest to smallest until 3 lines fit.
-  for (const fontSize of [56, 48, 40, 34, 30]) {
+  // Cap lines so the title fits in the bar: roughly fontSize * 1.15 *
+  // lines <= maxHeightPx, with a 1.6 padding factor.
+  for (const fontSize of [34, 30, 26, 22, 20, 18]) {
     const approxCharWidth = fontSize * 0.55;
     const maxChars = Math.max(6, Math.floor(maxWidthPx / approxCharWidth));
     const lines = greedyWrap(cleaned, maxChars);
-    if (lines.length <= 3) {
+    const blockHeight = fontSize * 1.15 * lines.length;
+    if (lines.length <= 2 && blockHeight <= maxHeightPx - 12) {
       return { lines, fontSize };
     }
   }
-  // Title is huge; truncate to 3 lines at the smallest font.
-  const fontSize = 28;
+  // Title is huge; truncate to 2 lines at the smallest font.
+  const fontSize = 16;
   const approxCharWidth = fontSize * 0.55;
   const maxChars = Math.max(6, Math.floor(maxWidthPx / approxCharWidth));
-  const lines = greedyWrap(cleaned, maxChars).slice(0, 3);
+  const lines = greedyWrap(cleaned, maxChars).slice(0, 2);
   const last = lines[lines.length - 1];
   if (last && last.length > 3) {
     lines[lines.length - 1] = last.slice(0, maxChars - 1) + '…';

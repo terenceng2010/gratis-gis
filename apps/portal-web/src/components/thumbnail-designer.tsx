@@ -2,18 +2,22 @@
 'use client';
 
 /**
- * Thumbnail designer (#66).  Replaces the previous "Upload image"
- * affordance on item edit with an inline two-color picker over a
- * live SVG preview.  Because the rendering happens at request time
- * from the design blob plus the item's current title and type, the
- * editor only has two knobs (sidebar fill + background fill) — the
- * sidebar text and title text are derived and always render to keep
- * the portal's thumbnail grammar consistent (see project memory:
- * thumbnail designer 2026-05-13).
+ * Thumbnail designer (#66 + polish pass #73).  Replaces the previous
+ * "Upload image" affordance on item edit with a four-layer composer
+ * that matches the AGO ArcGISThumbnailBuilder Story Map template:
  *
- * The author can revert to the type-default palette at any time;
- * the "Reset to default" button rewrites the design back to what
- * the backend would produce on a fresh create.
+ *   - Background: color OR full-bleed image, with image opacity
+ *   - Sidebar (right side): color + opacity; rotated type label
+ *   - Title bar (bottom): color + opacity; carries the item title
+ *   - Logo (optional): small image, top-left corner
+ *
+ * The sidebar text and title text always render and follow the
+ * item's name + type so a rename re-renders without a re-bake (per
+ * the project memory: "sidebar + title overlays always render").
+ *
+ * Image uploads (background image + logo) go through ImageUploader's
+ * presign-PUT-persist flow, same as the legacy thumbnail upload
+ * path; the resulting URL lands in the design blob.
  */
 import { useMemo } from 'react';
 import { RotateCcw } from 'lucide-react';
@@ -24,6 +28,7 @@ import {
   type ItemType,
   type ThumbnailDesign,
 } from '@gratis-gis/shared-types';
+import { ImageUploader } from '@/components/image-uploader';
 
 interface Props {
   /** Item type drives the type-default palette and the sidebar label. */
@@ -38,9 +43,6 @@ interface Props {
 }
 
 export function ThumbnailDesigner({ type, title, value, onChange }: Props) {
-  // Resolve the active design.  Empty / missing falls through to
-  // the type-default palette so the preview always renders
-  // something usable.
   const design = useMemo<ThumbnailDesign>(
     () => value ?? defaultThumbnailDesign(type),
     [value, type],
@@ -64,81 +66,156 @@ export function ThumbnailDesigner({ type, title, value, onChange }: Props) {
     onChange(defaultThumbnailDesign(type));
   }
 
+  // Fall-back values for the new fields so a design that predates
+  // the polish pass still renders something coherent in the sliders.
+  const sidebarOpacity = design.sidebarOpacity ?? 0.95;
+  const titleBarColor = design.titleBar ?? design.sidebar;
+  const titleBarOpacity = design.titleBarOpacity ?? 0.8;
+  const backgroundOpacity = design.backgroundOpacity ?? 1;
+
   return (
-    <div className="flex items-start gap-4">
-      <div
-        className="h-32 w-48 shrink-0 overflow-hidden rounded-md border border-border bg-surface-2"
-        aria-label="Thumbnail preview"
-        /* eslint-disable-next-line react/no-danger */
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <ColorRow
-          label="Sidebar"
-          hint="Strip on the left of the thumbnail. Carries the type label."
-          value={design.sidebar}
-          onChange={(v) => patch({ sidebar: v })}
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,_360px)_minmax(0,_1fr)]">
+      {/* Live preview pane */}
+      <div className="flex flex-col gap-2">
+        <div
+          className="aspect-[3/2] w-full overflow-hidden rounded-md border border-border bg-surface-2"
+          aria-label="Thumbnail preview"
+          /* eslint-disable-next-line react/no-danger */
+          dangerouslySetInnerHTML={{ __html: svg }}
         />
-        <ColorRow
-          label="Background"
-          hint="Fill behind the title text."
-          value={design.background}
-          onChange={(v) => patch({ background: v })}
-        />
-        <div className="flex items-center justify-between gap-2 pt-1">
+        <div className="flex items-center justify-between">
           <p className="text-[11px] text-muted">
-            Title and type label always render. They follow the item
-            name and type so a rename updates the thumbnail with no
-            re-bake.
+            Title and type label follow the item name and type. A
+            rename refreshes the thumbnail with no re-bake.
           </p>
           <button
             type="button"
             onClick={reset}
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
-            title="Reset to the type default palette"
+            title="Reset every layer to the type default palette"
           >
             <RotateCcw className="h-3 w-3" />
             Reset
           </button>
         </div>
       </div>
+
+      {/* Layer controls */}
+      <div className="space-y-4">
+        <LayerSection title="Background" hint="Color or image behind everything.">
+          <ColorRow
+            label="Color"
+            value={design.background}
+            onChange={(v) => patch({ background: v })}
+          />
+          <ImageRow
+            label="Image"
+            hint="Optional. Renders above the color, with the opacity slider below."
+            value={design.backgroundImage ?? null}
+            onChange={(v) => patch({ backgroundImage: v })}
+          />
+          {design.backgroundImage ? (
+            <OpacityRow
+              label="Image opacity"
+              value={backgroundOpacity}
+              onChange={(v) => patch({ backgroundOpacity: v })}
+            />
+          ) : null}
+        </LayerSection>
+
+        <LayerSection
+          title="Sidebar"
+          hint="Right-side strip carrying the type label."
+        >
+          <ColorRow
+            label="Color"
+            value={design.sidebar}
+            onChange={(v) => patch({ sidebar: v })}
+          />
+          <OpacityRow
+            label="Opacity"
+            value={sidebarOpacity}
+            onChange={(v) => patch({ sidebarOpacity: v })}
+          />
+        </LayerSection>
+
+        <LayerSection
+          title="Title bar"
+          hint="Strip across the bottom behind the item title."
+        >
+          <ColorRow
+            label="Color"
+            value={titleBarColor}
+            onChange={(v) => patch({ titleBar: v })}
+          />
+          <OpacityRow
+            label="Opacity"
+            value={titleBarOpacity}
+            onChange={(v) => patch({ titleBarOpacity: v })}
+          />
+        </LayerSection>
+
+        <LayerSection title="Logo" hint="Optional badge in the top-left corner.">
+          <ImageRow
+            label="Image"
+            hint="PNG with transparency reads best. Square images recommended."
+            value={design.logo ?? null}
+            onChange={(v) => patch({ logo: v })}
+          />
+        </LayerSection>
+      </div>
     </div>
+  );
+}
+
+function LayerSection({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-md border border-border bg-surface-1 p-3">
+      <div className="mb-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-ink-0">
+          {title}
+        </p>
+        <p className="text-[11px] text-muted">{hint}</p>
+      </div>
+      <div className="space-y-2">{children}</div>
+    </section>
   );
 }
 
 function ColorRow({
   label,
-  hint,
   value,
   onChange,
 }: {
   label: string;
-  hint: string;
   value: string;
   onChange: (next: string) => void;
 }) {
-  // The native color picker only understands #rrggbb. Anything else
-  // gets coerced to the nearest hex via a hidden canvas-style
-  // conversion done by the browser; just feed it the hex and accept
-  // whatever it returns.
   return (
     <label className="flex items-center gap-3">
       <span
-        className="inline-block h-8 w-8 shrink-0 overflow-hidden rounded-md border border-border"
-        aria-hidden
+        className="relative inline-block h-8 w-8 shrink-0 overflow-hidden rounded-md border border-border"
         style={{ background: value }}
+        aria-hidden
       >
         <input
           type="color"
           value={normalizeForPicker(value)}
           onChange={(e) => onChange(e.target.value)}
-          className="h-full w-full cursor-pointer opacity-0"
-          aria-label={`${label} color`}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          aria-label={label}
         />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-xs font-medium text-ink-1">{label}</span>
-        <span className="block truncate text-[11px] text-muted">{hint}</span>
+      <span className="min-w-0 flex-1 text-xs font-medium text-ink-1">
+        {label}
       </span>
       <input
         type="text"
@@ -147,6 +224,65 @@ function ColorRow({
         className="h-7 w-24 rounded border border-border bg-surface-1 px-2 font-mono text-[11px] focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
       />
     </label>
+  );
+}
+
+function OpacityRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (next: number) => void;
+}) {
+  const pct = Math.round(value * 100);
+  return (
+    <label className="flex items-center gap-3">
+      <span className="min-w-0 flex-1 text-xs font-medium text-ink-1">
+        {label}
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={pct}
+        onChange={(e) => onChange(Number(e.target.value) / 100)}
+        className="h-2 w-40 cursor-pointer accent-accent"
+      />
+      <span className="w-10 shrink-0 text-right font-mono text-[11px] text-muted">
+        {pct}%
+      </span>
+    </label>
+  );
+}
+
+function ImageRow({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: string | null;
+  onChange: (next: string | null) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-ink-1">{label}</p>
+      <ImageUploader
+        kind="item-thumb"
+        value={value}
+        onChange={onChange}
+        seed={label}
+        label={label}
+        size="md"
+        rounded="md"
+        hint={hint}
+      />
+    </div>
   );
 }
 

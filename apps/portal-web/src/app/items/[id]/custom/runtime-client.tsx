@@ -1533,29 +1533,23 @@ function BasemapGalleryWidgetRender({ widget }: { widget: CustomWidget }) {
                 }`}
                 title={b.label}
               >
-                {/* #67: render a live MapLibre preview of the
-                    basemap so users pick by appearance rather than
-                    label alone.  The legacy thumbnailUrl path is
-                    kept as a fast-path fallback for basemaps that
-                    explicitly carry a pre-rendered tile (rare; the
-                    gallery is small enough that N MapLibre
-                    instances perform fine). */}
-                {b.thumbnailUrl ? (
-                  <img
-                    src={b.thumbnailUrl}
-                    alt={b.label}
-                    className="h-12 w-full rounded object-cover"
-                    loading="lazy"
+                {/* #67: always render a live MapLibre preview of
+                    the basemap.  The picker exists so users can
+                    pick by appearance, which is a different consumer
+                    context from the item card; deferring to the
+                    item's thumbnailUrl (which #66 made point at the
+                    designer-grammar SVG) defeats the whole purpose
+                    of the picker.  Live previews are also cheap
+                    enough at gallery scale -- a handful of small
+                    MapLibre canvases, only mounted while the
+                    picker is open. */}
+                <div className="h-12 w-full overflow-hidden rounded">
+                  <BasemapPreview
+                    data={customBasemapToData(b)}
+                    ariaLabel={`Preview of ${b.label}`}
+                    className="h-full w-full"
                   />
-                ) : (
-                  <div className="h-12 w-full overflow-hidden rounded">
-                    <BasemapPreview
-                      data={customBasemapToData(b)}
-                      ariaLabel={`Preview of ${b.label}`}
-                      className="h-full w-full"
-                    />
-                  </div>
-                )}
+                </div>
                 <span className="truncate text-ink-1">{b.label}</span>
               </button>
             </li>
