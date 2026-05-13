@@ -716,16 +716,16 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
         className={
           inAppBar
             ? // Flat header-ink treatment for tools sitting in an
-              // app-bar. The bar already provides the surface; the
-              // trigger should read as part of the bar, not as a
-              // separately framed pill. Active state uses the
-              // header-ink color at full opacity with a subtle
-              // backdrop wash; idle uses a slightly faded ink so
-              // active vs. inactive reads clearly.
+              // app-bar. Idle: 85%-opacity header-ink (cream on
+              // green for Forest). Active: INVERTED — cream BG with
+              // header-bg ink (dark green-on-cream) so the icon and
+              // label stay clearly visible. The previous "16%
+              // alpha cream wash" active state washed out the cream
+              // icon stroke into near-invisibility.
               `group/tool flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors ${
                 open
-                  ? 'bg-[hsl(var(--app-header-ink)/0.16)] text-[hsl(var(--app-header-ink))]'
-                  : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.1)] hover:text-[hsl(var(--app-header-ink))]'
+                  ? 'bg-[hsl(var(--app-header-ink))] text-[hsl(var(--app-header-bg))]'
+                  : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]'
               }`
             : // Canvas treatment: raised white pill with shadow.
               // This is the right read when the trigger sits on the
@@ -755,6 +755,7 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
           arrangement={arrangement}
           containerRef={ctx.runtimeContainerRef}
           triggerRef={triggerRef}
+          triggerInAppBar={inAppBar}
           title={label}
           icon={Icon}
           onClose={() => setOpen(false)}
@@ -784,6 +785,7 @@ function ToolPopover({
   arrangement,
   containerRef,
   triggerRef,
+  triggerInAppBar,
   title,
   icon: Icon,
   onClose,
@@ -799,6 +801,15 @@ function ToolPopover({
    * that overlaps the bar itself.
    */
   triggerRef?: RefObject<HTMLButtonElement>;
+  /**
+   * When the trigger lives inside an app-bar, the popover wants
+   * extra vertical clearance under the bar (so it visually aligns
+   * with maplibre zoom controls) and extra horizontal inset on
+   * right-anchored placements (so it doesn't bleed into the
+   * zoom/compass control cluster). Caller passes this flag down so
+   * computePopoverPosition can apply those offsets.
+   */
+  triggerInAppBar?: boolean;
   title: string;
   icon: typeof MapIcon;
   onClose: () => void;
@@ -847,6 +858,7 @@ function ToolPopover({
     triggerRef: triggerRef ?? null,
     containerRef,
     placement,
+    triggerInAppBar: triggerInAppBar ?? false,
   });
 
   const animationClass =
@@ -1094,6 +1106,7 @@ function computePopoverPosition({
   triggerRef,
   containerRef,
   placement,
+  triggerInAppBar,
 }: {
   anchor: PanelAnchor;
   width: number;
@@ -1103,6 +1116,7 @@ function computePopoverPosition({
   triggerRef?: RefObject<HTMLButtonElement> | null;
   containerRef?: RefObject<HTMLDivElement>;
   placement?: string;
+  triggerInAppBar?: boolean;
 }): React.CSSProperties {
   // Trigger-anchored path: when we have a trigger button and the
   // popover is floating, position the popover relative to the
@@ -1117,20 +1131,31 @@ function computePopoverPosition({
   ) {
     const trig = triggerRef.current.getBoundingClientRect();
     const cont = containerRef.current.getBoundingClientRect();
-    const top = trig.bottom - cont.top + 4;
+    // App-bar triggers want extra vertical breathing room so the
+    // popover top aligns with maplibre's zoom controls (default
+    // top: 10 inside the map). Non-bar triggers stay tight (4px).
+    const topGap = triggerInAppBar ? 12 : 4;
+    const top = trig.bottom - cont.top + topGap;
     // Default to right-aligning the popover with the trigger button
     // for top-right anchors; left-align for top-left; center for the
     // rest. This keeps the popover visually attached to the button
     // edge the user actually clicked.
     const [, horiz] = anchor.split('-') as [string, string];
     const containerW = cont.width;
+    // Right-edge inset for app-bar triggers: enough to clear the
+    // maplibre zoom/compass control cluster (roughly 30px wide at
+    // 10px from the map's right edge), so the popover sits to the
+    // LEFT of those controls with a sensible gap.
+    const rightInset = triggerInAppBar ? 56 : 0;
     let left: number;
     if (horiz === 'left') {
       left = Math.max(offsetX, trig.left - cont.left);
     } else if (horiz === 'right') {
       // Right-align: popover's right edge sits at trigger's right
-      // edge. Clamp left to keep the popover inside the container.
-      const desiredRight = trig.right - cont.left;
+      // edge, minus the rightInset to clear the zoom controls when
+      // the trigger lives in an app-bar. Clamp left to keep the
+      // popover inside the container.
+      const desiredRight = trig.right - cont.left - rightInset;
       left = Math.min(
         Math.max(offsetX, desiredRight - width),
         containerW - width - offsetX,
