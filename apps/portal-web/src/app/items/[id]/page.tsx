@@ -146,6 +146,7 @@ import { ComingSoon } from './coming-soon';
 import { BasemapEditor } from './basemap/editor';
 import { GeocodingServiceEditor } from './geocoding/editor';
 import { TileLayerEditor } from './tile-layer/editor';
+import { AppTemplateDetail } from './app-template/app-template-detail';
 
 interface Props {
   params: { id: string };
@@ -991,6 +992,16 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             canEdit={canManage}
           />
         </section>
+      ) : item.type === 'app_template' ? (
+        <AppTemplateDetail
+          itemId={item.id}
+          blueprint={
+            (item.data && typeof item.data === 'object'
+              ? item.data
+              : { version: 3, themePresetId: 'default', targets: [], pages: [] }) as CustomAppData
+          }
+          seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
+        />
       ) : (
         <section className="mb-6">
           <ComingSoon type={item.type} data={item.data} />

@@ -68,8 +68,12 @@ import {
   APP_TEMPLATES,
   getAppTemplate,
   serviceProtocolLabel,
+  stampBlueprint,
 } from '@gratis-gis/shared-types';
-import type { AppTemplateId } from '@gratis-gis/shared-types';
+import type {
+  AppTemplateId,
+  CustomAppData,
+} from '@gratis-gis/shared-types';
 import { ImageUploader } from '@/components/image-uploader';
 import {
   describeArcgisService,
@@ -350,7 +354,24 @@ const ACCESS_OPTIONS: Array<{
   },
 ];
 
-export function NewItemWizard() {
+/**
+ * #22: summary of one app_template item, served from the server
+ * component and used by the Custom Web App gallery.  The full
+ * blueprint is fetched at submit time so we don't ship every
+ * widget tree on every wizard mount.
+ */
+export interface AppTemplateSummary {
+  itemId: string;
+  title: string;
+  description: string;
+  tags: string[];
+}
+
+export function NewItemWizard({
+  appTemplates = [],
+}: {
+  appTemplates?: AppTemplateSummary[];
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   // Optional `?type=<itemType>` query param lets entry points like the
@@ -359,12 +380,21 @@ export function NewItemWizard() {
   // and land directly on the details form. Validated against the
   // known ItemType set so a stray param can't put the wizard in a
   // bogus state.
-  const queryType =
-    searchParams && (ITEM_TYPES as readonly string[]).includes(
-      searchParams.get('type') ?? '',
-    )
-      ? ((searchParams.get('type') as ItemType) as ItemType)
-      : null;
+  // Accept either a real ItemType OR one of the wizard sentinels
+  // ('viewer', 'survey', 'custom') so deep-links like "Use this
+  // template" (?type=custom&template=<id>) can skip the picker.
+  const querySentinel = (
+    ['viewer', 'survey', 'custom'] as const
+  ).find((s) => s === (searchParams?.get('type') ?? ''));
+  const queryType: ItemType | 'viewer' | 'survey' | 'custom' | null =
+    querySentinel
+      ? querySentinel
+      : searchParams &&
+          (ITEM_TYPES as readonly string[]).includes(
+            searchParams.get('type') ?? '',
+          )
+        ? (searchParams.get('type') as ItemType)
+        : null;
   const [step, setStep] = useState<Step>(queryType ? 'details' : 'pick');
   // #259: 'viewer' is a wizard-only sentinel that maps to web_app +
   // template='viewer' at submit time. It isn't a persisted ItemType
@@ -382,14 +412,33 @@ export function NewItemWizard() {
   const [access, setAccess] = useState<ItemAccess>('private');
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
 
-  // Custom Web App template selection. When the user lands on the
-  // Custom Web App type, they pick a template (Sidebar Explorer,
-  // Showcase Map, Compact Drawer, Blank Canvas). The template's
-  // seed() generates the initial CustomAppData on submit. Defaults
-  // to 'sidebar-explorer' so a user who hits Create without
-  // touching the gallery gets the most-flexible starting point.
+  // Custom Web App template selection.  Templates are app_template
+  // items the user has read access to; the wizard fetches the list
+  // server-side and passes it in via props.  We track the chosen
+  // item id (or null = "no template, start blank").  On submit,
+  // the item's CustomAppData blueprint is fetched and stamped with
+  // fresh widget ids; falls back to a Blank Canvas equivalent if
+  // there are no templates available (e.g. admin deleted all
+  // starters and hasn't restored them yet).
+  // Preselect via ?template=<itemId> when the user followed
+  // "Use this template" from a template detail page; otherwise
+  // default to the first available template (typically the
+  // alphabetically-first built-in starter).
+  const preselectedTemplateId =
+    searchParams?.get('template') ?? null;
+  const [customAppTemplateItemId, setCustomAppTemplateItemId] = useState<
+    string | null
+  >(
+    preselectedTemplateId && appTemplates.some((t) => t.itemId === preselectedTemplateId)
+      ? preselectedTemplateId
+      : (appTemplates[0]?.itemId ?? null),
+  );
+  // Legacy state kept around in case some unrelated code reads the
+  // old AppTemplateId.  No longer driven by the gallery.
   const [customAppTemplateId, setCustomAppTemplateId] =
     useState<AppTemplateId>('sidebar-explorer');
+  void customAppTemplateId;
+  void setCustomAppTemplateId;
 
   // ArcGIS-specific state. Probe result is staged until Create fires.
   // `userEditedTitle` guards us from clobbering a title the user typed
@@ -1079,17 +1128,36 @@ export function NewItemWizard() {
       };
       data = webApp;
     } else if (type === 'custom') {
-      // #261 + themed-app MVP: Custom Web App seeded from one of
-      // the built-in templates. Templates are pre-configured
-      // CustomAppData instances (theme + widgets + containers in
-      // place); authors land on a wizard gallery, pick one, and
-      // get a ready-to-customize app. The Blank template
-      // preserves the previous "empty page" behavior.
-      const template = getAppTemplate(customAppTemplateId);
+      // #22: Custom Web App seeded from a user-selected app_template
+      // item.  Fetch the chosen template's blueprint, stamp fresh
+      // widget ids via stampBlueprint, wrap as WebAppData.  If no
+      // template was selected (org has none, or user dismissed the
+      // gallery), fall back to the legacy built-in starter so
+      // create always succeeds and lands on a working empty app.
+      let blueprintData: CustomAppData;
+      if (customAppTemplateItemId) {
+        type TemplateItemResponse = { data: CustomAppData };
+        const res = await fetch(
+          `/api/portal/items/${customAppTemplateItemId}`,
+          { cache: 'no-store' },
+        );
+        if (!res.ok) {
+          throw new Error(
+            `Could not load the chosen template (HTTP ${res.status})`,
+          );
+        }
+        const body = (await res.json()) as TemplateItemResponse;
+        blueprintData = stampBlueprint(body.data);
+      } else {
+        // No template available (or none picked); fall back to the
+        // built-in blank seed library so this branch always returns
+        // a valid CustomAppData.
+        blueprintData = getAppTemplate('blank-canvas').seed();
+      }
       const webApp: WebAppData = {
         version: 1,
         template: 'custom',
-        config: { template: 'custom', custom: template.seed() },
+        config: { template: 'custom', custom: blueprintData },
       };
       data = webApp;
     } else if (type === 'tile_layer') {
@@ -1548,49 +1616,71 @@ export function NewItemWizard() {
           <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
             Start from a template
           </label>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {APP_TEMPLATES.map((tpl) => {
-              const active = customAppTemplateId === tpl.id;
-              return (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  onClick={() => setCustomAppTemplateId(tpl.id)}
-                  aria-pressed={active}
-                  className={`flex flex-col items-start gap-1.5 rounded-lg border bg-surface-1 p-3 text-left transition-colors ${
-                    active
-                      ? 'border-accent ring-2 ring-accent/30'
-                      : 'border-border hover:border-ink-1 hover:bg-surface-2'
-                  }`}
-                >
-                  <span className="text-sm font-semibold text-ink-0">
-                    {tpl.label}
-                  </span>
-                  <span className="text-xs text-muted">{tpl.description}</span>
-                  <span className="mt-1 text-[11px] italic text-muted">
-                    {tpl.use}
-                  </span>
-                  {tpl.tags.length > 0 ? (
-                    <span className="mt-1 flex flex-wrap gap-1">
-                      {tpl.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="inline-flex items-center rounded-full border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted"
-                        >
-                          {tag}
-                        </span>
-                      ))}
+          {appTemplates.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border bg-surface-1 p-4 text-sm text-muted">
+              <p className="font-medium text-ink-1">
+                No app templates available in your org.
+              </p>
+              <p className="mt-1 text-xs">
+                Ask your admin to restore the starter templates via
+                Admin &rarr; Housekeeping, or save an existing
+                Custom Web App as a template to populate this list.
+                You can still create a blank Custom Web App; it
+                will land on the designer with no widgets.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {appTemplates.map((tpl) => {
+                const active = customAppTemplateItemId === tpl.itemId;
+                return (
+                  <button
+                    key={tpl.itemId}
+                    type="button"
+                    onClick={() =>
+                      setCustomAppTemplateItemId(tpl.itemId)
+                    }
+                    aria-pressed={active}
+                    className={`flex flex-col items-start gap-1.5 rounded-lg border bg-surface-1 p-3 text-left transition-colors ${
+                      active
+                        ? 'border-accent ring-2 ring-accent/30'
+                        : 'border-border hover:border-ink-1 hover:bg-surface-2'
+                    }`}
+                  >
+                    <span className="text-sm font-semibold text-ink-0">
+                      {tpl.title}
                     </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
+                    {tpl.description ? (
+                      <span className="text-xs text-muted">
+                        {tpl.description}
+                      </span>
+                    ) : null}
+                    {tpl.tags.length > 0 ? (
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        {tpl.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] ${
+                              tag === 'built-in'
+                                ? 'border-accent/30 bg-accent/10 text-accent'
+                                : 'border-border bg-surface-2 text-muted'
+                            }`}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <p className="mt-2 text-[11px] text-muted">
-            Every template is a pre-configured Custom Web App. After
-            create, open the app and use Advanced mode to rearrange
-            widgets, add new ones, swap themes, or rebuild the
-            layout from scratch.
+            Every template is a saved Custom Web App. After create,
+            open the app and edit anything: widgets, layout, theme.
+            You can also save your finished app as a template later
+            for reuse.
           </p>
         </section>
       ) : null}

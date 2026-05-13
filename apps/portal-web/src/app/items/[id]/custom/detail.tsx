@@ -305,6 +305,44 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
     }
   }, [app, itemId]);
 
+  // #22: "Save as template" creates a new app_template item with
+  // the current blueprint, owned by the requesting user, default
+  // access private (the author can re-share via the standard share
+  // dialog on the new item).  We open the new template in a new
+  // tab so the author doesn't lose context of the app they're
+  // editing.  The blueprint is stored exactly as-is; the
+  // instantiation path in the wizard (stampBlueprint) rewrites
+  // widget ids on each new app stamped from this template.
+  const [savingAsTemplate, setSavingAsTemplate] = useState(false);
+  const onSaveAsTemplate = useCallback(async () => {
+    setSavingAsTemplate(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/portal/items', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'app_template',
+          title: `${itemTitle} (template)`,
+          description: `Saved from ${itemTitle}`,
+          tags: ['user-saved'],
+          data: app,
+          access: 'private',
+        }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`save-as-template failed: ${res.status} ${txt}`);
+      }
+      const body = (await res.json()) as { id: string };
+      window.open(`/items/${body.id}`, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'save-as-template failed');
+    } finally {
+      setSavingAsTemplate(false);
+    }
+  }, [app, itemTitle]);
+
   const updateApp = useCallback((patch: Partial<CustomAppData>) => {
     setApp((cur) => ({ ...cur, ...patch }));
     setDirty(true);
@@ -601,6 +639,16 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
       >
         {saving && <Loader2 className="h-4 w-4 animate-spin" />}
         Save
+      </button>
+      <button
+        type="button"
+        disabled={!canEdit || savingAsTemplate}
+        onClick={onSaveAsTemplate}
+        title="Save the current blueprint as a reusable app_template item"
+        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-sm font-medium text-ink-1 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {savingAsTemplate && <Loader2 className="h-4 w-4 animate-spin" />}
+        Save as template
       </button>
       <a
         href={`/items/${itemId}/custom/run`}
