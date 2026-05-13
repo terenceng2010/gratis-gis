@@ -54,6 +54,8 @@ import type {
   PanelArrangement,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
+import { customBasemapToData } from '@/lib/custom-basemap';
+import { BasemapPreview } from '@/components/basemap-preview';
 import type { SelectToolMode } from '../map/select-tool';
 import { AttributeTable } from '../map/attribute-table';
 import type { LayerMetadata } from '../map/layer-metadata';
@@ -1531,6 +1533,13 @@ function BasemapGalleryWidgetRender({ widget }: { widget: CustomWidget }) {
                 }`}
                 title={b.label}
               >
+                {/* #67: render a live MapLibre preview of the
+                    basemap so users pick by appearance rather than
+                    label alone.  The legacy thumbnailUrl path is
+                    kept as a fast-path fallback for basemaps that
+                    explicitly carry a pre-rendered tile (rare; the
+                    gallery is small enough that N MapLibre
+                    instances perform fine). */}
                 {b.thumbnailUrl ? (
                   <img
                     src={b.thumbnailUrl}
@@ -1539,8 +1548,12 @@ function BasemapGalleryWidgetRender({ widget }: { widget: CustomWidget }) {
                     loading="lazy"
                   />
                 ) : (
-                  <div className="flex h-12 items-center justify-center rounded bg-surface-2">
-                    <MapIcon className="h-4 w-4 text-muted" />
+                  <div className="h-12 w-full overflow-hidden rounded">
+                    <BasemapPreview
+                      data={customBasemapToData(b)}
+                      ariaLabel={`Preview of ${b.label}`}
+                      className="h-full w-full"
+                    />
                   </div>
                 )}
                 <span className="truncate text-ink-1">{b.label}</span>

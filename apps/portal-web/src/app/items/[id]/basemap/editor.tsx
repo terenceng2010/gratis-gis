@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Check, Loader2, Save } from 'lucide-react';
 import type { BasemapData } from '@gratis-gis/shared-types';
 import { BasemapConfigSection } from '../../_components/basemap-config-section';
+import { BasemapPreview } from '@/components/basemap-preview';
 
 /**
  * Detail-page editor for basemap items (#144). Closes the gap where
@@ -123,8 +124,20 @@ export function BasemapEditor({ itemId, initial, canEdit }: Props) {
       </div>
 
       <div className={canEdit ? '' : 'pointer-events-none opacity-70'}>
-        <div className="p-4">
+        <div className="grid gap-4 p-4 md:grid-cols-[minmax(0,_1fr)_minmax(0,_1fr)]">
           <BasemapConfigSection value={draft} onChange={setDraft} />
+          <div className="flex min-w-0 flex-col gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted">
+              Preview
+            </p>
+            <div className="aspect-[3/2] w-full overflow-hidden rounded-md border border-border bg-surface-2">
+              <BasemapPreview data={draft} interactive />
+            </div>
+            <p className="text-[11px] text-muted">
+              Live render against the fields on the left. Pan and zoom
+              to confirm tiles serve at the levels you need.
+            </p>
+          </div>
         </div>
       </div>
 

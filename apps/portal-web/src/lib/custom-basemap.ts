@@ -2,6 +2,7 @@
 import type { StyleSpecification } from 'maplibre-gl';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
+import type { BasemapData } from '@gratis-gis/shared-types';
 
 // Register the pmtiles:// protocol with MapLibre once per page
 // load (#179). MapLibre's setStyle / addSource use the protocol
@@ -164,6 +165,145 @@ export function customBasemapToStyle(b: CustomBasemap): CustomStyle {
       layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
     } as StyleSpecification,
   };
+}
+
+/**
+ * Adapter: project a legacy `CustomBasemap` row onto the v1
+ * `BasemapData` shape so callers can hand either form to the
+ * shared BasemapPreview component.  The two shapes are isomorphic
+ * for our purposes; just different field names.
+ */
+export function customBasemapToData(b: CustomBasemap): BasemapData {
+  const attribution = b.attribution || undefined;
+  if (b.sourceKind === 'vector-style') {
+    return {
+      version: 1,
+      kind: 'style-url',
+      styleUrl: b.url,
+      ...(attribution ? { attribution } : {}),
+    };
+  }
+  if (b.sourceKind === 'xyz') {
+    return {
+      version: 1,
+      kind: 'tile-url',
+      tileUrl: b.url,
+      ...(attribution ? { attribution } : {}),
+    };
+  }
+  // wms
+  const cfg = (b.config ?? {}) as Record<string, unknown>;
+  return {
+    version: 1,
+    kind: 'wms',
+    wmsUrl: b.url,
+    wmsConfig: {
+      layers: typeof cfg.layers === 'string' ? cfg.layers : '',
+      ...(typeof cfg.format === 'string' ? { format: cfg.format } : {}),
+      ...(cfg.transparent === true || cfg.transparent === 'true'
+        ? { transparent: true }
+        : {}),
+      ...(typeof cfg.version === 'string' ? { version: cfg.version } : {}),
+      ...(typeof cfg.styles === 'string' ? { styles: cfg.styles } : {}),
+      ...(typeof cfg.crs === 'string' ? { crs: cfg.crs } : {}),
+    },
+    ...(attribution ? { attribution } : {}),
+  };
+}
+
+/**
+ * Convert a BasemapData blob (the shape stored on a basemap ITEM) to
+ * the same CustomStyle the legacy CustomBasemap path produces.
+ * Lets the BasemapPreview component and any other surface that has
+ * an item.data in hand render through one renderer (#67).
+ *
+ * Returns null when the blob doesn't yet have a URL for its kind
+ * (e.g. a brand-new basemap being authored); callers render an
+ * empty-state placeholder instead of trying to mount MapLibre
+ * against undefined.
+ */
+export function basemapDataToStyle(d: BasemapData): CustomStyle | null {
+  if (d.kind === 'style-url') {
+    if (!d.styleUrl) return null;
+    return { kind: 'url', url: d.styleUrl };
+  }
+  if (d.kind === 'tile-url') {
+    if (!d.tileUrl) return null;
+    if (d.tileUrl.startsWith('pmtiles://')) {
+      return {
+        kind: 'inline',
+        style: {
+          version: 8,
+          glyphs: DEFAULT_GLYPHS,
+          sources: {
+            raster: {
+              type: 'raster',
+              url: d.tileUrl,
+              tileSize: 256,
+              attribution: d.attribution || undefined,
+            },
+          },
+          layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
+        } as StyleSpecification,
+      };
+    }
+    return {
+      kind: 'inline',
+      style: {
+        version: 8,
+        glyphs: DEFAULT_GLYPHS,
+        sources: {
+          raster: {
+            type: 'raster',
+            tiles: [d.tileUrl],
+            tileSize: 256,
+            attribution: d.attribution || undefined,
+          },
+        },
+        layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
+      } as StyleSpecification,
+    };
+  }
+  if (d.kind === 'wms') {
+    if (!d.wmsUrl || !d.wmsConfig?.layers) return null;
+    const cfg = d.wmsConfig;
+    const format = cfg.format ?? 'image/png';
+    const transparent = cfg.transparent === true ? 'TRUE' : 'FALSE';
+    const version = cfg.version ?? '1.3.0';
+    const styles = cfg.styles ?? '';
+    const crs = cfg.crs ?? 'EPSG:3857';
+    const tileUrl = buildWmsTileUrl(d.wmsUrl, {
+      SERVICE: 'WMS',
+      VERSION: version,
+      REQUEST: 'GetMap',
+      LAYERS: cfg.layers,
+      STYLES: styles,
+      FORMAT: format,
+      TRANSPARENT: transparent,
+      [version.startsWith('1.3') ? 'CRS' : 'SRS']: crs,
+      WIDTH: '256',
+      HEIGHT: '256',
+      BBOX: '{bbox-epsg-3857}',
+    });
+    return {
+      kind: 'inline',
+      style: {
+        version: 8,
+        glyphs: DEFAULT_GLYPHS,
+        sources: {
+          raster: {
+            type: 'raster',
+            tiles: [tileUrl],
+            tileSize: 256,
+            attribution: d.attribution || undefined,
+          },
+        },
+        layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
+      } as StyleSpecification,
+    };
+  }
+  // composed-map (Phase 2 placeholder) not yet rendered.
+  return null;
 }
 
 /**
