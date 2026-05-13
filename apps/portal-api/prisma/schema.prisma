@@ -165,6 +165,12 @@ enum ItemType {
   /// uploads; consumable as a basemap source via the API's
   /// pmtiles:// proxy URL.
   tile_layer                 @map("tile-layer")
+  /// #22: reusable Custom Web App blueprint. Stores a CustomAppData
+  /// payload that the new-item wizard can clone into a fresh
+  /// web_app. Built-in starters are seeded per-org as items of
+  /// this kind, alongside any templates an author saves from an
+  /// existing app.
+  app_template               @map("app-template")
 }
 
 // ---------- Tables ----------
@@ -393,6 +399,14 @@ model Item {
   /// feature activity: an arcgis_service that's being actively
   /// rendered stays fresh even if nobody edits its item card.
   lastUsageAt  DateTime?  @map("last_usage_at")
+  /// #22: stable identifier for items seeded from a built-in
+  /// starter. Set when org-bootstrap (or admin restore) stamps a
+  /// fresh starter as an app_template item; null on any user-
+  /// authored template. Drives the admin "Restore starter
+  /// templates" flow so we can answer "does this org already have
+  /// the sidebar-explorer starter?" cheaply, and lets admins edit
+  /// the seeded items freely without losing the origin marker.
+  seedKind     String?    @map("seed_kind")
 
   org         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
   owner       User                @relation("ItemOwner", fields: [ownerId], references: [id])
@@ -406,6 +420,10 @@ model Item {
   @@index([type])
   @@index([deletedAt])
   @@index([deletedCohortId])
+  /// #22: partial index for the org-bootstrap "does this org already
+  /// have a starter with this seedKind?" lookup. Only seeded items
+  /// have a non-null seedKind so the index stays small.
+  @@index([orgId, type, seedKind], map: "item_org_type_seed_kind_idx")
   @@map("item")
 }
 

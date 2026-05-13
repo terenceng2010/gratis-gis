@@ -50,6 +50,13 @@ export const ITEM_TYPES = [
   // upload time. Consumable as a basemap source through its
   // pmtiles:// URL.
   'tile_layer',
+  // #22: reusable Custom Web App blueprint. Stores a CustomAppData
+  // payload that the new-item wizard can clone into a fresh
+  // web_app at instantiation time. Built-in starters (sidebar-
+  // explorer, showcase-map, compact-drawer, blank-canvas) are
+  // seeded per-org as items of this kind, alongside any templates
+  // an author saves themselves from an existing app.
+  'app_template',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];

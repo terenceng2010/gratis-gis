@@ -18,6 +18,7 @@ import {
   PencilRuler,
   Plug,
   Sparkles,
+  Wand2,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
@@ -64,6 +65,7 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
   data_collection: ClipboardList,
   geocoding_service: MapPin,
   tile_layer: Layers,
+  app_template: Wand2,
 };
 
 /**
@@ -99,6 +101,7 @@ const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   data_collection: 'Data collection',
   geocoding_service: 'Geocoding service',
   tile_layer: 'Tile layer',
+  app_template: 'App template',
 };
 
 export function getItemTypeLabel(t: ItemType): string {
@@ -134,6 +137,7 @@ const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
   data_collection: 'text-violet-700',
   geocoding_service: 'text-orange-700',
   tile_layer: 'text-fuchsia-600',
+  app_template: 'text-amber-700',
 };
 
 /** Tailwind class combos for the tile background used in compact
@@ -164,6 +168,7 @@ const ITEM_TYPE_TILE: Record<ItemType, string> = {
   data_collection: 'bg-violet-700/90 text-white',
   geocoding_service: 'bg-orange-600/90 text-white',
   tile_layer: 'bg-fuchsia-500/90 text-white',
+  app_template: 'bg-amber-700/90 text-white',
 };
 
 export function getItemTypeIcon(type: ItemType): LucideIcon {

@@ -484,6 +484,184 @@ export const APP_TEMPLATES: readonly AppTemplate[] = [
   },
 ];
 
+// ============================================================
+// #22 starter library + blueprint stamping.
+// ============================================================
+//
+// "Starters" are the four built-in templates we seed into every
+// org as app_template items on bootstrap.  After seeding, an admin
+// can edit / delete / replace them like any other item; the
+// `seedKind` column on item carries the stable starter id forward
+// so the housekeeping "Restore starter templates" button can
+// detect which starters this org is missing.
+//
+// The wizard does NOT iterate this array directly anymore (the
+// wizard reads app_template items from the API).  These exports
+// exist for two consumers:
+//
+//   * org-bootstrap (apps/portal-api) calls each starter's seed
+//     function at org-creation time to stamp the four starter
+//     items into the new org.
+//
+//   * admin-restore (apps/portal-api) calls the same seeds when
+//     an admin asks to restore a missing starter.
+
+/**
+ * Stable identifier persisted on the seeded item's `seedKind`
+ * column.  Lets the admin restore flow answer "does this org
+ * already have the sidebar-explorer starter?" without scanning
+ * content.  Do NOT change a starter's kind after release; rename
+ * the label / description instead.
+ */
+export type StarterKind =
+  | 'sidebar-explorer'
+  | 'showcase-map'
+  | 'compact-drawer'
+  | 'blank-canvas';
+
+/**
+ * One starter's metadata + seed function.  The seed returns a
+ * fresh CustomAppData with new widget ids per call, so two
+ * different orgs (or two restores within the same org) get
+ * non-colliding ids.
+ */
+export interface StarterTemplate {
+  kind: StarterKind;
+  label: string;
+  description: string;
+  use: string;
+  tags: readonly string[];
+  seed: () => CustomAppData;
+}
+
+/**
+ * The four built-in starters seeded into every org.  Order in this
+ * array is the order the admin restore UI displays them in.
+ */
+export const STARTERS: readonly StarterTemplate[] = [
+  {
+    kind: 'sidebar-explorer',
+    label: 'Sidebar Explorer',
+    description:
+      'Top app bar with title and tools, left dock panel for layers, map fills the rest of the canvas. The classic AGO-style explorer layout.',
+    use: 'Parcel viewers, asset inventories, internal data exploration, any "explore a map by toggling layers" workflow.',
+    tags: ['explorer', 'dock', 'map-first'],
+    seed: parcelViewerSeed,
+  },
+  {
+    kind: 'showcase-map',
+    label: 'Showcase Map',
+    description:
+      'Map-first layout with minimal chrome. Glass-style top bar floats over the map; search, layers, and basemap as overlay buttons.',
+    use: 'Community maps, public information portals, project showcases, story maps, "look at this map" presentations.',
+    tags: ['map-first', 'minimal', 'public'],
+    seed: publicInfoMapSeed,
+  },
+  {
+    kind: 'compact-drawer',
+    label: 'Compact Drawer',
+    description:
+      'Map fills the screen; a tool drawer slides in from the edge on demand. Smaller permanent chrome footprint for mobile / focused workflows.',
+    use: 'Field-staff apps, mobile-friendly maps, inspection workflows, anywhere screen real estate is at a premium.',
+    tags: ['mobile', 'drawer', 'compact'],
+    seed: fieldInspectionSeed,
+  },
+  {
+    kind: 'blank-canvas',
+    label: 'Blank Canvas',
+    description:
+      'Empty page with the default theme. No containers, no widgets; start from scratch in advanced mode.',
+    use: 'When none of the layouts above fit, or you want full control from the first widget drop.',
+    tags: ['advanced'],
+    seed: blankSeed,
+  },
+];
+
+/**
+ * Look up a starter by its kind.  Returns null when the kind isn't
+ * one of the four built-ins; callers should treat that as "this
+ * isn't a starter, it's a user-saved template" and skip the
+ * restore-from-seed path.
+ */
+export function getStarter(kind: string): StarterTemplate | null {
+  return STARTERS.find((s) => s.kind === kind) ?? null;
+}
+
+/**
+ * Mint fresh widget ids across a CustomAppData blueprint while
+ * preserving cross-widget references (mapWidgetId, syncWithMap-
+ * WidgetId, etc.).  Used when stamping a saved template into a
+ * fresh app: the template's widget ids are reused inside its own
+ * tree, but two app instances should not share ids.
+ *
+ * Strategy: walk the tree, build an id remap (oldId -> newId) for
+ * every widget, then walk again and rewrite both each widget's own
+ * id and any string fields on `config` that look like a known id
+ * reference.  Container widgets carry `widgets: CustomWidget[]`
+ * children that get the same treatment recursively.
+ */
+export function stampBlueprint(blueprint: CustomAppData): CustomAppData {
+  const idRemap = new Map<string, string>();
+
+  function collectIds(widgets: readonly CustomWidget[]): void {
+    for (const w of widgets) {
+      idRemap.set(w.id, wid());
+      const cfg = w.config as { widgets?: CustomWidget[] };
+      if (Array.isArray(cfg.widgets)) collectIds(cfg.widgets);
+    }
+  }
+
+  function remapRefsInConfig(cfg: unknown): unknown {
+    if (cfg === null || typeof cfg !== 'object') return cfg;
+    if (Array.isArray(cfg)) return cfg.map((v) => remapRefsInConfig(v));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(cfg as Record<string, unknown>)) {
+      if (
+        (k === 'mapWidgetId' ||
+          k === 'syncWithMapWidgetId' ||
+          k === 'targetWidgetId') &&
+        typeof v === 'string' &&
+        idRemap.has(v)
+      ) {
+        out[k] = idRemap.get(v);
+      } else {
+        out[k] = remapRefsInConfig(v);
+      }
+    }
+    return out;
+  }
+
+  function rewriteWidgets(widgets: readonly CustomWidget[]): CustomWidget[] {
+    return widgets.map((w) => {
+      const newId = idRemap.get(w.id) ?? wid();
+      const cfg = w.config as { widgets?: CustomWidget[] };
+      // Rewrite cross-widget id references on config.  For
+      // containers, recurse into config.widgets to mint child ids.
+      const rewrittenCfg = remapRefsInConfig(cfg) as typeof cfg;
+      if (Array.isArray(cfg.widgets)) {
+        rewrittenCfg.widgets = rewriteWidgets(cfg.widgets);
+      }
+      return {
+        ...w,
+        id: newId,
+        config: rewrittenCfg as CustomWidget['config'],
+      };
+    });
+  }
+
+  // Collect ids first across every page so cross-page references
+  // (rare but possible) also remap consistently.
+  for (const p of blueprint.pages) collectIds(p.widgets);
+
+  return {
+    ...blueprint,
+    pages: blueprint.pages.map((p) => ({
+      ...p,
+      widgets: rewriteWidgets(p.widgets),
+    })),
+  };
+}
+
 /**
  * Look up a template by id. Maps legacy topic-named ids
  * (parcel-viewer, public-info-map, field-inspection, blank) to
