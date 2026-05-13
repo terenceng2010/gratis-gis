@@ -4,11 +4,13 @@ import type { ToolStep } from '@gratis-gis/shared-types';
 
 import { bboxGenerator } from './bbox.js';
 import { bufferGenerator } from './buffer.js';
+import { calculateFieldGenerator } from './calculate-field.js';
 import { calculateGeometryGenerator } from './calculate-geometry.js';
 import { centroidGenerator } from './centroid.js';
 import { convexHullGenerator } from './convex-hull.js';
 import { densifyGenerator } from './densify.js';
 import { dissolveGenerator } from './dissolve.js';
+import { filterGenerator } from './filter.js';
 import { fishnetGenerator } from './fishnet.js';
 import { nearestNeighborGenerator } from './nearest-neighbor.js';
 import { randomSampleGenerator } from './random-sample.js';
@@ -50,6 +52,11 @@ const REGISTRY: Map<string, ToolGenerator<unknown>> = new Map([
   [
     calculateGeometryGenerator.kind,
     calculateGeometryGenerator as ToolGenerator<unknown>,
+  ],
+  [filterGenerator.kind, filterGenerator as ToolGenerator<unknown>],
+  [
+    calculateFieldGenerator.kind,
+    calculateFieldGenerator as ToolGenerator<unknown>,
   ],
 ]);
 

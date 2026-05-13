@@ -23,10 +23,13 @@ import {
   DEFAULT_BUFFER_STEP,
   DEFAULT_DERIVED_LAYER_FEATURE_LIMIT,
   DEFAULT_STEPS,
+  ExpressionError,
   LENGTH_UNITS,
   MAX_BUFFER_DISTANCE_METERS,
   METERS_PER_UNIT,
   UNIT_LABELS,
+  parseExpression,
+  validateExpression,
   type AreaUnit,
   type BufferParams,
   type CalculateGeometryParams,
@@ -828,6 +831,8 @@ const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   'nearest-neighbor': 'Nearest-neighbor distance',
   fishnet: 'Fishnet',
   'calculate-geometry': 'Calculate geometry',
+  filter: 'Filter by expression',
+  'calculate-field': 'Calculate field from expression',
 };
 
 const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
@@ -846,6 +851,10 @@ const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
   fishnet: 'Generate a grid of cells or transect lines over each polygon.',
   'calculate-geometry':
     'Add a length / perimeter / area field in your chosen unit.',
+  filter:
+    'Keep rows whose expression evaluates true. Reference fields with {{name}}.',
+  'calculate-field':
+    'Append a new attribute computed from any expression over the upstream fields.',
 };
 
 /**
@@ -1090,6 +1099,20 @@ function StepCard({
           onChange={(params) =>
             onChange({ tool: 'calculate-geometry', params })
           }
+        />
+      ) : step.tool === 'filter' ? (
+        <FilterStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'filter', params })}
+          sourceFields={sourceFields}
+        />
+      ) : step.tool === 'calculate-field' ? (
+        <CalculateFieldStepEditor
+          params={step.params}
+          onChange={(params) =>
+            onChange({ tool: 'calculate-field', params })
+          }
+          sourceFields={sourceFields}
         />
       ) : (
         // Forward-compat fallback for a tool kind a newer server
@@ -1890,6 +1913,245 @@ function CalculateGeometryStepEditor({
           on the source.
         </span>
       </label>
+    </div>
+  );
+}
+
+/**
+ * Filter step editor (#76).  Renders a chip strip of upstream
+ * fields the author can click to insert as {{name}} references,
+ * plus an expression textarea.  The shared expression engine
+ * validates the typed expression in real time and surfaces parse /
+ * schema errors below the textarea so the author can correct them
+ * before saving.
+ */
+function FilterStepEditor({
+  params,
+  onChange,
+  sourceFields,
+}: {
+  params: { expression: string };
+  onChange: (next: { expression: string }) => void;
+  sourceFields: FeatureField[];
+}) {
+  return (
+    <ExpressionEditor
+      label="Predicate"
+      hint="Keep rows whose expression evaluates true.  e.g. {{acres}} > 5 AND {{zoning}} == 'R1'"
+      value={params.expression}
+      onChange={(expression) => onChange({ expression })}
+      sourceFields={sourceFields}
+      resultMode="boolean"
+    />
+  );
+}
+
+/**
+ * Calculate-field step editor (#77).  Same expression editor as
+ * filter plus an output-name + output-type pair so the new column
+ * is named + typed correctly.
+ */
+function CalculateFieldStepEditor({
+  params,
+  onChange,
+  sourceFields,
+}: {
+  params: { outputName: string; outputType: 'number' | 'string' | 'boolean'; expression: string };
+  onChange: (next: {
+    outputName: string;
+    outputType: 'number' | 'string' | 'boolean';
+    expression: string;
+  }) => void;
+  sourceFields: FeatureField[];
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-[1fr_140px]">
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            New column name
+          </span>
+          <input
+            type="text"
+            value={params.outputName}
+            onChange={(e) => onChange({ ...params, outputName: e.target.value })}
+            placeholder="e.g. hectares, full_name"
+            className="h-9 rounded-md border border-border bg-surface-1 px-3 text-sm focus:border-accent focus:outline-none"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            Output type
+          </span>
+          <select
+            value={params.outputType}
+            onChange={(e) =>
+              onChange({
+                ...params,
+                outputType: e.target.value as 'number' | 'string' | 'boolean',
+              })
+            }
+            className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+          >
+            <option value="number">Number</option>
+            <option value="string">String</option>
+            <option value="boolean">Boolean</option>
+          </select>
+        </label>
+      </div>
+      <ExpressionEditor
+        label="Expression"
+        hint="e.g. {{acres}} * 0.4047  •  concat({{first_name}}, ' ', {{last_name}})  •  if({{population}} > 1000, 'urban', 'rural')"
+        value={params.expression}
+        onChange={(expression) => onChange({ ...params, expression })}
+        sourceFields={sourceFields}
+        resultMode={params.outputType}
+      />
+    </div>
+  );
+}
+
+/**
+ * Shared expression editor: chip strip of fields + textarea +
+ * inline parse / validate feedback.  Used by both filter (boolean
+ * predicate) and calculate-field (any-typed expression) so the two
+ * steps share authoring affordances.
+ */
+function ExpressionEditor({
+  label,
+  hint,
+  value,
+  onChange,
+  sourceFields,
+  resultMode,
+}: {
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (next: string) => void;
+  sourceFields: FeatureField[];
+  resultMode: 'boolean' | 'number' | 'string';
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  function insert(text: string) {
+    const el = ref.current;
+    if (!el) return;
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? value.length;
+    const next = value.slice(0, start) + text + value.slice(end);
+    onChange(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + text.length;
+      try {
+        el.setSelectionRange(caret, caret);
+      } catch {
+        /* element may be hidden mid-update */
+      }
+    });
+  }
+
+  // Parse + validate live for inline error feedback.  Empty
+  // expression is fine here; the save-time validator surfaces the
+  // "expression required" error and we let the user keep typing
+  // without yelling about it on first focus.
+  const validation = useMemo(() => {
+    if (value.trim().length === 0) return { errors: [], info: null };
+    try {
+      const ast = parseExpression(value);
+      const errors = validateExpression(
+        ast,
+        sourceFields.map((f) => ({
+          name: f.name,
+          type: f.type as 'number' | 'string' | 'boolean' | 'unknown',
+        })),
+      );
+      return { errors, info: null as string | null };
+    } catch (err) {
+      if (err instanceof ExpressionError) {
+        return {
+          errors: [`${err.message} (at position ${err.pos})`],
+          info: null,
+        };
+      }
+      return { errors: ['Unknown parse error'], info: null };
+    }
+  }, [value, sourceFields]);
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] uppercase tracking-wide text-muted">{label}</p>
+      <p className="text-[11px] text-muted">{hint}</p>
+      {sourceFields.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wide text-muted">
+            Insert:
+          </span>
+          {sourceFields.map((f) => (
+            <button
+              key={f.name}
+              type="button"
+              onClick={() => insert(`{{${f.name}}}`)}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-0.5 font-mono text-[11px] text-ink-1 hover:bg-surface-2"
+              title={`Insert {{${f.name}}}`}
+            >
+              <span className="text-muted">{'{{'}</span>
+              {f.name}
+              <span className="text-muted">{'}}'}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-muted">
+          Operators:
+        </span>
+        {['==', '!=', '<', '<=', '>', '>=', 'AND', 'OR', 'NOT', '+', '-', '*', '/', '(', ')'].map((op) => (
+          <button
+            key={op}
+            type="button"
+            onClick={() => insert(op === 'AND' || op === 'OR' || op === 'NOT' ? ` ${op} ` : op)}
+            className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-2 font-mono text-[11px] text-ink-1 hover:bg-surface-2"
+          >
+            {op}
+          </button>
+        ))}
+        {(['if', 'upper', 'lower', 'concat', 'coalesce', 'abs', 'round'] as const).map((fn) => (
+          <button
+            key={fn}
+            type="button"
+            onClick={() => insert(`${fn}()`)}
+            className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-2 font-mono text-[11px] text-ink-1 hover:bg-surface-2"
+          >
+            {fn}()
+          </button>
+        ))}
+      </div>
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={3}
+        placeholder={
+          resultMode === 'boolean'
+            ? "{{acres}} > 5 AND {{zoning}} == 'R1'"
+            : resultMode === 'number'
+              ? '{{acres}} * 0.4047'
+              : "concat({{first_name}}, ' ', {{last_name}})"
+        }
+        className="w-full rounded-md border border-border bg-surface-0 px-3 py-2 font-mono text-xs text-ink-0 focus:border-accent focus:outline-none"
+      />
+      {validation.errors.length > 0 ? (
+        <ul className="space-y-0.5 text-[11px] text-danger">
+          {validation.errors.map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+        </ul>
+      ) : value.trim().length > 0 ? (
+        <p className="text-[11px] text-emerald-600">
+          Expression parses cleanly.
+        </p>
+      ) : null}
     </div>
   );
 }

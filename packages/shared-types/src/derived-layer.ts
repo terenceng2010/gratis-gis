@@ -278,6 +278,47 @@ export interface CalculateGeometryStep {
 }
 
 /**
+ * Attribute filter step (#76).  Keeps rows whose expression
+ * evaluates truthy.  The expression is parsed + validated against
+ * the upstream schema at recipe-save time; the SQL emitter
+ * compiles it to a parameterized WHERE clause.
+ *
+ * Geometry and attributes pass through unchanged.  Empty
+ * `expression` is a save-time validation error: an "always true"
+ * filter adds noise without value, and an "always false" filter
+ * is more clearly written as `false`.
+ */
+export interface FilterStep {
+  tool: 'filter';
+  params: {
+    /** Expression source, e.g. `{{acres}} > 5 AND {{zoning}} == 'R1'`. */
+    expression: string;
+  };
+}
+
+/**
+ * Field calculator step (#77).  Appends one new attribute to each
+ * row by evaluating the expression against the upstream schema.
+ * The result column is named by `outputName` and typed by
+ * `outputType` -- the SQL emitter casts the expression value to
+ * the declared type, so a user writing a numeric expression but
+ * setting outputType='string' gets a TEXT column.
+ *
+ * Geometry passes through unchanged.  Attributes pass through and
+ * gain one more.  `outputName` must not collide with an existing
+ * field; the save-time validator rejects shadows.
+ */
+export interface CalculateFieldStep {
+  tool: 'calculate-field';
+  params: {
+    outputName: string;
+    outputType: 'number' | 'string' | 'boolean';
+    /** Expression source, e.g. `{{acres}} * 0.4047`. */
+    expression: string;
+  };
+}
+
+/**
  * Discriminated union of every available tool step. Adding a new tool
  * means adding a member here, a generator file in
  * apps/portal-api/src/derived-layers/tools/, and a wizard step in
@@ -296,7 +337,9 @@ export type ToolStep =
   | RandomSampleStep
   | NearestNeighborStep
   | FishnetStep
-  | CalculateGeometryStep;
+  | CalculateGeometryStep
+  | FilterStep
+  | CalculateFieldStep;
 
 /**
  * The recipe persisted in `item.data` when `type = 'derived_layer'`.
@@ -437,6 +480,20 @@ export const DEFAULT_CALCULATE_GEOMETRY_STEP: CalculateGeometryStep = {
     fieldName: 'area',
   },
 };
+export const DEFAULT_FILTER_STEP: FilterStep = {
+  tool: 'filter',
+  // Empty expression saves the user a click but fails validation on
+  // submit; the chip-strip editor prompts them to write one.
+  params: { expression: '' },
+};
+export const DEFAULT_CALCULATE_FIELD_STEP: CalculateFieldStep = {
+  tool: 'calculate-field',
+  params: {
+    outputName: 'new_field',
+    outputType: 'number',
+    expression: '',
+  },
+};
 
 /**
  * Lookup table of "what step should we splice into the pipeline when
@@ -459,6 +516,8 @@ export const DEFAULT_STEPS: Record<ToolStep['tool'], ToolStep> = {
   'nearest-neighbor': DEFAULT_NEAREST_NEIGHBOR_STEP,
   fishnet: DEFAULT_FISHNET_STEP,
   'calculate-geometry': DEFAULT_CALCULATE_GEOMETRY_STEP,
+  filter: DEFAULT_FILTER_STEP,
+  'calculate-field': DEFAULT_CALCULATE_FIELD_STEP,
 };
 
 /**
