@@ -26,6 +26,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark as BookmarkIcon,
+  ChevronDown,
   Layers as LayersIcon,
   Loader2,
   Palette,
@@ -226,6 +227,20 @@ export function AppThemeDetail({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only the first group ('Header') is open by default; the page was
+  // getting too scrolly with every group expanded.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(
+    () => new Set<string>([GROUPS[0]!.label]),
+  );
+
+  function toggleGroup(label: string): void {
+    setOpenGroups((cur) => {
+      const next = new Set(cur);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
 
   // Apply tokens to the preview root on every change so the
   // sample app shell restyles instantly.  Same applier the runtime
@@ -349,32 +364,63 @@ export function AppThemeDetail({
               colors below.
             </div>
           )}
-          {GROUPS.map((g) => (
-            <div key={g.label}>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                {g.label}
-              </p>
-              <p className="mb-2 text-[11px] text-muted">{g.description}</p>
-              <div className="space-y-1.5 rounded-md border border-border bg-surface-1 p-1.5">
-                {g.fields.map((f) => (
-                  <TokenRow
-                    key={f.key}
-                    field={f}
-                    value={tokens[f.key] ?? ''}
-                    canEdit={canEdit}
-                    onChange={(v) =>
-                      f.key === '--app-accent'
-                        ? patchAccentAndMaybeSwatch(v)
-                        : patchToken(
-                            f.key,
-                            f.kind === 'color' ? hexToHsl(v) : v,
-                          )
-                    }
+          {GROUPS.map((g) => {
+            const open = openGroups.has(g.label);
+            return (
+              <div key={g.label} className="rounded-md border border-border bg-surface-1">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g.label)}
+                  className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-2/60"
+                  aria-expanded={open}
+                >
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${
+                      open ? '' : '-rotate-90'
+                    }`}
                   />
-                ))}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-ink-0">
+                      {g.label}
+                    </p>
+                    {!open && (
+                      <p className="truncate text-[10px] text-muted">
+                        {g.description}
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted">
+                    {g.fields.length}
+                  </span>
+                </button>
+                {open && (
+                  <div className="border-t border-border px-1.5 pb-1.5">
+                    <p className="px-1 py-1.5 text-[11px] text-muted">
+                      {g.description}
+                    </p>
+                    <div className="space-y-1.5">
+                      {g.fields.map((f) => (
+                        <TokenRow
+                          key={f.key}
+                          field={f}
+                          value={tokens[f.key] ?? ''}
+                          canEdit={canEdit}
+                          onChange={(v) =>
+                            f.key === '--app-accent'
+                              ? patchAccentAndMaybeSwatch(v)
+                              : patchToken(
+                                  f.key,
+                                  f.kind === 'color' ? hexToHsl(v) : v,
+                                )
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* ---- Preview pane ---- */}
