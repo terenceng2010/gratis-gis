@@ -22,18 +22,22 @@ import type { FeatureField } from './data-layer';
 import type { AreaUnit, LengthUnit } from './length';
 
 /**
- * v1 always points at a single data_layer item. Stored as a tagged
- * shape so future kinds (a second derived_layer, a temporary
- * in-pipeline source) can slot in without rewriting reads.
+ * Source kind.  Now supports both data_layer and derived_layer
+ * sources so authors can chain pipelines across items (#78): a
+ * derived layer can feed another derived layer's input.  The
+ * read path detects cycles at save time and rejects them; sharing
+ * checks recursively, so a viewer must hold read on every layer
+ * in the source chain.
  */
 export interface DerivedLayerSource {
-  kind: 'data_layer';
-  /** UUID of the source `data_layer` Item. */
+  kind: 'data_layer' | 'derived_layer';
+  /** UUID of the source Item (data_layer or derived_layer). */
   itemId: string;
   /**
    * Optional sublayer key when the source is a v3 multi-layer data
-   * layer. Null / undefined means "the layer's only sublayer" or
-   * "treat the data_layer as a single feature collection".
+   * layer.  Null / undefined means "the layer's only sublayer" or
+   * "treat the data_layer as a single feature collection".  Ignored
+   * for kind='derived_layer' (a derived layer has a single output).
    */
   layerKey?: string;
 }
@@ -546,7 +550,11 @@ export function isDerivedLayerData(value: unknown): value is DerivedLayerData {
   const v = value as Record<string, unknown>;
   if (v.version !== 1) return false;
   const src = v.source as Record<string, unknown> | undefined;
-  if (!src || src.kind !== 'data_layer' || typeof src.itemId !== 'string') {
+  if (
+    !src ||
+    (src.kind !== 'data_layer' && src.kind !== 'derived_layer') ||
+    typeof src.itemId !== 'string'
+  ) {
     return false;
   }
   if (!Array.isArray(v.pipeline)) return false;
