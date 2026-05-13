@@ -523,8 +523,22 @@ export function NewItemWizard({
   // Derived-layer builder state. The recipe (source + pipeline) is
   // structural so the wizard collects it up front rather than starting
   // with an empty scaffold the user fills in on the detail page.
-  const [derivedLayerData, setDerivedLayerData] =
-    useState<DerivedLayerData>(DEFAULT_DERIVED_LAYER);
+  // #82: pre-seed source from ?source=<itemId> when the user
+  // followed the "Derive..." link from a data_layer detail page.
+  // The DerivedLayerBuilder reads source.itemId on mount and resolves
+  // the rest (sublayer picker, schema fetch) automatically; passing
+  // a non-empty itemId is enough to land them in "source already
+  // picked, configure pipeline" state.
+  const preseededDerivedSourceId = searchParams?.get('source') ?? null;
+  const [derivedLayerData, setDerivedLayerData] = useState<DerivedLayerData>(
+    () =>
+      preseededDerivedSourceId
+        ? {
+            ...DEFAULT_DERIVED_LAYER,
+            source: { kind: 'data_layer', itemId: preseededDerivedSourceId },
+          }
+        : DEFAULT_DERIVED_LAYER,
+  );
 
   // data_collection wizard state: just the chosen map id. mapId is
   // required at create-time (no map = nothing to deploy), and there's

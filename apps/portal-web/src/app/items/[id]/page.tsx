@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ClipboardList,
   ExternalLink,
+  FlaskConical,
   Globe2,
   Lock,
   Pencil,
@@ -477,6 +478,24 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
               <Pencil className="h-3.5 w-3.5" />
               Edit
             </Link>
+            {/* #82: contextual entry into the derived-layer wizard
+                from a data_layer detail page.  Pre-seeds the source
+                picker with this item so authors discover derivation
+                without having to know the type name.  Only shown
+                for data_layer items because that's the only source
+                kind the wizard supports today; once derived-of-
+                derived chaining lands (#78 engine work) this gate
+                can widen to include derived_layer items too. */}
+            {item.type === 'data_layer' ? (
+              <Link
+                href={`/items/new?type=derived_layer&source=${item.id}`}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2.5 text-xs font-medium text-ink-1 shadow-card hover:bg-surface-2"
+                title="Create a derived layer with this layer as its source"
+              >
+                <FlaskConical className="h-3.5 w-3.5" />
+                Derive...
+              </Link>
+            ) : null}
             <ReassignOwnerButton
               itemId={item.id}
               itemTitle={item.title}
