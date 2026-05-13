@@ -170,7 +170,7 @@ const CustomMapsContext = createContext<CustomMapsCtx | null>(null);
 /**
  * Runtime-info context. Carries app-shell metadata that container
  * widgets (app-bar, etc.) want as fallbacks when their own config
- * leaves a slot blank — e.g. an app-bar with no `title` set should
+ * leaves a slot blank (e.g. an app-bar with no `title` set should
  * fall back to the item's own title rather than render an empty
  * header. Keeping this separate from CustomMapsContext so a render
  * test that needs only the item title can mount one provider.
@@ -393,7 +393,7 @@ export function CustomRuntimeClient({
     <CustomMapsContext.Provider value={ctxValue}>
       {/* Viewport-fit container. h-screen (was h-full + min-h) so
           the app's whole vertical extent is exactly the viewport
-          height — header + page tabs (when present) + canvas slot
+          height: header + page tabs (when present) + canvas slot
           all distribute within that, and the canvas slot's
           overflow-hidden keeps widgets from pushing the page taller.
           End users see the app fitted to their screen with no
@@ -467,9 +467,12 @@ export function CustomRuntimeClient({
             overflow-auto -- if a widget's content exceeds its
             allotted grid cell, the widget handles its own internal
             scrolling. */}
-        <div className="relative flex-1 overflow-hidden bg-surface-0 p-3">
+        <div
+          ref={runtimeContainerRef}
+          className="relative flex flex-1 flex-col overflow-hidden bg-[hsl(var(--app-surface-0))]"
+        >
           {totalWidgets === 0 ? (
-            <div className="flex h-full items-center justify-center">
+            <div className="flex h-full items-center justify-center p-3">
               <div className="max-w-md rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center shadow-card">
                 <SquareIcon className="mx-auto h-8 w-8 text-muted" />
                 <h2 className="mt-3 text-base font-semibold text-ink-0">
@@ -487,11 +490,51 @@ export function CustomRuntimeClient({
                 </p>
               </div>
             </div>
-          ) : (
-            <div
-              ref={runtimeContainerRef}
-              className="relative grid h-full w-full"
-              style={{
+          ) : (() => {
+            // #22 final-mile: partition top-level widgets into the
+            // CONTAINER slots (app-bar at top, dock-panels left/right)
+            // and the CANVAS widgets (everything else). Containers
+            // render in flex slots around the canvas, so collapsing a
+            // dock actually frees up canvas space (the previous
+            // approach embedded the dock inside a grid cell that
+            // didn't change size when the dock collapsed, leaving a
+            // hollow stripe of page background between the dock and
+            // the map). Slideouts overlay the canvas at runtime, so
+            // they pass through as canvas widgets and self-position.
+            const ordered = sortForOverlapStacking(page.widgets);
+            const topBars: CustomWidget[] = [];
+            const leftDocks: CustomWidget[] = [];
+            const rightDocks: CustomWidget[] = [];
+            const canvasWidgets: CustomWidget[] = [];
+            for (const w of ordered) {
+              if (w.kind === 'app-bar') {
+                topBars.push(w);
+              } else if (
+                w.kind === 'dock-panel' &&
+                w.config.kind === 'dock-panel'
+              ) {
+                if (w.config.side === 'left') leftDocks.push(w);
+                else rightDocks.push(w);
+              } else {
+                canvasWidgets.push(w);
+              }
+            }
+            return (
+              <>
+                {topBars.map((w) => (
+                  <div key={w.id} className="relative shrink-0">
+                    {renderWidget(w)}
+                  </div>
+                ))}
+                <div className="relative flex min-h-0 flex-1 items-stretch">
+                  {leftDocks.map((w) => (
+                    <div key={w.id} className="relative shrink-0">
+                      {renderWidget(w)}
+                    </div>
+                  ))}
+                  <div
+                    className="relative grid min-h-0 min-w-0 flex-1 p-3"
+                    style={{
                 // Viewport-fit grid: 48 cols x N rows of 1fr each,
                 // where N = the highest row+rowSpan used by any
                 // widget. Rows are proportional (not pixel-fixed)
@@ -525,28 +568,22 @@ export function CustomRuntimeClient({
                 gap: '6px',
               }}
             >
-              {/* User-reported bug: widgets placed on top of a Map
-                  widget (overlapping grid cells) sometimes vanished at
-                  runtime. Root cause: CSS Grid items with overlapping
-                  cells paint in DOM source order, and the user's
-                  page.widgets array often had the Map widget AFTER
-                  earlier-placed tool buttons (typical authoring flow:
-                  drop a few toolbar buttons, then add the big Map
-                  widget). Map rendered last -> Map painted on top ->
-                  earlier widgets got covered.
-
-                  Fix: sort the render order so Map widgets always
-                  paint first (underneath) and everything else paints
-                  on top. The persisted array order is unchanged so
-                  saved apps don't churn; this is purely a render-time
-                  layering pass. Tabs containers also get the
-                  "underneath" treatment because their inner widgets
-                  share the same overlap semantics. */}
-              {sortForOverlapStacking(page.widgets).map((w) => (
-                <WidgetSlot key={w.id} widget={w} />
-              ))}
-            </div>
-          )}
+                    {/* Canvas widgets paint via the page grid. Map
+                        widgets sit at z-0; tool buttons at z-10;
+                        other panels at z-5 (see WidgetSlot). */}
+                    {canvasWidgets.map((w) => (
+                      <WidgetSlot key={w.id} widget={w} />
+                    ))}
+                  </div>
+                  {rightDocks.map((w) => (
+                    <div key={w.id} className="relative shrink-0">
+                      {renderWidget(w)}
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
         </div>
       </div>
     </CustomMapsContext.Provider>
@@ -717,7 +754,7 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
           inAppBar
             ? // Flat header-ink treatment for tools sitting in an
               // app-bar. Idle: 85%-opacity header-ink (cream on
-              // green for Forest). Active: INVERTED — cream BG with
+              // green for Forest). Active: INVERTED, cream BG with
               // header-bg ink (dark green-on-cream) so the icon and
               // label stay clearly visible. The previous "16%
               // alpha cream wash" active state washed out the cream
@@ -1333,7 +1370,7 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
             // every layer renders some color cue rather than a blank
             // gap. Combining the swatch into the layer row replaces
             // the separate Legend widget that templates used to
-            // stamp underneath the Layers list — same information,
+            // stamp underneath the Layers list: same information,
             // half the vertical space, and the toggle + identity sit
             // on the same line.
             const swatchColor =
@@ -2733,7 +2770,7 @@ function TabsWidgetRender({ widget }: { widget: CustomWidget }) {
  * Render a child widget inside a container. Tool-mode children
  * render through ToolWidgetSlot (icon button + popover with the
  * widget's panel content inside) so the Search widget inside an
- * app-bar appears as a search icon button — not as a full inline
+ * app-bar appears as a search icon button, not as a full inline
  * search input. Panel-mode children fall through to the standard
  * renderer.
  *
@@ -2753,7 +2790,7 @@ function renderWidgetInContainer(widget: CustomWidget): React.ReactNode {
   // inside a container. The container (foldable-group, dock-panel,
   // slideout) provides its own labeling, so the widget's
   // self-titled card chrome would double up (the screenshot showed
-  // "Layers" twice — once as the foldable-group title and again as
+  // "Layers" twice: once as the foldable-group title and again as
   // the LayerList's own WidgetFrame title).
   return (
     <SuppressFrameHeaderContext.Provider value={true}>
@@ -2778,7 +2815,7 @@ function AppBarWidgetRender({ widget }: { widget: CustomWidget }) {
   // wants something different from the item name.
   const info = useContext(RuntimeInfoContext);
   if (widget.config.kind !== 'app-bar') return null;
-  // Only spread fallbackTitle when defined — exactOptionalPropertyTypes
+  // Only spread fallbackTitle when defined; exactOptionalPropertyTypes
   // rejects explicit `undefined` for optional string props.
   const fallback = info?.itemTitle ? { fallbackTitle: info.itemTitle } : {};
   return (

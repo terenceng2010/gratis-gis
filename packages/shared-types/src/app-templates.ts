@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * App templates — pre-configured CustomAppData instances that seed
+ * App templates: pre-configured CustomAppData instances that seed
  * new Custom Web App items with a thoughtful layout, a theme, and
  * a sensible widget set. Authors pick a template in the new-item
  * wizard; the item gets created from the template's seed, and the
@@ -17,7 +17,7 @@
  * The `mapId` field is always left blank in the seed: the wizard
  * asks the author to pick a map item (or seeds it from a passed
  * default) before persisting. Same for any target binding fields
- * — the seed includes empty / placeholder values that the wizard
+ * (the seed includes empty / placeholder values that the wizard
  * fills in.
  */
 import type { CustomAppData, CustomWidget } from './custom-app';
@@ -27,7 +27,7 @@ import type { CustomAppData, CustomWidget } from './custom-app';
  * Names describe the LAYOUT / INTENT of the template (sidebar
  * explorer, showcase map, compact drawer, blank) rather than a
  * specific data topic. Topic examples live in the template's
- * description + use lines instead — a "Sidebar Explorer" is just
+ * description + use lines instead; a "Sidebar Explorer" is just
  * as good for asset inventories as it is for parcel viewers, so
  * locking the name to one topic narrows the apparent fit.
  *
@@ -52,7 +52,7 @@ export type AppTemplateId =
 /**
  * Metadata + seed function for one template. The seed is a function
  * (not a static object) so we can stamp fresh widget ids per
- * instance — otherwise two apps from the same template would share
+ * instance; otherwise two apps from the same template would share
  * widget ids and the designer's selection state would get confused.
  */
 export interface AppTemplate {
@@ -203,7 +203,7 @@ function parcelViewerSeed(): CustomAppData {
       widgets: [search, basemap, attrTable, print],
       // No baked-in title here. The runtime falls back to the item's
       // own title via RuntimeInfoContext, so the app-bar takes its
-      // identity from the item the author named — re-saving the
+      // identity from the item the author named (re-saving the
       // template instance as "Public Parcels" automatically updates
       // the header, no second edit needed.
       sticky: true,
@@ -227,7 +227,7 @@ function parcelViewerSeed(): CustomAppData {
           defaultOpen: true,
         }),
       ],
-      // No dock title — foldable group already labels its contents,
+      // No dock title: foldable group already labels its contents,
       // so a wrapping "Map tools" header reads as redundant chrome.
       // The collapse handle still renders so the user can rail-fold
       // the panel to give the map full width.
@@ -236,10 +236,15 @@ function parcelViewerSeed(): CustomAppData {
       widthPx: 280,
     },
   };
+  // Canvas widget: the map. Layout coords are now canvas-relative
+  // (the runtime renders containers as flex siblings of the canvas,
+  // so the canvas grid is its own 48-col coordinate system). Map
+  // fills the full canvas; the dock-panel sits to its left as a
+  // flex sibling rather than occupying canvas columns 1-12.
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 13, row: 5, colSpan: 36, rowSpan: 60 },
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
     config: { kind: 'map' },
   };
 
@@ -295,7 +300,7 @@ function publicInfoMapSeed(): CustomAppData {
     config: {
       kind: 'app-bar',
       widgets: [search, layerList, basemap],
-      // No baked-in title — runtime falls back to the item's title.
+      // No baked-in title; runtime falls back to the item's title.
       sticky: true,
       variant: 'glass',
     },
@@ -303,7 +308,7 @@ function publicInfoMapSeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 5, colSpan: 48, rowSpan: 60 },
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
     config: { kind: 'map' },
   };
 
@@ -374,7 +379,7 @@ function fieldInspectionSeed(): CustomAppData {
     config: {
       kind: 'app-bar',
       widgets: [search, myLocation, attrTable],
-      // No baked-in title — runtime falls back to the item's title.
+      // No baked-in title; runtime falls back to the item's title.
       sticky: true,
       variant: 'elevated',
     },
@@ -402,7 +407,7 @@ function fieldInspectionSeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 5, colSpan: 48, rowSpan: 60 },
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
     config: { kind: 'map' },
   };
 
@@ -472,7 +477,7 @@ export const APP_TEMPLATES: readonly AppTemplate[] = [
     id: 'blank-canvas',
     label: 'Blank Canvas',
     description:
-      'Empty page with the default theme. No containers, no widgets — start from scratch in advanced mode.',
+      'Empty page with the default theme. No containers, no widgets; start from scratch in advanced mode.',
     use: 'When none of the layouts above fit, or you want full control from the first widget drop.',
     tags: ['advanced'],
     seed: blankSeed,

@@ -80,7 +80,7 @@ export interface AppThemeTokens {
      * brand its header independently (navy banner over off-white
      * body, etc.) without changing the body card color. The Default
      * theme keeps this neutral; Slate/Aurora/Forest/Paper use bolder
-     * choices so the header reads as branded chrome — the way AGO
+     * choices so the header reads as branded chrome, the way AGO
      * apps do.
      */
     '--app-header-bg': string;

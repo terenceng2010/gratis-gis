@@ -4,7 +4,7 @@
 /**
  * Themed-app container widgets. Each container holds an array of
  * child CustomWidgets and renders them inside opinionated themed
- * chrome — a top app bar, a side dock, a slideout drawer, a
+ * chrome: a top app bar, a side dock, a slideout drawer, a
  * foldable group. These are the building blocks that let an author
  * make an app look like one cohesive product instead of a pile of
  * floating widget boxes.
@@ -16,7 +16,7 @@
  * --app-shadow-card, --app-density) drive the visual treatment so
  * the same container looks coherent across themes.
  *
- * Children are full CustomWidget instances — the same kinds the
+ * Children are full CustomWidget instances, the same kinds the
  * page grid uses. A template is just a CustomAppData with
  * containers already laid out and children dropped inside; an
  * advanced-mode author can rearrange + add + remove without
@@ -52,7 +52,7 @@ export type RenderChild = (child: CustomWidget) => React.ReactNode;
  * AppBarContext signals to descendant widgets that they're being
  * rendered inside an app-bar (vs. inline on the page grid). Tool
  * widgets check this so they can swap their raised white-pill
- * treatment for a flat, header-colored treatment — the difference
+ * treatment for a flat, header-colored treatment: the difference
  * between a "button that floats on a page" and an "icon link in a
  * navy nav bar".
  */
@@ -189,22 +189,20 @@ interface DockPanelRenderProps {
  */
 export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
   const collapsible = config.collapsible !== false;
+  const widthPx = config.widthPx ?? 280;
   const [collapsed, setCollapsed] = useState(config.defaultCollapsed ?? false);
   const side = config.side;
   const title = config.title;
 
-  // The dock fills its grid cell. config.widthPx is treated as a
-  // designer-time hint (what colSpan the template chose to match);
-  // at runtime the grid layout is the source of truth so an
-  // author who picks a wider colSpan gets a wider dock with no
-  // empty stripe between the dock and the canvas (the previous
-  // pixel-fixed `width` left a gap whenever the grid cell was
-  // wider than 280px). Collapsed state keeps the panel surface
-  // visible but hides the body so the user still sees a coherent
-  // panel rather than a hollow strip of page background.
+  // The dock controls its own width. The runtime now places dock
+  // widgets in flex slots (sibling of the canvas grid) so when the
+  // dock collapses to 44px, the canvas grid takes the freed space
+  // automatically. When expanded, the dock takes widthPx; the
+  // canvas takes whatever is left.
+  const effectiveWidth = collapsed ? 44 : widthPx;
   const borderSide = side === 'left' ? 'border-r' : 'border-l';
   // When the dock has no title configured, the header degrades to a
-  // bare collapse-handle row — author opted into "let the children
+  // bare collapse-handle row (author opted into "let the children
   // (foldable groups, etc.) label themselves", so we don't stamp a
   // redundant wrapping label like the older "Map tools" treatment.
   // When `collapsible=false` AND no title is set, the header drops
@@ -214,7 +212,8 @@ export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
 
   return (
     <aside
-      className={`relative flex h-full w-full shrink-0 flex-col overflow-hidden bg-[hsl(var(--app-surface-1))] ${borderSide} border-[hsl(var(--app-border))]`}
+      className={`relative flex h-full shrink-0 flex-col overflow-hidden bg-[hsl(var(--app-surface-1))] ${borderSide} border-[hsl(var(--app-border))]`}
+      style={{ width: effectiveWidth, transition: 'width 160ms ease-out' }}
     >
       {showHeader ? (
         // Header: optional title + collapse handle. When collapsed,
