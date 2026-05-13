@@ -750,18 +750,33 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
         onClick={() => setOpen((v) => !v)}
         aria-pressed={open}
         title={label}
+        // For in-bar buttons we use inline `style` for the active
+        // colors because Tailwind's arbitrary-value JIT was silently
+        // failing on `bg-[hsl(var(--app-header-ink))]` in production
+        // (cream + sage inversion never rendered, the button
+        // appeared invisible on the green header). Inline style
+        // sidesteps that entirely. Inactive state stays in classes
+        // because the simpler color-only Tailwind utilities work
+        // fine for it.
+        style={
+          inAppBar && open
+            ? {
+                backgroundColor: 'hsl(var(--app-header-ink))',
+                color: 'hsl(var(--app-header-bg))',
+              }
+            : undefined
+        }
         className={
           inAppBar
             ? // Flat header-ink treatment for tools sitting in an
               // app-bar. Idle: 85%-opacity header-ink (cream on
-              // green for Forest). Active: INVERTED, cream BG with
-              // header-bg ink (dark green-on-cream) so the icon and
-              // label stay clearly visible. The previous "16%
-              // alpha cream wash" active state washed out the cream
-              // icon stroke into near-invisibility.
+              // green for Forest). Active: INVERTED via inline
+              // style above (cream BG, sage ink). The previous
+              // attempt used Tailwind arbitrary values for active
+              // which the JIT scanner missed at build time.
               `group/tool flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors ${
                 open
-                  ? 'bg-[hsl(var(--app-header-ink))] text-[hsl(var(--app-header-bg))]'
+                  ? ''
                   : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]'
               }`
             : // Canvas treatment: raised white pill with shadow.
@@ -1179,20 +1194,22 @@ function computePopoverPosition({
     // edge the user actually clicked.
     const [, horiz] = anchor.split('-') as [string, string];
     const containerW = cont.width;
-    // Right-edge inset for app-bar triggers: enough to clear the
-    // maplibre zoom/compass control cluster (roughly 30px wide at
-    // 10px from the map's right edge), so the popover sits to the
-    // LEFT of those controls with a sensible gap.
-    const rightInset = triggerInAppBar ? 56 : 0;
     let left: number;
     if (horiz === 'left') {
       left = Math.max(offsetX, trig.left - cont.left);
     } else if (horiz === 'right') {
-      // Right-align: popover's right edge sits at trigger's right
-      // edge, minus the rightInset to clear the zoom controls when
-      // the trigger lives in an app-bar. Clamp left to keep the
-      // popover inside the container.
-      const desiredRight = trig.right - cont.left - rightInset;
+      // Right-align: for app-bar triggers, anchor the popover's
+      // right edge to the runtime container's right edge minus a
+      // small inset that clears the maplibre zoom/compass cluster
+      // (controls live at ~10px from the canvas right with ~30px
+      // width). This way the popover lands in the same horizontal
+      // region as the zoom controls regardless of which tool in
+      // the bar opened it. For non-bar triggers (canvas tools),
+      // keep the trigger-anchored behavior so the popover stays
+      // attached to the button the user clicked.
+      const desiredRight = triggerInAppBar
+        ? containerW - 50
+        : trig.right - cont.left;
       left = Math.min(
         Math.max(offsetX, desiredRight - width),
         containerW - width - offsetX,
