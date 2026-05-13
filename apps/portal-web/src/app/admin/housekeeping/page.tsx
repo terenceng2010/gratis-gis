@@ -9,6 +9,16 @@ import {
   type HousekeepingConfig,
   type HousekeepingRun,
 } from './housekeeping-schedule-card';
+import { StarterTemplatesCard } from './starter-templates-card';
+
+interface StarterStatusResponse {
+  starters: Array<{
+    kind: string;
+    label: string;
+    description: string;
+    itemId: string | null;
+  }>;
+}
 
 /**
  * Admin-only housekeeping dashboard: surfaces the items + users
@@ -30,6 +40,7 @@ export default async function AdminHousekeepingPage() {
   let bundle: HousekeepingBundle | null = null;
   let scheduleConfig: HousekeepingConfig | null = null;
   let scheduleRuns: HousekeepingRun[] = [];
+  let starterStatus: StarterStatusResponse | null = null;
   let error: string | null = null;
   try {
     const [
@@ -44,6 +55,7 @@ export default async function AdminHousekeepingPage() {
       largestDataLayers,
       config,
       runs,
+      starterStatusResp,
     ] = await Promise.all([
       apiFetch<HousekeepingBundle['summary']>(
         '/api/admin/housekeeping/summary',
@@ -76,6 +88,9 @@ export default async function AdminHousekeepingPage() {
       apiFetch<HousekeepingRun[]>(
         '/api/admin/housekeeping/runs?limit=10',
       ),
+      apiFetch<StarterStatusResponse>(
+        '/api/admin/app-templates/starter-status',
+      ),
     ]);
     bundle = {
       summary,
@@ -90,6 +105,7 @@ export default async function AdminHousekeepingPage() {
     };
     scheduleConfig = config;
     scheduleRuns = runs;
+    starterStatus = starterStatusResp;
   } catch (err) {
     error = err instanceof Error ? err.message : 'Could not load housekeeping data.';
   }
@@ -133,6 +149,12 @@ export default async function AdminHousekeepingPage() {
             initialConfig={scheduleConfig}
             initialRuns={scheduleRuns}
           />
+        </div>
+      ) : null}
+
+      {starterStatus ? (
+        <div className="mb-6">
+          <StarterTemplatesCard initial={starterStatus.starters} />
         </div>
       ) : null}
 
