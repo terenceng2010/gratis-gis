@@ -76,7 +76,11 @@ import type {
   AppTemplateId,
   CustomAppData,
 } from '@gratis-gis/shared-types';
-import { ImageUploader } from '@/components/image-uploader';
+import { ThumbnailDesigner } from '@/components/thumbnail-designer';
+import {
+  defaultThumbnailDesign,
+  type ThumbnailDesign,
+} from '@gratis-gis/shared-types';
 import {
   describeArcgisService,
   probeService,
@@ -413,7 +417,24 @@ export function NewItemWizard({
   const [description, setDescription] = useState('');
   const [tagsText, setTagsText] = useState('');
   const [access, setAccess] = useState<ItemAccess>('private');
+  // thumbnailUrl is retained at null so the create payload's shape
+  // stays back-compat with the API; uploads are no longer offered
+  // in the wizard now that ThumbnailDesigner is the single thumbnail
+  // surface (#66).
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  void setThumbnailUrl;
+  // #66: auto-thumbnail design state. Resolves the wizard's
+  // wider-than-ItemType union (viewer/survey/custom all bake to
+  // web_app under the hood) to a concrete type for the designer.
+  // Author can tweak colors before saving; absent customization,
+  // we let the backend apply its own type-default on create.
+  const resolvedTypeForThumbnail: ItemType =
+    type === 'viewer' || type === 'survey' || type === 'custom'
+      ? 'web_app'
+      : (type ?? 'file');
+  const [thumbnailDesign, setThumbnailDesign] = useState<ThumbnailDesign>(() =>
+    defaultThumbnailDesign(resolvedTypeForThumbnail),
+  );
 
   // Custom Web App template selection.  Templates are app_template
   // items the user has read access to; the wizard fetches the list
@@ -1289,6 +1310,7 @@ export function NewItemWizard({
         .filter((t) => t.length > 0),
       access,
       thumbnailUrl,
+      thumbnailDesign,
       data,
     };
 
@@ -1724,14 +1746,11 @@ export function NewItemWizard({
         <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
           Thumbnail
         </label>
-        <ImageUploader
-          kind="item-thumb"
-          value={thumbnailUrl}
-          onChange={setThumbnailUrl}
-          seed={title || 'new-item'}
-          label={title || 'New item'}
-          size="xl"
-          rounded="md"
+        <ThumbnailDesigner
+          type={resolvedTypeForThumbnail}
+          title={title}
+          value={thumbnailDesign}
+          onChange={setThumbnailDesign}
         />
       </section>
 

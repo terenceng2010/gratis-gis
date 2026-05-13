@@ -75,6 +75,12 @@ export interface CreateItemInput {
   access?: ItemAccess | undefined;
   /** Pass null or omit to start without a custom thumbnail. */
   thumbnailUrl?: string | null | undefined;
+  /**
+   * #66: optional thumbnail design override on create. When
+   * provided, this exact design is stored; when omitted, the
+   * service applies defaultThumbnailDesign(type).
+   */
+  thumbnailDesign?: Prisma.InputJsonValue | null | undefined;
   /** Open-data license; null / omitted = not recorded. */
   license?: string | null | undefined;
   /**
@@ -97,6 +103,11 @@ export interface UpdateItemInput {
   access?: ItemAccess | undefined;
   /** Pass null to clear. */
   thumbnailUrl?: string | null | undefined;
+  /**
+   * #66: pass a ThumbnailDesign blob to update the auto-thumbnail
+   * rendering, or null to revert to the type-default design.
+   */
+  thumbnailDesign?: Prisma.InputJsonValue | null | undefined;
   /** Pass null to clear a previously-set license. */
   license?: string | null | undefined;
   /**
@@ -920,8 +931,11 @@ export class ItemsService {
       // later rename automatically updates the rendering with no
       // re-bake. Authors can later customize via the thumbnail
       // designer; the design blob is the only state that needs to
-      // change for the rendering to update.
-      const thumbnailDesign = defaultThumbnailDesign(input.type);
+      // change for the rendering to update. When the create form
+      // supplies a custom design (user tweaked colors before
+      // saving), pass it through unchanged.
+      const thumbnailDesign =
+        input.thumbnailDesign ?? defaultThumbnailDesign(input.type);
       row = await this.prisma.item.create({
         data: {
           orgId: user.orgId,
@@ -1241,6 +1255,18 @@ export class ItemsService {
         ...(nextData !== undefined && { data: nextData }),
         ...(input.access !== undefined && { access: input.access }),
         ...(input.thumbnailUrl !== undefined && { thumbnailUrl: input.thumbnailUrl }),
+        // #66: thumbnailDesign updates re-render the SVG on the
+        // next read; no extra side-effect needed here because the
+        // synthesized thumbnailUrl is keyed on updatedAt which
+        // Prisma is about to bump.  Prisma needs the JsonNull
+        // sentinel to clear a nullable Json column; plain `null`
+        // isn't accepted under exactOptionalPropertyTypes.
+        ...(input.thumbnailDesign !== undefined && {
+          thumbnailDesign:
+            input.thumbnailDesign === null
+              ? Prisma.JsonNull
+              : input.thumbnailDesign,
+        }),
         ...(input.license !== undefined && { license: input.license }),
         // #80: tier-level geo limits. Null clears, undefined leaves
         // unchanged. The columns are nullable in Prisma so passing

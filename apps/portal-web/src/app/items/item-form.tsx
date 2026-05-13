@@ -17,15 +17,17 @@ import type {
   Item,
   ItemAccess,
   ItemType,
+  ThumbnailDesign,
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_ARCGIS_SERVICE,
   DEFAULT_DATA_LAYER,
   DEFAULT_DERIVED_LAYER,
   DEFAULT_MAP,
+  defaultThumbnailDesign,
   isDerivedLayerData,
 } from '@gratis-gis/shared-types';
-import { ImageUploader } from '@/components/image-uploader';
+import { ThumbnailDesigner } from '@/components/thumbnail-designer';
 import { DerivedLayerBuilder } from './new/derived-layer-builder';
 
 type Mode =
@@ -43,6 +45,7 @@ interface Props {
       | 'tags'
       | 'access'
       | 'thumbnailUrl'
+      | 'thumbnailDesign'
       | 'license'
     >
   >;
@@ -194,6 +197,20 @@ export function ItemForm({ mode, initialValues, initialData, itemId }: Props) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(
     initialValues?.thumbnailUrl ?? null,
   );
+  // #66: thumbnail design state. Edit mode pre-populates from the
+  // item; create mode lets the user customize the type-default
+  // before saving (the design ships in the create payload so the
+  // backend stores it instead of re-applying its own default).
+  const [thumbnailDesign, setThumbnailDesign] = useState<ThumbnailDesign>(
+    initialValues?.thumbnailDesign ??
+      defaultThumbnailDesign(
+        (initialValues?.type as ItemType | undefined) ?? type,
+      ),
+  );
+  // setThumbnailUrl is kept reachable for legacy uploads even
+  // though no UI exposes it any more; preserves existing uploaded
+  // images when the edit form round-trips.
+  void setThumbnailUrl;
   // License is authored via the picker below. We track the "preset"
   // separately from "custom text" so switching back to a preset
   // doesn't lose what the user typed into the custom field. A
@@ -255,6 +272,7 @@ export function ItemForm({ mode, initialValues, initialData, itemId }: Props) {
       tags: parseTags(tagsText),
       access,
       thumbnailUrl,
+      thumbnailDesign,
       license: effectiveLicense,
     };
     if (mode.kind === 'create') {
@@ -377,18 +395,11 @@ export function ItemForm({ mode, initialValues, initialData, itemId }: Props) {
         <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
           Thumbnail
         </label>
-        <ImageUploader
-          kind="item-thumb"
-          value={thumbnailUrl}
-          onChange={setThumbnailUrl}
-          seed={
-            mode.kind === 'edit'
-              ? mode.itemId
-              : (itemId ?? title) || 'new-item'
-          }
-          label={title || 'New item'}
-          size="xl"
-          rounded="md"
+        <ThumbnailDesigner
+          type={type}
+          title={title}
+          value={thumbnailDesign}
+          onChange={setThumbnailDesign}
         />
       </section>
 

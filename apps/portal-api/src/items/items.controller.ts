@@ -58,6 +58,11 @@ class CreateItemDto {
   // thumbnail during create. Optional; null/omitted falls back to the
   // auto-generated initial badge.
   @IsOptional() @IsString() @MaxLength(2048) thumbnailUrl?: string | null;
+  // #66: optional thumbnail design override on create. When
+  // present the backend stores it as-is instead of applying the
+  // type default; lets the new-item form ship the user-customized
+  // palette in the same POST.
+  @IsOptional() @IsObject() thumbnailDesign?: Prisma.InputJsonValue | null;
   // Open-data license string (SPDX id, URL, or free-form). Null on
   // create means "not recorded"; DCAT consumers treat absence as
   // "rights reserved".
@@ -73,6 +78,12 @@ class UpdateItemDto {
   // Absolute URL produced by StorageService after the browser PUT completes.
   // Pass null to clear a previously-set thumbnail.
   @IsOptional() @IsString() @MaxLength(2048) thumbnailUrl?: string | null;
+  // #66: auto-thumbnail design blob.  Pass a ThumbnailDesign JSON
+  // to update the on-demand SVG rendering; pass null to revert to
+  // the type-default design (the service will resynthesize the
+  // URL on the next read).  Structurally validated by the service
+  // layer; we just accept an object here.
+  @IsOptional() @IsObject() thumbnailDesign?: Prisma.InputJsonValue | null;
   // Open-data license. SPDX id (CC-BY-4.0), URL, or free-form.
   // Pass null to clear a previously-set license.
   @IsOptional() @IsString() @MaxLength(500) license?: string | null;
