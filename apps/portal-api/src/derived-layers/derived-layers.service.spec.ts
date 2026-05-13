@@ -82,6 +82,7 @@ function makeDerivedItem(data: DerivedLayerData): Item {
     description: '',
     tags: [],
     thumbnailUrl: null,
+    thumbnailDesign: null,
     license: null,
     data: data as unknown as Item['data'],
     storageRef: null,

@@ -37,3 +37,4 @@ export * from './file';
 export * from './service';
 export * from './geocoding-service';
 export * from './tile-layer';
+export * from './thumbnail';

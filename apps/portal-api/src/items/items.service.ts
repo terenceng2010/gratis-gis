@@ -3,7 +3,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type { ItemAccess, ItemType, PrincipalType, SharePermission } from '@prisma/client';
-import { ITEM_TYPES } from '@gratis-gis/shared-types';
+import { ITEM_TYPES, defaultThumbnailDesign } from '@gratis-gis/shared-types';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -24,6 +24,31 @@ const SMART_FOLDER_TYPES: readonly string[] = ITEM_TYPES;
  */
 function degreesFromKm(km: number): number {
   return Math.min(Math.max(km, 0), 100_000) / 111;
+}
+
+/**
+ * #66: synthesize a thumbnailUrl from the auto-thumbnail design blob
+ * when the item doesn't carry an uploaded image. The SVG endpoint
+ * reads the row's current title + type live, so all this URL needs
+ * to do is point at the right item with a cache-buster keyed on
+ * updatedAt; renames bump updatedAt, browsers refetch.  Rows that
+ * already carry an uploaded thumbnailUrl pass through untouched.
+ */
+function synthesizeThumbnailUrl<
+  T extends {
+    id: string;
+    updatedAt: Date;
+    thumbnailUrl: string | null;
+    thumbnailDesign?: Prisma.JsonValue | null;
+  },
+>(row: T): T {
+  if (row.thumbnailUrl) return row;
+  if (!row.thumbnailDesign) return row;
+  const v = row.updatedAt.getTime();
+  return {
+    ...row,
+    thumbnailUrl: `/api/portal/items/${row.id}/thumbnail.svg?v=${v}`,
+  };
 }
 import {
   extractDependencies,
@@ -488,6 +513,10 @@ export class ItemsService {
       description: true,
       tags: true,
       thumbnailUrl: true,
+      // #66: auto-thumbnail design blob.  Small (under 200 bytes per
+      // row); cheap to ship in the list payload so consumers don't
+      // need a second request to render the SVG fallback.
+      thumbnailDesign: true,
       license: true,
       storageRef: true,
       access: true,
@@ -639,7 +668,15 @@ export class ItemsService {
           `total=${tFindDone - tStart}ms`,
       );
     }
-    return result;
+    // #66: surface the auto-thumbnail URL for rows without an
+    // uploaded image. Compute from the design blob + updatedAt
+    // cache-buster so renames refresh the rendering.
+    return (result as Array<{
+      id: string;
+      updatedAt: Date;
+      thumbnailUrl: string | null;
+      thumbnailDesign?: Prisma.JsonValue | null;
+    }>).map(synthesizeThumbnailUrl);
   }
 
   /**
@@ -684,7 +721,7 @@ export class ItemsService {
       if (!this.sharing.canAdmin(user, item)) {
         throw new NotFoundException('Item not found');
       }
-      return item;
+      return synthesizeThumbnailUrl(item);
     }
     if (!this.sharing.canRead(user, item, item.shares)) {
       // Don't leak existence; return 404 instead of 403 for unauthenticated reads
@@ -702,9 +739,9 @@ export class ItemsService {
       // because the dataJson contract is loose, but the rest of the
       // service expects Prisma's `JsonValue` so callers of get() see
       // the same type regardless of branch.
-      return { ...item, data: filtered as typeof item.data };
+      return synthesizeThumbnailUrl({ ...item, data: filtered as typeof item.data });
     }
-    return item;
+    return synthesizeThumbnailUrl(item);
   }
 
   /**
@@ -878,6 +915,13 @@ export class ItemsService {
     const bbox = itemBbox(input.type, resolvedData);
     let row;
     try {
+      // #66: every new item ships with an auto-generated thumbnail
+      // design. The SVG is computed on the fly at request time so a
+      // later rename automatically updates the rendering with no
+      // re-bake. Authors can later customize via the thumbnail
+      // designer; the design blob is the only state that needs to
+      // change for the rendering to update.
+      const thumbnailDesign = defaultThumbnailDesign(input.type);
       row = await this.prisma.item.create({
         data: {
           orgId: user.orgId,
@@ -889,6 +933,7 @@ export class ItemsService {
           data: resolvedData,
           access: input.access ?? 'private',
           bbox: bbox ?? [],
+          thumbnailDesign: thumbnailDesign as unknown as Prisma.InputJsonValue,
           ...(input.thumbnailUrl ? { thumbnailUrl: input.thumbnailUrl } : {}),
           ...(input.license !== undefined && input.license !== null ? { license: input.license } : {}),
           ...(input.seedKind !== undefined && input.seedKind !== null
@@ -918,7 +963,7 @@ export class ItemsService {
     // caller cleaned up by deleting the item row. With no DDL to
     // run, neither concern applies; the item row is the only state
     // that needs to land.
-    return row;
+    return synthesizeThumbnailUrl(row);
   }
 
   /**

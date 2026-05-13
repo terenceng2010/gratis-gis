@@ -2,6 +2,7 @@
 import type { ItemId, UserId, OrgId, ISODateString } from './ids';
 import type { ItemAccess, SharePermission } from './sharing';
 import type { ItemType } from './item-types';
+import type { ThumbnailDesign } from './thumbnail';
 
 export type PrincipalType = 'user' | 'group';
 
@@ -14,6 +15,16 @@ export interface Item<TData = unknown> {
   description: string;
   tags: string[];
   thumbnailUrl: string | null;
+  /**
+   * Auto-thumbnail design blob (#66).  Every item ships with a
+   * generated SVG thumbnail composed from this design plus the
+   * item's title and type.  Renderer lives in
+   * `packages/shared-types/src/thumbnail.ts`; the backend exposes
+   * the SVG at `/api/portal/items/{id}/thumbnail.svg`.  Null on
+   * legacy rows that haven't been backfilled (rare); consumers
+   * should treat null as "fall through to thumbnailUrl or badge".
+   */
+  thumbnailDesign?: ThumbnailDesign | null;
   data: TData;
   storageRef: string | null;
   access: ItemAccess;

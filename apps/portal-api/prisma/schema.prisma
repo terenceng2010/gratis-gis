@@ -347,6 +347,17 @@ model Item {
   description  String     @default("")
   tags         String[]   @default([])
   thumbnailUrl String?    @map("thumbnail_url")
+  /// Auto-thumbnail design (#66).  Every item gets a generated
+  /// thumbnail composed of a sidebar with the type label and a
+  /// title overlay with the item's name.  This blob captures the
+  /// design knobs (sidebar / background colors + optional bg
+  /// image); the SVG renderer reads `title` and `type` live from
+  /// the item row so a rename re-renders automatically without
+  /// re-baking.  See packages/shared-types/src/thumbnail.ts for
+  /// the renderer and ThumbnailDesign shape.  Null is tolerated
+  /// for back-compat; the backend falls back to the type-default
+  /// design when present.
+  thumbnailDesign Json?  @map("thumbnail_design")
   /// Open-data licensing for this item. Free-form so a deployment
   /// can pick any license; the UI offers a curated preset list
   /// (CC-BY, CC0, OGL, proprietary…) plus a custom URL. Surfaces

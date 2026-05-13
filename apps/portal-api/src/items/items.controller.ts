@@ -10,7 +10,9 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   IsArray,
@@ -24,7 +26,13 @@ import {
   MinLength,
 } from 'class-validator';
 import type { ItemAccess, ItemType, Prisma, PrincipalType, SharePermission } from '@prisma/client';
-import { ITEM_TYPES } from '@gratis-gis/shared-types';
+import {
+  ITEM_TYPES,
+  defaultThumbnailDesign,
+  getItemTypeLabel,
+  renderThumbnailSvg,
+  type ThumbnailDesign,
+} from '@gratis-gis/shared-types';
 
 import { Logger } from '@nestjs/common';
 
@@ -295,6 +303,45 @@ export class ItemsController {
    * silently hid the toolbar for explicit-share recipients; this
    * endpoint is the supported way to ask the question.
    */
+  /**
+   * #66: per-item auto-thumbnail SVG.  Reads the row's current
+   * title + type + thumbnailDesign and emits an inline <svg>
+   * payload.  Computed live (not baked) so a renamed item shows
+   * the new title immediately with no re-bake.  Falls back to the
+   * type-default design when the row predates the design blob.
+   *
+   * Returns 404 (via items.get) for callers that can't read the
+   * underlying item, so private items don't leak existence
+   * through their thumbnail URL.
+   *
+   * Cache-Control is short-lived but allows revalidation: the
+   * caller supplies a `?v=<updatedAt-ms>` query param when
+   * generating the URL (see synthesizeThumbnailUrl in
+   * items.service.ts) which is enough to bust the cache on
+   * rename without needing strong ETags.
+   */
+  @Get(':id/thumbnail.svg')
+  async thumbnailSvg(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Res({ passthrough: false }) res: Response,
+  ): Promise<void> {
+    const item = await this.items.get(user, id);
+    const design =
+      (item.thumbnailDesign as ThumbnailDesign | null | undefined) ??
+      defaultThumbnailDesign(item.type);
+    const svg = renderThumbnailSvg({
+      title: item.title,
+      typeLabel: getItemTypeLabel(item.type),
+      design,
+    });
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    // 5 min revalidation; the URL has an updatedAt cache-buster so
+    // a longer window only helps when the design hasn't changed.
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(svg);
+  }
+
   @Get(':id/permissions')
   async permissions(
     @CurrentUser() user: AuthUser,

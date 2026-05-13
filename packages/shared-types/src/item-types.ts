@@ -73,3 +73,44 @@ export type ItemType = (typeof ITEM_TYPES)[number];
 export function isItemType(value: unknown): value is ItemType {
   return typeof value === 'string' && (ITEM_TYPES as readonly string[]).includes(value);
 }
+
+/**
+ * Human-readable display labels for each ItemType.  Lifted here from
+ * portal-web's item-type-icon.tsx so backend renderers (thumbnail
+ * SVG, DCAT export, notifications) can reuse the same vocabulary
+ * without round-tripping through the UI layer.  portal-web's
+ * getItemTypeLabel() now re-exports from here; the icon registry
+ * stays in portal-web because it pulls in lucide.
+ */
+export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
+  map: 'Map',
+  data_layer: 'Data layer',
+  derived_layer: 'Derived layer',
+  arcgis_service: 'ArcGIS service',
+  form: 'Form',
+  form_submission_collection: 'Form submissions',
+  web_app: 'Web app',
+  report_template: 'Report template',
+  dashboard: 'Dashboard',
+  file: 'File',
+  layer_package: 'Layer package',
+  tool: 'Tool',
+  widget_package: 'Widget package',
+  pick_list: 'Pick list',
+  geo_boundary: 'Boundary',
+  basemap: 'Basemap',
+  wms_service: 'WMS service',
+  wfs_service: 'WFS service',
+  service: 'Connected service',
+  folder: 'Folder',
+  editor: 'Editor',
+  data_collection: 'Data collection',
+  geocoding_service: 'Geocoding service',
+  tile_layer: 'Tile layer',
+  app_template: 'Web app template',
+  theme: 'Theme',
+};
+
+export function getItemTypeLabel(t: ItemType): string {
+  return ITEM_TYPE_LABELS[t] ?? t;
+}

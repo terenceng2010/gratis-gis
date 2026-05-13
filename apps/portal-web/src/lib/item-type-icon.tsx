@@ -78,38 +78,13 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
  * the UI ("data_layer" as uppercase tracking-wide text) should read
  * from here instead.
  */
-const ITEM_TYPE_LABELS: Record<ItemType, string> = {
-  map: 'Map',
-  data_layer: 'Data layer',
-  derived_layer: 'Derived layer',
-  arcgis_service: 'ArcGIS service',
-  form: 'Form',
-  form_submission_collection: 'Form submissions',
-  web_app: 'Web app',
-  report_template: 'Report template',
-  dashboard: 'Dashboard',
-  file: 'File',
-  layer_package: 'Layer package',
-  tool: 'Tool',
-  widget_package: 'Widget package',
-  pick_list: 'Pick list',
-  geo_boundary: 'Boundary',
-  basemap: 'Basemap',
-  wms_service: 'WMS service',
-  wfs_service: 'WFS service',
-  service: 'Connected service',
-  folder: 'Folder',
-  editor: 'Editor',
-  data_collection: 'Data collection',
-  geocoding_service: 'Geocoding service',
-  tile_layer: 'Tile layer',
-  app_template: 'Web app template',
-  theme: 'Theme',
-};
+// Label map lifted to shared-types so backend renderers (thumbnail
+// SVG, etc.) can read the same labels.  Imported here for the local
+// getItemDisplayLabel helper that needs to distinguish web_app
+// variants before falling through to the generic label.
+import { ITEM_TYPE_LABELS } from '@gratis-gis/shared-types';
 
-export function getItemTypeLabel(t: ItemType): string {
-  return ITEM_TYPE_LABELS[t] ?? t;
-}
+export { getItemTypeLabel } from '@gratis-gis/shared-types';
 
 /** Tailwind color classes used when rendering the icon OUTSIDE a
  *  colored tile (e.g. on a plain surface alongside the item title).
