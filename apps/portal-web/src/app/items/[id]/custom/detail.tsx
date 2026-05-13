@@ -1703,6 +1703,15 @@ function Canvas({
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
+  // #53 WYSIWYG: drag-from-palette drop-target indicator.  When
+  // a palette tile is hovered over a container's footprint, we
+  // light up that container with an outline so the user knows
+  // the drop will route into the container's children (vs.
+  // landing as a page-level widget).  Cleared on dragleave +
+  // drop.  Computed in onDragOver via the same findContainerHostAt
+  // helper the drop handler uses, so what the user sees == what
+  // they'll get.
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   // Theme root for live preview of theme tokens.  Same dual-path
   // behaviour as the runtime: use the upstream-resolved tokens
   // when present (user-saved or built-in theme item), else fall
@@ -1730,13 +1739,36 @@ function Canvas({
 
   function onDragOver(e: DragEvent<HTMLDivElement>) {
     if (!canEdit) return;
-    if (e.dataTransfer.types.includes('text/x-widget-kind')) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
+    if (!e.dataTransfer.types.includes('text/x-widget-kind')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    // Compute the drop-target container (if any) under the cursor
+    // so the highlight tracks the cursor as it moves over the
+    // canvas.  Mirrors the same math the drop handler uses so the
+    // visual indicator matches the actual routing decision.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const colWidth = rect.width / GRID_COLS;
+    const col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / colWidth) + 1));
+    const row = Math.max(1, Math.floor(y / ROW_HEIGHT_PX) + 1);
+    const host = findContainerHostAt(widgets, col, row);
+    setDropTargetId((cur) => (cur === (host?.id ?? null) ? cur : host?.id ?? null));
+  }
+
+  function onDragLeave(e: DragEvent<HTMLDivElement>) {
+    // Only clear when the cursor leaves the canvas root, not when
+    // it crosses between child elements inside the canvas.  Without
+    // the relatedTarget check, the highlight would flicker every
+    // time the cursor passed over a widget child.
+    if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget as Node)) {
+      return;
     }
+    setDropTargetId(null);
   }
 
   function onDrop(e: DragEvent<HTMLDivElement>) {
+    setDropTargetId(null);
     if (!canEdit) return;
     const kind = e.dataTransfer.getData('text/x-widget-kind');
     if (!kind) return;
@@ -1846,6 +1878,7 @@ function Canvas({
       <div
         ref={canvasRef}
         onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={() => onSelect(null)}
         // Dot grid background, very subtle. Anchors to (12px, 12px)
@@ -1897,6 +1930,7 @@ function Canvas({
               canEdit={canEdit}
               gesturing={Boolean(gesture && gesture.widgetId === w.id)}
               anyGesture={gesture !== null}
+              isDropTarget={w.id === dropTargetId}
               // #363: prefer the widget's own map override if one is
               // resolved, else fall through to the app default.
               previewMapData={widgetMapData[w.id] ?? previewMapData}
@@ -1950,6 +1984,7 @@ function WidgetCard({
   canEdit,
   gesturing,
   anyGesture,
+  isDropTarget,
   previewMapData,
   previewBasemaps,
   activeTabIdx,
@@ -1966,6 +2001,13 @@ function WidgetCard({
   canEdit: boolean;
   gesturing: boolean;
   anyGesture: boolean;
+  /**
+   * #53: true when a palette tile is currently being dragged
+   * over this widget AND it's a container that will host the
+   * dropped child.  Renders an outline ring so the user sees
+   * which container the drop will route into.
+   */
+  isDropTarget: boolean;
   previewMapData: MapData | null;
   previewBasemaps: CustomBasemap[];
   activeTabIdx: number;
@@ -2009,9 +2051,11 @@ function WidgetCard({
           cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
         }}
         className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md transition-shadow ${
-          selected
-            ? 'shadow-[0_0_0_2px_var(--color-ink-0,_#0f0f10)]'
-            : 'shadow-[0_0_0_1px_var(--color-border,_#e5e7eb)] hover:shadow-[0_0_0_1px_var(--color-ink-1,_#374151)]'
+          isDropTarget
+            ? 'shadow-[0_0_0_3px_var(--color-accent,_#2563eb)]'
+            : selected
+              ? 'shadow-[0_0_0_2px_var(--color-ink-0,_#0f0f10)]'
+              : 'shadow-[0_0_0_1px_var(--color-border,_#e5e7eb)] hover:shadow-[0_0_0_1px_var(--color-ink-1,_#374151)]'
         } ${gesturing ? 'opacity-90' : ''}`}
       >
         <ContainerInDesigner
@@ -2020,6 +2064,17 @@ function WidgetCard({
           selectedChildId={selectedChildId}
           onSelectChild={onSelectChild}
         />
+        {/* Drop-target badge.  Visible only while a palette tile
+            is being dragged over this container.  Tells the user
+            what's about to happen ("Drop here to add to App bar")
+            so the routing into children isn't a mystery. */}
+        {isDropTarget && canEdit ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-accent/10">
+            <span className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink shadow-md">
+              Drop into {label}
+            </span>
+          </div>
+        ) : null}
         {selected && canEdit && (
           <>
             <button
