@@ -247,28 +247,20 @@ const TYPE_GROUPS: TypeGroup[] = [
     label: 'Apps',
     iconTileClass: 'bg-amber-500/10 text-amber-700',
     options: [
-      {
-        value: 'dashboard',
-        label: 'Dashboard',
-        desc: 'Live panels showing feature data.',
-        Icon: LayoutDashboard,
-      },
-      {
-        value: 'editor',
-        label: 'Editor',
-        desc: 'Online workspace for adding, editing, and deleting features in one or more data layers.',
-        Icon: PencilRuler,
-      },
-      {
-        value: 'viewer',
-        label: 'Viewer',
-        desc: 'Read-only app for zooming, querying, and printing. No editing tools; layers are presented as-is.',
-        Icon: Eye,
-      },
+      // #22: Dashboard / Editor / Viewer pulled from the picker.
+      // Editor and Viewer are just specific layouts of the same
+      // Custom Web App framework, so they live as app_template
+      // items now (seeded per org alongside Sidebar Explorer
+      // etc.); the picker only needs the one "Custom web app"
+      // entry, and the wizard's template gallery is where users
+      // pick the editor / viewer / parcel / etc. layout.
+      // Dashboard stays a placeholder item type (existing items
+      // resolve) but isn't surfaced for creation until a real
+      // implementation lands.
       {
         value: 'survey',
         label: 'Survey responses',
-        desc: 'Browse a formâ€™s submissions on a map, with click-through to a form-shaped receipt.',
+        desc: "Browse a form's submissions on a map, with click-through to a form-shaped receipt.",
         Icon: ClipboardList,
       },
       {
@@ -291,8 +283,8 @@ const TYPE_GROUPS: TypeGroup[] = [
       },
       {
         value: 'custom',
-        label: 'Custom web app',
-        desc: 'Drag-drop layout of map, layer-list, attribute-table, chart, and text widgets. The freeform option when Editor / Viewer / Survey are too constrained.',
+        label: 'Web app',
+        desc: 'Drag-drop layout of map + tool widgets, sidebar, header, foldable groups. Pick a starter template (Sidebar Explorer, Showcase Map, Editor, Viewer, etc.) on the next screen, or start blank and build the layout from scratch.',
         Icon: Sparkles,
       },
     ],

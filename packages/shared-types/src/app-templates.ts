@@ -426,6 +426,204 @@ function fieldInspectionSeed(): CustomAppData {
 }
 
 /**
+ * #22: Editor template.  A working app for staff who add / edit /
+ * delete features.  Layout mirrors the legacy `editor` item type:
+ * top app-bar with Save / Search / table, left dock for layer
+ * toggles, the Attribute Table docked at the bottom by default
+ * so authors land on a "see rows + their geometry" workspace.
+ *
+ * The dedicated Create / Edit / Delete feature widgets are
+ * planned (task #56); when they land, the seed is updated to
+ * stamp them in the app-bar.  For now the template lays out the
+ * working surface and the user wires in editing via the
+ * AttributeTable's inline edit affordances + the map's existing
+ * select-and-edit path.
+ */
+function editorWorkspaceSeed(): CustomAppData {
+  const mapId = wid();
+  const search = childWidget('search', {
+    kind: 'search',
+    mapWidgetId: mapId,
+    geocodingEnabled: true,
+    displayMode: 'tool',
+    panelArrangement: toolPanel('top-center'),
+  });
+  const select = childWidget('select', {
+    kind: 'select',
+    mapWidgetId: mapId,
+    displayMode: 'tool',
+    panelArrangement: toolPanel('top-right'),
+  });
+  const basemap = childWidget('basemap-gallery', {
+    kind: 'basemap-gallery',
+    mapWidgetId: mapId,
+    displayMode: 'tool',
+    panelArrangement: toolPanel('top-right'),
+  });
+  // Attribute table is docked-bottom by default and open from
+  // the start; editors want it visible without a click.
+  const attrTable = childWidget('attribute-table', {
+    kind: 'attribute-table',
+    targetIndex: 0,
+    syncWithMapWidgetId: mapId,
+    displayMode: 'tool',
+    panelArrangement: {
+      placement: 'docked-bottom',
+      anchor: 'bottom-center',
+      width: 720,
+      height: 360,
+      offsetX: 0,
+      offsetY: 0,
+      animation: 'fade',
+    },
+  });
+  const layerList = childWidget('layer-list', {
+    kind: 'layer-list',
+    mapWidgetId: mapId,
+    allowToggle: true,
+    displayMode: 'panel',
+  });
+
+  const appBar: CustomWidget = {
+    id: wid(),
+    kind: 'app-bar',
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    config: {
+      kind: 'app-bar',
+      widgets: [search, select, basemap, attrTable],
+      sticky: true,
+      variant: 'elevated',
+    },
+  };
+  const dockPanel: CustomWidget = {
+    id: wid(),
+    kind: 'dock-panel',
+    layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
+    config: {
+      kind: 'dock-panel',
+      side: 'left',
+      widgets: [
+        childWidget('foldable-group', {
+          kind: 'foldable-group',
+          title: 'Layers',
+          widgets: [layerList],
+          defaultOpen: true,
+        }),
+      ],
+      collapsible: true,
+      defaultCollapsed: false,
+      widthPx: 280,
+    },
+  };
+  const map: CustomWidget = {
+    id: mapId,
+    kind: 'map',
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    config: { kind: 'map' },
+  };
+
+  return {
+    version: 3,
+    themePresetId: 'slate',
+    targets: [],
+    pages: [
+      {
+        id: 'home',
+        title: 'Home',
+        widgets: [appBar, dockPanel, map],
+      },
+    ],
+  };
+}
+
+/**
+ * #22: Viewer template.  Read-only audience-facing app.  Bar
+ * carries Search + Basemaps + Print; left dock holds Layers
+ * (toggle visibility only, no editing).  No attribute table by
+ * default — viewers can pop one open via the popup on map click,
+ * but the chrome stays minimal.
+ */
+function viewerReadonlySeed(): CustomAppData {
+  const mapId = wid();
+  const search = childWidget('search', {
+    kind: 'search',
+    mapWidgetId: mapId,
+    geocodingEnabled: true,
+    displayMode: 'tool',
+    panelArrangement: toolPanel('top-center'),
+  });
+  const basemap = childWidget('basemap-gallery', {
+    kind: 'basemap-gallery',
+    mapWidgetId: mapId,
+    displayMode: 'tool',
+    panelArrangement: toolPanel('top-right'),
+  });
+  const print = childWidget('print', {
+    kind: 'print',
+    mapWidgetId: mapId,
+    displayMode: 'tool',
+    panelArrangement: toolPanel('top-right'),
+  });
+  const layerList = childWidget('layer-list', {
+    kind: 'layer-list',
+    mapWidgetId: mapId,
+    allowToggle: true,
+    displayMode: 'panel',
+  });
+
+  const appBar: CustomWidget = {
+    id: wid(),
+    kind: 'app-bar',
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    config: {
+      kind: 'app-bar',
+      widgets: [search, basemap, print],
+      sticky: true,
+      variant: 'elevated',
+    },
+  };
+  const dockPanel: CustomWidget = {
+    id: wid(),
+    kind: 'dock-panel',
+    layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
+    config: {
+      kind: 'dock-panel',
+      side: 'left',
+      widgets: [
+        childWidget('foldable-group', {
+          kind: 'foldable-group',
+          title: 'Layers',
+          widgets: [layerList],
+          defaultOpen: true,
+        }),
+      ],
+      collapsible: true,
+      defaultCollapsed: false,
+      widthPx: 280,
+    },
+  };
+  const map: CustomWidget = {
+    id: mapId,
+    kind: 'map',
+    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    config: { kind: 'map' },
+  };
+
+  return {
+    version: 3,
+    themePresetId: 'default',
+    targets: [],
+    pages: [
+      {
+        id: 'home',
+        title: 'Home',
+        widgets: [appBar, dockPanel, map],
+      },
+    ],
+  };
+}
+
+/**
  * Blank template. Empty page + portal-default theme. The "Custom
  * Web App from scratch" path users who don't want to start from a
  * template land in.
@@ -517,6 +715,8 @@ export type StarterKind =
   | 'sidebar-explorer'
   | 'showcase-map'
   | 'compact-drawer'
+  | 'editor-workspace'
+  | 'viewer-readonly'
   | 'blank-canvas';
 
 /**
@@ -565,6 +765,24 @@ export const STARTERS: readonly StarterTemplate[] = [
     use: 'Field-staff apps, mobile-friendly maps, inspection workflows, anywhere screen real estate is at a premium.',
     tags: ['mobile', 'drawer', 'compact'],
     seed: fieldInspectionSeed,
+  },
+  {
+    kind: 'editor-workspace',
+    label: 'Editor',
+    description:
+      'Workspace layout for staff adding, editing, and deleting features. Top bar with search + select, left dock with layers, attribute table docked at the bottom.',
+    use: 'Data maintenance workflows, asset stewardship, anyone whose job is to keep a data layer current.',
+    tags: ['editor', 'data-maintenance'],
+    seed: editorWorkspaceSeed,
+  },
+  {
+    kind: 'viewer-readonly',
+    label: 'Viewer',
+    description:
+      'Read-only audience-facing app. Search + basemap + print in the top bar, layer toggles in the side dock, no editing affordances.',
+    use: 'Public information maps, internal share-only views, anywhere the audience reads but does not write.',
+    tags: ['viewer', 'read-only', 'public'],
+    seed: viewerReadonlySeed,
   },
   {
     kind: 'blank-canvas',
