@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { OrgRole } from '@prisma/client';
-import { BUILTIN_BASEMAP_SEEDS } from '@gratis-gis/shared-types';
+import { BUILTIN_BASEMAP_SEEDS, STARTERS } from '@gratis-gis/shared-types';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { KeycloakClaims } from './jwt.strategy.js';
 import {
@@ -71,6 +71,16 @@ export class AuthSyncService {
    * doesn't permanently disable seeding.
    */
   private readonly basemapSeedInFlight = new Map<string, Promise<void>>();
+
+  /**
+   * #22: per-process cache + in-flight promise for the parallel
+   * "every org gets the four starter app templates" seeding pass.
+   * Same coalescing pattern as the basemap seeder above.  Resets
+   * on process restart so a newly-added starter (or a renamed
+   * one) gets re-checked next deploy.
+   */
+  private readonly appTemplateSeedChecked = new Set<string>();
+  private readonly appTemplateSeedInFlight = new Map<string, Promise<void>>();
 
   /**
    * Per-process cache of `userId -> last time we wrote lastSeenAt`.
@@ -241,6 +251,26 @@ export class AuthSyncService {
       await inFlight;
     }
 
+    // #22: same coalesced-seeding pattern for the four starter
+    // app_template items.  Idempotent (skipped per-process once
+    // an org is confirmed; idempotent against the DB via the
+    // seed_kind unique check inside the seeder).
+    if (!this.appTemplateSeedChecked.has(org.id)) {
+      let inFlight = this.appTemplateSeedInFlight.get(org.id);
+      if (!inFlight) {
+        inFlight = (async () => {
+          try {
+            await this.ensureBuiltinAppTemplates(org.id, user.id);
+            this.appTemplateSeedChecked.add(org.id);
+          } finally {
+            this.appTemplateSeedInFlight.delete(org.id);
+          }
+        })();
+        this.appTemplateSeedInFlight.set(org.id, inFlight);
+      }
+      await inFlight;
+    }
+
     // Exclude memberships whose group is in the trash. Otherwise an item
     // shared to a soft-deleted group would still match this user's
     // effective groupIds and grant read access, which would defeat
@@ -319,6 +349,61 @@ export class AuthSyncService {
           seededKey: seed.seededKey,
         },
         access: 'org' as const,
+      })),
+    });
+  }
+
+  /**
+   * #22: For each built-in starter app template, insert an
+   * `app_template` item row if the org doesn't already have one
+   * with that `seed_kind`.  Idempotent: if the admin previously
+   * deleted a starter, this will not re-create it (the housekeeping
+   * "Restore starter templates" button is the explicit way to bring
+   * them back).  Idempotent on first-run: the seed_kind check
+   * prevents duplicates if two processes race.
+   *
+   * Each starter's CustomAppData blueprint is captured at seed
+   * time, so editing the seed function and redeploying does NOT
+   * mutate existing items.  Org admins own their starter items
+   * outright and can edit them freely.
+   */
+  private async ensureBuiltinAppTemplates(
+    orgId: string,
+    fallbackOwnerId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.item.findMany({
+      where: { orgId, type: 'app_template', seedKind: { not: null } },
+      select: { seedKind: true },
+    });
+    const have = new Set<string>();
+    for (const row of existing) {
+      if (row.seedKind) have.add(row.seedKind);
+    }
+    const missing = STARTERS.filter((s) => !have.has(s.kind));
+    if (missing.length === 0) return;
+
+    // Prefer the org's first admin so the seed items match the
+    // ownership model existing orgs would have on a manual create.
+    // Fall back to the signed-in user only when the org has no
+    // admin yet (very early in org bootstrap).
+    const admin = await this.prisma.user.findFirst({
+      where: { orgId, orgRole: 'admin' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    const ownerId = admin?.id ?? fallbackOwnerId;
+
+    await this.prisma.item.createMany({
+      data: missing.map((starter) => ({
+        orgId,
+        ownerId,
+        type: 'app_template' as const,
+        title: starter.label,
+        description: starter.description,
+        tags: ['built-in', ...starter.tags],
+        data: starter.seed() as unknown as object,
+        access: 'org' as const,
+        seedKind: starter.kind,
       })),
     });
   }

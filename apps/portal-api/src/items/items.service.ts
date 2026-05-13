@@ -52,6 +52,16 @@ export interface CreateItemInput {
   thumbnailUrl?: string | null | undefined;
   /** Open-data license; null / omitted = not recorded. */
   license?: string | null | undefined;
+  /**
+   * #22: stable identifier for items seeded from a built-in
+   * starter (e.g. 'sidebar-explorer' on an app_template item).
+   * Set by org-bootstrap and admin-restore; never accepted via
+   * the public create endpoint, so a user-saved template stays
+   * null and the restore flow correctly treats it as "not a
+   * starter."  Callers that pass this also typically pass
+   * ownerOverride to attribute the seed to the org admin.
+   */
+  seedKind?: string | null | undefined;
 }
 
 export interface UpdateItemInput {
@@ -881,6 +891,9 @@ export class ItemsService {
           bbox: bbox ?? [],
           ...(input.thumbnailUrl ? { thumbnailUrl: input.thumbnailUrl } : {}),
           ...(input.license !== undefined && input.license !== null ? { license: input.license } : {}),
+          ...(input.seedKind !== undefined && input.seedKind !== null
+            ? { seedKind: input.seedKind }
+            : {}),
         },
       });
     } catch (err) {

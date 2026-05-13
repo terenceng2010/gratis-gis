@@ -95,6 +95,7 @@ function makeDerivedItem(data: DerivedLayerData): Item {
     publicGeoBoundaryId: null,
     orgGeoBoundaryId: null,
     lastUsageAt: null,
+    seedKind: null,
   };
 }
 
