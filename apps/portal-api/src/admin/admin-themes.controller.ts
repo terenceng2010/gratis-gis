@@ -122,7 +122,7 @@ export class AdminThemesController {
       tags: string[];
       data: object;
       access: 'org';
-      seedKind: string;
+      seedKind: string | null;
     }> = [];
 
     for (const starter of THEME_STARTERS) {
@@ -148,7 +148,9 @@ export class AdminThemesController {
           tokens: starter.tokens,
         },
         access: 'org',
-        seedKind: starter.kind,
+        // Force-restore copies drop seed_kind so the partial unique
+        // index allows them alongside the existing customized starter.
+        seedKind: alreadyHere ? null : starter.kind,
       });
       restored.push(starter.kind);
     }

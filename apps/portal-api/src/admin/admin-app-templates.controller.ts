@@ -152,7 +152,7 @@ export class AdminAppTemplatesController {
       tags: string[];
       data: object;
       access: 'org';
-      seedKind: string;
+      seedKind: string | null;
     }> = [];
 
     for (const starter of STARTERS) {
@@ -163,9 +163,12 @@ export class AdminAppTemplatesController {
         continue;
       }
       // When force=true and a copy already exists, suffix the
-      // title so the admin can tell the two apart; the new copy
-      // gets a fresh widget tree from seed() so its ids are
-      // distinct from the previously-seeded one.
+      // title so the admin can tell the two apart, and DROP the
+      // seed_kind on the new copy.  The partial unique index on
+      // (org, type, seed_kind) only allows one starter per org;
+      // the alongside copy is a fresh reference, not a "starter"
+      // anymore, so it stores as a regular user-saved template
+      // and the existing customized starter stays Present.
       const titleSuffix = alreadyHere
         ? ` (restored ${new Date().toISOString().slice(0, 10)})`
         : '';
@@ -178,7 +181,7 @@ export class AdminAppTemplatesController {
         tags: ['built-in', ...starter.tags],
         data: starter.seed() as unknown as object,
         access: 'org',
-        seedKind: starter.kind,
+        seedKind: alreadyHere ? null : starter.kind,
       });
       restored.push(starter.kind);
     }

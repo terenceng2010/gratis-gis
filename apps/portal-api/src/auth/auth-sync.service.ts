@@ -433,6 +433,13 @@ export class AuthSyncService {
         access: 'org' as const,
         seedKind: starter.kind,
       })),
+      // Belt-and-suspenders with the partial unique index on
+      // (org_id, type, seed_kind).  If a sibling replica wins the
+      // INSERT race for any starter, the conflicting row is
+      // silently skipped here instead of the whole createMany
+      // failing.  The other replica still owns the row, which is
+      // what we want.
+      skipDuplicates: true,
     });
   }
 
@@ -482,6 +489,9 @@ export class AuthSyncService {
         access: 'org' as const,
         seedKind: starter.kind,
       })),
+      // See ensureBuiltinAppTemplates for the rationale; same
+      // cross-replica race risk applies here.
+      skipDuplicates: true,
     });
   }
 }

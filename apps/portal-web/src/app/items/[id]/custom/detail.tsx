@@ -72,6 +72,12 @@ import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
+import {
+  AppBar,
+  DockPanel,
+  FoldableGroup,
+  Slideout,
+} from './themed-containers';
 
 /**
  * #22: summary of one theme item, served from the parent server
@@ -932,6 +938,7 @@ export function CustomAppDetail({
               activeTabIdxByWidget={activeTabIdxByWidget}
               themePresetId={app.themePresetId}
               themeTokens={resolvedThemeTokens}
+              itemTitle={itemTitle}
               onSetActiveTabIdx={setActiveTabIdx}
               onSelect={setSelectedWidgetId}
               onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
@@ -1642,6 +1649,7 @@ function Canvas({
   activeTabIdxByWidget,
   themePresetId,
   themeTokens,
+  itemTitle,
   onSetActiveTabIdx,
   onSelect,
   onCanvasDrop,
@@ -1667,6 +1675,13 @@ function Canvas({
    * Falls back to the in-process starter resolver when undefined.
    */
   themeTokens: Record<string, string> | undefined;
+  /**
+   * #22 WYSIWYG: item title used as the fallback for app-bar
+   * children that don't have their own title set.  Passed
+   * straight through to WidgetCard which threads it into the
+   * inline themed-containers render.
+   */
+  itemTitle: string;
   onSetActiveTabIdx: (widgetId: string, idx: number) => void;
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
@@ -1873,6 +1888,9 @@ function Canvas({
               previewMapData={widgetMapData[w.id] ?? previewMapData}
               previewBasemaps={previewBasemaps}
               activeTabIdx={activeTabIdxByWidget[w.id] ?? 0}
+              itemTitle={itemTitle}
+              selectedChildId={selectedId}
+              onSelectChild={onSelect}
               onSetActiveTabIdx={(idx) => onSetActiveTabIdx(w.id, idx)}
               onClick={(e) => {
                 e.stopPropagation();
@@ -1921,6 +1939,9 @@ function WidgetCard({
   previewMapData,
   previewBasemaps,
   activeTabIdx,
+  itemTitle,
+  selectedChildId,
+  onSelectChild,
   onSetActiveTabIdx,
   onClick,
   onMoveStart,
@@ -1934,6 +1955,16 @@ function WidgetCard({
   previewMapData: MapData | null;
   previewBasemaps: CustomBasemap[];
   activeTabIdx: number;
+  /**
+   * #22 WYSIWYG: forwarded to inline-rendered children of container
+   * widgets (app-bar children get the item title as their fallback
+   * title for the live preview, same as the runtime does).
+   */
+  itemTitle: string;
+  /** Selection mirror for nested children inside containers. */
+  selectedChildId: string | null;
+  /** Click handler for a nested child; bubbles up to the page. */
+  onSelectChild: (childId: string) => void;
   onSetActiveTabIdx: (idx: number) => void;
   onClick: (e: React.MouseEvent) => void;
   onMoveStart: (e: ReactMouseEvent<HTMLElement>) => void;
@@ -1946,6 +1977,69 @@ function WidgetCard({
   const Icon = tile?.Icon ?? Square;
   const label = tile?.label ?? widget.kind;
   const summary = summarizeWidget(widget);
+  // #22 WYSIWYG: containers render the actual runtime themed-
+  // container component inside the card so the designer matches
+  // what the live app will look like.  We branch out before the
+  // standard title-bar + placeholder layout below.
+  const isContainer = THEMED_CONTAINER_KINDS.has(widget.kind);
+  if (isContainer) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onMouseDown={canEdit ? onMoveStart : undefined}
+        style={{
+          gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
+          gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
+          cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
+        }}
+        className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md transition-shadow ${
+          selected
+            ? 'shadow-[0_0_0_2px_var(--color-ink-0,_#0f0f10)]'
+            : 'shadow-[0_0_0_1px_var(--color-border,_#e5e7eb)] hover:shadow-[0_0_0_1px_var(--color-ink-1,_#374151)]'
+        } ${gesturing ? 'opacity-90' : ''}`}
+      >
+        <ContainerInDesigner
+          widget={widget}
+          itemTitle={itemTitle}
+          selectedChildId={selectedChildId}
+          onSelectChild={onSelectChild}
+        />
+        {selected && canEdit && (
+          <>
+            <button
+              type="button"
+              aria-label="Resize right"
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onResizeStart('r', e);
+              }}
+              className="absolute right-0 top-1/2 z-20 h-8 w-1.5 -translate-y-1/2 cursor-ew-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
+            />
+            <button
+              type="button"
+              aria-label="Resize bottom"
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onResizeStart('b', e);
+              }}
+              className="absolute bottom-0 left-1/2 z-20 h-1.5 w-8 -translate-x-1/2 cursor-ns-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
+            />
+            <button
+              type="button"
+              aria-label="Resize"
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onResizeStart('br', e);
+              }}
+              className="absolute bottom-0 right-0 z-20 h-3 w-3 cursor-nwse-resize rounded-tl-sm bg-accent opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
+            />
+          </>
+        )}
+      </div>
+    );
+  }
   // #343: live MapLibre preview for Map widgets. We freeze the
   // preview during ANY canvas gesture (not just the one on this
   // widget) so a drag of a sibling widget doesn't cause MapLibre to
@@ -3558,6 +3652,143 @@ function MyLocationWidgetConfigBody({
         Leave marker on the map after locating
       </label>
     </div>
+  );
+}
+
+// ---- Themed container canvas preview (#22 WYSIWYG) -----------------------
+
+/**
+ * Render a themed container (app-bar / dock-panel / slideout /
+ * foldable-group) inside the designer canvas using the same
+ * runtime themed-containers components the live app uses.  This
+ * is the EB-style WYSIWYG path: the canvas chrome matches what
+ * users will see at runtime, and clicking a child selects it
+ * (vs. opening its popover, which the runtime would do).
+ *
+ * The `renderChildInDesigner` callback supplied to each container
+ * produces a clickable representation of the child:
+ *   - container children (foldable-group inside dock-panel) recurse
+ *   - tool-mode widgets (Search, Basemaps, etc.) render as a labeled
+ *     icon button matching the runtime in-bar styling
+ *   - panel-mode widgets (LayerList, etc.) render a compact summary
+ *
+ * Selection: clicking a child invokes onSelectChild(child.id) which
+ * the page maps back to selectedWidgetId via a deep-find so the
+ * right-rail properties panel shows the child's config.
+ */
+function ContainerInDesigner({
+  widget,
+  itemTitle,
+  selectedChildId,
+  onSelectChild,
+}: {
+  widget: CustomWidget;
+  itemTitle: string;
+  selectedChildId: string | null;
+  onSelectChild: (childId: string) => void;
+}) {
+  const renderChild = (child: CustomWidget): React.ReactNode => (
+    <DesignerChild
+      child={child}
+      isSelected={selectedChildId === child.id}
+      onSelect={onSelectChild}
+      itemTitle={itemTitle}
+    />
+  );
+
+  switch (widget.config.kind) {
+    case 'app-bar':
+      return (
+        <AppBar
+          config={widget.config}
+          fallbackTitle={itemTitle}
+          renderChild={renderChild}
+        />
+      );
+    case 'dock-panel':
+      return (
+        <DockPanel config={widget.config} renderChild={renderChild} />
+      );
+    case 'slideout':
+      return (
+        <Slideout config={widget.config} renderChild={renderChild} />
+      );
+    case 'foldable-group':
+      return (
+        <FoldableGroup config={widget.config} renderChild={renderChild} />
+      );
+    default:
+      return null;
+  }
+}
+
+/**
+ * One child inside a designer container.  Renders a click-to-
+ * select representation of the child widget that matches the
+ * runtime visually (icon + label for tools; container chrome for
+ * nested containers; small placeholder card for content widgets).
+ */
+function DesignerChild({
+  child,
+  isSelected,
+  onSelect,
+  itemTitle,
+}: {
+  child: CustomWidget;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+  itemTitle: string;
+}) {
+  const tile = PALETTE_TILES.find((t) => t.kind === child.kind);
+  const Icon = tile?.Icon ?? Square;
+  const label = tile?.label ?? child.kind;
+
+  // Nested containers (foldable-group inside dock-panel, or any
+  // other container that ends up here) recurse via the same
+  // ContainerInDesigner so the WYSIWYG goes all the way down.
+  if (THEMED_CONTAINER_KINDS.has(child.kind)) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(child.id);
+        }}
+        className={`relative cursor-pointer ${
+          isSelected ? 'outline outline-2 outline-accent' : ''
+        }`}
+      >
+        <ContainerInDesigner
+          widget={child}
+          itemTitle={itemTitle}
+          selectedChildId={null}
+          onSelectChild={onSelect}
+        />
+      </div>
+    );
+  }
+
+  // Tool widgets and other content widgets render as a small
+  // labeled icon button.  Mirrors the runtime in-bar visual so
+  // the canvas reads as the live app, just without active state.
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect(child.id);
+      }}
+      title={label}
+      className={`group/designer-child flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors ${
+        isSelected
+          ? 'bg-[hsl(var(--app-header-ink))] text-[hsl(var(--app-header-bg))]'
+          : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]'
+      }`}
+    >
+      <Icon className="h-5 w-5" strokeWidth={1.75} />
+      <span className="text-[10px] font-medium leading-none">{label}</span>
+    </button>
   );
 }
 
