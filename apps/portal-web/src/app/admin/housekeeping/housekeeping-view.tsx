@@ -556,6 +556,8 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<CalendarClock className="h-4 w-4" />}
         title={`Shares expiring in the next ${summary.expiryWindowDays} days`}
         empty="No shares are scheduled to expire in this window."
+        count={expiringShares.length}
+        defaultOpen={expiringShares.length > 0}
         caption={
           expiringShares.length === 0
             ? null
@@ -580,6 +582,8 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<Timer className="h-4 w-4" />}
         title={`Users auto-disabling in the next ${summary.expiryWindowDays} days`}
         empty="No users have an auto-disable date in this window."
+        count={expiringUsers.length}
+        defaultOpen={expiringUsers.length > 0}
         caption={
           expiringUsers.length === 0
             ? null
@@ -600,6 +604,8 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<Clock className="h-4 w-4" />}
         title={`Items with no activity for ${summary.staleItemDays}+ days`}
         empty="No stale items: every item in your org has been edited or had feature activity recently, or is still being shared."
+        count={staleItems.length}
+        defaultOpen={staleItems.length > 0}
         caption={
           <>
             {staleItems.length === 0
@@ -655,6 +661,8 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<Users className="h-4 w-4" />}
         title={`Users quiet for ${summary.staleUserDays}+ days`}
         empty="Nobody looks idle. Admins are deliberately excluded from this check so a break-glass account never shows up."
+        count={staleUsers.length}
+        defaultOpen={staleUsers.length > 0}
         caption="Admins are excluded. Ticking a user who still owns items is fine: when you click Disable, we'll ask who to reassign their items to (defaults to you) before disabling the account."
         bulkBar={
           selectedUsers.size > 0 ? (
@@ -718,35 +726,13 @@ export function HousekeepingView({ bundle }: Props) {
         />
       ) : null}
 
-      {/* Items first because that's the actionable view -- "which
-          item should I trash" -- and tables second as the diagnostic
-          drilldown for "is the database itself bloated". */}
-      <Section
-        icon={<Database className="h-4 w-4" />}
-        title="Largest items by total size"
-        empty="No items yet."
-        caption="Each item's settings/metadata blob plus, for data_layer items, the per-layer feature tables that hold the actual rows and geometry. File attachments and form submissions aren't attributed back to their owning items here -- attachments live in MinIO (see the Storage card above) and submissions live in form_submission (see the Largest database tables card below)."
-      >
-        {largeItems.length === 0 ? null : (
-          <LargeItemsTable rows={largeItems} />
-        )}
-      </Section>
-
-      {/* Top tables by total relation size (#161). Diagnostic for
-          "which table is bloating the cluster" -- if the database
-          card above is heavy, this is where to look. PostGIS's
-          spatial_ref_sys and Prisma's bookkeeping tables are
-          excluded server-side so the chart shows only user data. */}
-      <Section
-        icon={<Layers className="h-4 w-4" />}
-        title="Largest database tables"
-        empty="No tables to report."
-        caption="Top 10 user tables in the public schema by total size (heap + indexes). The observation_p20xxxxx tables are monthly partitions of the engine's observation log; form_submission holds every form response. PostGIS reference tables and Prisma bookkeeping are excluded. For per-layer drill-down see the Storage by data layer card below."
-      >
-        {largestTables.length === 0 ? null : (
-          <LargestTablesTable rows={largestTables} />
-        )}
-      </Section>
+      {/* "Largest items by total size" and "Largest database
+          tables" were here but pulled per user feedback: low
+          signal for the typical admin (the actionable storage
+          questions are answered by the Storage card above and
+          the Storage by data layer card below).  The endpoints
+          still exist for diagnostic CLI use.  Re-add as a
+          collapsed "Diagnostics" group later if anyone asks. */}
 
       {/* Per-data-layer drill-down inside the observation table
           (#115 P10 follow-up). The table above lumps every layer
@@ -759,6 +745,7 @@ export function HousekeepingView({ bundle }: Props) {
         icon={<Layers className="h-4 w-4" />}
         title="Storage by data layer"
         empty="No data_layer scopes have feature observations yet."
+        count={largestDataLayers.length}
         caption="Top 50 data layers by approximate observation footprint. The 'approx' bytes column is prorated from the observation table's total size by row share, not measured per row, so it ranks layers reliably but should not be read as a literal disk number. Orphan rows belong to a permanently deleted item and can be cleaned up via the orphan-cleanup migration (#115)."
       >
         {largestDataLayers.length === 0 ? null : (
@@ -923,6 +910,19 @@ function StatCard({
 // Section shell
 // ---------------------------------------------------------------
 
+/**
+ * Collapsible section card.  User feedback: housekeeping page was
+ * too scrolly with every section open all at once.  Each section
+ * now stamps a click-to-toggle header (chevron right when
+ * collapsed, chevron down when open) and starts collapsed by
+ * default unless `defaultOpen` is set on the call site.  Server-
+ * fetched data still loads either way (Suspense fires regardless
+ * of the open state) so expanding is just a CSS reveal.
+ *
+ * Optional `count` chip in the header gives the admin a quick
+ * "anything here?" signal without expanding.  When count is 0 the
+ * chip uses a muted style.
+ */
 function Section({
   icon,
   title,
@@ -930,6 +930,8 @@ function Section({
   caption,
   bulkBar,
   children,
+  count,
+  defaultOpen = false,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -937,24 +939,59 @@ function Section({
   caption?: React.ReactNode;
   bulkBar?: React.ReactNode;
   children: React.ReactNode;
+  /** Optional chip showing N items in this section. */
+  count?: number;
+  /** Force this section open on first render. */
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="rounded-lg border border-border bg-surface-1">
-      <header className="border-b border-border px-4 py-3">
-        <h2 className="inline-flex items-center gap-2 text-sm font-medium text-ink-0">
-          {icon}
-          {title}
-        </h2>
-        {caption ? (
-          <p className="mt-0.5 text-xs text-muted">{caption}</p>
-        ) : null}
-      </header>
-      {bulkBar}
-      {children ? (
-        <div>{children}</div>
-      ) : (
-        <p className="px-4 py-6 text-center text-sm text-muted">{empty}</p>
-      )}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={`flex w-full items-start gap-2 px-4 py-3 text-left ${
+          open ? 'border-b border-border' : ''
+        }`}
+      >
+        <ChevronRight
+          className={`mt-0.5 h-4 w-4 shrink-0 text-muted transition-transform ${
+            open ? 'rotate-90' : ''
+          }`}
+          strokeWidth={2}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="inline-flex items-center gap-2 text-sm font-medium text-ink-0">
+            {icon}
+            {title}
+            {typeof count === 'number' ? (
+              <span
+                className={`inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full px-1.5 text-[11px] font-medium ${
+                  count > 0
+                    ? 'bg-accent/10 text-accent'
+                    : 'bg-surface-2 text-muted'
+                }`}
+              >
+                {count}
+              </span>
+            ) : null}
+          </span>
+          {caption ? (
+            <span className="mt-0.5 block text-xs text-muted">{caption}</span>
+          ) : null}
+        </span>
+      </button>
+      {open ? (
+        <>
+          {bulkBar}
+          {children ? (
+            <div>{children}</div>
+          ) : (
+            <p className="px-4 py-6 text-center text-sm text-muted">{empty}</p>
+          )}
+        </>
+      ) : null}
     </section>
   );
 }
