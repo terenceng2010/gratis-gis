@@ -43,7 +43,7 @@ export function AppTemplateDetail({ itemId, blueprint, seedKind }: Props) {
           <Wand2 className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-xs text-muted">App template</p>
+          <p className="text-xs text-muted">Web app template</p>
           <h2 className="text-base font-semibold text-ink-0">
             Reusable Custom Web App blueprint
           </h2>

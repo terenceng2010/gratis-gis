@@ -101,7 +101,7 @@ const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   data_collection: 'Data collection',
   geocoding_service: 'Geocoding service',
   tile_layer: 'Tile layer',
-  app_template: 'App template',
+  app_template: 'Web app template',
 };
 
 export function getItemTypeLabel(t: ItemType): string {
