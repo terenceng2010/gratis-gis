@@ -20,6 +20,22 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Single-runner mutex (#72).  Two concurrent invocations of this
+# script race over docker buildx + `docker compose up`, and the
+# second one can kill the first's containers mid-bootup.  Hold an
+# flock on a file in /var/lock; if another deploy is already
+# running, exit cleanly rather than racing.  Adjust the flock path
+# only if /var/lock is missing (some minimal images).
+LOCK_FILE="${DEPLOY_LOCK_FILE:-/var/lock/gratisgis-deploy.lock}"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "Another deploy is in progress (lock=$LOCK_FILE)." >&2
+  echo "Tail /tmp/deploy.log if you started one in the background, or wait for it to finish before re-running." >&2
+  exit 1
+fi
+# The lock auto-releases when fd 9 closes (process exit).
+
 if [[ ! -f infra/.env.prod ]]; then
   echo "FATAL: infra/.env.prod is missing." >&2
   echo "Copy infra/.env.prod.example to infra/.env.prod and fill in real values." >&2
