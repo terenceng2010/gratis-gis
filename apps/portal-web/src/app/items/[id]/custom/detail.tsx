@@ -530,6 +530,10 @@ export function CustomAppDetail({
 
   const updateWidget = useCallback(
     (widgetId: string, patch: Partial<CustomWidget>) => {
+      // #22 WYSIWYG: walks containers + tabs so a patch applied
+      // against a nested child id lands on the right node in the
+      // tree instead of falling through to a no-op against the
+      // page-level array.
       setApp((cur) => ({
         ...cur,
         pages: cur.pages.map((p, i) =>
@@ -537,8 +541,10 @@ export function CustomAppDetail({
             ? p
             : {
                 ...p,
-                widgets: p.widgets.map((w) =>
-                  w.id === widgetId ? ({ ...w, ...patch } as CustomWidget) : w,
+                widgets: updateWidgetDeep(
+                  p.widgets,
+                  widgetId,
+                  (w) => ({ ...w, ...patch }) as CustomWidget,
                 ),
               },
         ),
@@ -550,12 +556,15 @@ export function CustomAppDetail({
 
   const removeWidget = useCallback(
     (widgetId: string) => {
+      // Same deep walker: deleting a nested child (e.g. removing
+      // a Print tool from inside an app-bar) targets the right
+      // tree node.
       setApp((cur) => ({
         ...cur,
         pages: cur.pages.map((p, i) =>
           i !== activePageIdx
             ? p
-            : { ...p, widgets: p.widgets.filter((w) => w.id !== widgetId) },
+            : { ...p, widgets: removeWidgetDeep(p.widgets, widgetId) },
         ),
       }));
       setSelectedWidgetId(null);
@@ -782,8 +791,13 @@ export function CustomAppDetail({
   );
 
   const activePage = app.pages[activePageIdx] ?? app.pages[0]!;
-  const selectedWidget =
-    activePage.widgets.find((w) => w.id === selectedWidgetId) ?? null;
+  // #22 WYSIWYG: deep-find the selected widget so clicking a tool
+  // icon inside an app-bar (or any nested child) resolves to the
+  // child's config in the right-rail properties panel.  The legacy
+  // top-level `find` only saw page-level widgets.
+  const selectedWidget = selectedWidgetId
+    ? findContainerById(activePage.widgets, selectedWidgetId)
+    : null;
 
   // BuilderShell top-bar right side. Saved indicator + Save button +
   // Open link to the runtime. Page/widget counts surface as a small
@@ -5185,6 +5199,91 @@ function findContainerById(
     }
   }
   return null;
+}
+
+/**
+ * #22 WYSIWYG: walk every widget tree on the page (including
+ * container children, foldable-group children, tabs children) and
+ * apply `updater` to the widget whose id matches.  Returns a fresh
+ * array with the update applied; non-matching widgets pass through
+ * untouched.  Used by the right-rail properties panel so editing
+ * a nested child's config persists on the right level of the tree
+ * instead of trying to set it on the page-level array (where it
+ * doesn't exist for nested ids).
+ */
+function updateWidgetDeep(
+  widgets: CustomWidget[],
+  targetId: string,
+  updater: (w: CustomWidget) => CustomWidget,
+): CustomWidget[] {
+  return widgets.map((w) => {
+    if (w.id === targetId) return updater(w);
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const nextChildren = updateWidgetDeep(cfg.widgets, targetId, updater);
+      if (nextChildren !== cfg.widgets) {
+        return {
+          ...w,
+          config: { ...cfg, widgets: nextChildren },
+        } as CustomWidget;
+      }
+    }
+    // #362: tabs also nests widgets per-tab.
+    if (cfg.kind === 'tabs' && Array.isArray(cfg.tabs)) {
+      let touched = false;
+      const nextTabs = cfg.tabs.map((t) => {
+        const nextTabWidgets = updateWidgetDeep(t.widgets, targetId, updater);
+        if (nextTabWidgets !== t.widgets) {
+          touched = true;
+          return { ...t, widgets: nextTabWidgets };
+        }
+        return t;
+      });
+      if (touched) {
+        return { ...w, config: { ...cfg, tabs: nextTabs } } as CustomWidget;
+      }
+    }
+    return w;
+  });
+}
+
+/**
+ * #22 WYSIWYG: remove a widget by id anywhere in the tree.
+ * Mirrors updateWidgetDeep's walking behaviour.
+ */
+function removeWidgetDeep(
+  widgets: CustomWidget[],
+  targetId: string,
+): CustomWidget[] {
+  const filtered = widgets.filter((w) => w.id !== targetId);
+  if (filtered.length !== widgets.length) return filtered;
+  return widgets.map((w) => {
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const nextChildren = removeWidgetDeep(cfg.widgets, targetId);
+      if (nextChildren !== cfg.widgets) {
+        return {
+          ...w,
+          config: { ...cfg, widgets: nextChildren },
+        } as CustomWidget;
+      }
+    }
+    if (cfg.kind === 'tabs' && Array.isArray(cfg.tabs)) {
+      let touched = false;
+      const nextTabs = cfg.tabs.map((t) => {
+        const nextTabWidgets = removeWidgetDeep(t.widgets, targetId);
+        if (nextTabWidgets !== t.widgets) {
+          touched = true;
+          return { ...t, widgets: nextTabWidgets };
+        }
+        return t;
+      });
+      if (touched) {
+        return { ...w, config: { ...cfg, tabs: nextTabs } } as CustomWidget;
+      }
+    }
+    return w;
+  });
 }
 
 /**
