@@ -57,6 +57,7 @@ import type { CustomBasemap } from '@/lib/custom-basemap';
 import type { SelectToolMode } from '../map/select-tool';
 import { AttributeTable } from '../map/attribute-table';
 import type { LayerMetadata } from '../map/layer-metadata';
+import { SearchBar } from '../map/search-bar';
 import {
   AppBar,
   AppBarContext,
@@ -1554,71 +1555,120 @@ function BasemapGalleryWidgetRender({ widget }: { widget: CustomWidget }) {
 
 // ---- Search widget ---------------------------------------------------------
 
+/**
+ * Custom Web App search tool. Delegates to the same SearchBar
+ * component the map editor uses, so the popover honors every
+ * setting the author already configured on the bound map item:
+ *
+ *   - The map's Search Source (`map.search.geocoderId`) drives
+ *     which geocoder runs.  Unset and `search.geocoding === true`
+ *     falls back to Nominatim through /api/geocode.
+ *     `search.geocoding === false` disables the address half
+ *     entirely.
+ *   - Each layer's Searchable interaction (`layer.search.enabled`
+ *     + `fields` + `labelTemplate`) drives attribute search.
+ *     Local layer search runs over the in-memory feature cache;
+ *     ArcGIS REST layers are queried server-side; v3 data layers
+ *     don't pre-warm in the Custom App runtime (no local cache),
+ *     same as the AttributeTable widget.
+ *   - The widget's own `geocodingEnabled === false` is treated as
+ *     an explicit override that forces geocoding off even when
+ *     the map allows it; absent or true inherits the map's
+ *     setting.
+ *
+ * The previous implementation hand-rolled a /api/geocode probe
+ * that ignored all of the above (and 404'd in deployments where
+ * the route wasn't reachable from the runtime context); using
+ * SearchBar fixes the 404 and gives the popover the rich
+ * candidate list with grouped sections + keyboard nav.
+ */
 function SearchWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'search') return null;
-  const { state, flyTo } = useBoundMap(widget.config.mapWidgetId);
-  const [q, setQ] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const cfg = widget.config;
+  const ctx = useContext(CustomMapsContext);
+  const mapWidgetId = cfg.mapWidgetId;
+  const boundMapState = mapWidgetId ? ctx?.states[mapWidgetId] ?? null : null;
+  const boundMapInstance = mapWidgetId ? ctx?.maps[mapWidgetId] ?? null : null;
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!state || !q.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/geocode?q=${encodeURIComponent(q.trim())}`,
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Array<{
-        bbox?: [number, number, number, number];
-        lat?: number;
-        lon?: number;
-      }>;
-      const top = data[0];
-      if (!top) {
-        setError('No results');
-        return;
-      }
-      if (top.bbox) {
-        flyTo(top.bbox);
-      } else if (typeof top.lat === 'number' && typeof top.lon === 'number') {
-        const d = 0.01;
-        flyTo([top.lon - d, top.lat - d, top.lon + d, top.lat + d]);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Search failed');
-    } finally {
-      setBusy(false);
+  // Live viewport bbox so a configured geocoder can scope its
+  // similarity scan to what the user is looking at.  Same moveend
+  // pattern AttributeTableWidget uses; nullable until the map's
+  // first idle.
+  const [viewportBbox, setViewportBbox] = useState<
+    [number, number, number, number] | null
+  >(null);
+  useEffect(() => {
+    if (!boundMapInstance) {
+      setViewportBbox(null);
+      return;
     }
+    const update = () => {
+      const b = boundMapInstance.getBounds();
+      setViewportBbox([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    };
+    update();
+    boundMapInstance.on('moveend', update);
+    return () => {
+      boundMapInstance.off('moveend', update);
+    };
+  }, [boundMapInstance]);
+
+  // Local feature cache is intentionally empty: v3 data layers
+  // don't pre-warm in the Custom App runtime (mirrors the
+  // AttributeTable widget), ArcGIS REST layers are queried
+  // server-side via SearchBar's searchArcgisLayers path, and the
+  // geocoder paths don't read the cache at all.  Pre-warming for
+  // legacy GeoJSON sources can come later when those re-enter the
+  // Custom App flow.
+  const featuresByLayer = useMemo<
+    Record<string, GeoJSON.FeatureCollection | null>
+  >(() => ({}), []);
+
+  if (!boundMapState || !mapWidgetId) {
+    return (
+      <WidgetFrame icon={SearchIcon} title="Search">
+        <p className="p-3 text-xs italic text-muted">
+          Bind to a Map widget to enable.
+        </p>
+      </WidgetFrame>
+    );
   }
+
+  const mapSearch = boundMapState.mapData.search;
+  // Widget override beats inheritance only when it's an explicit
+  // false; otherwise the map's setting wins (and the map defaults
+  // geocoding on).
+  const geocodingEnabled =
+    cfg.geocodingEnabled !== false && mapSearch?.geocoding !== false;
+  const geocoderItemId = mapSearch?.geocoderId;
 
   return (
     <WidgetFrame icon={SearchIcon} title="Search">
-      <form onSubmit={onSubmit} className="flex flex-col gap-1 p-2">
-        <input
-          type="text"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder={
-            widget.config.geocodingEnabled === false
-              ? 'Search layer attributes…'
-              : 'Search address or attributes…'
-          }
-          disabled={busy || !state}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+      <div className="p-2">
+        <SearchBar
+          embedded
+          layers={boundMapState.mapData.layers}
+          featuresByLayer={featuresByLayer}
+          geocodingEnabled={geocodingEnabled}
+          {...(geocoderItemId ? { geocoderItemId } : {})}
+          viewportBbox={viewportBbox}
+          onPick={(r) => {
+            if (!ctx) return;
+            if (r.bbox) {
+              ctx.flyTo(mapWidgetId, r.bbox);
+              return;
+            }
+            if (r.center) {
+              // Small box around the center so flyTo gets a real
+              // bbox.  Matches what the old probe did for bare
+              // lat/lon hits.
+              const [lng, lat] = r.center;
+              const d = 0.01;
+              ctx.flyTo(mapWidgetId, [lng - d, lat - d, lng + d, lat + d]);
+            }
+          }}
         />
-        {error ? (
-          <p className="text-[10px] text-rose-600">{error}</p>
-        ) : (
-          <p className="text-[10px] text-muted">
-            {state
-              ? 'Press Enter to search.'
-              : 'Bind to a Map widget to enable.'}
-          </p>
-        )}
-      </form>
+      </div>
     </WidgetFrame>
   );
 }

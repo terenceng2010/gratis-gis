@@ -34,6 +34,14 @@ interface Props {
    * highlight logic; we just hand off the target.
    */
   onPick: (result: SearchResult) => void;
+  /**
+   * #64: render without the map-canvas overlay chrome so the bar can
+   * live inside a Custom Web App tool popover. Drops the absolute
+   * positioning, fixed width, raised shadow, and backdrop blur, and
+   * lets the parent control sizing. The search behavior (layer-attr +
+   * Nominatim or item geocoder) is identical in either mode.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -58,6 +66,7 @@ export function SearchBar({
   geocoderItemId,
   viewportBbox,
   onPick,
+  embedded = false,
 }: Props) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -184,7 +193,11 @@ export function SearchBar({
   return (
     <div
       ref={rootRef}
-      className="absolute left-4 top-4 z-10 w-80 overflow-hidden rounded-lg border border-border bg-surface-1/95 shadow-raised backdrop-blur"
+      className={
+        embedded
+          ? 'overflow-hidden rounded-lg border border-border bg-surface-1'
+          : 'absolute left-4 top-4 z-10 w-80 overflow-hidden rounded-lg border border-border bg-surface-1/95 shadow-raised backdrop-blur'
+      }
     >
       <label className="relative block">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
