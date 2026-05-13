@@ -57,6 +57,15 @@ export const ITEM_TYPES = [
   // seeded per-org as items of this kind, alongside any templates
   // an author saves themselves from an existing app.
   'app_template',
+  // #22: shareable color/typography palette for Custom Web Apps.
+  // data_json stores the AppThemeTokens bundle (surface ladder,
+  // header tokens, accent, radii, shadows, density). Built-in
+  // starters (default/slate/aurora/forest/paper) seed per-org as
+  // items of this kind; user-saved themes appear alongside them
+  // in the designer's theme picker. CustomAppData.themePresetId
+  // references a theme item id (or the starter kind for back-
+  // compat with apps that pre-date this refactor).
+  'theme',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];

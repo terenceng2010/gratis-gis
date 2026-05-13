@@ -171,6 +171,12 @@ enum ItemType {
   /// this kind, alongside any templates an author saves from an
   /// existing app.
   app_template               @map("app-template")
+  /// #22: shareable color/typography palette for Custom Web Apps.
+  /// data_json carries the AppThemeTokens bundle. Built-in
+  /// starters (default/slate/aurora/forest/paper) seed per-org;
+  /// user-saved themes live here too. CustomAppData.themePresetId
+  /// references one of these item ids.
+  theme
 }
 
 // ---------- Tables ----------

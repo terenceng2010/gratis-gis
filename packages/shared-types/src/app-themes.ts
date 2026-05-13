@@ -295,7 +295,9 @@ interface CSSVariableSetter {
  * Apply a theme's tokens to a DOM element by setting CSS custom
  * properties. Mount this on the app's root container in both the
  * designer preview and the runtime so widgets restyle live as the
- * author swaps presets.
+ * author swaps presets.  Accepts either a starter kind id or a
+ * full token bundle (used when resolving against a saved theme
+ * item rather than a built-in preset).
  */
 export function applyAppTheme(
   el: CSSVariableSetter,
@@ -305,4 +307,79 @@ export function applyAppTheme(
   for (const [key, value] of Object.entries(theme.tokens)) {
     el.style.setProperty(key, value);
   }
+}
+
+/**
+ * Like applyAppTheme but accepts the tokens directly.  Used by
+ * the runtime when the theme came from a `theme` item rather than
+ * a built-in starter kind.  Skips unknown keys gracefully so a
+ * future token addition doesn't break apps stored against an
+ * older shape.
+ */
+export function applyAppThemeTokens(
+  el: CSSVariableSetter,
+  tokens: AppThemeTokens['tokens'],
+): void {
+  for (const [key, value] of Object.entries(tokens)) {
+    if (typeof value === 'string') {
+      el.style.setProperty(key, value);
+    }
+  }
+}
+
+// ============================================================
+// #22 Theme starter library (themes-as-items).
+// ============================================================
+//
+// Mirror of the app-template starter library above.  The same
+// five built-in palettes that used to live behind a string-literal
+// AppThemePresetId union now seed per-org as `theme` items via
+// auth-sync.  After seeding, admins are free to edit / delete /
+// replace them like any other item; the seed_kind column on item
+// is the durable "this was originally the default starter" mark.
+
+/**
+ * Stable identifier persisted on the seeded theme item's seedKind.
+ * Matches the legacy AppThemePresetId values so apps saved before
+ * the items-refactor (themePresetId: 'forest' etc.) keep resolving.
+ */
+export type ThemeStarterKind = AppThemePresetId;
+
+export interface ThemeStarter {
+  kind: ThemeStarterKind;
+  label: string;
+  description: string;
+  swatch: string;
+  tokens: AppThemeTokens['tokens'];
+}
+
+/**
+ * Built-in theme starters, derived from APP_THEMES.  Order in this
+ * array is the order the housekeeping restore UI displays them.
+ */
+export const THEME_STARTERS: readonly ThemeStarter[] = (
+  Object.entries(APP_THEMES) as Array<[ThemeStarterKind, AppThemeTokens]>
+).map(([kind, t]) => ({
+  kind,
+  label: t.label,
+  description: t.description,
+  swatch: t.swatch,
+  tokens: t.tokens,
+}));
+
+export function getThemeStarter(kind: string): ThemeStarter | null {
+  return THEME_STARTERS.find((s) => s.kind === kind) ?? null;
+}
+
+/**
+ * Shape of a saved theme item's data_json payload.  Mirrors the
+ * AppThemeTokens bundle the runtime applies; serializes cleanly
+ * over Prisma's JSONB column.
+ */
+export interface ThemeItemData {
+  version: 1;
+  /** Display swatch (e.g. 'hsl(150 22% 38%)'); rendered in pickers. */
+  swatch: string;
+  /** Token bundle written as CSS custom properties at the app root. */
+  tokens: AppThemeTokens['tokens'];
 }

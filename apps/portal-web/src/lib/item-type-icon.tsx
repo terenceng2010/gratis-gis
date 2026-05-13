@@ -17,6 +17,7 @@ import {
   Package,
   PencilRuler,
   Plug,
+  Palette,
   Sparkles,
   Wand2,
   Wrench,
@@ -66,6 +67,7 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
   geocoding_service: MapPin,
   tile_layer: Layers,
   app_template: Wand2,
+  theme: Palette,
 };
 
 /**
@@ -102,6 +104,7 @@ const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   geocoding_service: 'Geocoding service',
   tile_layer: 'Tile layer',
   app_template: 'Web app template',
+  theme: 'Theme',
 };
 
 export function getItemTypeLabel(t: ItemType): string {
@@ -138,6 +141,7 @@ const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
   geocoding_service: 'text-orange-700',
   tile_layer: 'text-fuchsia-600',
   app_template: 'text-amber-700',
+  theme: 'text-pink-600',
 };
 
 /** Tailwind class combos for the tile background used in compact
@@ -169,6 +173,7 @@ const ITEM_TYPE_TILE: Record<ItemType, string> = {
   geocoding_service: 'bg-orange-600/90 text-white',
   tile_layer: 'bg-fuchsia-500/90 text-white',
   app_template: 'bg-amber-700/90 text-white',
+  theme: 'bg-pink-500/90 text-white',
 };
 
 export function getItemTypeIcon(type: ItemType): LucideIcon {

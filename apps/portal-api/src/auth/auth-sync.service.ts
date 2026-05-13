@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { OrgRole } from '@prisma/client';
-import { BUILTIN_BASEMAP_SEEDS, STARTERS } from '@gratis-gis/shared-types';
+import {
+  BUILTIN_BASEMAP_SEEDS,
+  STARTERS,
+  THEME_STARTERS,
+} from '@gratis-gis/shared-types';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { KeycloakClaims } from './jwt.strategy.js';
 import {
@@ -81,6 +85,13 @@ export class AuthSyncService {
    */
   private readonly appTemplateSeedChecked = new Set<string>();
   private readonly appTemplateSeedInFlight = new Map<string, Promise<void>>();
+
+  /**
+   * #22: parallel coalesced seeding for the five starter theme
+   * items.  Same pattern as the basemap + app-template seeders.
+   */
+  private readonly themeSeedChecked = new Set<string>();
+  private readonly themeSeedInFlight = new Map<string, Promise<void>>();
 
   /**
    * Per-process cache of `userId -> last time we wrote lastSeenAt`.
@@ -271,6 +282,23 @@ export class AuthSyncService {
       await inFlight;
     }
 
+    // #22: the same dance for the five starter theme items.
+    if (!this.themeSeedChecked.has(org.id)) {
+      let inFlight = this.themeSeedInFlight.get(org.id);
+      if (!inFlight) {
+        inFlight = (async () => {
+          try {
+            await this.ensureBuiltinThemes(org.id, user.id);
+            this.themeSeedChecked.add(org.id);
+          } finally {
+            this.themeSeedInFlight.delete(org.id);
+          }
+        })();
+        this.themeSeedInFlight.set(org.id, inFlight);
+      }
+      await inFlight;
+    }
+
     // Exclude memberships whose group is in the trash. Otherwise an item
     // shared to a soft-deleted group would still match this user's
     // effective groupIds and grant read access, which would defeat
@@ -402,6 +430,55 @@ export class AuthSyncService {
         description: starter.description,
         tags: ['built-in', ...starter.tags],
         data: starter.seed() as unknown as object,
+        access: 'org' as const,
+        seedKind: starter.kind,
+      })),
+    });
+  }
+
+  /**
+   * #22: For each built-in theme starter, insert a `theme` item
+   * row if the org doesn't already have one with that seed_kind.
+   * Idempotent on first run via the seed_kind check.  Admin can
+   * later delete one without it coming back automatically (the
+   * housekeeping "Restore starter themes" button is the explicit
+   * way).
+   */
+  private async ensureBuiltinThemes(
+    orgId: string,
+    fallbackOwnerId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.item.findMany({
+      where: { orgId, type: 'theme', seedKind: { not: null } },
+      select: { seedKind: true },
+    });
+    const have = new Set<string>();
+    for (const row of existing) {
+      if (row.seedKind) have.add(row.seedKind);
+    }
+    const missing = THEME_STARTERS.filter((s) => !have.has(s.kind));
+    if (missing.length === 0) return;
+
+    const admin = await this.prisma.user.findFirst({
+      where: { orgId, orgRole: 'admin' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    const ownerId = admin?.id ?? fallbackOwnerId;
+
+    await this.prisma.item.createMany({
+      data: missing.map((starter) => ({
+        orgId,
+        ownerId,
+        type: 'theme' as const,
+        title: starter.label,
+        description: starter.description,
+        tags: ['built-in'],
+        data: {
+          version: 1,
+          swatch: starter.swatch,
+          tokens: starter.tokens,
+        } as unknown as object,
         access: 'org' as const,
         seedKind: starter.kind,
       })),
