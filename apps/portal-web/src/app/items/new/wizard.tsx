@@ -27,6 +27,7 @@ import {
   Lock,
   Map as MapIcon,
   MapPin,
+  Palette,
   PencilRuler,
   Plug,
   Search,
@@ -66,6 +67,7 @@ import {
   DEFAULT_VIEWER,
   ITEM_TYPES,
   APP_TEMPLATES,
+  APP_THEMES,
   getAppTemplate,
   serviceProtocolLabel,
   stampBlueprint,
@@ -286,6 +288,15 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Web app',
         desc: 'Drag-drop layout of map + tool widgets, sidebar, header, foldable groups. Pick a starter template (Sidebar Explorer, Showcase Map, Editor, Viewer, etc.) on the next screen, or start blank and build the layout from scratch.',
         Icon: Sparkles,
+      },
+      {
+        // #54: themes are items.  Starts a blank theme cloned
+        // from the Default starter so the user lands in the
+        // theme editor with a working palette to tweak.
+        value: 'theme',
+        label: 'Theme',
+        desc: 'Reusable color palette + geometry tokens applied to web apps. Edit the colors and a live preview shell shows where each one appears.',
+        Icon: Palette,
       },
     ],
   },
@@ -1152,6 +1163,18 @@ export function NewItemWizard({
         config: { template: 'custom', custom: blueprintData },
       };
       data = webApp;
+    } else if (type === 'theme') {
+      // #54: seed a fresh theme item from the Default starter's
+      // tokens so the author lands on the theme editor with a
+      // working palette to tweak.  The swatch follows the
+      // accent color; both fields are editable on the detail
+      // page.  Picker preview matches what the runtime applies.
+      const def = APP_THEMES.default;
+      data = {
+        version: 1,
+        swatch: def.swatch,
+        tokens: def.tokens,
+      };
     } else if (type === 'tile_layer') {
       // #179: empty tile_layer. The file upload + metadata
       // extraction happen on the detail page after create,
