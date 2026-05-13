@@ -135,8 +135,13 @@ export function ItemCard({
   className,
 }: ItemCardProps) {
   const badgeClass = typeBadgeColor[item.type] ?? 'bg-slate-100 text-slate-800';
+  // h-full lets the card fill its grid cell; consumers that use a
+  // grid with `auto-rows-fr` (the items list does) then get
+  // uniform-height cards regardless of how much description /
+  // tag content each one carries. The footer pins to the bottom
+  // via `mt-auto` inside the layout below.
   const baseClass = cn(
-    'flex w-full flex-col gap-2 rounded-lg border border-border bg-surface-1 p-4 text-left shadow-card transition-shadow',
+    'flex h-full w-full flex-col gap-2 rounded-lg border border-border bg-surface-1 p-4 text-left shadow-card transition-shadow',
     href ? 'hover:shadow-raised focus:outline-none focus:ring-2 focus:ring-accent/30' : '',
     className,
   );
@@ -241,7 +246,7 @@ export function ItemCard({
           })}
         </div>
       ) : null}
-      <div className="text-xs text-muted">
+      <div className="mt-auto text-xs text-muted">
         Updated {new Date(item.updatedAt).toLocaleDateString()}
       </div>
     </>
