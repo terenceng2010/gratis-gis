@@ -833,6 +833,7 @@ const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   'calculate-geometry': 'Calculate geometry',
   filter: 'Filter by expression',
   'calculate-field': 'Calculate field from expression',
+  aggregate: 'Group by + aggregate',
 };
 
 const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
@@ -855,6 +856,8 @@ const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
     'Keep rows whose expression evaluates true. Reference fields with {{name}}.',
   'calculate-field':
     'Append a new attribute computed from any expression over the upstream fields.',
+  aggregate:
+    'Collapse rows into one per group with count / sum / avg / min / max aggregations. Geometry is unioned per group.',
 };
 
 /**
@@ -1112,6 +1115,12 @@ function StepCard({
           onChange={(params) =>
             onChange({ tool: 'calculate-field', params })
           }
+          sourceFields={sourceFields}
+        />
+      ) : step.tool === 'aggregate' ? (
+        <AggregateStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'aggregate', params })}
           sourceFields={sourceFields}
         />
       ) : (
@@ -2152,6 +2161,194 @@ function ExpressionEditor({
           Expression parses cleanly.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Aggregate step editor (#80).  Group-by chip strip + aggregation
+ * row list (op + field + outputName).  Empty groupBy collapses to
+ * a single output row (dissolve-with-extras).
+ */
+function AggregateStepEditor({
+  params,
+  onChange,
+  sourceFields,
+}: {
+  params: {
+    groupBy: string[];
+    aggs: Array<{ field: string; op: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'; outputName: string }>;
+  };
+  onChange: (next: {
+    groupBy: string[];
+    aggs: Array<{ field: string; op: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first'; outputName: string }>;
+  }) => void;
+  sourceFields: FeatureField[];
+}) {
+  const numericFields = sourceFields.filter((f) => f.type === 'number');
+  const groupCandidates = sourceFields.filter(
+    (f) => !params.groupBy.includes(f.name),
+  );
+
+  function toggleGroup(name: string, on: boolean) {
+    const next = on
+      ? [...params.groupBy, name]
+      : params.groupBy.filter((g) => g !== name);
+    onChange({ ...params, groupBy: next });
+  }
+  function addAgg() {
+    onChange({
+      ...params,
+      aggs: [
+        ...params.aggs,
+        { op: 'count', field: '', outputName: `agg_${params.aggs.length + 1}` },
+      ],
+    });
+  }
+  function updateAgg(idx: number, patch: Partial<typeof params.aggs[number]>) {
+    onChange({
+      ...params,
+      aggs: params.aggs.map((a, i) => (i === idx ? { ...a, ...patch } : a)),
+    });
+  }
+  function removeAgg(idx: number) {
+    onChange({
+      ...params,
+      aggs: params.aggs.filter((_, i) => i !== idx),
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
+          Group by
+        </p>
+        <p className="text-[11px] text-muted">
+          One output row per distinct combination.  Empty = collapse
+          to a single output row (legacy dissolve behavior).
+        </p>
+        {params.groupBy.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {params.groupBy.map((g) => (
+              <span
+                key={g}
+                className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px] font-mono text-accent"
+              >
+                {g}
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g, false)}
+                  aria-label={`Remove group key ${g}`}
+                  className="ml-1 text-accent/70 hover:text-danger"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {groupCandidates.length > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-muted">
+              Add:
+            </span>
+            {groupCandidates.map((f) => (
+              <button
+                key={f.name}
+                type="button"
+                onClick={() => toggleGroup(f.name, true)}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-0.5 font-mono text-[11px] text-ink-1 hover:bg-surface-2"
+              >
+                + {f.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <p className="text-[11px] uppercase tracking-wide text-muted">
+            Aggregations
+          </p>
+          <button
+            type="button"
+            onClick={addAgg}
+            className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] text-ink-1 hover:bg-surface-2"
+          >
+            <Plus className="h-3 w-3" />
+            Add
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {params.aggs.map((a, idx) => (
+            <div
+              key={idx}
+              className="grid grid-cols-[110px_minmax(0,_1fr)_minmax(0,_1fr)_28px] items-center gap-1.5"
+            >
+              <select
+                value={a.op}
+                onChange={(e) =>
+                  updateAgg(idx, {
+                    op: e.target.value as typeof a.op,
+                    // Reset field for count so an old field doesn't
+                    // leak into a count agg.
+                    ...(e.target.value === 'count' ? { field: '' } : {}),
+                  })
+                }
+                className="h-8 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none"
+              >
+                <option value="count">count</option>
+                <option value="sum">sum</option>
+                <option value="avg">avg</option>
+                <option value="min">min</option>
+                <option value="max">max</option>
+                <option value="first">first</option>
+              </select>
+              {a.op === 'count' ? (
+                <span className="rounded border border-border bg-surface-1 px-2 py-1 text-[11px] text-muted">
+                  (no field needed)
+                </span>
+              ) : (
+                <select
+                  value={a.field}
+                  onChange={(e) => updateAgg(idx, { field: e.target.value })}
+                  className="h-8 min-w-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none"
+                >
+                  <option value="">(pick a field)</option>
+                  {(a.op === 'first' ? sourceFields : numericFields).map((f) => (
+                    <option key={f.name} value={f.name}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <input
+                type="text"
+                value={a.outputName}
+                onChange={(e) =>
+                  updateAgg(idx, { outputName: e.target.value })
+                }
+                placeholder="output column name"
+                className="h-8 min-w-0 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => removeAgg(idx)}
+                aria-label="Remove aggregation"
+                className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          {params.aggs.length === 0 ? (
+            <p className="text-[11px] text-muted">
+              No aggregations yet.  Add at least one with the + button.
+            </p>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

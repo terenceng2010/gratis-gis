@@ -2,6 +2,7 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ToolStep } from '@gratis-gis/shared-types';
 
+import { aggregateGenerator } from './aggregate.js';
 import { bboxGenerator } from './bbox.js';
 import { bufferGenerator } from './buffer.js';
 import { calculateFieldGenerator } from './calculate-field.js';
@@ -58,6 +59,7 @@ const REGISTRY: Map<string, ToolGenerator<unknown>> = new Map([
     calculateFieldGenerator.kind,
     calculateFieldGenerator as ToolGenerator<unknown>,
   ],
+  [aggregateGenerator.kind, aggregateGenerator as ToolGenerator<unknown>],
 ]);
 
 /**

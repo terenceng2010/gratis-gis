@@ -282,6 +282,48 @@ export interface CalculateGeometryStep {
 }
 
 /**
+ * Group-by aggregation step (#80).  The principled generalization
+ * of dissolve: collapse N rows into one (or one-per-group) and
+ * compute aggregate values across them.
+ *
+ * Geometry handling: when at least one group is set, output
+ * geometry is ST_Union of the inputs in each group ("dissolve by
+ * attribute", the AGO/QGIS classic).  When groupBy is empty, the
+ * whole layer collapses to one feature whose geometry is the
+ * union of all inputs (current dissolve behavior).
+ *
+ * Aggregations: for each entry in `aggs` the step adds one
+ * attribute named `outputName` whose value is `op(field)` across
+ * the group.  `op: 'count'` ignores field and counts rows; 'sum',
+ * 'avg', 'min', 'max' need a numeric field; 'first' picks any one
+ * row's value deterministically (the lowest global_id) so the
+ * result is stable across reads of the same recipe.
+ */
+export type AggOp = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'first';
+
+export interface AggregateAggregation {
+  /** Field on the upstream schema to aggregate over.  Empty for op='count'. */
+  field: string;
+  op: AggOp;
+  /** Output column name; must not collide with any group-by column. */
+  outputName: string;
+}
+
+export interface AggregateStep {
+  tool: 'aggregate';
+  params: {
+    /**
+     * Upstream attribute names to group by.  Empty array means
+     * "single output row" (the current dissolve behavior).  Each
+     * named field is preserved on the output schema with its
+     * original type.
+     */
+    groupBy: string[];
+    aggs: AggregateAggregation[];
+  };
+}
+
+/**
  * Attribute filter step (#76).  Keeps rows whose expression
  * evaluates truthy.  The expression is parsed + validated against
  * the upstream schema at recipe-save time; the SQL emitter
@@ -343,7 +385,8 @@ export type ToolStep =
   | FishnetStep
   | CalculateGeometryStep
   | FilterStep
-  | CalculateFieldStep;
+  | CalculateFieldStep
+  | AggregateStep;
 
 /**
  * The recipe persisted in `item.data` when `type = 'derived_layer'`.
@@ -498,6 +541,16 @@ export const DEFAULT_CALCULATE_FIELD_STEP: CalculateFieldStep = {
     expression: '',
   },
 };
+export const DEFAULT_AGGREGATE_STEP: AggregateStep = {
+  tool: 'aggregate',
+  // No groupBy + a count(*) aggregation: equivalent to the legacy
+  // dissolve, but with a row count attached.  Authors can switch to
+  // group-by attributes from here without re-picking a tool.
+  params: {
+    groupBy: [],
+    aggs: [{ field: '', op: 'count', outputName: 'count' }],
+  },
+};
 
 /**
  * Lookup table of "what step should we splice into the pipeline when
@@ -522,6 +575,7 @@ export const DEFAULT_STEPS: Record<ToolStep['tool'], ToolStep> = {
   'calculate-geometry': DEFAULT_CALCULATE_GEOMETRY_STEP,
   filter: DEFAULT_FILTER_STEP,
   'calculate-field': DEFAULT_CALCULATE_FIELD_STEP,
+  aggregate: DEFAULT_AGGREGATE_STEP,
 };
 
 /**
