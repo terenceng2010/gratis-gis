@@ -10,12 +10,23 @@ import {
   type HousekeepingRun,
 } from './housekeeping-schedule-card';
 import { StarterTemplatesCard } from './starter-templates-card';
+import { StarterThemesCard } from './starter-themes-card';
 
 interface StarterStatusResponse {
   starters: Array<{
     kind: string;
     label: string;
     description: string;
+    itemId: string | null;
+  }>;
+}
+
+interface ThemeStarterStatusResponse {
+  starters: Array<{
+    kind: string;
+    label: string;
+    description: string;
+    swatch: string;
     itemId: string | null;
   }>;
 }
@@ -41,6 +52,7 @@ export default async function AdminHousekeepingPage() {
   let scheduleConfig: HousekeepingConfig | null = null;
   let scheduleRuns: HousekeepingRun[] = [];
   let starterStatus: StarterStatusResponse | null = null;
+  let themeStarterStatus: ThemeStarterStatusResponse | null = null;
   let error: string | null = null;
   try {
     const [
@@ -56,6 +68,7 @@ export default async function AdminHousekeepingPage() {
       config,
       runs,
       starterStatusResp,
+      themeStarterStatusResp,
     ] = await Promise.all([
       apiFetch<HousekeepingBundle['summary']>(
         '/api/admin/housekeeping/summary',
@@ -90,7 +103,10 @@ export default async function AdminHousekeepingPage() {
       ),
       apiFetch<StarterStatusResponse>(
         '/api/admin/app-templates/starter-status',
-      ),
+      ).catch(() => null),
+      apiFetch<ThemeStarterStatusResponse>(
+        '/api/admin/themes/starter-status',
+      ).catch(() => null),
     ]);
     bundle = {
       summary,
@@ -106,6 +122,7 @@ export default async function AdminHousekeepingPage() {
     scheduleConfig = config;
     scheduleRuns = runs;
     starterStatus = starterStatusResp;
+    themeStarterStatus = themeStarterStatusResp;
   } catch (err) {
     error = err instanceof Error ? err.message : 'Could not load housekeeping data.';
   }
@@ -155,6 +172,12 @@ export default async function AdminHousekeepingPage() {
       {starterStatus ? (
         <div className="mb-6">
           <StarterTemplatesCard initial={starterStatus.starters} />
+        </div>
+      ) : null}
+
+      {themeStarterStatus ? (
+        <div className="mb-6">
+          <StarterThemesCard initial={themeStarterStatus.starters} />
         </div>
       ) : null}
 

@@ -64,7 +64,12 @@ import {
   FoldableGroup,
   Slideout,
 } from './themed-containers';
-import { applyAppTheme, resolveAssetRefSync } from '@gratis-gis/shared-types';
+import {
+  applyAppTheme,
+  applyAppThemeTokens,
+  resolveAssetRefSync,
+  type AppThemeTokens,
+} from '@gratis-gis/shared-types';
 import { createPortal } from 'react-dom';
 import {
   MapCanvas,
@@ -218,6 +223,14 @@ interface Props {
    */
   widgetMapData: Record<string, MapData>;
   resolvedTargets: ResolvedAppTarget[];
+  /**
+   * #22: theme tokens resolved server-side from the app's
+   * themePresetId.  When present, the runtime applies these
+   * directly (no client-side fetch needed).  Optional so older
+   * call sites without theme plumbing still work; we fall back to
+   * the built-in starter resolver in that case.
+   */
+  themeTokens?: AppThemeTokens['tokens'];
 }
 
 export function CustomRuntimeClient({
@@ -228,6 +241,7 @@ export function CustomRuntimeClient({
   baseMapData,
   widgetMapData,
   resolvedTargets,
+  themeTokens,
 }: Props) {
   // Multi-page support (#342). Track which page is showing; render
   // only that page's widgets, but seed map state from EVERY page so
@@ -238,16 +252,21 @@ export function CustomRuntimeClient({
   // this so "fixed" placement docks to the runtime viewport rather
   // than the browser one.
   const runtimeContainerRef = useRef<HTMLDivElement | null>(null);
-  // Theme root ref. applyAppTheme sets CSS custom properties here
-  // so every descendant widget that reads `var(--app-*)` tokens
-  // picks up the configured theme preset. Effect re-runs whenever
-  // `themePresetId` changes (designer live-preview, eventually).
+  // Theme root ref.  Applies CSS custom properties on the app
+  // root so descendants reading `var(--app-*)` tokens render with
+  // the configured theme.  When themeTokens are passed in
+  // (server-resolved via theme items), use them directly via
+  // applyAppThemeTokens; otherwise fall back to the built-in
+  // starter resolver keyed off themePresetId.
   const themeRootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (themeRootRef.current) {
+    if (!themeRootRef.current) return;
+    if (themeTokens) {
+      applyAppThemeTokens(themeRootRef.current, themeTokens);
+    } else {
       applyAppTheme(themeRootRef.current, app.themePresetId);
     }
-  }, [app.themePresetId]);
+  }, [app.themePresetId, themeTokens]);
   const safePageIdx = Math.min(activePageIdx, app.pages.length - 1);
   const page = app.pages[safePageIdx]!;
   const totalWidgets = app.pages.reduce((n, p) => n + p.widgets.length, 0);

@@ -2,6 +2,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import type {
+  AppThemeTokens,
   BasemapData,
   CustomAppData,
   DataLayerData,
@@ -9,8 +10,10 @@ import type {
   Item,
   MapData,
   MapLayer,
+  ThemeItemData,
 } from '@gratis-gis/shared-types';
 import {
+  APP_THEMES,
   DEFAULT_LAYER_ACCESS,
   DEFAULT_LAYER_INTERACTIONS,
   DEFAULT_LAYER_LABELS,
@@ -24,6 +27,7 @@ import {
   isCustomAppItem,
   migrateCustomAppData,
   readCustomAppData,
+  THEME_STARTERS,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { apiFetch, hasSession, publicApiFetch } from '@/lib/api';
@@ -205,10 +209,16 @@ export default async function CustomAppRuntimePage({ params }: Props) {
   }
 
   // Fetch the org's basemaps (for MapCanvas's basemap library +
-  // BasemapGallery) and every needed map item in parallel.
-  const [basemapItems, ...mapItems] = await Promise.all([
+  // BasemapGallery), every needed map item, and every theme item
+  // (for the themePresetId resolution below) in parallel.
+  const [basemapItems, themeItems, ...mapItems] = await Promise.all([
     fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
+    ),
+    fetchItemList<Array<Item<ThemeItemData> & { seedKind?: string | null }>>(
+      '/api/items?type=theme',
+    ).catch(
+      () => [] as Array<Item<ThemeItemData> & { seedKind?: string | null }>,
     ),
     ...Array.from(uniqueMapIds).map((id) =>
       fetchItem<Item<MapData>>(`/api/items/${id}`).catch(() => null),
@@ -260,6 +270,18 @@ export default async function CustomAppRuntimePage({ params }: Props) {
     }
   }
 
+  // #22: resolve themePresetId to a token bundle.  Themes are
+  // items now; the saved id is either:
+  //   - a starter kind ('default'|'slate'|'aurora'|'forest'|'paper')
+  //     from apps created before the items refactor.  Match against
+  //     the theme item with seedKind === starter kind so an admin
+  //     who customized the starter sees their edits at runtime.
+  //   - a UUID pointing at a saved theme item the user has access
+  //     to (matched by id).
+  //   - undefined or unresolvable.  Fall back to APP_THEMES.default
+  //     baked into the bundle so the runtime always has tokens.
+  const themeTokens = resolveThemeTokens(app.themePresetId, themeItems);
+
   return (
     <CustomRuntimeClient
       itemId={item.id}
@@ -269,8 +291,40 @@ export default async function CustomAppRuntimePage({ params }: Props) {
       baseMapData={baseMapData}
       widgetMapData={widgetMapData}
       resolvedTargets={resolvedTargets}
+      themeTokens={themeTokens}
     />
   );
+}
+
+/**
+ * Resolve a themePresetId saved on a CustomAppData to a concrete
+ * AppThemeTokens['tokens'] bundle.  Resolution order (#22):
+ *
+ *   1. Look up the user's accessible theme items.  Match by:
+ *      - seedKind === presetId (legacy starter kind path)
+ *      - id === presetId (user-saved theme path)
+ *      If a match returns valid tokens, use those.
+ *   2. Fall back to APP_THEMES[presetId] (the in-process starter
+ *      registry) so an org with no theme items yet still renders.
+ *   3. Final fallback: APP_THEMES.default tokens.
+ */
+function resolveThemeTokens(
+  presetId: string | undefined,
+  themeItems: Array<Item<ThemeItemData> & { seedKind?: string | null }>,
+): AppThemeTokens['tokens'] {
+  if (presetId) {
+    const match = themeItems.find(
+      (t) => t.seedKind === presetId || t.id === presetId,
+    );
+    const tokens = match?.data?.tokens;
+    if (tokens && typeof tokens === 'object') {
+      return tokens;
+    }
+    // Fallback to the in-process registry by starter kind name.
+    const starter = THEME_STARTERS.find((s) => s.kind === presetId);
+    if (starter) return starter.tokens;
+  }
+  return APP_THEMES.default.tokens;
 }
 
 export const dynamic = 'force-dynamic';

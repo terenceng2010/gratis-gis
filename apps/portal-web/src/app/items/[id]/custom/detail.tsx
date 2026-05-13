@@ -60,7 +60,9 @@ import type {
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_MAP,
+  APP_THEMES,
   applyAppTheme,
+  applyAppThemeTokens,
   migrateCustomAppData,
 } from '@gratis-gis/shared-types';
 import type { AppThemePresetId, AssetRef } from '@gratis-gis/shared-types';
@@ -71,6 +73,24 @@ import { PickMapDialog } from '../editor/pick-map-dialog';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
 
+/**
+ * #22: summary of one theme item, served from the parent server
+ * page so the right-rail picker can render without a client-side
+ * fetch.  The id is what gets persisted on CustomAppData.themePresetId
+ * for a user-saved theme; seedKind handles back-compat with apps
+ * that still reference the starter kind ('default' | 'forest' | ...).
+ */
+export interface ThemeItemSummary {
+  id: string;
+  title: string;
+  description: string;
+  seedKind: string | null;
+  /** Token bundle for live-preview application. */
+  tokens?: Record<string, string>;
+  /** Display swatch color (hsl() string). */
+  swatch: string;
+}
+
 interface Props {
   itemId: string;
   /**
@@ -80,6 +100,20 @@ interface Props {
   itemTitle: string;
   initial: CustomAppData;
   canEdit: boolean;
+  /**
+   * #22: theme catalog the picker iterates.  Includes the five
+   * built-in starters seeded per org plus any themes the user has
+   * saved or had shared with them.  Defaults to an empty array
+   * for callers that haven't been updated; in that case the picker
+   * falls back to the in-process starter list.
+   */
+  themeItems?: Array<{
+    id: string;
+    title: string;
+    description: string;
+    seedKind: string | null;
+    data: { swatch?: string; tokens?: Record<string, string> };
+  }>;
 }
 
 /**
@@ -108,7 +142,13 @@ interface Props {
  * everything else, real renders are reserved for the runtime
  * (#341); the designer's job is layout + binding.
  */
-export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) {
+export function CustomAppDetail({
+  itemId,
+  itemTitle,
+  initial,
+  canEdit,
+  themeItems = [],
+}: Props) {
   // #357: migrate any v1 (12-col / 48px-row) app to the new v2 grid
   // (24-col / 24px-row) on load so the rest of the designer can
   // assume v2 coordinates. Idempotent: v2 input passes through
@@ -347,6 +387,129 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
     setApp((cur) => ({ ...cur, ...patch }));
     setDirty(true);
   }, []);
+
+  // #22: build the picker option list from themeItems (server-
+  // loaded) with a fall-through to the in-process starter list so
+  // an org without seeded themes still sees something.  Sort
+  // builtins first (matched by seedKind), then user-saved themes
+  // alphabetically.
+  const themeOptions = useMemo(() => {
+    if (themeItems.length === 0) {
+      // Fallback to the legacy hardcoded starters.  This is the
+      // "auth-sync seeder hasn't run yet for this org" path.
+      return APP_THEME_OPTIONS.map((o) => ({
+        id: o.id,
+        label: o.label,
+        description: o.description,
+        swatch: o.swatch,
+        seedKind: o.id,
+      }));
+    }
+    const byStarterOrder: Record<string, number> = {
+      default: 0,
+      slate: 1,
+      aurora: 2,
+      forest: 3,
+      paper: 4,
+    };
+    return [...themeItems]
+      .sort((a, b) => {
+        const aBuiltin = a.seedKind !== null;
+        const bBuiltin = b.seedKind !== null;
+        if (aBuiltin && bBuiltin) {
+          return (
+            (byStarterOrder[a.seedKind!] ?? 99) -
+            (byStarterOrder[b.seedKind!] ?? 99)
+          );
+        }
+        if (aBuiltin) return -1;
+        if (bBuiltin) return 1;
+        return a.title.localeCompare(b.title);
+      })
+      .map((t) => ({
+        id: t.id,
+        label: t.title,
+        description: t.description,
+        swatch:
+          t.data?.swatch ??
+          (t.seedKind &&
+            APP_THEME_OPTIONS.find((o) => o.id === t.seedKind)?.swatch) ??
+          'hsl(210 40% 96%)',
+        seedKind: t.seedKind,
+      }));
+  }, [themeItems]);
+
+  // #22: resolved tokens for the currently-selected theme.  Used
+  // by the canvas live-preview effect so a swap in the picker
+  // updates the canvas chrome immediately (same code path the
+  // runtime uses at view time).  Falls back to undefined when the
+  // selected theme doesn't have its tokens loaded; the canvas
+  // then leans on the in-process starter resolver.
+  const resolvedThemeTokens = useMemo(() => {
+    const id = app.themePresetId;
+    if (!id) return undefined;
+    const match = themeItems.find(
+      (t) => t.id === id || t.seedKind === id,
+    );
+    const tokens = match?.data?.tokens;
+    if (tokens && typeof tokens === 'object') return tokens;
+    return undefined;
+  }, [app.themePresetId, themeItems]);
+
+  // #22: capture the currently-applied theme tokens and stamp them
+  // as a new `theme` item.  Reads from the live CSS variables on
+  // the document root rather than the source tokens object so an
+  // author who customized via the older theme.accent / theme.bg
+  // block also captures those overrides.  Opens the new theme
+  // item in a new tab.
+  const [savingAsTheme, setSavingAsTheme] = useState(false);
+  const onSaveAsTheme = useCallback(async () => {
+    setSavingAsTheme(true);
+    setError(null);
+    try {
+      // Read the swatch from the active selection so the new
+      // theme's picker preview matches what the author was looking
+      // at.  Falls back to the starter swatch when present.
+      const activeOpt = themeOptions.find(
+        (o) =>
+          o.id === app.themePresetId || o.seedKind === app.themePresetId,
+      );
+      const swatch = activeOpt?.swatch ?? 'hsl(210 40% 96%)';
+      const tokensSource =
+        resolvedThemeTokens ??
+        (app.themePresetId &&
+          APP_THEMES[app.themePresetId as AppThemePresetId]?.tokens) ??
+        APP_THEMES.default.tokens;
+      const res = await fetch('/api/portal/items', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'theme',
+          title: `${itemTitle} theme`,
+          description: `Saved from ${itemTitle}`,
+          tags: ['user-saved'],
+          data: { version: 1, swatch, tokens: tokensSource },
+          access: 'private',
+        }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`save-as-theme failed: ${res.status} ${txt}`);
+      }
+      const body = (await res.json()) as { id: string };
+      window.open(`/items/${body.id}`, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'save-as-theme failed');
+    } finally {
+      setSavingAsTheme(false);
+    }
+  }, [
+    app.themePresetId,
+    itemTitle,
+    resolvedThemeTokens,
+    themeOptions,
+  ]);
+  void savingAsTheme;
 
   const updatePage = useCallback(
     (idx: number, patch: Partial<CustomPage>) => {
@@ -706,6 +869,7 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
       page={activePage}
       mapTitle={mapTitle}
       canEdit={canEdit}
+      themeOptions={themeOptions}
       onUpdateApp={updateApp}
       onUpdatePage={(patch) => updatePage(activePageIdx, patch)}
       onClearMap={() => {
@@ -717,6 +881,7 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
         setDirty(true);
       }}
       onPickMap={() => setPickingMap({ scope: 'app' })}
+      onSaveAsTheme={onSaveAsTheme}
     />
   );
 
@@ -766,6 +931,7 @@ export function CustomAppDetail({ itemId, itemTitle, initial, canEdit }: Props) 
               widgetMapData={widgetMapData}
               activeTabIdxByWidget={activeTabIdxByWidget}
               themePresetId={app.themePresetId}
+              themeTokens={resolvedThemeTokens}
               onSetActiveTabIdx={setActiveTabIdx}
               onSelect={setSelectedWidgetId}
               onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
@@ -1475,6 +1641,7 @@ function Canvas({
   widgetMapData,
   activeTabIdxByWidget,
   themePresetId,
+  themeTokens,
   onSetActiveTabIdx,
   onSelect,
   onCanvasDrop,
@@ -1492,7 +1659,14 @@ function Canvas({
    * the in-canvas widgets render with the same theme they'd use at
    * runtime so the designer preview is WYSIWYG across theme changes.
    */
-  themePresetId: AppThemePresetId | undefined;
+  themePresetId: string | undefined;
+  /**
+   * #22: explicit token bundle for the currently-selected theme,
+   * resolved upstream against the org's theme items.  When set,
+   * the canvas applies these directly via applyAppThemeTokens.
+   * Falls back to the in-process starter resolver when undefined.
+   */
+  themeTokens: Record<string, string> | undefined;
   onSetActiveTabIdx: (widgetId: string, idx: number) => void;
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
@@ -1500,17 +1674,19 @@ function Canvas({
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
-  // Theme root for live preview of theme tokens. applyAppTheme sets
-  // CSS variables on this element so every in-canvas widget that
-  // reads var(--app-*) tokens picks up the current preset. Effect
-  // re-runs whenever the preset id changes so swapping themes in
-  // the right rail updates the preview live.
+  // Theme root for live preview of theme tokens.  Same dual-path
+  // behaviour as the runtime: use the upstream-resolved tokens
+  // when present (user-saved or built-in theme item), else fall
+  // back to the in-process starter resolver keyed off themePresetId.
   const themeRootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (themeRootRef.current) {
+    if (!themeRootRef.current) return;
+    if (themeTokens) {
+      applyAppThemeTokens(themeRootRef.current, themeTokens);
+    } else {
       applyAppTheme(themeRootRef.current, themePresetId);
     }
-  }, [themePresetId]);
+  }, [themePresetId, themeTokens]);
 
   // Compute the canvas's grid extent from the widgets' bottom-most
   // row so dropping a widget below the current content extends the
@@ -2032,19 +2208,37 @@ function AppProperties({
   page,
   mapTitle,
   canEdit,
+  themeOptions,
   onUpdateApp,
   onUpdatePage,
   onClearMap,
   onPickMap,
+  onSaveAsTheme,
 }: {
   app: CustomAppData;
   page: CustomPage;
   mapTitle: string | null;
   canEdit: boolean;
+  /**
+   * #22: themes the picker renders.  Order = built-in starters
+   * first (matched via seedKind on the seeded items), then user-
+   * saved themes alphabetically.  Empty array drops the picker
+   * to a hint asking the user to ask their admin to restore
+   * starter themes.
+   */
+  themeOptions: Array<{
+    id: string;
+    label: string;
+    description: string;
+    swatch: string;
+    /** Stable starter id when this option is a seeded starter. */
+    seedKind: string | null;
+  }>;
   onUpdateApp: (patch: Partial<CustomAppData>) => void;
   onUpdatePage: (patch: Partial<CustomPage>) => void;
   onClearMap: () => void;
   onPickMap: () => void;
+  onSaveAsTheme: () => void;
 }) {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -2072,40 +2266,66 @@ function AppProperties({
             restyles the canvas immediately. */}
         <Field
           label="Theme"
-          hint="Visual preset applied to every widget inside the app."
+          hint="Visual preset applied to every widget inside the app. Pick from your org's catalog or save the current look as a new theme."
         >
-          <div className="grid grid-cols-1 gap-1.5">
-            {APP_THEME_OPTIONS.map((opt) => {
-              const active = (app.themePresetId ?? 'default') === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  disabled={!canEdit}
-                  onClick={() => onUpdateApp({ themePresetId: opt.id })}
-                  aria-pressed={active}
-                  className={`flex items-center gap-2 rounded-md border bg-surface-1 px-2 py-1.5 text-left transition-colors ${
-                    active
-                      ? 'border-accent ring-2 ring-accent/30'
-                      : 'border-border hover:bg-surface-2'
-                  } disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  <span
-                    className="h-4 w-4 shrink-0 rounded-sm border border-border"
-                    style={{ background: opt.swatch }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-ink-0">
-                      {opt.label}
-                    </p>
-                    <p className="truncate text-[11px] text-muted">
-                      {opt.description}
-                    </p>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          {themeOptions.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border bg-surface-1 px-2 py-1.5 text-xs text-muted">
+              No theme items in your org yet. Ask an admin to restore
+              starter themes via Admin &rarr; Housekeeping.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-1.5">
+              {themeOptions.map((opt) => {
+                // Match either by the user-saved item id or by the
+                // starter kind (back-compat with apps saved before
+                // themes became items).
+                const active =
+                  app.themePresetId === opt.id ||
+                  (opt.seedKind !== null && app.themePresetId === opt.seedKind);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={!canEdit}
+                    onClick={() =>
+                      onUpdateApp({
+                        themePresetId: (opt.seedKind ?? opt.id) as never,
+                      })
+                    }
+                    aria-pressed={active}
+                    className={`flex items-center gap-2 rounded-md border bg-surface-1 px-2 py-1.5 text-left transition-colors ${
+                      active
+                        ? 'border-accent ring-2 ring-accent/30'
+                        : 'border-border hover:bg-surface-2'
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    <span
+                      className="h-4 w-4 shrink-0 rounded-sm border border-border"
+                      style={{ background: opt.swatch }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-ink-0">
+                        {opt.label}
+                      </p>
+                      {opt.description ? (
+                        <p className="truncate text-[11px] text-muted">
+                          {opt.description}
+                        </p>
+                      ) : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!canEdit}
+            onClick={onSaveAsTheme}
+            className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border bg-surface-1 px-2 py-1.5 text-xs text-ink-1 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            + Save current theme as new theme item
+          </button>
         </Field>
 
         <Field

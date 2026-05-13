@@ -75,18 +75,18 @@ export interface CustomAppData {
     background?: string;
   };
   /**
-   * Named theme preset. When set, the runtime + designer apply the
-   * preset's CSS-variable token bundle at the app root so every
-   * widget renders with a consistent palette / typography /
-   * spacing. Independent of the older `theme.accent` /
-   * `theme.background` overrides which still apply on top.
+   * Theme reference.  Either:
+   *   - a built-in starter kind ('default' / 'slate' / 'aurora' /
+   *     'forest' / 'paper') matching seedKind on a seeded theme
+   *     item (legacy storage for apps saved before #22 lifted
+   *     themes into items), or
+   *   - a UUID pointing at a `theme` item the user has access to.
    *
-   * Presets are defined in `app-themes.ts` (Default, Slate, Aurora,
-   * Forest, etc.) so authors can pick a vibe without becoming
-   * designers, while still being able to override individual tokens
-   * via the older `theme` block when they want pixel control.
+   * The runtime resolves either form against the user's theme
+   * catalog (server-side preload).  The older `theme.accent` /
+   * `theme.background` overrides still apply on top when set.
    */
-  themePresetId?: AppThemePresetId;
+  themePresetId?: string;
 }
 
 /**

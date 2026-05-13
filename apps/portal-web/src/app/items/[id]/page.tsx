@@ -147,6 +147,7 @@ import { BasemapEditor } from './basemap/editor';
 import { GeocodingServiceEditor } from './geocoding/editor';
 import { TileLayerEditor } from './tile-layer/editor';
 import { AppTemplateDetail } from './app-template/app-template-detail';
+import { AppThemeDetail } from './theme/theme-detail';
 
 interface Props {
   params: { id: string };
@@ -231,6 +232,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
   // is now resolved. Wall-clock cost goes from sum-of-7-fetches to
   // max-of-7-fetches. Failures are non-fatal per-fetch (same as the
   // sequential version was).
+  const needsThemes = isCustomAppItem(item);
   const [
     basemaps,
     defaultExtentBoundary,
@@ -238,6 +240,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
     allFoldersForBreadcrumb,
     geoBoundaries,
     groups,
+    themeItems,
   ] = await Promise.all([
     // Web map basemap library.
     isMap
@@ -284,6 +287,28 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
     canManage
       ? apiFetch<Group[]>('/api/groups').catch(() => [] as Group[])
       : Promise.resolve([] as Group[]),
+    // #22: theme catalog for the Custom Web App designer's theme
+    // picker.  Only fetched when looking at a custom-app item so
+    // the round-trip doesn't run on every detail page view.
+    needsThemes
+      ? apiFetch<
+          Array<{
+            id: string;
+            title: string;
+            description: string;
+            seedKind: string | null;
+            data: { swatch?: string };
+          }>
+        >('/api/items?type=theme').catch(() => [])
+      : Promise.resolve(
+          [] as Array<{
+            id: string;
+            title: string;
+            description: string;
+            seedKind: string | null;
+            data: { swatch?: string };
+          }>,
+        ),
   ]);
 
   // Folder breadcrumb: walk up the parent chain so the detail page
@@ -755,6 +780,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             ...((readCustomAppData(item) ?? {}) as Partial<CustomAppData>),
           }}
           canEdit={canManage}
+          themeItems={themeItems}
         />
       ) : isCustomAppItem(item) && !isBuilderView ? (
         <section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
@@ -999,6 +1025,20 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             (item.data && typeof item.data === 'object'
               ? item.data
               : { version: 3, themePresetId: 'default', targets: [], pages: [] }) as CustomAppData
+          }
+          seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
+        />
+      ) : item.type === 'theme' ? (
+        <AppThemeDetail
+          itemId={item.id}
+          blueprint={
+            (item.data && typeof item.data === 'object'
+              ? item.data
+              : { version: 1, swatch: '', tokens: {} }) as {
+              version?: number;
+              swatch?: string;
+              tokens?: Record<string, string>;
+            }
           }
           seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
         />

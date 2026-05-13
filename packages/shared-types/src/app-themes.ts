@@ -301,9 +301,12 @@ interface CSSVariableSetter {
  */
 export function applyAppTheme(
   el: CSSVariableSetter,
-  id: AppThemePresetId | undefined,
+  id: AppThemePresetId | string | undefined,
 ): void {
-  const theme = resolveAppTheme(id);
+  // resolveAppTheme tolerates unknown strings by falling back to
+  // 'default'; widen the input here so callers with a theme item
+  // UUID can use the same applier as the legacy starter-kind path.
+  const theme = resolveAppTheme(id as AppThemePresetId | undefined);
   for (const [key, value] of Object.entries(theme.tokens)) {
     el.style.setProperty(key, value);
   }
@@ -318,7 +321,7 @@ export function applyAppTheme(
  */
 export function applyAppThemeTokens(
   el: CSSVariableSetter,
-  tokens: AppThemeTokens['tokens'],
+  tokens: AppThemeTokens['tokens'] | Record<string, unknown>,
 ): void {
   for (const [key, value] of Object.entries(tokens)) {
     if (typeof value === 'string') {
