@@ -1184,9 +1184,10 @@ function computePopoverPosition({
     const trig = triggerRef.current.getBoundingClientRect();
     const cont = containerRef.current.getBoundingClientRect();
     // App-bar triggers want extra vertical breathing room so the
-    // popover top aligns with maplibre's zoom controls (default
-    // top: 10 inside the map). Non-bar triggers stay tight (4px).
-    const topGap = triggerInAppBar ? 12 : 4;
+    // popover top sits clearly below the zoom controls (default
+    // top: 10 inside the map, controls are ~30px tall). Non-bar
+    // triggers stay tight (4px).
+    const topGap = triggerInAppBar ? 24 : 4;
     const top = trig.bottom - cont.top + topGap;
     // Default to right-aligning the popover with the trigger button
     // for top-right anchors; left-align for top-left; center for the
@@ -1208,7 +1209,7 @@ function computePopoverPosition({
       // keep the trigger-anchored behavior so the popover stays
       // attached to the button the user clicked.
       const desiredRight = triggerInAppBar
-        ? containerW - 50
+        ? containerW - 80
         : trig.right - cont.left;
       left = Math.min(
         Math.max(offsetX, desiredRight - width),
