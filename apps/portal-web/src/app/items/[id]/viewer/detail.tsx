@@ -11,10 +11,12 @@ import {
   Map as MapIcon,
   Play,
   Plus,
+  Settings,
   Trash2,
   Wrench,
   X,
 } from 'lucide-react';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import Link from 'next/link';
 import type {
   DataLayerData,
@@ -340,232 +342,198 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
     [viewer.targets],
   );
 
-  return (
-    <div className="space-y-6">
-      {/* Sticky save bar mirrors map-editor's UX. The "Open in
-          workspace" link is always visible so a viewer (no edit
-          rights) can still launch the runtime. */}
-      <div className="sticky top-0 z-10 flex items-center justify-between rounded-md border border-border bg-surface-1 px-4 py-2 shadow-sm">
-        <div className="flex items-center gap-2 text-sm">
-          <Eye className="h-4 w-4 text-purple-600" />
-          <span className="font-medium text-ink-0">Viewer configuration</span>
-          {canEdit && dirty ? (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-              Unsaved changes
-            </span>
-          ) : canEdit && saved ? (
-            <span className="text-[11px] text-emerald-700">Saved</span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Open in a new tab so the viewer fills the browser
-              window without portal chrome around it -- matches AGOL's
-              shared-viewer UX where the link launches a chromeless,
-              full-bleed map. The same href is what authors copy as
-              the public-share URL, so the public-share + author-test
-              experience are identical. */}
-          <a
-            href={`/items/${itemId}/viewer/run`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            title="Open this viewer in a new tab"
+  // #17 -- toolbar lives in BuilderShell's toolbarRight slot now,
+  // not as a sticky section above the form.  Builder chrome (back
+  // arrow, title) comes from BuilderShell; we just provide the
+  // action buttons + dirty / saved indicators.  Same set of
+  // actions as the legacy save bar (Open viewer + Convert to
+  // custom + Discard + Save), so the migration is layout-only.
+  const toolbarRight = (
+    <div className="flex items-center gap-2">
+      {canEdit && dirty ? (
+        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+          Unsaved changes
+        </span>
+      ) : canEdit && saved ? (
+        <span className="text-[11px] text-emerald-700">Saved</span>
+      ) : null}
+      <a
+        href={`/items/${itemId}/viewer/run`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+        title="Open this viewer in a new tab"
+      >
+        <Play className="h-3.5 w-3.5" />
+        Open viewer
+      </a>
+      {canEdit ? (
+        <>
+          <ConvertToCustomButton
+            itemId={itemId}
+            sourceTemplate="viewer"
+            {...(viewer.mapId ? { sourceMapId: viewer.mapId } : {})}
+            sourceTargets={viewer.targets}
+          />
+          <button
+            type="button"
+            onClick={cancel}
+            disabled={!dirty || saving}
+            className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
           >
-            <Play className="h-3.5 w-3.5" />
-            Open viewer
-          </a>
-          {canEdit ? (
-            <>
-              <ConvertToCustomButton
-                itemId={itemId}
-                sourceTemplate="viewer"
-                {...(viewer.mapId ? { sourceMapId: viewer.mapId } : {})}
-                sourceTargets={viewer.targets}
-              />
-              <button
-                type="button"
-                onClick={cancel}
-                disabled={!dirty || saving}
-                className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                onClick={() => void save()}
-                disabled={!dirty || saving}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-              >
-                {saving ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : null}
-                Save
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={!dirty || saving}
+            className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Save
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
 
-      {error ? (
-        <div
-          className="rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-sm text-danger"
-          role="alert"
-        >
-          {error}
+  // Left rail = the editable layers list.  This is the primary
+  // content surface for a viewer (every other config is downstream
+  // of "what layers does the viewer expose").
+  const layersPanel = (
+    <div className="space-y-3 p-3">
+      {canEdit ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setAddingFromMap(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+            title="Bulk-import layers from a map"
+          >
+            <MapIcon className="h-3.5 w-3.5" />
+            Add from map
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add layer
+          </button>
         </div>
       ) : null}
+      <p className="text-[11px] text-muted">
+        Layers exposed in the layer panel, legend, and attribute
+        table. Symbology comes from the underlying data layer.
+      </p>
+      {viewer.targets.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted">
+          No layers yet.
+          {canEdit ? ' Use "Add layer" above.' : ''}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border rounded-md border border-border bg-surface-0">
+          {viewer.targets.map((target, index) => (
+            <TargetRow
+              key={`${target.dataLayerId}:${target.layerKey}`}
+              target={target}
+              resolved={
+                resolved[`${target.dataLayerId}:${target.layerKey}`] ?? null
+              }
+              resolving={resolving}
+              canEdit={canEdit}
+              onRemove={() => removeTarget(index)}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 
-      {/* Reference map. The viewer inherits this map's basemap,
-          viewport, layer order, and reference-layer symbology. */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-              <MapIcon className="h-4 w-4 text-emerald-600" />
-              Reference map
-            </h2>
-            <p className="text-xs text-muted">
-              The viewer opens against this map's basemap, viewport,
-              and layer order. Layers in the map that are not viewer
-              targets render as read-only reference context.
-            </p>
-          </div>
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={() => setPickingMap(true)}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            >
-              {viewer.mapId ? 'Change map' : 'Pick map'}
-            </button>
-          ) : null}
-        </div>
-        <div className="px-4 py-3 text-sm">
-          {viewer.mapId ? (
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <MapIcon className="h-4 w-4 shrink-0 text-emerald-600" />
-                <span className="truncate font-medium text-ink-0">
-                  {mapTitle ?? <span className="text-muted">Loading...</span>}
+  // Right rail = secondary config (reference map + tool palette).
+  // Both are "set it once and forget it" knobs that don't warrant
+  // taking room from the primary layers list.
+  const settingsPanel = (
+    <div className="space-y-4 p-3">
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <MapIcon className="h-3.5 w-3.5" />
+          Reference map
+        </h3>
+        <p className="text-[11px] text-muted">
+          The viewer opens against this map's basemap, viewport, and
+          layer order. Layers in the map that are not viewer targets
+          render as read-only reference context.
+        </p>
+        {viewer.mapId ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <MapIcon className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+              <span className="truncate text-xs font-medium text-ink-0">
+                {mapTitle ?? <span className="text-muted">Loading...</span>}
+              </span>
+              {mapMissing ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">
+                  <AlertTriangle className="h-3 w-3" />
+                  Missing
                 </span>
-                {mapMissing ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-                    <AlertTriangle className="h-3 w-3" />
-                    Map not found
-                  </span>
-                ) : null}
-                {!mapMissing && mapTitle ? (
-                  <Link
-                    href={`/items/${viewer.mapId}`}
-                    className="inline-flex items-center gap-1 text-xs text-muted hover:text-accent"
-                  >
-                    Open <ExternalLink className="h-3 w-3" />
-                  </Link>
-                ) : null}
-              </div>
-              {canEdit ? (
-                <button
-                  type="button"
-                  onClick={() => pickMap(null)}
-                  className="inline-flex items-center gap-1 rounded-md p-1 text-muted hover:bg-surface-2 hover:text-danger"
-                  aria-label="Clear reference map"
-                  title="Clear reference map"
+              ) : null}
+              {!mapMissing && mapTitle ? (
+                <Link
+                  href={`/items/${viewer.mapId}`}
+                  className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted hover:text-accent"
                 >
-                  <X className="h-4 w-4" />
-                </button>
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
               ) : null}
             </div>
-          ) : (
-            <p className="text-muted">
-              No reference map.{' '}
-              {canEdit
-                ? 'Without one, the viewer opens on a default basemap and fits to the union of its target layers.'
-                : ''}
-            </p>
-          )}
-        </div>
-      </section>
-
-      {/* Targets section. Each row is just identity + a remove
-          button: the viewer doesn't need per-layer policy knobs. */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-              <Layers className="h-4 w-4 text-sky-600" />
-              Layers in this viewer
-            </h2>
-            <p className="text-xs text-muted">
-              Layers exposed in the layer panel, legend, and attribute
-              table. Symbology comes from the underlying data layer.
-            </p>
-          </div>
-          {canEdit ? (
-            <div className="flex items-center gap-2">
+            {canEdit ? (
               <button
                 type="button"
-                onClick={() => setAddingFromMap(true)}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-                title="Bulk-import layers from a map"
+                onClick={() => pickMap(null)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-danger"
+                aria-label="Clear reference map"
+                title="Clear reference map"
               >
-                <MapIcon className="h-3.5 w-3.5" />
-                Add from map
+                <X className="h-3.5 w-3.5" />
               </button>
-              <button
-                type="button"
-                onClick={() => setAdding(true)}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add layer
-              </button>
-            </div>
-          ) : null}
-        </div>
-        {viewer.targets.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted">
-            No layers yet.
-            {canEdit ? ' Use "Add layer" to expose a data layer here.' : ''}
+            ) : null}
           </div>
         ) : (
-          <ul className="divide-y divide-border">
-            {viewer.targets.map((target, index) => (
-              <TargetRow
-                key={`${target.dataLayerId}:${target.layerKey}`}
-                target={target}
-                resolved={
-                  resolved[`${target.dataLayerId}:${target.layerKey}`] ?? null
-                }
-                resolving={resolving}
-                canEdit={canEdit}
-                onRemove={() => removeTarget(index)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Tool palette. Authors trim the toolbar for narrower
-          workflows (a results-only viewer might keep just legend +
-          attribute-table; a kiosk might keep only print). */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-            <Wrench className="h-4 w-4 text-muted" />
-            Toolbar
-          </h2>
-          <p className="text-xs text-muted">
-            Read-side tools the viewer exposes. Every tool here is
-            non-destructive.
+          <p className="mt-2 rounded-md border border-dashed border-border px-2 py-2 text-[11px] text-muted">
+            No reference map.
+            {canEdit
+              ? ' Without one, the viewer opens on a default basemap.'
+              : ''}
           </p>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-3">
+        )}
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setPickingMap(true)}
+            className="mt-2 inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+          >
+            {viewer.mapId ? 'Change map' : 'Pick map'}
+          </button>
+        ) : null}
+      </section>
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <Wrench className="h-3.5 w-3.5" />
+          Toolbar
+        </h3>
+        <p className="text-[11px] text-muted">
+          Read-side tools the viewer exposes. Every tool here is
+          non-destructive.
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2">
           {ALL_TOOLS.map(({ key, label, hint }) => {
             const on = viewer.tools.includes(key);
             return (
               <label
                 key={key}
-                className="flex items-start gap-2 text-sm"
+                className="flex items-start gap-2 text-xs"
                 title={hint}
               >
                 <input
@@ -573,18 +541,76 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
                   checked={on}
                   disabled={!canEdit}
                   onChange={(e) => toggleTool(key, e.target.checked)}
-                  className="mt-0.5 h-4 w-4 cursor-pointer"
+                  className="mt-0.5 h-3.5 w-3.5 cursor-pointer"
                 />
                 <span>
                   <span className="font-medium text-ink-1">{label}</span>
-                  <span className="block text-[11px] text-muted">{hint}</span>
+                  <span className="block text-[10px] text-muted">{hint}</span>
                 </span>
               </label>
             );
           })}
         </div>
       </section>
+    </div>
+  );
 
+  return (
+    <>
+      <BuilderShell
+        storageKey="builder-shell:viewer"
+        backHref={`/items/${itemId}`}
+        title="Viewer configuration"
+        icon={<Eye className="h-4 w-4 text-purple-600" />}
+        toolbarRight={toolbarRight}
+        leftPanel={layersPanel}
+        leftPanelTitle="Layers"
+        leftRailIcon={<Layers className="h-4 w-4" />}
+        rightPanel={settingsPanel}
+        rightPanelTitle="Settings"
+        rightRailIcon={<Settings className="h-4 w-4" />}
+      >
+        {/* Center pane: error banner + "what is this builder" note.
+            A viewer doesn't have a designer canvas the way a Custom
+            Web App does -- its surface is the runtime page at
+            /viewer/run, opened in a new tab via the toolbar.  The
+            center pane gives the author orientation + room for
+            future inline preview / live-render. */}
+        <div className="absolute inset-0 flex flex-col gap-4 overflow-auto p-6">
+          {error ? (
+            <div
+              className="rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {error}
+            </div>
+          ) : null}
+          <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center">
+            <Eye className="mx-auto h-8 w-8 text-purple-300" />
+            <h2 className="mt-2 text-sm font-semibold text-ink-0">
+              Viewer configuration
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              Add layers in the left panel, pick a reference map and
+              toolbar tools on the right. Open the viewer to test the
+              live runtime in a new tab.
+            </p>
+            <a
+              href={`/items/${itemId}/viewer/run`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            >
+              <Play className="h-3.5 w-3.5" />
+              Open viewer in a new tab
+            </a>
+          </div>
+        </div>
+      </BuilderShell>
+
+      {/* Dialogs live outside BuilderShell so they portal above the
+          shell's panel chrome.  Add target / add from map / pick map
+          are reused as-is from the legacy layout. */}
       <AddTargetDialog
         open={adding}
         onClose={() => setAdding(false)}
@@ -607,7 +633,7 @@ export function ViewerDetail({ itemId, initial, canEdit }: Props) {
         onClose={() => setPickingMap(false)}
         onPick={(m) => pickMap(m.id)}
       />
-    </div>
+    </>
   );
 }
 

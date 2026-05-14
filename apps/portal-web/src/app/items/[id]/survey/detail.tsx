@@ -10,10 +10,12 @@ import {
   Loader2,
   Map as MapIcon,
   Play,
+  Settings,
   UserCircle,
   Wrench,
   X,
 } from 'lucide-react';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import type { Item, SurveyData, ViewerTool, WebAppData } from '@gratis-gis/shared-types';
 import { DEFAULT_SURVEY_TOOLS } from '@gratis-gis/shared-types';
 import { PickMapDialog } from '../editor/pick-map-dialog';
@@ -196,255 +198,204 @@ export function SurveyDetail({ itemId, initial, canEdit }: Props) {
     setError(null);
   }
 
-  return (
-    <div>
-      <header className="mb-4 flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-semibold text-ink-0">
-            Survey Response Viewer
-          </h1>
-          <p className="text-xs text-muted">
-            Browse responses to a form on a map, with click-through to
-            the full form receipt.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {error ? (
-            <span className="text-[11px] text-rose-700">{error}</span>
-          ) : dirty ? (
-            <span className="text-[11px] text-amber-700">
-              Unsaved changes
-            </span>
-          ) : canEdit && saved ? (
-            <span className="text-[11px] text-emerald-700">Saved</span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <a
-            href={`/items/${itemId}/survey/run`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            title="Open this survey in a new tab"
+  // #17 -- save bar moves to BuilderShell's toolbarRight slot.  No
+  // semantic change, just relocation; same buttons in same order
+  // as the legacy header.
+  const toolbarRight = (
+    <div className="flex items-center gap-2">
+      {error ? (
+        <span className="text-[11px] text-rose-700">{error}</span>
+      ) : dirty ? (
+        <span className="text-[11px] text-amber-700">Unsaved changes</span>
+      ) : canEdit && saved ? (
+        <span className="text-[11px] text-emerald-700">Saved</span>
+      ) : null}
+      <a
+        href={`/items/${itemId}/survey/run`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+        title="Open this survey in a new tab"
+      >
+        <Play className="h-3.5 w-3.5" />
+        Open survey
+      </a>
+      {canEdit ? (
+        <>
+          <ConvertToCustomButton
+            itemId={itemId}
+            sourceTemplate="survey"
+            {...(survey.mapId ? { sourceMapId: survey.mapId } : {})}
+            sourceTargets={[]}
+          />
+          <button
+            type="button"
+            onClick={cancel}
+            disabled={!dirty || saving}
+            className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
           >
-            <Play className="h-3.5 w-3.5" />
-            Open survey
-          </a>
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={!dirty || saving}
+            className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Save
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+
+  // Left rail = the primary surface (the bound form).  A survey
+  // app is a 1:1 binding to a form item, so the left panel just
+  // shows + lets the user rebind that one reference.
+  const formPanel = (
+    <div className="space-y-3 p-3">
+      <p className="text-[11px] text-muted">
+        The form whose submissions this survey app browses.
+        Submissions read from the paired data layer.
+      </p>
+      {survey.formId ? (
+        <div className="rounded-md border border-border bg-surface-0 p-3">
+          <p className="truncate text-sm font-medium text-ink-0">
+            {formTitle ?? survey.formId.slice(0, 8)}
+          </p>
+          {formMissing ? (
+            <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-rose-700">
+              <AlertTriangle className="h-3 w-3" />
+              Form not found or not visible to you
+            </p>
+          ) : null}
           {canEdit ? (
-            <>
-              <ConvertToCustomButton
-                itemId={itemId}
-                sourceTemplate="survey"
-                {...(survey.formId
-                  ? // Survey has no editor-target list of its own;
-                    // the runtime synthesizes a single target from
-                    // the bound form's paired data_layer at render
-                    // time. We can't resolve that synchronously
-                    // here without an extra fetch, so the conversion
-                    // ships with empty targets and the user can
-                    // re-add them in the designer. mapId carries
-                    // over directly.
-                    {}
-                  : {})}
-                {...(survey.mapId ? { sourceMapId: survey.mapId } : {})}
-                sourceTargets={[]}
-              />
+            <div className="mt-2 flex items-center gap-2">
               <button
                 type="button"
-                onClick={cancel}
-                disabled={!dirty || saving}
-                className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
+                onClick={() => setPickingForm(true)}
+                className="rounded-md border border-border bg-surface-0 px-2 py-1 text-xs hover:bg-surface-2"
               >
-                Discard
+                Change form
               </button>
               <button
                 type="button"
-                onClick={() => void save()}
-                disabled={!dirty || saving}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+                onClick={() => pickForm(null)}
+                className="rounded-md border border-border bg-surface-0 px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-danger"
               >
-                {saving ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : null}
-                Save
+                Clear
               </button>
-            </>
+            </div>
           ) : null}
         </div>
-      </header>
-
-      {/* Form binding card. Required: without a formId the runtime
-          has no submissions to render. */}
-      <section className="mb-4 rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-            <FileText className="h-4 w-4 text-orange-600" />
-            Form
-          </h2>
-          <p className="text-xs text-muted">
-            The form whose submissions this survey app browses.
-          </p>
-        </div>
-        <div className="px-4 py-4 text-sm">
-          {survey.formId ? (
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium text-ink-0">
-                  {formTitle ?? survey.formId.slice(0, 8)}
-                </p>
-                {formMissing ? (
-                  <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-rose-700">
-                    <AlertTriangle className="h-3 w-3" />
-                    Form not found or not visible to you
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-muted">
-                    Submissions read from the paired data layer.
-                  </p>
-                )}
-              </div>
-              {canEdit ? (
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setPickingForm(true)}
-                    className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs hover:bg-surface-2"
-                  >
-                    Change
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => pickForm(null)}
-                    className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs hover:bg-surface-2"
-                    aria-label="Clear bound form"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-muted">
-                No form bound yet. Pick the form whose responses this
-                viewer will surface.
-              </p>
-              {canEdit ? (
-                <button
-                  type="button"
-                  onClick={() => setPickingForm(true)}
-                  className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium hover:bg-surface-2"
-                >
-                  Pick form
-                </button>
-              ) : null}
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Reference map (optional) + reset. */}
-      <section className="mb-4 rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-            <MapIcon className="h-4 w-4 text-sky-600" />
-            Reference map
-          </h2>
-          <p className="text-xs text-muted">
-            Optional. Inherits basemap + viewport. Leave blank to fall
-            back to the survey&apos;s submission extent.
-          </p>
-        </div>
-        <div className="px-4 py-4 text-sm">
-          {survey.mapId ? (
-            <div className="flex items-center justify-between gap-3">
-              <span className="truncate font-medium text-ink-0">
-                {mapTitle ?? survey.mapId.slice(0, 8)}
-              </span>
-              {canEdit ? (
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setPickingMap(true)}
-                    className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs hover:bg-surface-2"
-                  >
-                    Change
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => pickMap(null)}
-                    className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs hover:bg-surface-2"
-                    aria-label="Clear referenced map"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : canEdit ? (
+      ) : (
+        <div className="rounded-md border border-dashed border-border p-3 text-center">
+          <p className="text-xs text-muted">No form bound yet.</p>
+          {canEdit ? (
             <button
               type="button"
-              onClick={() => setPickingMap(true)}
-              className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium hover:bg-surface-2"
+              onClick={() => setPickingForm(true)}
+              className="mt-2 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-xs font-medium hover:bg-surface-2"
             >
-              Pick map
+              Pick form
             </button>
-          ) : (
-            <p className="text-xs text-muted">No reference map.</p>
-          )}
+          ) : null}
         </div>
-      </section>
+      )}
+    </div>
+  );
 
-      {/* Tool palette. */}
-      <section className="mb-4 rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-            <Wrench className="h-4 w-4 text-muted" />
-            Toolbar
-          </h2>
-          <p className="text-xs text-muted">
-            Read-side tools available in the survey runtime.
+  // Right rail = secondary config: reference map + toolbar tools +
+  // response options (lookback days, hide submitter).
+  const settingsPanel = (
+    <div className="space-y-4 p-3">
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <MapIcon className="h-3.5 w-3.5" />
+          Reference map
+        </h3>
+        <p className="text-[11px] text-muted">
+          Optional. Inherits basemap + viewport. Leave blank to fall
+          back to the survey&apos;s submission extent.
+        </p>
+        {survey.mapId ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5">
+            <span className="truncate text-xs font-medium text-ink-0">
+              {mapTitle ?? survey.mapId.slice(0, 8)}
+            </span>
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={() => pickMap(null)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-danger"
+                aria-label="Clear reference map"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <p className="mt-2 rounded-md border border-dashed border-border px-2 py-2 text-[11px] text-muted">
+            No reference map.
           </p>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-3">
+        )}
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setPickingMap(true)}
+            className="mt-2 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+          >
+            {survey.mapId ? 'Change map' : 'Pick map'}
+          </button>
+        ) : null}
+      </section>
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <Wrench className="h-3.5 w-3.5" />
+          Toolbar
+        </h3>
+        <p className="text-[11px] text-muted">
+          Read-side tools available in the survey runtime.
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2">
           {ALL_TOOLS.map(({ key, label, hint }) => {
             const on = survey.tools.includes(key);
             return (
-              <label key={key} className="flex items-start gap-2 text-sm" title={hint}>
+              <label
+                key={key}
+                className="flex items-start gap-2 text-xs"
+                title={hint}
+              >
                 <input
                   type="checkbox"
                   checked={on}
                   disabled={!canEdit}
                   onChange={(e) => toggleTool(key, e.target.checked)}
-                  className="mt-0.5 h-4 w-4 cursor-pointer"
+                  className="mt-0.5 h-3.5 w-3.5 cursor-pointer"
                 />
                 <span>
                   <span className="font-medium text-ink-1">{label}</span>
-                  <span className="block text-[11px] text-muted">{hint}</span>
+                  <span className="block text-[10px] text-muted">{hint}</span>
                 </span>
               </label>
             );
           })}
         </div>
       </section>
-
-      {/* Survey-flavored knobs. */}
-      <section className="mb-4 rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-            <Clock className="h-4 w-4 text-muted" />
-            Response options
-          </h2>
-        </div>
-        <div className="space-y-3 px-4 py-3 text-sm">
-          <label className="flex items-center justify-between gap-3">
-            <span>
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <Clock className="h-3.5 w-3.5" />
+          Response options
+        </h3>
+        <div className="space-y-3 text-xs">
+          <label className="flex items-center justify-between gap-2">
+            <span className="flex-1">
               <span className="block font-medium text-ink-1">
-                Default look-back window
+                Default look-back
               </span>
-              <span className="block text-[11px] text-muted">
-                Pre-filter submissions to this many days back from now
-                when the survey opens. Leave blank to show all.
+              <span className="block text-[10px] text-muted">
+                Pre-filter to N days back from now. Blank = show all.
               </span>
             </span>
             <input
@@ -458,25 +409,27 @@ export function SurveyDetail({ itemId, initial, canEdit }: Props) {
                 setSurvey((cur) => {
                   const next = { ...cur };
                   if (v === '') delete next.defaultLookbackDays;
-                  else next.defaultLookbackDays = Math.max(0, parseInt(v, 10) || 0);
+                  else
+                    next.defaultLookbackDays = Math.max(
+                      0,
+                      parseInt(v, 10) || 0,
+                    );
                   return next;
                 });
                 markDirty();
               }}
-              className="h-8 w-24 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              className="h-7 w-20 rounded-md border border-border bg-surface-0 px-2 text-xs focus:border-accent focus:outline-none"
             />
           </label>
-
-          <label className="flex items-center justify-between gap-3">
-            <span className="inline-flex items-center gap-1.5">
-              <UserCircle className="h-3.5 w-3.5 text-muted" />
-              <span>
+          <label className="flex items-center justify-between gap-2">
+            <span className="inline-flex flex-1 items-center gap-1.5">
+              <UserCircle className="h-3 w-3 text-muted" />
+              <span className="flex-1">
                 <span className="block font-medium text-ink-1">
-                  Hide submitter column
+                  Hide submitter
                 </span>
-                <span className="block text-[11px] text-muted">
-                  Don&apos;t show who submitted each response. For
-                  anonymous-feedback workflows.
+                <span className="block text-[10px] text-muted">
+                  Anonymous-feedback workflows.
                 </span>
               </span>
             </span>
@@ -493,11 +446,53 @@ export function SurveyDetail({ itemId, initial, canEdit }: Props) {
                 });
                 markDirty();
               }}
-              className="h-4 w-4 cursor-pointer"
+              className="h-3.5 w-3.5 cursor-pointer"
             />
           </label>
         </div>
       </section>
+    </div>
+  );
+
+  return (
+    <>
+      <BuilderShell
+        storageKey="builder-shell:survey"
+        backHref={`/items/${itemId}`}
+        title="Survey Response Viewer"
+        icon={<FileText className="h-4 w-4 text-orange-600" />}
+        toolbarRight={toolbarRight}
+        leftPanel={formPanel}
+        leftPanelTitle="Form"
+        leftRailIcon={<FileText className="h-4 w-4" />}
+        rightPanel={settingsPanel}
+        rightPanelTitle="Settings"
+        rightRailIcon={<Settings className="h-4 w-4" />}
+      >
+        <div className="absolute inset-0 flex flex-col gap-4 overflow-auto p-6">
+          <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center">
+            <FileText className="mx-auto h-8 w-8 text-orange-300" />
+            <h2 className="mt-2 text-sm font-semibold text-ink-0">
+              Survey Response Viewer
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              Browse responses to a form on a map. Pick a form in the
+              left panel and configure the toolbar + map on the
+              right. Open the survey to test the live runtime in a
+              new tab.
+            </p>
+            <a
+              href={`/items/${itemId}/survey/run`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            >
+              <Play className="h-3.5 w-3.5" />
+              Open survey in a new tab
+            </a>
+          </div>
+        </div>
+      </BuilderShell>
 
       {/* Form-picker reuses the existing items endpoint with a
           ?type=form filter. Today the picker is a barebones dropdown
@@ -521,7 +516,7 @@ export function SurveyDetail({ itemId, initial, canEdit }: Props) {
           setPickingMap(false);
         }}
       />
-    </div>
+    </>
   );
 }
 
