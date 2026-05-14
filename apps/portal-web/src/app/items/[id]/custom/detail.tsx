@@ -2284,7 +2284,17 @@ function WidgetCard({
           gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
           cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
         }}
-        className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md transition-shadow ${
+        // #95: min-h-0 / min-w-0 suppress CSS Grid's default
+        // `min-height: auto` on grid items, which would otherwise
+        // expand the row track when the item's content (the
+        // FlowContainer's icon row, ~46-50px) is taller than the
+        // fixed `gridAutoRows` track size (3px × rowSpan). Without
+        // these, a 16-row container that should be 70.5px tall
+        // could balloon to ~100px because the auto-min sizing
+        // grows the track to fit its content's natural height.
+        // overflow-hidden on its own isn't enough -- the row
+        // track has to be told it can shrink below auto.
+        className={`group relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md transition-shadow ${
           isDropTarget
             ? 'shadow-[0_0_0_3px_var(--color-accent,_#2563eb)]'
             : selected
@@ -2342,7 +2352,7 @@ function WidgetCard({
         gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
         cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
       }}
-      className={`group relative flex h-full w-full flex-col overflow-hidden rounded-md bg-surface-1 text-left transition-shadow ${
+      className={`group relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md bg-surface-1 text-left transition-shadow ${
         selected
           ? 'shadow-[0_0_0_2px_var(--color-ink-0,_#0f0f10)]'
           : 'shadow-[0_0_0_1px_var(--color-border,_#e5e7eb)] hover:shadow-[0_0_0_1px_var(--color-ink-1,_#374151)]'
