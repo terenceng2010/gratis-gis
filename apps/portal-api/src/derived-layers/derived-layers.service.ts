@@ -662,6 +662,14 @@ export class DerivedLayersService {
     sourceItem: Pick<Item, 'id' | 'type' | 'data' | 'bbox'>;
     upTo: number;
     limit: number;
+    /**
+     * Optional ISO timestamp -- when set, the preview runs against
+     * the source's bitemporal "current truth" as of that moment.
+     * Lets authors compare "what would this recipe have produced
+     * yesterday vs. now" without saving + reloading.  Mirrors the
+     * `at` query param on the geojson controller.
+     */
+    at?: string;
   }): Promise<{
     rowCount: number;
     truncated: boolean;
@@ -764,7 +772,7 @@ export class DerivedLayersService {
         type: args.sourceItem.type as 'data_layer' | 'derived_layer',
         data: args.sourceItem.data,
       },
-      {},
+      args.at ? { at: args.at } : {},
     );
     const allRows = fc.features as Array<{
       type: 'Feature';

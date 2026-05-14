@@ -1217,6 +1217,13 @@ export class ItemsService {
       pipeline: unknown[];
       upTo: number;
       limit?: number;
+      /**
+       * Optional bitemporal "as of" timestamp (#86).  The preview's
+       * source CTE filters observations to those valid at this
+       * moment, so authors can compare a recipe's historical output
+       * against today's.  Propagated through the chain unchanged.
+       */
+      at?: string;
     },
   ): Promise<{
     rowCount: number;
@@ -1261,6 +1268,9 @@ export class ItemsService {
       sourceItem: source,
       upTo: args.upTo,
       limit: args.limit ?? 10,
+      ...(typeof args.at === 'string' && args.at.length > 0
+        ? { at: args.at }
+        : {}),
     });
   }
 

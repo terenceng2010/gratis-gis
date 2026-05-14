@@ -143,6 +143,12 @@ class DerivedLayerPreviewDto {
   upTo!: number;
   // Optional cap on sample size (server hard-caps to 50).
   limit?: number;
+  // #86: optional bitemporal "as of" timestamp.  The source CTE
+  // filters observations to those valid at this moment, so the
+  // wizard's Preview button can show what the recipe would have
+  // returned at a past date.  Accepts ISO-8601 strings; malformed
+  // values fall through as no-op (no filter applied).
+  @IsOptional() @IsDateString() at?: string;
 }
 
 class ShareDto {
@@ -668,6 +674,9 @@ export class ItemsController {
       pipeline: dto.pipeline,
       upTo: typeof dto.upTo === 'number' ? dto.upTo : dto.pipeline.length - 1,
       ...(typeof dto.limit === 'number' ? { limit: dto.limit } : {}),
+      ...(typeof dto.at === 'string' && dto.at.length > 0
+        ? { at: dto.at }
+        : {}),
     });
   }
 

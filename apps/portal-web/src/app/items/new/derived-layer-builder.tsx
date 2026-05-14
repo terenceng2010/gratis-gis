@@ -1258,6 +1258,11 @@ function StepPreviewPanel({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // #86 -- optional "as of" timestamp.  YYYY-MM-DD from a native
+  // <input type="date">; we extend to a full ISO at request time
+  // so the source CTE's `valid_from <= $ts AND valid_to > $ts`
+  // filter has a real timestamptz to compare against.
+  const [asOfDate, setAsOfDate] = useState<string>('');
   const [result, setResult] = useState<{
     rowCount: number;
     truncated: boolean;
@@ -1274,6 +1279,13 @@ function StepPreviewPanel({
     setLoading(true);
     setErr(null);
     try {
+      const atIso = asOfDate
+        ? // Anchor the picked date at end-of-day local time so a
+          // user who picks "March 5" sees what the data looked like
+          // at the end of that day -- matches AGO's "as of date"
+          // intuition.  Browser timezone is intentional.
+          new Date(`${asOfDate}T23:59:59`).toISOString()
+        : '';
       const res = await fetch('/api/portal/items/derived-layer:preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1282,6 +1294,7 @@ function StepPreviewPanel({
           pipeline,
           upTo: index,
           limit: 10,
+          ...(atIso ? { at: atIso } : {}),
         }),
       });
       if (!res.ok) {
@@ -1300,7 +1313,7 @@ function StepPreviewPanel({
     } finally {
       setLoading(false);
     }
-  }, [disabled, source, pipeline, index]);
+  }, [disabled, source, pipeline, index, asOfDate]);
 
   // Column list for the preview table.  Sourced from the response so
   // it reflects the actual step output (calc-field / spatial-join /
@@ -1344,6 +1357,35 @@ function StepPreviewPanel({
             <p className="text-[11px] text-muted">
               Pick a source layer above to preview this step.
             </p>
+          ) : null}
+          {!disabled ? (
+            // #86 -- "as of" date picker.  Empty value means current
+            // truth; a date asks the engine to run the recipe
+            // against the source's bitemporal projection at the end
+            // of the picked day.  Useful for "what did this look
+            // like a month ago?" diff-against-now workflows.
+            <label className="flex items-center gap-2 text-[11px] text-muted">
+              <span>As of</span>
+              <input
+                type="date"
+                value={asOfDate}
+                onChange={(e) => setAsOfDate(e.target.value)}
+                className="h-7 rounded-md border border-border bg-surface-0 px-2 text-[11px] text-ink-0 focus:border-accent focus:outline-none"
+              />
+              {asOfDate ? (
+                <button
+                  type="button"
+                  onClick={() => setAsOfDate('')}
+                  className="text-accent hover:underline"
+                >
+                  Clear
+                </button>
+              ) : (
+                <span className="text-muted">
+                  (leave blank for current truth)
+                </span>
+              )}
+            </label>
           ) : null}
           {err ? (
             <p className="rounded-md bg-danger/10 px-2 py-1 text-[11px] text-danger">
