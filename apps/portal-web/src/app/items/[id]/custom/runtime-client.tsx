@@ -1427,6 +1427,12 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
 function MapWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.kind !== 'map') return null;
   const ctx = useContext(CustomMapsContext);
+  // #87 -- read the app-time so the bound MapCanvas threads `at`
+  // into every data-layer tile URL + bbox geojson fetch.  Scrubbing
+  // the slider triggers a re-render here, MapCanvas's `asOfTime`
+  // prop changes, and MapLibre re-fetches tiles tagged with the new
+  // timestamp.
+  const appAt = useAppTime();
   const ref = useRef<MapCanvasHandle | null>(null);
   // Register the ref ONCE on mount so sibling widgets can use it
   // for fly-to. Re-registering on every render is harmless (same
@@ -1464,6 +1470,7 @@ function MapWidgetRender({ widget }: { widget: CustomWidget }) {
         hideNavigationControl={
           widget.config.kind === 'map' && widget.config.showNavigation === false
         }
+        asOfTime={appAt}
       />
     </div>
   );

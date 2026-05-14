@@ -135,6 +135,15 @@ interface Props {
    * MapLibre defaults.
    */
   hideNavigationControl?: boolean;
+  /**
+   * #87 -- bitemporal "as of" timestamp.  When set, every data-layer
+   * source's MVT tile URL and editor-target GeoJSON fetch appends
+   * `at=<ISO>` so MapLibre renders the engine's projection at that
+   * point in time rather than current truth.  Null / undefined =
+   * "now" (default).  The runtime threads this from AppTimeContext;
+   * the standalone map editor leaves it unset.
+   */
+  asOfTime?: string | null;
 }
 
 export interface MapCanvasHandle {
@@ -190,6 +199,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     suppressPopup = false,
     onSelectionChange,
     onMapReady,
+    asOfTime,
     hideNavigationControl = false,
   }: Props,
   ref,
@@ -224,6 +234,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // when only the clip changes.
   const clipBoundaryRef = useRef<string | undefined>(map.clipBoundaryId);
   clipBoundaryRef.current = map.clipBoundaryId;
+  // #87: ref-shadow of asOfTime so the basemap/style switch callback
+  // and any other ref-read site sees the current value without
+  // forcing a full source rebuild.  The proper rebuild on `at`
+  // change happens via the dep array on the syncOverlays effect
+  // below.
+  const asOfTimeRef = useRef<string | null | undefined>(asOfTime);
+  asOfTimeRef.current = asOfTime;
   // Refs the selection handlers read so we don't have to re-wire
   // mouse listeners every time the selection or tool changes.
   const selectionRef = useRef(selection);
@@ -649,7 +666,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       m.jumpTo({ center: [c.lng, c.lat], zoom: z, bearing: b, pitch: p });
       await loadAllIcons(m);
       if (cancelled) return;
-      syncOverlays(m, layersRef.current, hoveredRef, clipBoundaryRef.current);
+      syncOverlays(
+        m,
+        layersRef.current,
+        hoveredRef,
+        clipBoundaryRef.current,
+        asOfTimeRef.current,
+      );
       setIconsTick((t) => t + 1);
     };
 
@@ -704,18 +727,21 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const once = () => {
         if (!m.isStyleLoaded()) return;
         m.off('styledata', once);
-        syncOverlays(m, map.layers, hoveredRef, map.clipBoundaryId);
+        syncOverlays(m, map.layers, hoveredRef, map.clipBoundaryId, asOfTime);
       };
       m.on('styledata', once);
       return () => {
         m.off('styledata', once);
       };
     }
-    syncOverlays(m, map.layers, hoveredRef, map.clipBoundaryId);
+    syncOverlays(m, map.layers, hoveredRef, map.clipBoundaryId, asOfTime);
     // Also re-sync when the map-level clip changes so existing
     // overlay sources pick up / drop the ?clip query param without
-    // the user needing to reload (#79).
-  }, [map.layers, map.clipBoundaryId, iconsTick]);
+    // the user needing to reload (#79).  #87 adds asOfTime as a
+    // sync trigger: every MVT source needs its URL rebuilt when
+    // the runtime scrubs back in time so MapLibre re-fetches tiles
+    // tagged with the new `at` value.
+  }, [map.layers, map.clipBoundaryId, iconsTick, asOfTime]);
 
   // Live bbox-driven refetch for ArcGIS REST layers. Runs after
   // syncOverlays (same dep array, later in the file), so the sources
@@ -853,6 +879,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
         if (layer.boundaryFilterItemId) {
           params.set('clip', layer.boundaryFilterItemId);
         }
+        // #87 -- bitemporal "as of" passthrough.  When the runtime
+        // has scrubbed to a past moment, every data-layer fetch
+        // asks the engine for that snapshot rather than current
+        // truth.  Engine's CTE filter does the heavy lifting.
+        if (asOfTime) {
+          params.set('at', asOfTime);
+        }
         fetch(`${base}?${params}`, {
           signal: controller.signal,
           cache: 'no-store',
@@ -877,7 +910,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     return () => {
       m.off('moveend', refetchAll);
     };
-  }, [map.layers, iconsTick]);
+    // #87: include asOfTime so scrubbing back in time triggers a
+    // full refetch with the new `at` parameter -- without this dep,
+    // editor-target GeoJSON sources would keep showing current
+    // truth until the user pans the camera.
+  }, [map.layers, iconsTick, asOfTime]);
 
   // Click handlers for popups, hover handlers for highlight + cursor.
   // Attached once, dispatches dynamically based on the current layer set.
@@ -1965,6 +2002,15 @@ function syncOverlays(
    * lives on MapData.clipBoundaryId.
    */
   mapClipBoundaryId?: string,
+  /**
+   * #87: optional bitemporal "as of" timestamp.  When set, MVT
+   * data-layer sources append `at=<ISO>` to every tile URL so the
+   * engine returns the projection at that moment.  Undefined / null
+   * = "now" (default).  The dep array on the calling effect also
+   * includes asOfTime so swapping it triggers a full source rebuild
+   * and MapLibre refetches tiles with the new URL.
+   */
+  asOfTime?: string | null,
 ) {
   // Remove previously-added overlay layers. Everything we own starts
   // with `gg:` so we can distinguish from basemap layers.
@@ -2050,9 +2096,22 @@ function syncOverlays(
         : `/api/portal/items/${dataSource.itemId}/tile/{z}/{x}/{y}.mvt`;
       const effectiveClip =
         layer.boundaryFilterItemId ?? mapClipBoundaryId ?? null;
-      const tileUrl = effectiveClip
-        ? `${base}?clip=${encodeURIComponent(effectiveClip)}`
-        : base;
+      // #87 -- MVT URLs accept an `at` query string in addition to
+      // the {z}/{x}/{y} template.  MapLibre treats the whole string
+      // as the tile URL template, so the query string just rides
+      // along on every per-tile fetch.  Building the URL here means
+      // every visible tile asks for the engine's projection at that
+      // moment; MapLibre's cache keys on the full URL so swapping
+      // `at` invalidates the cache automatically.
+      const tileParams: string[] = [];
+      if (effectiveClip) {
+        tileParams.push(`clip=${encodeURIComponent(effectiveClip)}`);
+      }
+      if (asOfTime) {
+        tileParams.push(`at=${encodeURIComponent(asOfTime)}`);
+      }
+      const tileUrl =
+        tileParams.length > 0 ? `${base}?${tileParams.join('&')}` : base;
       m.addSource(sourceId, {
         type: 'vector',
         tiles: [tileUrl],
