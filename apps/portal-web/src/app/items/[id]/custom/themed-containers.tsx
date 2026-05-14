@@ -2,27 +2,26 @@
 'use client';
 
 /**
- * Themed-app container widgets. Each container holds an array of
- * child CustomWidgets and renders them inside opinionated themed
- * chrome: a top app bar, a side dock, a slideout drawer, a
- * foldable group. These are the building blocks that let an author
- * make an app look like one cohesive product instead of a pile of
- * floating widget boxes.
+ * Generic container widget renderer.  ONE component handles every
+ * container behavior (sticky top/bottom bar, side dock, overlay
+ * drawer, inline region) by reading the container's `position`,
+ * `variant`, `layout`, and `collapsible` props.  Replaces the
+ * earlier AppBar / DockPanel / Slideout / FoldableGroup family
+ * (#92) which baked slot-style chrome into separate widget kinds.
  *
- * Containers are deliberately not "generic flex containers". Each
- * has opinions about how children stack (row vs column), spacing
- * between siblings, dividers, collapse affordances, etc. The
- * theme tokens (--app-surface-*, --app-accent, --app-radius,
- * --app-shadow-card, --app-density) drive the visual treatment so
- * the same container looks coherent across themes.
+ * The container holds an array of full CustomWidget children and
+ * passes each to the caller-supplied `renderChild` function.  The
+ * container's own `layout` prop controls how children flow (row vs
+ * column) inside the body; everything else (background, sticky
+ * anchoring, collapse affordance, trigger button) is chrome
+ * provided by this component.
  *
- * Children are full CustomWidget instances, the same kinds the
- * page grid uses. A template is just a CustomAppData with
- * containers already laid out and children dropped inside; an
- * advanced-mode author can rearrange + add + remove without
- * touching a separate framework.
+ * Theme tokens (--app-surface-*, --app-header-*, --app-accent,
+ * --app-radius, --app-shadow-card, etc.) drive the visual treatment
+ * so the same container looks coherent across the theme presets.
  */
-import { createContext, useEffect, useRef, useState } from 'react';
+import { createContext, useState } from 'react';
+import type { CSSProperties } from 'react';
 import {
   ChevronDown as ChevronDownIcon,
   ChevronRight as ChevronRightIcon,
@@ -33,228 +32,271 @@ import {
   Wrench as WrenchIcon,
 } from 'lucide-react';
 import type {
-  AppBarWidgetConfig,
+  ContainerWidgetConfig,
   CustomWidget,
-  DockPanelWidgetConfig,
-  FoldableGroupWidgetConfig,
-  SlideoutWidgetConfig,
 } from '@gratis-gis/shared-types';
 
 /**
- * The runtime + designer pass these renderers a `RenderChild`
- * function so the container doesn't have to import the full widget
- * renderer registry directly (and so the designer can swap in a
- * design-time preview for children without touching this file).
+ * The runtime + designer pass the renderer a `RenderChild` function
+ * so the container doesn't have to import the full widget renderer
+ * registry directly (and so the designer can swap in a design-time
+ * preview for children without touching this file).
  */
 export type RenderChild = (child: CustomWidget) => React.ReactNode;
 
 /**
- * AppBarContext signals to descendant widgets that they're being
- * rendered inside an app-bar (vs. inline on the page grid). Tool
- * widgets check this so they can swap their raised white-pill
- * treatment for a flat, header-colored treatment: the difference
- * between a "button that floats on a page" and an "icon link in a
- * navy nav bar".
+ * Signals to descendant widgets that they're being rendered inside
+ * a container with branded-header chrome (variant='elevated' on a
+ * sticky-top / sticky-bottom container).  Tool widgets check this
+ * so they can swap their raised white-pill treatment for a flat,
+ * header-colored treatment: the difference between a "button that
+ * floats on a page" and an "icon link in a navy nav bar".  Renamed
+ * from AppBarContext (#92); kept as a single boolean so existing
+ * consumers don't need a new shape.
  */
 export const AppBarContext = createContext<boolean>(false);
 
-// ---- App bar ----------------------------------------------------
-
-interface AppBarRenderProps {
-  config: AppBarWidgetConfig;
-  /** Fallback title (e.g., the item's own title) when config.title
-   *  is empty. */
-  fallbackTitle?: string;
-  /** Logo URL fallback (e.g., the org's branding logo) when
-   *  config.logoUrl is empty. */
-  fallbackLogoUrl?: string;
+interface ContainerRenderProps {
+  config: ContainerWidgetConfig;
   renderChild: RenderChild;
 }
 
 /**
- * Top app bar. Sticky by default; renders logo + title block on the
- * left, children as a flex row on the right (which is the
- * convention for action bars in nearly every app shell).
+ * Resolve the effective defaults for a container's chrome props.
+ * Centralizes the "what does position X imply" rules so the renderer
+ * branches stay tight.
  */
-export function AppBar({
-  config,
-  fallbackTitle,
-  fallbackLogoUrl,
-  renderChild,
-}: AppBarRenderProps) {
-  const sticky = config.sticky !== false;
-  const variant = config.variant ?? 'elevated';
-  const title = config.title ?? fallbackTitle ?? '';
-  const subtitle = config.subtitle;
-  const logoUrl = config.logoUrl ?? fallbackLogoUrl;
+function resolveChrome(config: ContainerWidgetConfig) {
+  const position = config.position ?? 'inline';
+  const variant =
+    config.variant ??
+    (position === 'sticky-top' ||
+    position === 'sticky-bottom' ||
+    position === 'dock-left' ||
+    position === 'dock-right' ||
+    position === 'overlay-trigger'
+      ? 'elevated'
+      : 'flat');
+  const layout =
+    config.layout ??
+    (position === 'sticky-top' || position === 'sticky-bottom'
+      ? 'row'
+      : 'column');
+  return { position, variant, layout };
+}
 
-  // Variant styling map. 'elevated' is the default branded bar
-  // using --app-header-* tokens so each theme stamps its own
-  // identity at the top (Forest green, Slate near-black, Paper
-  // black, Aurora teal). 'glass' stays translucent over the body
-  // surface for map-first layouts (good when the author wants the
-  // map to read as the dominant surface). 'flat' is borderless on
-  // surface-1 for sparse, content-first apps.
-  const variantClass =
-    variant === 'glass'
-      ? 'bg-[hsl(var(--app-surface-1)/0.7)] backdrop-blur supports-[backdrop-filter]:bg-[hsl(var(--app-surface-1)/0.6)] border-b border-[hsl(var(--app-border)/0.6)] text-[hsl(var(--app-ink-0))]'
-      : variant === 'flat'
-        ? 'bg-[hsl(var(--app-surface-1))] text-[hsl(var(--app-ink-0))]'
-        : 'bg-[hsl(var(--app-header-bg))] text-[hsl(var(--app-header-ink))] border-b border-[hsl(var(--app-header-border))] shadow-[var(--app-shadow-card)]';
+/**
+ * Map a container's `variant` to its chrome class set.  Same
+ * vocabulary across every position so an 'elevated' sticky top bar
+ * and an 'elevated' overlay drawer share the same header surface
+ * tokens.
+ */
+function variantClasses(variant: ContainerWidgetConfig['variant']): string {
+  if (variant === 'glass') {
+    return 'bg-[hsl(var(--app-surface-1)/0.7)] backdrop-blur supports-[backdrop-filter]:bg-[hsl(var(--app-surface-1)/0.6)] border-b border-[hsl(var(--app-border)/0.6)] text-[hsl(var(--app-ink-0))]';
+  }
+  if (variant === 'flat') {
+    return 'bg-[hsl(var(--app-surface-1))] text-[hsl(var(--app-ink-0))]';
+  }
+  if (variant === 'none') {
+    return 'bg-transparent text-[hsl(var(--app-ink-0))]';
+  }
+  // 'elevated' (default).  Branded header surface.
+  return 'bg-[hsl(var(--app-header-bg))] text-[hsl(var(--app-header-ink))] border-b border-[hsl(var(--app-header-border))] shadow-[var(--app-shadow-card)]';
+}
 
-  // Whether this variant renders on the branded header surface
-  // (elevated default). When true, child text uses header ink for
-  // contrast against the header background; otherwise it stays on
-  // body-ink tokens.
-  const onHeaderSurface = variant !== 'glass' && variant !== 'flat';
-  const titleInkClass = onHeaderSurface
-    ? 'text-[hsl(var(--app-header-ink))]'
-    : 'text-[hsl(var(--app-ink-0))]';
-  const subtitleInkClass = onHeaderSurface
-    ? 'text-[hsl(var(--app-header-muted))]'
-    : 'text-[hsl(var(--app-muted))]';
+/**
+ * Single Container renderer.  Dispatches on `position` to the right
+ * sub-renderer.  Inline / sticky-top / sticky-bottom render as the
+ * same flow container with different anchoring; dock-left /
+ * dock-right render as a side panel with collapse-to-rail;
+ * overlay-trigger renders a hidden drawer with a trigger button.
+ */
+export function Container({ config, renderChild }: ContainerRenderProps) {
+  const { position, variant, layout } = resolveChrome(config);
 
+  if (position === 'dock-left' || position === 'dock-right') {
+    return (
+      <DockContainer
+        config={config}
+        renderChild={renderChild}
+        variant={variant}
+        layout={layout}
+        side={position === 'dock-left' ? 'left' : 'right'}
+      />
+    );
+  }
+  if (position === 'overlay-trigger') {
+    return (
+      <OverlayContainer
+        config={config}
+        renderChild={renderChild}
+        variant={variant}
+        layout={layout}
+      />
+    );
+  }
+  // sticky-top / sticky-bottom / inline.  Same flow region, just
+  // different anchoring + (for inline) no anchoring at all.
   return (
-    <AppBarContext.Provider value={onHeaderSurface}>
-      <header
-        className={`flex h-full w-full items-center gap-3 px-4 ${variantClass} ${
-          sticky ? 'sticky top-0 z-10' : ''
-        }`}
-      >
-        {/* Left: logo + title block. Logo is optional; title is the
-            primary label. Subtitle stacks under the title for a
-            two-line hero treatment when the author wants context.
-            The inner block uses `flex flex-col justify-center` so a
-            single-line title is vertically centered against the bar
-            rather than baseline-pinned to the top. */}
-        <div className="flex min-w-0 items-center gap-3 self-stretch">
-          {logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={logoUrl}
-              alt=""
-              className="h-7 w-7 shrink-0 self-center rounded object-contain"
-            />
-          ) : null}
-          {title || subtitle ? (
-            <div className="flex min-w-0 flex-col justify-center">
-              {title ? (
-                <p
-                  className={`truncate text-base font-semibold leading-tight ${titleInkClass}`}
-                >
-                  {title}
-                </p>
-              ) : null}
-              {subtitle ? (
-                <p className={`truncate text-xs leading-tight ${subtitleInkClass}`}>
-                  {subtitle}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+    <FlowContainer
+      config={config}
+      renderChild={renderChild}
+      variant={variant}
+      layout={layout}
+      position={position}
+    />
+  );
+}
 
-        {/* Right: children flex row. Each child renders flat (no
-            raised pill) so the bar reads as a coherent banner. Tool
-            widgets inside this provider see AppBarContext=true and
-            switch from white-pill to flat header-ink treatment. */}
-        <div className="flex flex-1 items-stretch justify-end gap-1">
+// ---- Flow container (inline / sticky-top / sticky-bottom) -------
+
+interface FlowProps extends ContainerRenderProps {
+  variant: NonNullable<ContainerWidgetConfig['variant']>;
+  layout: NonNullable<ContainerWidgetConfig['layout']>;
+  position: 'inline' | 'sticky-top' | 'sticky-bottom';
+}
+
+function FlowContainer({
+  config,
+  renderChild,
+  variant,
+  layout,
+  position,
+}: FlowProps) {
+  const collapsible = config.collapsible === true;
+  const [collapsed, setCollapsed] = useState(
+    config.defaultCollapsed === true,
+  );
+  const inBrandedHeader =
+    variant === 'elevated' &&
+    (position === 'sticky-top' || position === 'sticky-bottom');
+  const chromeClass = variantClasses(variant);
+  const stickyClass =
+    position === 'sticky-top'
+      ? 'sticky top-0 z-10'
+      : position === 'sticky-bottom'
+        ? 'sticky bottom-0 z-10'
+        : '';
+  const flowClass =
+    layout === 'row'
+      ? 'flex items-stretch gap-1'
+      : 'flex flex-col gap-1';
+  const heightStyle: CSSProperties =
+    typeof config.heightPx === 'number' ? { height: config.heightPx } : {};
+
+  // Collapsed inline / sticky containers fold their children behind
+  // a chevron handle; the chrome region stays visible so the handle
+  // is reachable.  For row-layout containers (toolbars), collapse
+  // doesn't make much physical sense — the handle still works but
+  // the practical use is column-layout accordion sections.
+  return (
+    <AppBarContext.Provider value={inBrandedHeader}>
+      <div
+        className={`flex h-full w-full ${chromeClass} ${stickyClass}`}
+        style={heightStyle}
+      >
+        {collapsible ? (
+          <header className="flex shrink-0 items-center self-start px-2 py-1">
+            <button
+              type="button"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={collapsed ? 'Expand container' : 'Collapse container'}
+              aria-expanded={!collapsed}
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[hsl(var(--app-muted))] hover:bg-[hsl(var(--app-surface-2))] hover:text-[hsl(var(--app-ink-0))]"
+            >
+              {collapsed ? (
+                <ChevronRightIcon className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDownIcon className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </header>
+        ) : null}
+        <div
+          className={`min-h-0 min-w-0 flex-1 ${flowClass} px-4 py-1`}
+          style={collapsed ? { display: 'none' } : undefined}
+          aria-hidden={collapsed}
+        >
           {config.widgets.map((child) => (
             <div
               key={child.id}
               className="flex shrink-0 items-stretch"
-              data-app-bar-child
+              data-container-child
             >
               {renderChild(child)}
             </div>
           ))}
         </div>
-      </header>
+      </div>
     </AppBarContext.Provider>
   );
 }
 
-// ---- Dock panel -------------------------------------------------
+// ---- Dock container (dock-left / dock-right) -------------------
 
-interface DockPanelRenderProps {
-  config: DockPanelWidgetConfig;
-  renderChild: RenderChild;
+interface DockProps extends ContainerRenderProps {
+  variant: NonNullable<ContainerWidgetConfig['variant']>;
+  layout: NonNullable<ContainerWidgetConfig['layout']>;
+  side: 'left' | 'right';
 }
 
-/**
- * Side dock panel. Always-open when `collapsible=false`; otherwise
- * shows a collapse handle that shrinks the panel to a 40px icon
- * rail. The rail icons come from each child widget's kind-specific
- * icon registry; clicking the rail expands the panel.
- */
-export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
+function DockContainer({
+  config,
+  renderChild,
+  variant,
+  side,
+}: DockProps) {
   const collapsible = config.collapsible !== false;
   const widthPx = config.widthPx ?? 280;
-  const [collapsed, setCollapsed] = useState(config.defaultCollapsed ?? false);
-  const side = config.side;
-  const title = config.title;
+  const [collapsed, setCollapsed] = useState(
+    config.defaultCollapsed === true,
+  );
 
-  // The dock controls its own width. The runtime now places dock
-  // widgets in flex slots (sibling of the canvas grid) so when the
-  // dock collapses to 44px, the canvas grid takes the freed space
-  // automatically. When expanded, the dock takes widthPx; the
-  // canvas takes whatever is left.
+  // The dock controls its own width.  When collapsed, shrinks to a
+  // 44px rail so the canvas grid takes the freed space automatically.
   const effectiveWidth = collapsed ? 44 : widthPx;
   const borderSide = side === 'left' ? 'border-r' : 'border-l';
-  // When the dock has no title configured, the header degrades to a
-  // bare collapse-handle row (author opted into "let the children
-  // (foldable groups, etc.) label themselves", so we don't stamp a
-  // redundant wrapping label like the older "Map tools" treatment.
-  // When `collapsible=false` AND no title is set, the header drops
-  // out entirely so the dock is just its body.
-  const hasTitle = Boolean(title && title.trim().length > 0);
-  const showHeader = hasTitle || collapsible;
+  const chromeClass = variantClasses(variant);
+  // Strip the bottom border the variantClasses adds (it's meant for
+  // top bars); a side dock wants its border on the inner edge only.
+  const dockChromeClass = chromeClass
+    .replace('border-b', '')
+    .replace('border-[hsl(var(--app-header-border))]', '');
 
   return (
     <aside
-      className={`relative flex h-full shrink-0 flex-col overflow-hidden bg-[hsl(var(--app-surface-1))] ${borderSide} border-[hsl(var(--app-border))]`}
+      className={`relative flex h-full shrink-0 flex-col overflow-hidden ${dockChromeClass} ${borderSide} border-[hsl(var(--app-border))]`}
       style={{ width: effectiveWidth, transition: 'width 160ms ease-out' }}
     >
-      {showHeader ? (
-        // Header: optional title + collapse handle. When collapsed,
-        // the handle becomes the only interactive surface; clicking
-        // expands. When `hasTitle=false`, the row contains just the
-        // collapse button right-aligned so the children butt right
-        // against the top edge with no chrome between them.
+      {collapsible ? (
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[hsl(var(--app-border))] px-2">
-          {hasTitle && !collapsed ? (
-            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-[hsl(var(--app-muted))]">
-              {title}
-            </span>
-          ) : null}
-          {collapsible ? (
-            <button
-              type="button"
-              onClick={() => setCollapsed((v) => !v)}
-              aria-label={collapsed ? 'Expand panel' : 'Collapse panel'}
-              aria-expanded={!collapsed}
-              className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded text-[hsl(var(--app-muted))] hover:bg-[hsl(var(--app-surface-2))] hover:text-[hsl(var(--app-ink-0))]"
-            >
-              {side === 'left' ? (
-                collapsed ? (
-                  <ChevronRightIcon className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronDownIcon className="h-3.5 w-3.5 rotate-90" />
-                )
-              ) : collapsed ? (
-                <ChevronRightIcon className="h-3.5 w-3.5 rotate-180" />
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            aria-label={collapsed ? 'Expand panel' : 'Collapse panel'}
+            aria-expanded={!collapsed}
+            className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded text-[hsl(var(--app-muted))] hover:bg-[hsl(var(--app-surface-2))] hover:text-[hsl(var(--app-ink-0))]"
+          >
+            {side === 'left' ? (
+              collapsed ? (
+                <ChevronRightIcon className="h-3.5 w-3.5" />
               ) : (
-                <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
-              )}
-            </button>
-          ) : null}
+                <ChevronDownIcon className="h-3.5 w-3.5 rotate-90" />
+              )
+            ) : collapsed ? (
+              <ChevronRightIcon className="h-3.5 w-3.5 rotate-180" />
+            ) : (
+              <ChevronDownIcon className="h-3.5 w-3.5 -rotate-90" />
+            )}
+          </button>
         </header>
       ) : null}
 
       {/* Body: children stack vertically with a divider between
-          siblings. When collapsed, only the kind icons render; the
-          body content stays mounted so per-instance state survives
-          collapse + re-expand. */}
+          siblings.  Stays mounted when collapsed so per-instance
+          state survives collapse + re-expand; visibility hidden so
+          the rail width is the only thing visible. */}
       <div
         className="min-h-0 flex-1 overflow-y-auto"
         style={collapsed ? { visibility: 'hidden' } : undefined}
@@ -262,7 +304,7 @@ export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
       >
         <div className="divide-y divide-[hsl(var(--app-border)/0.6)]">
           {config.widgets.map((child) => (
-            <div key={child.id} className="p-2" data-dock-panel-child>
+            <div key={child.id} className="p-2" data-container-child>
               {renderChild(child)}
             </div>
           ))}
@@ -272,22 +314,20 @@ export function DockPanel({ config, renderChild }: DockPanelRenderProps) {
   );
 }
 
-// ---- Slideout drawer --------------------------------------------
+// ---- Overlay container (overlay-trigger) -----------------------
 
-interface SlideoutRenderProps {
-  config: SlideoutWidgetConfig;
-  renderChild: RenderChild;
+interface OverlayProps extends ContainerRenderProps {
+  variant: NonNullable<ContainerWidgetConfig['variant']>;
+  layout: NonNullable<ContainerWidgetConfig['layout']>;
 }
 
-/**
- * Slideout drawer. Hidden by default; opens via a trigger button
- * stamped at the configured edge of the parent. Used for "tools"
- * drawers that the author doesn't want to take permanent space.
- */
-export function Slideout({ config, renderChild }: SlideoutRenderProps) {
+function OverlayContainer({ config, renderChild }: OverlayProps) {
   const [open, setOpen] = useState(false);
-  const edge = config.edge;
-  const sizePx = config.sizePx ?? 320;
+  const edge = config.edge ?? 'left';
+  const sizePx =
+    edge === 'left' || edge === 'right'
+      ? config.widthPx ?? 320
+      : config.heightPx ?? 320;
   const triggerLabel = config.triggerLabel ?? 'Tools';
   const Icon =
     config.triggerIcon === 'layers'
@@ -298,9 +338,6 @@ export function Slideout({ config, renderChild }: SlideoutRenderProps) {
           ? MenuIcon
           : WrenchIcon;
 
-  // Trigger anchored on the parent's edge. Drawer panel slides in
-  // from the same edge when open. Both share the same root so the
-  // container's grid placement positions everything correctly.
   const triggerPositionClass =
     edge === 'left'
       ? 'left-2 top-1/2 -translate-y-1/2'
@@ -317,7 +354,7 @@ export function Slideout({ config, renderChild }: SlideoutRenderProps) {
         : edge === 'top'
           ? 'top-0 left-0 w-full'
           : 'bottom-0 left-0 w-full';
-  const drawerSizeStyle: React.CSSProperties =
+  const drawerSizeStyle: CSSProperties =
     edge === 'left' || edge === 'right'
       ? { width: sizePx }
       : { height: sizePx };
@@ -334,8 +371,7 @@ export function Slideout({ config, renderChild }: SlideoutRenderProps) {
 
   return (
     <div className="pointer-events-none absolute inset-0">
-      {/* Trigger pill always visible; turns into the close button
-          when the drawer is open. */}
+      {/* Trigger pill always visible. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -347,7 +383,7 @@ export function Slideout({ config, renderChild }: SlideoutRenderProps) {
         {triggerLabel}
       </button>
 
-      {/* Drawer panel. Stays mounted so per-instance state survives
+      {/* Drawer panel.  Stays mounted so per-instance state survives
           open/close; off-screen when closed via translate transform. */}
       <aside
         className={`pointer-events-auto absolute z-10 flex flex-col overflow-hidden border-[hsl(var(--app-border))] bg-[hsl(var(--app-surface-1))] shadow-[var(--app-shadow-overlay)] transition-transform duration-200 ease-out ${drawerPositionClass} ${drawerTransform} ${
@@ -373,7 +409,7 @@ export function Slideout({ config, renderChild }: SlideoutRenderProps) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="divide-y divide-[hsl(var(--app-border)/0.6)]">
             {config.widgets.map((child) => (
-              <div key={child.id} className="p-2" data-slideout-child>
+              <div key={child.id} className="p-2" data-container-child>
                 {renderChild(child)}
               </div>
             ))}
@@ -381,61 +417,5 @@ export function Slideout({ config, renderChild }: SlideoutRenderProps) {
         </div>
       </aside>
     </div>
-  );
-}
-
-// ---- Foldable group --------------------------------------------
-
-interface FoldableGroupRenderProps {
-  config: FoldableGroupWidgetConfig;
-  renderChild: RenderChild;
-}
-
-/**
- * Foldable group. Header with chevron; clicking toggles the
- * children. Useful for nesting groups of related controls inside a
- * dock panel or slideout so a deep tool tree fits in a small side.
- */
-export function FoldableGroup({
-  config,
-  renderChild,
-}: FoldableGroupRenderProps) {
-  const [open, setOpen] = useState(config.defaultOpen !== false);
-  return (
-    <section className="flex w-full flex-col overflow-hidden rounded-[var(--app-radius)] border border-[hsl(var(--app-border))] bg-[hsl(var(--app-surface-1))]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[hsl(var(--app-surface-2))]"
-      >
-        <span className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-[hsl(var(--app-ink-0))]">
-            {config.title}
-          </p>
-          {config.subtitle ? (
-            <p className="truncate text-xs text-[hsl(var(--app-muted))]">
-              {config.subtitle}
-            </p>
-          ) : null}
-        </span>
-        {open ? (
-          <ChevronDownIcon className="h-4 w-4 text-[hsl(var(--app-muted))]" />
-        ) : (
-          <ChevronRightIcon className="h-4 w-4 text-[hsl(var(--app-muted))]" />
-        )}
-      </button>
-      {open ? (
-        <div className="border-t border-[hsl(var(--app-border)/0.6)]">
-          <div className="divide-y divide-[hsl(var(--app-border)/0.6)]">
-            {config.widgets.map((child) => (
-              <div key={child.id} className="p-2" data-foldable-child>
-                {renderChild(child)}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
   );
 }

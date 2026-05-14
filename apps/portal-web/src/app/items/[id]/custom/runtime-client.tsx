@@ -66,13 +66,7 @@ import { AttributeTable } from '../map/attribute-table';
 import { AttributeForm } from '../editor/attribute-form';
 import type { LayerMetadata } from '../map/layer-metadata';
 import { SearchBar } from '../map/search-bar';
-import {
-  AppBar,
-  AppBarContext,
-  DockPanel,
-  FoldableGroup,
-  Slideout,
-} from './themed-containers';
+import { AppBarContext, Container } from './themed-containers';
 import {
   applyAppTheme,
   applyAppThemeTokens,
@@ -655,30 +649,31 @@ export function CustomRuntimeClient({
               </div>
             </div>
           ) : (() => {
-            // #22 final-mile: partition top-level widgets into the
-            // CONTAINER slots (app-bar at top, dock-panels left/right)
-            // and the CANVAS widgets (everything else). Containers
-            // render in flex slots around the canvas, so collapsing a
-            // dock actually frees up canvas space (the previous
-            // approach embedded the dock inside a grid cell that
-            // didn't change size when the dock collapsed, leaving a
-            // hollow stripe of page background between the dock and
-            // the map). Slideouts overlay the canvas at runtime, so
-            // they pass through as canvas widgets and self-position.
+            // #92 final-mile: partition top-level widgets into
+            // CONTAINER slots and CANVAS widgets, based on each
+            // container's `position` prop.  Containers with sticky-
+            // top / sticky-bottom positions render as top / bottom
+            // bars above and below the canvas; dock-left / dock-
+            // right render as flex-sibling side panels (so
+            // collapsing a dock actually frees up canvas space);
+            // overlay-trigger and inline containers pass through
+            // to the canvas (overlay-trigger uses absolute
+            // positioning to self-place; inline takes its grid
+            // cell like any other widget).
             const ordered = sortForOverlapStacking(page.widgets);
             const topBars: CustomWidget[] = [];
+            const bottomBars: CustomWidget[] = [];
             const leftDocks: CustomWidget[] = [];
             const rightDocks: CustomWidget[] = [];
             const canvasWidgets: CustomWidget[] = [];
             for (const w of ordered) {
-              if (w.kind === 'app-bar') {
-                topBars.push(w);
-              } else if (
-                w.kind === 'dock-panel' &&
-                w.config.kind === 'dock-panel'
-              ) {
-                if (w.config.side === 'left') leftDocks.push(w);
-                else rightDocks.push(w);
+              if (w.kind === 'container' && w.config.kind === 'container') {
+                const pos = w.config.position ?? 'inline';
+                if (pos === 'sticky-top') topBars.push(w);
+                else if (pos === 'sticky-bottom') bottomBars.push(w);
+                else if (pos === 'dock-left') leftDocks.push(w);
+                else if (pos === 'dock-right') rightDocks.push(w);
+                else canvasWidgets.push(w);
               } else {
                 canvasWidgets.push(w);
               }
@@ -721,9 +716,10 @@ export function CustomRuntimeClient({
                 // reverted: it broke on narrow viewports (toolbar
                 // widgets ended up off-screen) and made map-first
                 // layouts feel cramped on wide displays. The new
-                // direction is container widgets (app-bar,
-                // dock-panel, slideout) that handle their own
-                // responsive sizing inside the grid, so the grid
+                // direction is the generic Container widget (with
+                // position=sticky-top / dock-left / etc.) that
+                // handles its own responsive sizing as a flex
+                // sibling of the canvas grid, so the grid itself
                 // doesn't need a fixed width to look right.
                 //
                 // (gridTemplateColumns and gridTemplateRows are
@@ -745,6 +741,11 @@ export function CustomRuntimeClient({
                     </div>
                   ))}
                 </div>
+                {bottomBars.map((w) => (
+                  <div key={w.id} className="relative shrink-0">
+                    {renderWidget(w)}
+                  </div>
+                ))}
               </>
             );
           })()}
@@ -1474,18 +1475,13 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <DeleteFeatureWidgetRender widget={widget} />;
     case 'tabs':
       return <TabsWidgetRender widget={widget} />;
-    // Themed-app containers. Each holds an array of child widgets
-    // and renders them inside themed chrome (top bar, side dock,
-    // slideout drawer, foldable group). The actual rendering lives
-    // in themed-containers.tsx alongside the renderer registry.
-    case 'app-bar':
-      return <AppBarWidgetRender widget={widget} />;
-    case 'dock-panel':
-      return <DockPanelWidgetRender widget={widget} />;
-    case 'slideout':
-      return <SlideoutWidgetRender widget={widget} />;
-    case 'foldable-group':
-      return <FoldableGroupWidgetRender widget={widget} />;
+    // #92: generic container.  Renders its children inside a styled
+    // region whose chrome (sticky top/bottom bar, side dock,
+    // overlay drawer, inline region) is driven entirely by its
+    // `position` / `variant` / `layout` / `collapsible` props.
+    // Implementation in themed-containers.tsx.
+    case 'container':
+      return <ContainerWidgetRender widget={widget} />;
     default: {
       const _exhaustive: never = widget.kind;
       void _exhaustive;
@@ -4092,51 +4088,16 @@ function TimeSliderWidgetRender({ widget }: { widget: CustomWidget }) {
 }
 
 /**
- * Render wrappers for the themed-app container widgets. Each
- * delegates to the themed-containers.tsx component, passing the
- * tool-aware child renderer so the same widget kind renders as
- * an icon button inside an app-bar but as a full inline card
- * when placed on the page grid.
+ * Render wrapper for the generic Container widget.  Delegates to
+ * the Container component in themed-containers.tsx, passing the
+ * tool-aware child renderer so the same widget kind renders as an
+ * icon button inside a sticky-top container but as a full inline
+ * card when placed on the page grid.
  */
-function AppBarWidgetRender({ widget }: { widget: CustomWidget }) {
-  // Pull itemTitle from the runtime-info context so a template that
-  // didn't set its own title (the common case after we removed the
-  // baked-in "Parcel Viewer" strings) falls back to the item's name.
-  // Item title is the most useful identity in a portal context; the
-  // app-bar's `title` slot then only needs to be set when the author
-  // wants something different from the item name.
-  const info = useContext(RuntimeInfoContext);
-  if (widget.config.kind !== 'app-bar') return null;
-  // Only spread fallbackTitle when defined; exactOptionalPropertyTypes
-  // rejects explicit `undefined` for optional string props.
-  const fallback = info?.itemTitle ? { fallbackTitle: info.itemTitle } : {};
+function ContainerWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'container') return null;
   return (
-    <AppBar
-      config={widget.config}
-      {...fallback}
-      renderChild={renderWidgetInContainer}
-    />
-  );
-}
-
-function DockPanelWidgetRender({ widget }: { widget: CustomWidget }) {
-  if (widget.config.kind !== 'dock-panel') return null;
-  return (
-    <DockPanel config={widget.config} renderChild={renderWidgetInContainer} />
-  );
-}
-
-function SlideoutWidgetRender({ widget }: { widget: CustomWidget }) {
-  if (widget.config.kind !== 'slideout') return null;
-  return (
-    <Slideout config={widget.config} renderChild={renderWidgetInContainer} />
-  );
-}
-
-function FoldableGroupWidgetRender({ widget }: { widget: CustomWidget }) {
-  if (widget.config.kind !== 'foldable-group') return null;
-  return (
-    <FoldableGroup
+    <Container
       config={widget.config}
       renderChild={renderWidgetInContainer}
     />
@@ -4212,12 +4173,8 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   'delete-feature': Trash2,
   // #362 layout container.
   tabs: ChevronRight,
-  // Themed-app containers (#22). Icons mirror the designer's
-  // PALETTE_TILES; the runtime currently renders containers via
-  // their own components so this is only used as a lookup
-  // fallback.
-  'app-bar': SquareIcon,
-  'dock-panel': SquareIcon,
-  slideout: SquareIcon,
-  'foldable-group': ChevronDown,
+  // #92 generic container. Icon mirrors the designer's palette tile;
+  // runtime renders containers through their own component so this
+  // is only used as a lookup fallback.
+  container: SquareIcon,
 };

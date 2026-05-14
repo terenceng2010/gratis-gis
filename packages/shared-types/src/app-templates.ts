@@ -8,11 +8,20 @@
  * binding, theme), or open Advanced mode to edit anything.
  *
  * Critical design constraint: templates are pre-configured
- * CustomAppData instances. They use the SAME widget kinds and the
- * SAME container kinds the freeform path uses. Anything in a
- * template can be built from scratch in the freeform Custom Web
- * App; anything in the freeform path can be saved as a template.
- * No template-only widgets, no template-only rendering paths.
+ * CustomAppData instances. They use the SAME widget kinds the
+ * freeform path uses. Anything in a template can be built from
+ * scratch in the freeform Custom Web App; anything in the freeform
+ * path can be saved as a template. No template-only widgets, no
+ * template-only rendering paths.
+ *
+ * All structural chrome (top bars, side docks, overlay drawers,
+ * accordion sections) is expressed via the single generic
+ * `container` widget with appropriate `position` / `variant` /
+ * `layout` / `collapsible` props.  Templates do not stamp
+ * label widgets inside containers by default: the author can drop
+ * a Text widget into any container if they want a header.  Keeping
+ * the seed minimal matches the "pure container" model -- the
+ * framework provides a region; the author composes its contents.
  *
  * The `mapId` field is always left blank in the seed: the wizard
  * asks the author to pick a map item (or seeds it from a passed
@@ -120,33 +129,22 @@ function toolPanel(anchor: 'top-right' | 'bottom-center' | 'top-center') {
 }
 
 /**
- * Parcel Viewer template. Designed for organizations that publish a
- * parcels map for the public + internal staff. The layout:
+ * Sidebar Explorer template.  A working layout for parcel viewers,
+ * asset inventories, and "browse a map by toggling layers" apps:
  *
- *   - App bar across the top with the org logo, title, and a search
- *     widget (geocoder bound to the parcel layer's address fields).
- *   - Dock panel on the left holding Layers and Basemaps, collapse-
- *     to-rail so the map gets the full width when the user is
- *     browsing.
- *   - Map widget fills the remaining canvas, bound to the org's
- *     parcels map item.
- *   - Attribute table widget configured as docked-bottom, opens on
- *     demand from a button in the app-bar's right side.
+ *   - Top sticky container (position='sticky-top', layout='row') with
+ *     Search / Basemaps / Attribute Table / Print as tool widgets.
+ *   - Left docked container (position='dock-left', layout='column',
+ *     collapsible) with a LayerList.  Collapses to a rail when the
+ *     user wants the map to take the full width.
+ *   - Map widget fills the remaining canvas.
  *
- * Theme: Default (portal-matching). Authors can swap to Slate /
- * Forest / Paper in the right rail.
+ * The author can drag a Text widget into the top container if they
+ * want a title -- the container itself stays a pure layout region.
  */
 function parcelViewerSeed(): CustomAppData {
-  // Stamp the map widget id first so every map-bound child can
-  // reference it. Without this, the seed leaves mapWidgetId='' on
-  // every child and the runtime shows "No bound map" for Layers,
-  // Search, Basemap, etc.
   const mapId = wid();
 
-  // App-bar children: Search + Basemaps + Attribute Table button +
-  // Print. All as tool-mode widgets so they render as icon buttons
-  // inside the bar (renderWidgetInContainer in the runtime wraps
-  // tool-mode children in a ToolWidgetSlot).
   const search = childWidget('search', {
     kind: 'search',
     mapWidgetId: mapId,
@@ -182,10 +180,6 @@ function parcelViewerSeed(): CustomAppData {
     panelArrangement: toolPanel('top-right'),
   });
 
-  // Dock-panel children: a Layers list as a panel-mode widget (it's
-  // already inside the dock's own column layout; no popover needed).
-  // The LayerList renders its own legend swatches inline per row so
-  // we don't need a separate Legend widget in the dock.
   const layerList = childWidget('layer-list', {
     kind: 'layer-list',
     mapWidgetId: mapId,
@@ -193,54 +187,33 @@ function parcelViewerSeed(): CustomAppData {
     displayMode: 'panel',
   });
 
-  // Top-level containers + map.
-  const appBar: CustomWidget = {
+  const topBar: CustomWidget = {
     id: wid(),
-    kind: 'app-bar',
+    kind: 'container',
     layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
     config: {
-      kind: 'app-bar',
-      widgets: [search, basemap, attrTable, print],
-      // No baked-in title here. The runtime falls back to the item's
-      // own title via RuntimeInfoContext, so the app-bar takes its
-      // identity from the item the author named (re-saving the
-      // template instance as "Public Parcels" automatically updates
-      // the header, no second edit needed.
-      sticky: true,
+      kind: 'container',
+      position: 'sticky-top',
+      layout: 'row',
       variant: 'elevated',
+      widgets: [search, basemap, attrTable, print],
     },
   };
-  const dockPanel: CustomWidget = {
+  const leftDock: CustomWidget = {
     id: wid(),
-    kind: 'dock-panel',
+    kind: 'container',
     layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
     config: {
-      kind: 'dock-panel',
-      side: 'left',
-      widgets: [
-        // Wrap each in a foldable-group so the dock organizes its
-        // contents the way an authoring user would expect.
-        childWidget('foldable-group', {
-          kind: 'foldable-group',
-          title: 'Layers',
-          widgets: [layerList],
-          defaultOpen: true,
-        }),
-      ],
-      // No dock title: foldable group already labels its contents,
-      // so a wrapping "Map tools" header reads as redundant chrome.
-      // The collapse handle still renders so the user can rail-fold
-      // the panel to give the map full width.
+      kind: 'container',
+      position: 'dock-left',
+      layout: 'column',
+      variant: 'flat',
       collapsible: true,
       defaultCollapsed: false,
       widthPx: 280,
+      widgets: [layerList],
     },
   };
-  // Canvas widget: the map. Layout coords are now canvas-relative
-  // (the runtime renders containers as flex siblings of the canvas,
-  // so the canvas grid is its own 48-col coordinate system). Map
-  // fills the full canvas; the dock-panel sits to its left as a
-  // flex sibling rather than occupying canvas columns 1-12.
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
@@ -256,19 +229,22 @@ function parcelViewerSeed(): CustomAppData {
       {
         id: 'home',
         title: 'Home',
-        widgets: [appBar, dockPanel, map],
+        widgets: [topBar, leftDock, map],
       },
     ],
   };
 }
 
 /**
- * Public Info Map template. Map-first, minimal chrome. Just a
- * sticky title bar at top with logo + title + search; map fills
- * the rest; basemap picker as a floating button in the top-right
- * corner of the map. No left dock, no permanent attribute table.
- * Good for "show this map to the public, click around to learn
- * about your community" style apps.
+ * Showcase Map template.  Map-first, minimal chrome:
+ *
+ *   - Top sticky container with 'glass' variant for translucent
+ *     floating chrome over the map.  Search + Layers + Basemap
+ *     as tool widgets.
+ *   - Map widget fills the canvas.
+ *
+ * Good for "look at this map" presentations where the map is the
+ * dominant surface.
  */
 function publicInfoMapSeed(): CustomAppData {
   const mapId = wid();
@@ -293,16 +269,16 @@ function publicInfoMapSeed(): CustomAppData {
     panelArrangement: toolPanel('top-right'),
   });
 
-  const appBar: CustomWidget = {
+  const topBar: CustomWidget = {
     id: wid(),
-    kind: 'app-bar',
+    kind: 'container',
     layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
     config: {
-      kind: 'app-bar',
-      widgets: [search, layerList, basemap],
-      // No baked-in title; runtime falls back to the item's title.
-      sticky: true,
+      kind: 'container',
+      position: 'sticky-top',
+      layout: 'row',
       variant: 'glass',
+      widgets: [search, layerList, basemap],
     },
   };
   const map: CustomWidget = {
@@ -320,18 +296,17 @@ function publicInfoMapSeed(): CustomAppData {
       {
         id: 'home',
         title: 'Home',
-        widgets: [appBar, map],
+        widgets: [topBar, map],
       },
     ],
   };
 }
 
 /**
- * Field Inspection template. Designed for staff doing field work:
- * a title bar with sync status + search; left slideout drawer
- * holding the inspection workflow (form / record list); attribute
- * table along the bottom for record review; map filling the rest.
- * Theme: Slate (dark, technical).
+ * Compact Drawer template.  Map-first with a drawer that slides in
+ * from the left on demand.  Top sticky container carries a few
+ * tools; an overlay-trigger container holds the layer list (hidden
+ * until the user opens the drawer).
  */
 function fieldInspectionSeed(): CustomAppData {
   const mapId = wid();
@@ -372,36 +347,32 @@ function fieldInspectionSeed(): CustomAppData {
     displayMode: 'panel',
   });
 
-  const appBar: CustomWidget = {
+  const topBar: CustomWidget = {
     id: wid(),
-    kind: 'app-bar',
+    kind: 'container',
     layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
     config: {
-      kind: 'app-bar',
-      widgets: [search, myLocation, attrTable],
-      // No baked-in title; runtime falls back to the item's title.
-      sticky: true,
+      kind: 'container',
+      position: 'sticky-top',
+      layout: 'row',
       variant: 'elevated',
+      widgets: [search, myLocation, attrTable],
     },
   };
-  const slideout: CustomWidget = {
+  const drawer: CustomWidget = {
     id: wid(),
-    kind: 'slideout',
+    kind: 'container',
     layout: { col: 1, row: 5, colSpan: 4, rowSpan: 60 },
     config: {
-      kind: 'slideout',
+      kind: 'container',
+      position: 'overlay-trigger',
       edge: 'left',
-      widgets: [
-        childWidget('foldable-group', {
-          kind: 'foldable-group',
-          title: 'Layers',
-          widgets: [layerList],
-          defaultOpen: true,
-        }),
-      ],
+      layout: 'column',
+      variant: 'elevated',
       triggerLabel: 'Tools',
       triggerIcon: 'tools',
-      sizePx: 320,
+      widthPx: 320,
+      widgets: [layerList],
     },
   };
   const map: CustomWidget = {
@@ -419,7 +390,7 @@ function fieldInspectionSeed(): CustomAppData {
       {
         id: 'home',
         title: 'Home',
-        widgets: [appBar, map, slideout],
+        widgets: [topBar, map, drawer],
       },
     ],
   };
@@ -427,17 +398,9 @@ function fieldInspectionSeed(): CustomAppData {
 
 /**
  * #22: Editor template.  A working app for staff who add / edit /
- * delete features.  Layout mirrors the legacy `editor` item type:
- * top app-bar with Save / Search / table, left dock for layer
- * toggles, the Attribute Table docked at the bottom by default
- * so authors land on a "see rows + their geometry" workspace.
- *
- * The dedicated Create / Edit / Delete feature widgets are
- * planned (task #56); when they land, the seed is updated to
- * stamp them in the app-bar.  For now the template lays out the
- * working surface and the user wires in editing via the
- * AttributeTable's inline edit affordances + the map's existing
- * select-and-edit path.
+ * delete features.  Top sticky container with Search / Select /
+ * Basemap / Attribute Table tools; left docked container with the
+ * LayerList; map fills the rest.
  */
 function editorWorkspaceSeed(): CustomAppData {
   const mapId = wid();
@@ -460,8 +423,6 @@ function editorWorkspaceSeed(): CustomAppData {
     displayMode: 'tool',
     panelArrangement: toolPanel('top-right'),
   });
-  // Attribute table is docked-bottom by default and open from
-  // the start; editors want it visible without a click.
   const attrTable = childWidget('attribute-table', {
     kind: 'attribute-table',
     targetIndex: 0,
@@ -484,35 +445,31 @@ function editorWorkspaceSeed(): CustomAppData {
     displayMode: 'panel',
   });
 
-  const appBar: CustomWidget = {
+  const topBar: CustomWidget = {
     id: wid(),
-    kind: 'app-bar',
+    kind: 'container',
     layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
     config: {
-      kind: 'app-bar',
-      widgets: [search, select, basemap, attrTable],
-      sticky: true,
+      kind: 'container',
+      position: 'sticky-top',
+      layout: 'row',
       variant: 'elevated',
+      widgets: [search, select, basemap, attrTable],
     },
   };
-  const dockPanel: CustomWidget = {
+  const leftDock: CustomWidget = {
     id: wid(),
-    kind: 'dock-panel',
+    kind: 'container',
     layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
     config: {
-      kind: 'dock-panel',
-      side: 'left',
-      widgets: [
-        childWidget('foldable-group', {
-          kind: 'foldable-group',
-          title: 'Layers',
-          widgets: [layerList],
-          defaultOpen: true,
-        }),
-      ],
+      kind: 'container',
+      position: 'dock-left',
+      layout: 'column',
+      variant: 'flat',
       collapsible: true,
       defaultCollapsed: false,
       widthPx: 280,
+      widgets: [layerList],
     },
   };
   const map: CustomWidget = {
@@ -530,18 +487,17 @@ function editorWorkspaceSeed(): CustomAppData {
       {
         id: 'home',
         title: 'Home',
-        widgets: [appBar, dockPanel, map],
+        widgets: [topBar, leftDock, map],
       },
     ],
   };
 }
 
 /**
- * #22: Viewer template.  Read-only audience-facing app.  Bar
- * carries Search + Basemaps + Print; left dock holds Layers
- * (toggle visibility only, no editing).  No attribute table by
- * default — viewers can pop one open via the popup on map click,
- * but the chrome stays minimal.
+ * #22: Viewer template.  Read-only audience-facing app.  Top sticky
+ * container with Search / Basemap / Print; left docked container
+ * with the LayerList (toggle visibility only); no attribute table
+ * by default.
  */
 function viewerReadonlySeed(): CustomAppData {
   const mapId = wid();
@@ -571,35 +527,31 @@ function viewerReadonlySeed(): CustomAppData {
     displayMode: 'panel',
   });
 
-  const appBar: CustomWidget = {
+  const topBar: CustomWidget = {
     id: wid(),
-    kind: 'app-bar',
+    kind: 'container',
     layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
     config: {
-      kind: 'app-bar',
-      widgets: [search, basemap, print],
-      sticky: true,
+      kind: 'container',
+      position: 'sticky-top',
+      layout: 'row',
       variant: 'elevated',
+      widgets: [search, basemap, print],
     },
   };
-  const dockPanel: CustomWidget = {
+  const leftDock: CustomWidget = {
     id: wid(),
-    kind: 'dock-panel',
+    kind: 'container',
     layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
     config: {
-      kind: 'dock-panel',
-      side: 'left',
-      widgets: [
-        childWidget('foldable-group', {
-          kind: 'foldable-group',
-          title: 'Layers',
-          widgets: [layerList],
-          defaultOpen: true,
-        }),
-      ],
+      kind: 'container',
+      position: 'dock-left',
+      layout: 'column',
+      variant: 'flat',
       collapsible: true,
       defaultCollapsed: false,
       widthPx: 280,
+      widgets: [layerList],
     },
   };
   const map: CustomWidget = {
@@ -617,7 +569,7 @@ function viewerReadonlySeed(): CustomAppData {
       {
         id: 'home',
         title: 'Home',
-        widgets: [appBar, dockPanel, map],
+        widgets: [topBar, leftDock, map],
       },
     ],
   };
@@ -735,7 +687,7 @@ export interface StarterTemplate {
 }
 
 /**
- * The four built-in starters seeded into every org.  Order in this
+ * The built-in starters seeded into every org.  Order in this
  * array is the order the admin restore UI displays them in.
  */
 export const STARTERS: readonly StarterTemplate[] = [
@@ -743,7 +695,7 @@ export const STARTERS: readonly StarterTemplate[] = [
     kind: 'sidebar-explorer',
     label: 'Sidebar Explorer',
     description:
-      'Top app bar with title and tools, left dock panel for layers, map fills the rest of the canvas. The classic sidebar explorer layout.',
+      'Top sticky container with map tools, left dock container with a layer list, map fills the rest of the canvas. The classic sidebar explorer layout.',
     use: 'Parcel viewers, asset inventories, internal data exploration, any "explore a map by toggling layers" workflow.',
     tags: ['explorer', 'dock', 'map-first'],
     seed: parcelViewerSeed,
@@ -752,7 +704,7 @@ export const STARTERS: readonly StarterTemplate[] = [
     kind: 'showcase-map',
     label: 'Showcase Map',
     description:
-      'Map-first layout with minimal chrome. Glass-style top bar floats over the map; search, layers, and basemap as overlay buttons.',
+      'Map-first layout with minimal chrome. Glass-style top container floats over the map; search, layers, and basemap as overlay buttons.',
     use: 'Community maps, public information portals, project showcases, story maps, "look at this map" presentations.',
     tags: ['map-first', 'minimal', 'public'],
     seed: publicInfoMapSeed,
@@ -761,7 +713,7 @@ export const STARTERS: readonly StarterTemplate[] = [
     kind: 'compact-drawer',
     label: 'Compact Drawer',
     description:
-      'Map fills the screen; a tool drawer slides in from the edge on demand. Smaller permanent chrome footprint for mobile / focused workflows.',
+      'Map fills the screen; an overlay-trigger container slides in from the edge on demand. Smaller permanent chrome footprint for mobile / focused workflows.',
     use: 'Field-staff apps, mobile-friendly maps, inspection workflows, anywhere screen real estate is at a premium.',
     tags: ['mobile', 'drawer', 'compact'],
     seed: fieldInspectionSeed,
@@ -770,7 +722,7 @@ export const STARTERS: readonly StarterTemplate[] = [
     kind: 'editor-workspace',
     label: 'Editor',
     description:
-      'Workspace layout for staff adding, editing, and deleting features. Top bar with search + select, left dock with layers, attribute table docked at the bottom.',
+      'Workspace layout for staff adding, editing, and deleting features. Top container with search + select, left dock with layers, attribute table docked at the bottom.',
     use: 'Data maintenance workflows, asset stewardship, anyone whose job is to keep a data layer current.',
     tags: ['editor', 'data-maintenance'],
     seed: editorWorkspaceSeed,
@@ -779,7 +731,7 @@ export const STARTERS: readonly StarterTemplate[] = [
     kind: 'viewer-readonly',
     label: 'Viewer',
     description:
-      'Read-only audience-facing app. Search + basemap + print in the top bar, layer toggles in the side dock, no editing affordances.',
+      'Read-only audience-facing app. Search + basemap + print in the top container, layer toggles in the side dock, no editing affordances.',
     use: 'Public information maps, internal share-only views, anywhere the audience reads but does not write.',
     tags: ['viewer', 'read-only', 'public'],
     seed: viewerReadonlySeed,

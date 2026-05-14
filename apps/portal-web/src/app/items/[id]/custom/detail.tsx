@@ -73,12 +73,7 @@ import { MapCanvas } from '../map/map-canvas';
 import { PickMapDialog } from '../editor/pick-map-dialog';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
-import {
-  AppBar,
-  DockPanel,
-  FoldableGroup,
-  Slideout,
-} from './themed-containers';
+import { Container } from './themed-containers';
 
 /**
  * #22: summary of one theme item, served from the parent server
@@ -1359,31 +1354,10 @@ const PALETTE_TILES: Array<{
   // the chrome; freeform authors drop them to build the same
   // shapes themselves.
   {
-    kind: 'app-bar',
-    label: 'App bar',
+    kind: 'container',
+    label: 'Container',
     Icon: Square,
-    hint: 'Top bar across the page; holds title + tool buttons',
-    category: 'layout',
-  },
-  {
-    kind: 'dock-panel',
-    label: 'Dock panel',
-    Icon: ListTree,
-    hint: 'Side dock; vertical stack of widgets with collapse',
-    category: 'layout',
-  },
-  {
-    kind: 'slideout',
-    label: 'Slideout',
-    Icon: Settings,
-    hint: 'Drawer that slides in from an edge on click',
-    category: 'layout',
-  },
-  {
-    kind: 'foldable-group',
-    label: 'Foldable group',
-    Icon: ChevronRight,
-    hint: 'Collapsible header + child widgets stacked below',
+    hint: 'Generic layout region: drop widgets inside; chrome (sticky bar, side dock, drawer) is configurable.',
     category: 'layout',
   },
 ];
@@ -3108,33 +3082,9 @@ function WidgetConfigForm({
     // (title, variant, side, widthPx, etc.) plus a shared children
     // list with add/remove/reorder so authors can edit templated
     // apps without dropping into Advanced JSON mode.
-    case 'app-bar':
+    case 'container':
       return (
-        <AppBarConfigEditor
-          config={widget.config}
-          canEdit={canEdit}
-          onChangeConfig={onChangeConfig}
-        />
-      );
-    case 'dock-panel':
-      return (
-        <DockPanelConfigEditor
-          config={widget.config}
-          canEdit={canEdit}
-          onChangeConfig={onChangeConfig}
-        />
-      );
-    case 'slideout':
-      return (
-        <SlideoutConfigEditor
-          config={widget.config}
-          canEdit={canEdit}
-          onChangeConfig={onChangeConfig}
-        />
-      );
-    case 'foldable-group':
-      return (
-        <FoldableGroupConfigEditor
+        <ContainerConfigEditor
           config={widget.config}
           canEdit={canEdit}
           onChangeConfig={onChangeConfig}
@@ -3982,7 +3932,7 @@ function TimeSliderWidgetConfigEditor({
  */
 function ContainerInDesigner({
   widget,
-  itemTitle,
+  itemTitle: _itemTitle,
   selectedChildId,
   onSelectChild,
 }: {
@@ -3991,39 +3941,20 @@ function ContainerInDesigner({
   selectedChildId: string | null;
   onSelectChild: (childId: string) => void;
 }) {
+  void _itemTitle;
   const renderChild = (child: CustomWidget): React.ReactNode => (
     <DesignerChild
       child={child}
       isSelected={selectedChildId === child.id}
       onSelect={onSelectChild}
-      itemTitle={itemTitle}
+      itemTitle={_itemTitle}
     />
   );
 
-  switch (widget.config.kind) {
-    case 'app-bar':
-      return (
-        <AppBar
-          config={widget.config}
-          fallbackTitle={itemTitle}
-          renderChild={renderChild}
-        />
-      );
-    case 'dock-panel':
-      return (
-        <DockPanel config={widget.config} renderChild={renderChild} />
-      );
-    case 'slideout':
-      return (
-        <Slideout config={widget.config} renderChild={renderChild} />
-      );
-    case 'foldable-group':
-      return (
-        <FoldableGroup config={widget.config} renderChild={renderChild} />
-      );
-    default:
-      return null;
-  }
+  if (widget.config.kind !== 'container') return null;
+  return (
+    <Container config={widget.config} renderChild={renderChild} />
+  );
 }
 
 /**
@@ -4564,67 +4495,6 @@ function ToolModeSection({
 }
 
 /**
- * Container kinds an author can put on the page.  Used to decide
- * what shows up in the "+ Add" menu of the children editor, with
- * app-bar excluded everywhere (it only makes sense at the top
- * level) and foldable-group excluded from app-bar (which is a
- * horizontal toolbar, not a vertical content stack).
- */
-const ADDABLE_CHILD_KINDS_BY_CONTAINER: Record<
-  'app-bar' | 'dock-panel' | 'slideout' | 'foldable-group',
-  readonly CustomWidgetKind[]
-> = {
-  'app-bar': [
-    'search',
-    'basemap-gallery',
-    'attribute-table',
-    'print',
-    'select',
-    'bookmark',
-    'coordinates',
-    'my-location',
-    'layer-list',
-    'legend',
-  ],
-  'dock-panel': [
-    'foldable-group',
-    'layer-list',
-    'legend',
-    'basemap-gallery',
-    'bookmark',
-    'attribute-table',
-    'text',
-    'chart',
-    'image',
-    'embed',
-  ],
-  slideout: [
-    'foldable-group',
-    'layer-list',
-    'legend',
-    'basemap-gallery',
-    'bookmark',
-    'attribute-table',
-    'text',
-    'chart',
-    'image',
-    'embed',
-  ],
-  'foldable-group': [
-    'layer-list',
-    'legend',
-    'basemap-gallery',
-    'bookmark',
-    'attribute-table',
-    'coordinates',
-    'text',
-    'chart',
-    'image',
-    'embed',
-  ],
-};
-
-/**
  * Friendly label for a widget kind, shown in the children list and
  * in the add menu.  Kept terse so a 280px-wide right rail can show
  * them on one line.
@@ -4652,204 +4522,89 @@ const WIDGET_KIND_LABEL: Record<CustomWidgetKind, string> = {
   button: 'Button',
   divider: 'Divider',
   tabs: 'Tabs',
-  'app-bar': 'App bar',
-  'dock-panel': 'Dock panel',
-  slideout: 'Slideout',
-  'foldable-group': 'Foldable group',
+  container: 'Container',
 };
 
 /**
- * Children list editor reused by every container's property panel.
- * Renders each existing child as a row with reorder + remove
- * buttons; "+ Add" pops a menu of compatible kinds and stamps a
- * fresh widget into the container's `widgets` array.
- *
- * Container layout coords are not used for children at runtime, so
- * the row passes a placeholder layout to `stampWidget` and the
- * children render in source order inside the container.
+ * #92 generic container editor.  The container is a PURE layout
+ * region: it exposes only chrome props (position, layout, variant,
+ * collapsible, fixed dimensions, overlay-trigger affordances) and
+ * lets the author drag widgets into the canvas body to fill it.
+ * There are no Title / Subtitle / Logo URL slots -- the author can
+ * drop a Text or Image widget inside if they want a header.
  */
-function ChildrenEditor({
-  parentKind,
-  children,
-  canEdit,
-  onChange,
-}: {
-  parentKind: 'app-bar' | 'dock-panel' | 'slideout' | 'foldable-group';
-  children: CustomWidget[];
-  canEdit: boolean;
-  onChange: (next: CustomWidget[]) => void;
-}) {
-  const [addOpen, setAddOpen] = useState(false);
-  const addable = ADDABLE_CHILD_KINDS_BY_CONTAINER[parentKind];
-
-  function addChild(kind: CustomWidgetKind) {
-    // Children inside a container don't use grid coords at runtime
-    // (the container lays them out itself), so any layout works
-    // here.  We pass the parent-kind defaults from
-    // defaultLayoutForKind for completeness.
-    const child = stampWidget(kind, defaultLayoutForKind(kind));
-    onChange([...children, child]);
-    setAddOpen(false);
-  }
-
-  function move(index: number, delta: -1 | 1) {
-    const target = index + delta;
-    if (target < 0 || target >= children.length) return;
-    const next = children.slice();
-    const [c] = next.splice(index, 1);
-    if (c) next.splice(target, 0, c);
-    onChange(next);
-  }
-
-  function remove(index: number) {
-    const next = children.slice();
-    next.splice(index, 1);
-    onChange(next);
-  }
-
-  // exactOptionalPropertyTypes: only pass `hint` when we actually
-  // have one, instead of passing `undefined`.
-  const hintProp =
-    children.length === 0
-      ? { hint: 'No children yet. Add a tool or widget below.' }
-      : {};
-  return (
-    <Field label="Children" {...hintProp}>
-      <div className="space-y-1.5">
-        {children.map((c, i) => (
-          <div
-            key={c.id}
-            className="flex items-center gap-1.5 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-          >
-            <span className="flex-1 truncate text-ink-1">
-              {WIDGET_KIND_LABEL[c.kind] ?? c.kind}
-            </span>
-            <button
-              type="button"
-              disabled={!canEdit || i === 0}
-              onClick={() => move(i, -1)}
-              aria-label="Move up"
-              className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <svg
-                viewBox="0 0 16 16"
-                className="h-3 w-3"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M4 10l4-4 4 4" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              disabled={!canEdit || i === children.length - 1}
-              onClick={() => move(i, 1)}
-              aria-label="Move down"
-              className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <svg
-                viewBox="0 0 16 16"
-                className="h-3 w-3"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M4 6l4 4 4-4" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              disabled={!canEdit}
-              onClick={() => remove(i)}
-              aria-label="Remove"
-              className="rounded p-0.5 text-muted hover:bg-surface-2 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <svg
-                viewBox="0 0 16 16"
-                className="h-3 w-3"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M4 4l8 8M12 4l-8 8" />
-              </svg>
-            </button>
-          </div>
-        ))}
-        <div className="relative">
-          <button
-            type="button"
-            disabled={!canEdit}
-            onClick={() => setAddOpen((v) => !v)}
-            className="inline-flex items-center gap-1 rounded-md border border-dashed border-border bg-surface-1 px-2 py-1 text-xs text-ink-1 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            + Add
-          </button>
-          {addOpen && (
-            <div
-              role="menu"
-              className="absolute left-0 z-10 mt-1 max-h-60 w-44 overflow-y-auto rounded-md border border-border bg-surface-1 py-1 text-xs shadow-overlay"
-            >
-              {addable.map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => addChild(k)}
-                  className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
-                >
-                  {WIDGET_KIND_LABEL[k] ?? k}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </Field>
-  );
-}
-
-function AppBarConfigEditor({
+function ContainerConfigEditor({
   config,
   canEdit,
   onChangeConfig,
 }: {
-  config: { kind: 'app-bar' } & {
-    title?: string;
-    subtitle?: string;
-    variant?: 'elevated' | 'glass' | 'flat';
-    sticky?: boolean;
+  config: {
+    kind: 'container';
+    position?:
+      | 'inline'
+      | 'sticky-top'
+      | 'sticky-bottom'
+      | 'dock-left'
+      | 'dock-right'
+      | 'overlay-trigger';
+    edge?: 'left' | 'right' | 'top' | 'bottom';
+    layout?: 'row' | 'column';
+    variant?: 'elevated' | 'glass' | 'flat' | 'none';
+    collapsible?: boolean;
+    defaultCollapsed?: boolean;
+    widthPx?: number;
+    heightPx?: number;
+    triggerLabel?: string;
+    triggerIcon?: 'menu' | 'layers' | 'tools' | 'filter';
     widgets: CustomWidget[];
   };
   canEdit: boolean;
   onChangeConfig: (patch: Record<string, unknown>) => void;
 }) {
+  const position = config.position ?? 'inline';
+  const isDock = position === 'dock-left' || position === 'dock-right';
+  const isOverlay = position === 'overlay-trigger';
+  const isSticky =
+    position === 'sticky-top' || position === 'sticky-bottom';
   return (
     <div className="space-y-3">
       <Field
-        label="Title"
-        hint="Leave blank to inherit the item's title at runtime."
+        label="Position"
+        hint="Where the container sits on the page.  Pure layout choice; the author composes the content inside."
       >
-        <input
-          type="text"
-          value={config.title ?? ''}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ title: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        />
-      </Field>
-      <Field label="Subtitle">
-        <input
-          type="text"
-          value={config.subtitle ?? ''}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ subtitle: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        />
-      </Field>
-      <Field label="Variant">
         <select
-          value={config.variant ?? 'elevated'}
+          value={position}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ position: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+        >
+          <option value="inline">Inline (in page grid)</option>
+          <option value="sticky-top">Sticky top bar</option>
+          <option value="sticky-bottom">Sticky bottom bar</option>
+          <option value="dock-left">Docked left</option>
+          <option value="dock-right">Docked right</option>
+          <option value="overlay-trigger">Overlay drawer (trigger button)</option>
+        </select>
+      </Field>
+      <Field
+        label="Layout"
+        hint="How children flow inside the container body."
+      >
+        <select
+          value={
+            config.layout ?? (isSticky ? 'row' : 'column')
+          }
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ layout: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+        >
+          <option value="row">Row (horizontal)</option>
+          <option value="column">Column (vertical)</option>
+        </select>
+      </Field>
+      <Field label="Variant" hint="Visual chrome surface.">
+        <select
+          value={config.variant ?? (position === 'inline' ? 'flat' : 'elevated')}
           disabled={!canEdit}
           onChange={(e) => onChangeConfig({ variant: e.target.value })}
           className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
@@ -4857,218 +4612,135 @@ function AppBarConfigEditor({
           <option value="elevated">Elevated (branded header)</option>
           <option value="glass">Glass (translucent)</option>
           <option value="flat">Flat (surface-1)</option>
+          <option value="none">None (transparent)</option>
         </select>
       </Field>
-      <Field label="Sticky">
-        <label className="flex items-center gap-2 text-xs text-ink-1">
-          <input
-            type="checkbox"
-            checked={config.sticky !== false}
-            disabled={!canEdit}
-            onChange={(e) => onChangeConfig({ sticky: e.target.checked })}
-          />
-          Pin to top
-        </label>
-      </Field>
-      <ChildrenEditor
-        parentKind="app-bar"
-        children={config.widgets}
-        canEdit={canEdit}
-        onChange={(widgets) => onChangeConfig({ widgets })}
-      />
-    </div>
-  );
-}
-
-function DockPanelConfigEditor({
-  config,
-  canEdit,
-  onChangeConfig,
-}: {
-  config: { kind: 'dock-panel' } & {
-    side: 'left' | 'right';
-    title?: string;
-    widthPx?: number;
-    collapsible?: boolean;
-    defaultCollapsed?: boolean;
-    widgets: CustomWidget[];
-  };
-  canEdit: boolean;
-  onChangeConfig: (patch: Record<string, unknown>) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <Field label="Side">
-        <select
-          value={config.side}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ side: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        >
-          <option value="left">Left</option>
-          <option value="right">Right</option>
-        </select>
-      </Field>
-      <Field label="Title" hint="Blank hides the dock's own header.">
-        <input
-          type="text"
-          value={config.title ?? ''}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ title: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        />
-      </Field>
-      <Field label="Width (px)">
-        <NumberInput
-          value={config.widthPx ?? 280}
-          min={120}
-          max={640}
-          disabled={!canEdit}
-          onChange={(widthPx) => onChangeConfig({ widthPx })}
-        />
-      </Field>
-      <Field label="Collapsible">
-        <label className="flex items-center gap-2 text-xs text-ink-1">
-          <input
-            type="checkbox"
-            checked={config.collapsible !== false}
-            disabled={!canEdit}
-            onChange={(e) => onChangeConfig({ collapsible: e.target.checked })}
-          />
-          Show collapse handle
-        </label>
-      </Field>
-      <Field label="Default collapsed">
-        <label className="flex items-center gap-2 text-xs text-ink-1">
-          <input
-            type="checkbox"
-            checked={config.defaultCollapsed === true}
-            disabled={!canEdit}
-            onChange={(e) =>
-              onChangeConfig({ defaultCollapsed: e.target.checked })
+      {isDock ? (
+        <>
+          <Field label="Width (px)">
+            <NumberInput
+              value={config.widthPx ?? 280}
+              min={120}
+              max={640}
+              disabled={!canEdit}
+              onChange={(widthPx) => onChangeConfig({ widthPx })}
+            />
+          </Field>
+          <Field label="Collapsible">
+            <label className="flex items-center gap-2 text-xs text-ink-1">
+              <input
+                type="checkbox"
+                checked={config.collapsible !== false}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  onChangeConfig({ collapsible: e.target.checked })
+                }
+              />
+              Show collapse handle
+            </label>
+          </Field>
+          <Field label="Default collapsed">
+            <label className="flex items-center gap-2 text-xs text-ink-1">
+              <input
+                type="checkbox"
+                checked={config.defaultCollapsed === true}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  onChangeConfig({ defaultCollapsed: e.target.checked })
+                }
+              />
+              Start collapsed
+            </label>
+          </Field>
+        </>
+      ) : null}
+      {isOverlay ? (
+        <>
+          <Field label="Edge">
+            <select
+              value={config.edge ?? 'left'}
+              disabled={!canEdit}
+              onChange={(e) => onChangeConfig({ edge: e.target.value })}
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            >
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+              <option value="top">Top</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </Field>
+          <Field
+            label={
+              config.edge === 'top' || config.edge === 'bottom'
+                ? 'Height (px)'
+                : 'Width (px)'
             }
-          />
-          Start collapsed
-        </label>
-      </Field>
-      <ChildrenEditor
-        parentKind="dock-panel"
-        children={config.widgets}
-        canEdit={canEdit}
-        onChange={(widgets) => onChangeConfig({ widgets })}
-      />
-    </div>
-  );
-}
-
-function SlideoutConfigEditor({
-  config,
-  canEdit,
-  onChangeConfig,
-}: {
-  config: { kind: 'slideout' } & {
-    edge: 'left' | 'right' | 'top' | 'bottom';
-    sizePx?: number;
-    triggerLabel?: string;
-    widgets: CustomWidget[];
-  };
-  canEdit: boolean;
-  onChangeConfig: (patch: Record<string, unknown>) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <Field label="Edge">
-        <select
-          value={config.edge}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ edge: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+          >
+            <NumberInput
+              value={
+                config.edge === 'top' || config.edge === 'bottom'
+                  ? config.heightPx ?? 320
+                  : config.widthPx ?? 320
+              }
+              min={120}
+              max={800}
+              disabled={!canEdit}
+              onChange={(n) =>
+                onChangeConfig(
+                  config.edge === 'top' || config.edge === 'bottom'
+                    ? { heightPx: n }
+                    : { widthPx: n },
+                )
+              }
+            />
+          </Field>
+          <Field label="Trigger label">
+            <input
+              type="text"
+              value={config.triggerLabel ?? ''}
+              disabled={!canEdit}
+              onChange={(e) =>
+                onChangeConfig({ triggerLabel: e.target.value })
+              }
+              placeholder="Tools"
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            />
+          </Field>
+          <Field label="Trigger icon">
+            <select
+              value={config.triggerIcon ?? 'tools'}
+              disabled={!canEdit}
+              onChange={(e) =>
+                onChangeConfig({ triggerIcon: e.target.value })
+              }
+              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+            >
+              <option value="tools">Tools (wrench)</option>
+              <option value="layers">Layers</option>
+              <option value="filter">Filter</option>
+              <option value="menu">Menu</option>
+            </select>
+          </Field>
+        </>
+      ) : null}
+      {!isDock && !isOverlay ? (
+        <Field
+          label="Collapsible"
+          hint="Adds a chevron handle that hides the container body."
         >
-          <option value="left">Left</option>
-          <option value="right">Right</option>
-          <option value="top">Top</option>
-          <option value="bottom">Bottom</option>
-        </select>
-      </Field>
-      <Field label="Size (px)">
-        <NumberInput
-          value={config.sizePx ?? 320}
-          min={120}
-          max={800}
-          disabled={!canEdit}
-          onChange={(sizePx) => onChangeConfig({ sizePx })}
-        />
-      </Field>
-      <Field label="Trigger label">
-        <input
-          type="text"
-          value={config.triggerLabel ?? ''}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ triggerLabel: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        />
-      </Field>
-      <ChildrenEditor
-        parentKind="slideout"
-        children={config.widgets}
-        canEdit={canEdit}
-        onChange={(widgets) => onChangeConfig({ widgets })}
-      />
-    </div>
-  );
-}
-
-function FoldableGroupConfigEditor({
-  config,
-  canEdit,
-  onChangeConfig,
-}: {
-  config: { kind: 'foldable-group' } & {
-    title?: string;
-    subtitle?: string;
-    defaultOpen?: boolean;
-    widgets: CustomWidget[];
-  };
-  canEdit: boolean;
-  onChangeConfig: (patch: Record<string, unknown>) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <Field label="Title">
-        <input
-          type="text"
-          value={config.title ?? ''}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ title: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        />
-      </Field>
-      <Field label="Subtitle">
-        <input
-          type="text"
-          value={config.subtitle ?? ''}
-          disabled={!canEdit}
-          onChange={(e) => onChangeConfig({ subtitle: e.target.value })}
-          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
-        />
-      </Field>
-      <Field label="Default open">
-        <label className="flex items-center gap-2 text-xs text-ink-1">
-          <input
-            type="checkbox"
-            checked={config.defaultOpen !== false}
-            disabled={!canEdit}
-            onChange={(e) => onChangeConfig({ defaultOpen: e.target.checked })}
-          />
-          Start expanded
-        </label>
-      </Field>
-      <ChildrenEditor
-        parentKind="foldable-group"
-        children={config.widgets}
-        canEdit={canEdit}
-        onChange={(widgets) => onChangeConfig({ widgets })}
-      />
+          <label className="flex items-center gap-2 text-xs text-ink-1">
+            <input
+              type="checkbox"
+              checked={config.collapsible === true}
+              disabled={!canEdit}
+              onChange={(e) =>
+                onChangeConfig({ collapsible: e.target.checked })
+              }
+            />
+            Show collapse handle
+          </label>
+        </Field>
+      ) : null}
     </div>
   );
 }
@@ -5263,20 +4935,12 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 16, rowSpan: 4 };
     case 'tabs':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
-    // Themed-app containers each fill a different region of the
-    // canvas by default. app-bar runs full-width along the top
-    // (4 rows tall, ~48 px). dock-panel covers the left rail
-    // (12 cols wide, full visible height). slideout overlays the
-    // canvas so its grid placement is just an anchor (small
-    // footprint). foldable-group nests inside other containers in
-    // practice; its standalone default is a small stack.
-    case 'app-bar':
-      return { col: 1, row: 1, colSpan: 48, rowSpan: 4 };
-    case 'dock-panel':
-      return { col: 1, row: 5, colSpan: 12, rowSpan: 40 };
-    case 'slideout':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 4 };
-    case 'foldable-group':
+    // #92 generic container: fresh containers stamp inline by
+    // default and take a modest 16x8 region.  Once the author flips
+    // `position` to sticky-top / dock-left / etc. the runtime
+    // dispatches the container into the appropriate page slot and
+    // these grid coords become a no-op.
+    case 'container':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 8 };
     default: {
       const _exhaustive: never = kind;
@@ -5430,12 +5094,7 @@ function findTabsHostAt(
  * tab's child list rather than the container's flat children
  * array.
  */
-const THEMED_CONTAINER_KINDS = new Set<CustomWidgetKind>([
-  'app-bar',
-  'dock-panel',
-  'slideout',
-  'foldable-group',
-]);
+const THEMED_CONTAINER_KINDS = new Set<CustomWidgetKind>(['container']);
 
 /**
  * Find the deepest themed-app container at a given (col, row) drop
@@ -5897,55 +5556,21 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           ],
         },
       };
-    // Themed-app containers stamped fresh with empty child lists.
-    // Templates use these with pre-filled children; from-scratch
-    // authors add children via Advanced mode editing.
-    case 'app-bar':
-      return {
-        id,
-        kind,
-        layout,
-        config: { kind: 'app-bar', widgets: [], sticky: true, variant: 'elevated' },
-      };
-    case 'dock-panel':
+    // #92 generic container.  Stamped fresh with no children;
+    // author flips `position` + `variant` to shape the chrome and
+    // drops widgets inside to fill it.  Default is an inline,
+    // column-layout, flat region -- a neutral starting point.
+    case 'container':
       return {
         id,
         kind,
         layout,
         config: {
-          kind: 'dock-panel',
-          side: 'left',
+          kind: 'container',
+          position: 'inline',
+          layout: 'column',
+          variant: 'flat',
           widgets: [],
-          title: 'Panel',
-          collapsible: true,
-          defaultCollapsed: false,
-          widthPx: 280,
-        },
-      };
-    case 'slideout':
-      return {
-        id,
-        kind,
-        layout,
-        config: {
-          kind: 'slideout',
-          edge: 'left',
-          widgets: [],
-          triggerLabel: 'Tools',
-          triggerIcon: 'tools',
-          sizePx: 320,
-        },
-      };
-    case 'foldable-group':
-      return {
-        id,
-        kind,
-        layout,
-        config: {
-          kind: 'foldable-group',
-          title: 'Group',
-          widgets: [],
-          defaultOpen: true,
         },
       };
     default: {
