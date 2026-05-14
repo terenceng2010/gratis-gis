@@ -216,6 +216,7 @@ export function DerivedLayerBuilder({
 
       <PipelineSection
         pipeline={value.pipeline}
+        source={value.source}
         sourceFields={sourceFields}
         sourcePicked={Boolean(value.source.itemId)}
         onReplaceStep={replaceStep}
@@ -926,6 +927,7 @@ const TOOL_GROUPS: ToolGroup[] = [
  */
 function PipelineSection({
   pipeline,
+  source,
   sourceFields,
   sourcePicked,
   onReplaceStep,
@@ -933,6 +935,7 @@ function PipelineSection({
   onInsertStep,
 }: {
   pipeline: ToolStep[];
+  source: DerivedLayerData['source'];
   sourceFields: FeatureField[];
   sourcePicked: boolean;
   onReplaceStep: (index: number, next: ToolStep) => void;
@@ -969,6 +972,8 @@ function PipelineSection({
             <StepCard
               index={idx}
               step={step}
+              pipeline={pipeline}
+              source={source}
               sourceFields={sourceFields}
               sourcePicked={sourcePicked}
               onChange={(next) => onReplaceStep(idx, next)}
@@ -1015,6 +1020,8 @@ function PipelineSection({
 function StepCard({
   index,
   step,
+  pipeline,
+  source,
   sourceFields,
   sourcePicked,
   onChange,
@@ -1022,6 +1029,8 @@ function StepCard({
 }: {
   index: number;
   step: ToolStep;
+  pipeline: ToolStep[];
+  source: DerivedLayerData['source'];
   sourceFields: FeatureField[];
   sourcePicked: boolean;
   onChange: (next: ToolStep) => void;
@@ -1140,8 +1149,212 @@ function StepCard({
           client may be older than the server.
         </p>
       )}
+
+      {/* #81 -- per-step preview.  Renders below the step editor so
+          authors can see what the step produces with the current
+          source + draft pipeline.  Disabled until a source is
+          picked; the picker enforces the same precondition for the
+          editors above. */}
+      <StepPreviewPanel
+        index={index}
+        pipeline={pipeline}
+        source={source}
+        disabled={!sourcePicked}
+      />
     </div>
   );
+}
+
+/**
+ * #81 per-step preview panel.  Lives inside StepCard so each card
+ * has its own collapsed/expanded state and result cache.  Posts the
+ * full draft pipeline to `/api/portal/items/derived-layer:preview`
+ * with `upTo = index` so the server runs the recipe up to and
+ * including the current step and returns a small sample.
+ *
+ * The fetch is on-demand (button click) rather than auto-running on
+ * every keystroke so a malformed step doesn't fire a flood of 400s
+ * against the API.  Results are cached until the user collapses the
+ * panel or clicks Refresh.
+ */
+function StepPreviewPanel({
+  index,
+  pipeline,
+  source,
+  disabled,
+}: {
+  index: number;
+  pipeline: ToolStep[];
+  source: DerivedLayerData['source'];
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    rowCount: number;
+    truncated: boolean;
+    sample: Array<{
+      id: string | number | null;
+      geometry: unknown;
+      properties: Record<string, unknown>;
+    }>;
+    outputSchema: FeatureField[];
+  } | null>(null);
+
+  const runPreview = useCallback(async () => {
+    if (disabled) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch('/api/portal/items/derived-layer:preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source,
+          pipeline,
+          upTo: index,
+          limit: 10,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as
+          | { message?: string }
+          | null;
+        throw new Error(
+          body?.message ?? `Preview failed with HTTP ${res.status}`,
+        );
+      }
+      const body = (await res.json()) as typeof result;
+      setResult(body);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Preview failed');
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [disabled, source, pipeline, index]);
+
+  // Column list for the preview table.  Sourced from the response so
+  // it reflects the actual step output (calc-field / spatial-join /
+  // aggregate all change the column set).
+  const columns = result?.outputSchema ?? [];
+
+  return (
+    <div className="mt-2 border-t border-border/60 pt-2">
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const next = !open;
+            setOpen(next);
+            if (next && !result && !loading) {
+              void runPreview();
+            }
+          }}
+          disabled={disabled}
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted hover:bg-surface-1 hover:text-ink-1 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ChevronDown
+            className={`h-3 w-3 transition-transform ${open ? '' : '-rotate-90'}`}
+          />
+          {open ? 'Hide preview' : 'Preview output'}
+        </button>
+        {open ? (
+          <button
+            type="button"
+            onClick={() => void runPreview()}
+            disabled={disabled || loading}
+            className="text-[11px] text-accent hover:underline disabled:opacity-50"
+          >
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="mt-2 space-y-2">
+          {disabled ? (
+            <p className="text-[11px] text-muted">
+              Pick a source layer above to preview this step.
+            </p>
+          ) : null}
+          {err ? (
+            <p className="rounded-md bg-danger/10 px-2 py-1 text-[11px] text-danger">
+              {err}
+            </p>
+          ) : null}
+          {loading && !result ? (
+            <p className="text-[11px] text-muted">Running preview…</p>
+          ) : null}
+          {result ? (
+            <div className="space-y-1">
+              <p className="text-[11px] text-muted">
+                {result.truncated
+                  ? `Showing first ${result.sample.length} of many rows (preview is capped)`
+                  : `${result.rowCount} ${result.rowCount === 1 ? 'row' : 'rows'} in this step's output`}
+              </p>
+              {result.sample.length > 0 ? (
+                <div className="overflow-x-auto rounded-md border border-border bg-surface-1">
+                  <table className="min-w-full text-[11px]">
+                    <thead className="bg-surface-2 text-ink-1">
+                      <tr>
+                        {columns.map((c) => (
+                          <th
+                            key={c.name}
+                            className="border-b border-border px-2 py-1 text-left font-medium"
+                          >
+                            {c.label || c.name}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.sample.map((row, i) => (
+                        <tr
+                          key={(row.id ?? i).toString()}
+                          className="odd:bg-surface-1 even:bg-surface-0"
+                        >
+                          {columns.map((c) => (
+                            <td
+                              key={c.name}
+                              className="border-b border-border/40 px-2 py-1 align-top text-ink-0"
+                            >
+                              {formatCell(row.properties?.[c.name])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted">
+                  No rows match this step.
+                </p>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Render a single cell value as a compact string.  Numbers and
+ * booleans stringify directly; objects (rare in user-facing
+ * properties but possible from spatial-join's count attr) get
+ * JSON-rendered; null / undefined render as a dash placeholder.
+ */
+function formatCell(v: unknown): string {
+  if (v === null || v === undefined) return '-';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
 }
 
 /**

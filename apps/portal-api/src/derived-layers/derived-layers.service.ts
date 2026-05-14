@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { Item } from '@prisma/client';
 import {
   DEFAULT_DERIVED_LAYER_FEATURE_LIMIT,
@@ -421,6 +422,119 @@ export class DerivedLayersService {
         geometry: r.geom ? JSON.parse(r.geom) : null,
         properties: r.properties ?? {},
       })),
+    };
+  }
+
+  /**
+   * Preview a draft recipe (#81).  Runs the pipeline through step
+   * `upTo` inclusive against the resolved source and returns a
+   * small sample of output features + the computed output schema +
+   * a row-count estimate (capped by the preview limit).
+   *
+   * Used by the wizard's per-step Preview buttons so authors can
+   * see what each step produces before saving.  The recipe doesn't
+   * have to be a saved derived_layer item -- the caller passes the
+   * draft directly.  Caller is responsible for verifying read
+   * access on the source.
+   */
+  async previewRecipe(args: {
+    source: DerivedLayerData['source'];
+    pipeline: ToolStep[];
+    sourceItem: Pick<Item, 'id' | 'type' | 'data' | 'bbox'>;
+    upTo: number;
+    limit: number;
+  }): Promise<{
+    rowCount: number;
+    truncated: boolean;
+    sample: Array<{
+      id: string | number | null;
+      geometry: unknown;
+      properties: Record<string, unknown>;
+    }>;
+    outputSchema: FeatureField[];
+  }> {
+    if (args.pipeline.length === 0) {
+      return {
+        rowCount: 0,
+        truncated: false,
+        sample: [],
+        outputSchema: [],
+      };
+    }
+    const stop = Math.min(args.upTo, args.pipeline.length - 1);
+    const sliced = args.pipeline.slice(0, stop + 1);
+    const previewLimit = Math.max(1, Math.min(args.limit, 50));
+
+    if (args.sourceItem.type !== 'data_layer') {
+      throw new BadRequestException(
+        'derived-layer preview: source must be a data_layer item',
+      );
+    }
+
+    // Compute the output schema by walking the validator chain --
+    // mirrors what validateAndEnrich does at save time, but without
+    // the async enrich pass (the cached values aren't load-bearing
+    // for read-time SQL emission; tools that depend on them treat
+    // missing values as defaults).
+    const sourceVersion = readSourceVersion(args.sourceItem.data);
+    const sublayer = resolveSublayer(
+      args.sourceItem.data,
+      sourceVersion,
+      typeof args.source.layerKey === 'string'
+        ? args.source.layerKey
+        : undefined,
+    );
+    let schema: FeatureField[] = sublayer
+      ? sublayer.fields
+      : readSourceSchema(args.sourceItem.data);
+    for (const step of sliced) {
+      const generator = getGeneratorForStep(step);
+      const validated = generator.validate(step.params, {
+        sourceSchema: schema,
+      });
+      schema = generator.outputSchema(schema, validated);
+    }
+
+    // Compose the SQL via the same path getGeoJson uses, but with
+    // the truncated pipeline and a slim preview limit (+1 so we
+    // can detect "more rows available beyond the preview cap").
+    const fakeRecipe: DerivedLayerData = {
+      version: 1,
+      source: args.source,
+      pipeline: sliced,
+      featureLimit: previewLimit + 1,
+      outputSchema: schema,
+      bbox: [],
+    };
+    const fakeItem = {
+      id: 'preview-recipe',
+      type: 'derived_layer' as const,
+      data: fakeRecipe as unknown as Prisma.JsonValue,
+      bbox: [] as unknown as number[] | [],
+    } as unknown as Item;
+
+    const fc = await this.getGeoJson(
+      fakeItem,
+      { id: args.sourceItem.id, type: 'data_layer', data: args.sourceItem.data },
+      {},
+    );
+    const allRows = fc.features as Array<{
+      type: 'Feature';
+      id?: string | number;
+      geometry: unknown;
+      properties: Record<string, unknown>;
+    }>;
+    const truncated = allRows.length > previewLimit;
+    const sample = allRows.slice(0, previewLimit).map((f) => ({
+      id: (f.id ?? null) as string | number | null,
+      geometry: f.geometry,
+      properties: f.properties ?? {},
+    }));
+    return {
+      rowCount: truncated ? previewLimit : allRows.length,
+      truncated,
+      sample,
+      outputSchema: schema,
     };
   }
 

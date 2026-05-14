@@ -123,6 +123,28 @@ class WebMapJsonImportDto {
   @IsOptional() @IsString() @MaxLength(5000) description?: string;
 }
 
+/**
+ * #81: preview a derived-layer recipe draft.  Posted by the
+ * builder's per-step Preview button.  The source must point at a
+ * data_layer the caller can read; the pipeline is the in-flight
+ * draft (not yet persisted), and `upTo` selects which step's
+ * output to materialise.
+ */
+class DerivedLayerPreviewDto {
+  // Source reference shape mirrors DerivedLayerSource.  Validated
+  // structurally by the service so we accept an object here.
+  @IsObject() source!: Record<string, unknown>;
+  // Each entry is `{ tool: string, params: object }`; the per-tool
+  // validators inside DerivedLayersService.previewRecipe do the
+  // real shape check so the controller stays a thin wrapper.
+  @IsArray() pipeline!: Array<Record<string, unknown>>;
+  // Zero-indexed step ordinal.  `upTo` is clamped to the pipeline
+  // length so an out-of-range value just previews the full pipeline.
+  upTo!: number;
+  // Optional cap on sample size (server hard-caps to 50).
+  limit?: number;
+}
+
 class ShareDto {
   @IsEnum(['user', 'group']) principalType!: PrincipalType;
   // 'loose' accepts any 8-4-4-4-12 hex string. Real UUIDs coming from Keycloak
@@ -606,6 +628,46 @@ export class ItemsController {
       >[0]['webMap'],
       ...(dto.title !== undefined && { title: dto.title }),
       ...(dto.description !== undefined && { description: dto.description }),
+    });
+  }
+
+  /**
+   * #81: preview a derived-layer recipe draft.  Verb is `:preview`
+   * (Esri-style sub-resource verb) so the route reads as an action
+   * on a transient draft -- there is no `:id` because the recipe
+   * hasn't been saved yet.  Returns rowCount + truncated flag + a
+   * small sample of feature rows + the computed output schema.
+   *
+   * The endpoint is intentionally lightweight: the read SQL is
+   * generated and executed exactly once (no plan caching), and the
+   * service hard-caps the sample limit so a misbehaving client
+   * cannot ask for a million rows.  Callers that want the full
+   * materialised layer should save the recipe and read it via the
+   * regular item-geojson path.
+   */
+  @Post('derived-layer:preview')
+  async previewDerivedLayer(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: DerivedLayerPreviewDto,
+  ) {
+    if (!dto.source || typeof dto.source !== 'object') {
+      throw new BadRequestException('preview.source is required');
+    }
+    if (!Array.isArray(dto.pipeline) || dto.pipeline.length === 0) {
+      throw new BadRequestException(
+        'preview.pipeline must be a non-empty array of tool steps',
+      );
+    }
+    const sourceArg = dto.source as unknown as {
+      kind: 'data_layer';
+      itemId: string;
+      layerKey?: string;
+    };
+    return this.items.previewDerivedLayerRecipe(user, {
+      source: sourceArg,
+      pipeline: dto.pipeline,
+      upTo: typeof dto.upTo === 'number' ? dto.upTo : dto.pipeline.length - 1,
+      ...(typeof dto.limit === 'number' ? { limit: dto.limit } : {}),
     });
   }
 

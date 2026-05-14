@@ -1120,6 +1120,73 @@ export class ItemsService {
   }
 
   /**
+   * Preview a derived-layer recipe draft (#81).  Loads the source
+   * with the same access check as `enrichDerivedLayerData`, then
+   * delegates to DerivedLayersService.previewRecipe.  Used by the
+   * builder's per-step Preview buttons.  Does NOT mutate state; the
+   * recipe doesn't have to be persisted first.
+   */
+  async previewDerivedLayerRecipe(
+    user: AuthUser,
+    args: {
+      source: { kind: 'data_layer'; itemId: string; layerKey?: string };
+      pipeline: unknown[];
+      upTo: number;
+      limit?: number;
+    },
+  ): Promise<{
+    rowCount: number;
+    truncated: boolean;
+    sample: Array<{
+      id: string | number | null;
+      geometry: unknown;
+      properties: Record<string, unknown>;
+    }>;
+    outputSchema: unknown[];
+  }> {
+    if (!args.source || typeof args.source.itemId !== 'string') {
+      throw new BadRequestException(
+        'preview.source.itemId is required',
+      );
+    }
+    if (!Array.isArray(args.pipeline) || args.pipeline.length === 0) {
+      throw new BadRequestException(
+        'preview.pipeline must be a non-empty array of tool steps',
+      );
+    }
+    const source = await this.prisma.item.findUnique({
+      where: { id: args.source.itemId },
+      include: { shares: true },
+    });
+    if (
+      !source ||
+      source.deletedAt !== null ||
+      !this.sharing.canRead(user, source, source.shares)
+    ) {
+      throw new BadRequestException(
+        'preview.source.itemId does not point at an accessible data layer',
+      );
+    }
+    // Coerce the inbound pipeline to the validator-friendly shape;
+    // the validator inside DerivedLayersService.previewRecipe runs
+    // each step's per-tool validate() so malformed entries surface
+    // there as BadRequestException rather than a runtime crash.
+    const pipeline = args.pipeline as Parameters<
+      typeof this.derivedLayers.previewRecipe
+    >[0]['pipeline'];
+    const sourceArg = args.source as Parameters<
+      typeof this.derivedLayers.previewRecipe
+    >[0]['source'];
+    return this.derivedLayers.previewRecipe({
+      source: sourceArg,
+      pipeline,
+      sourceItem: source,
+      upTo: args.upTo,
+      limit: args.limit ?? 10,
+    });
+  }
+
+  /**
    * Map items arrive from the wizard with the DEFAULT_MAP scaffold,
    * which uses an empty-string sentinel for `basemap`. Resolve the
    * sentinel to a real basemap item UUID so every saved map references
