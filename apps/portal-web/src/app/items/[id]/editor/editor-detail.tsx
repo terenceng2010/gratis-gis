@@ -12,10 +12,12 @@ import {
   PencilRuler,
   Play,
   Plus,
+  Settings,
   Trash2,
   Wrench,
   X,
 } from 'lucide-react';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import Link from 'next/link';
 import type {
   DataLayerData,
@@ -391,237 +393,193 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
     [editor.targets],
   );
 
-  return (
-    <div className="space-y-6">
-      {/* Sticky save bar mirrors map-editor's UX: present whenever
-          dirty so the user always knows how to commit. The "Open in
-          workspace" link is always visible, even when the form is
-          read-only, so a viewer can launch the runtime to see what
-          the configured editor would look like. */}
-      <div className="sticky top-0 z-10 flex items-center justify-between rounded-md border border-border bg-surface-1 px-4 py-2 shadow-sm">
-        <div className="flex items-center gap-2 text-sm">
-          <PencilRuler className="h-4 w-4 text-purple-600" />
-          <span className="font-medium text-ink-0">Editor configuration</span>
-          {canEdit && dirty ? (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-              Unsaved changes
-            </span>
-          ) : canEdit && saved ? (
-            <span className="text-[11px] text-emerald-700">Saved</span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Open in a new tab so the runtime gets the full viewport
-              and the author can keep this configuration tab open for
-              quick reference. Mirrors viewer/detail.tsx. */}
-          <a
-            href={`/items/${itemId}/editor/run`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            title="Open this editor in a new tab"
+  // #17 -- save bar moves to BuilderShell's toolbarRight slot.
+  const toolbarRight = (
+    <div className="flex items-center gap-2">
+      {canEdit && dirty ? (
+        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+          Unsaved changes
+        </span>
+      ) : canEdit && saved ? (
+        <span className="text-[11px] text-emerald-700">Saved</span>
+      ) : null}
+      <a
+        href={`/items/${itemId}/editor/run`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+        title="Open this editor in a new tab"
+      >
+        <Play className="h-3.5 w-3.5" />
+        Open in workspace
+      </a>
+      {canEdit ? (
+        <>
+          <ConvertToCustomButton
+            itemId={itemId}
+            sourceTemplate="editor"
+            {...(editor.mapId ? { sourceMapId: editor.mapId } : {})}
+            sourceTargets={editor.targets}
+          />
+          <button
+            type="button"
+            onClick={cancel}
+            disabled={!dirty || saving}
+            className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
           >
-            <Play className="h-3.5 w-3.5" />
-            Open in workspace
-          </a>
-          {canEdit ? (
-            <>
-              <ConvertToCustomButton
-                itemId={itemId}
-                sourceTemplate="editor"
-                {...(editor.mapId ? { sourceMapId: editor.mapId } : {})}
-                sourceTargets={editor.targets}
-              />
-              <button
-                type="button"
-                onClick={cancel}
-                disabled={!dirty || saving}
-                className="rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm hover:bg-surface-2 disabled:opacity-50"
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                onClick={() => void save()}
-                disabled={!dirty || saving}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-              >
-                {saving ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : null}
-                Save
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={!dirty || saving}
+            className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Save
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
 
-      {error ? (
-        <div className="rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-sm text-danger" role="alert">
-          {error}
+  // Left rail = target layers + per-target policy editor.  This is
+  // the primary surface of an editor app; everything else (tools,
+  // snapping, reference map) wraps around the per-layer config.
+  const targetsPanel = (
+    <div className="space-y-3 p-3">
+      {canEdit ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setAddingFromMap(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+            title="Bulk-import editable layers from a map"
+          >
+            <MapIcon className="h-3.5 w-3.5" />
+            Add from map
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add target
+          </button>
         </div>
       ) : null}
+      <p className="text-[11px] text-muted">
+        Layers exposed for editing. Each target narrows from what
+        the underlying data layer allows; the runtime re-checks
+        permissions per request.
+      </p>
+      {editor.targets.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-muted">
+          No target layers yet.
+          {canEdit ? ' Use "Add target" above.' : ''}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border rounded-md border border-border bg-surface-0">
+          {editor.targets.map((target, index) => (
+            <TargetRow
+              key={`${target.dataLayerId}:${target.layerKey}`}
+              target={target}
+              resolved={
+                resolved[`${target.dataLayerId}:${target.layerKey}`] ?? null
+              }
+              resolving={resolving}
+              canEdit={canEdit}
+              onPatch={(updater) => patchTarget(index, updater)}
+              onRemove={() => removeTarget(index)}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 
-      {/* Reference map. The editor inherits this map's basemap,
-          viewport, and reference-layer context. Layers in the map
-          that aren't editor targets render as read-only context
-          (with their map symbology) when the runtime ships in
-          slice 3b. Snap targets and tracing layers come from
-          here. See docs/editing-and-collection.md "Desktop GIS
-          Integration" / reference layers. */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-              <MapIcon className="h-4 w-4 text-emerald-600" />
-              Reference map
-            </h2>
-            <p className="text-xs text-muted">
-              The editor opens against this map's basemap and viewport. Any of
-              its layers that are not editor targets render as read-only
-              reference context (snap targets, tracing aids, work-area
-              boundaries).
-            </p>
-          </div>
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={() => setPickingMap(true)}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-            >
-              {editor.mapId ? 'Change map' : 'Pick map'}
-            </button>
-          ) : null}
-        </div>
-        <div className="px-4 py-3 text-sm">
-          {editor.mapId ? (
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <MapIcon className="h-4 w-4 shrink-0 text-emerald-600" />
-                <span className="truncate font-medium text-ink-0">
-                  {mapTitle ?? (
-                    <span className="text-muted">Loading...</span>
-                  )}
+  // Right rail = reference map + tool palette + snap settings.
+  // "Set once and forget" knobs that don't deserve primary space.
+  const settingsPanel = (
+    <div className="space-y-4 p-3">
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <MapIcon className="h-3.5 w-3.5" />
+          Reference map
+        </h3>
+        <p className="text-[11px] text-muted">
+          The editor opens against this map's basemap + viewport.
+          Layers in the map that aren't editor targets render as
+          read-only reference context (snap targets, tracing aids).
+        </p>
+        {editor.mapId ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <MapIcon className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+              <span className="truncate text-xs font-medium text-ink-0">
+                {mapTitle ?? <span className="text-muted">Loading...</span>}
+              </span>
+              {mapMissing ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">
+                  <AlertTriangle className="h-3 w-3" />
+                  Missing
                 </span>
-                {mapMissing ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-                    <AlertTriangle className="h-3 w-3" />
-                    Map not found
-                  </span>
-                ) : null}
-                {!mapMissing && mapTitle ? (
-                  <Link
-                    href={`/items/${editor.mapId}`}
-                    className="inline-flex items-center gap-1 text-xs text-muted hover:text-accent"
-                  >
-                    Open <ExternalLink className="h-3 w-3" />
-                  </Link>
-                ) : null}
-              </div>
-              {canEdit ? (
-                <button
-                  type="button"
-                  onClick={() => pickMap(null)}
-                  className="inline-flex items-center gap-1 rounded-md p-1 text-muted hover:bg-surface-2 hover:text-danger"
-                  aria-label="Clear reference map"
-                  title="Clear reference map"
+              ) : null}
+              {!mapMissing && mapTitle ? (
+                <Link
+                  href={`/items/${editor.mapId}`}
+                  className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted hover:text-accent"
                 >
-                  <X className="h-4 w-4" />
-                </button>
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
               ) : null}
             </div>
-          ) : (
-            <p className="text-muted">
-              No reference map.{' '}
-              {canEdit
-                ? 'Without one, the editor opens on a default basemap with no reference context.'
-                : ''}
-            </p>
-          )}
-        </div>
-      </section>
-
-      {/* Targets section. Each card is the per-layer policy editor. */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-              <Layers className="h-4 w-4 text-sky-600" />
-              Target layers
-            </h2>
-            <p className="text-xs text-muted">
-              Layers exposed for editing in this app. Each target narrows from
-              what the underlying data layer allows in principle.
-            </p>
-          </div>
-          {canEdit ? (
-            <div className="flex items-center gap-2">
+            {canEdit ? (
               <button
                 type="button"
-                onClick={() => setAddingFromMap(true)}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-                title="Bulk-import editable layers from a map"
+                onClick={() => pickMap(null)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-danger"
+                aria-label="Clear reference map"
               >
-                <MapIcon className="h-3.5 w-3.5" />
-                Add from map
+                <X className="h-3.5 w-3.5" />
               </button>
-              <button
-                type="button"
-                onClick={() => setAdding(true)}
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add target
-              </button>
-            </div>
-          ) : null}
-        </div>
-        {editor.targets.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted">
-            No target layers yet.
-            {canEdit ? ' Use "Add target" to expose a data layer here.' : ''}
+            ) : null}
           </div>
         ) : (
-          <ul className="divide-y divide-border">
-            {editor.targets.map((target, index) => (
-              <TargetRow
-                key={`${target.dataLayerId}:${target.layerKey}`}
-                target={target}
-                resolved={
-                  resolved[`${target.dataLayerId}:${target.layerKey}`] ?? null
-                }
-                resolving={resolving}
-                canEdit={canEdit}
-                onPatch={(updater) => patchTarget(index, updater)}
-                onRemove={() => removeTarget(index)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Tool palette toggles. Editing tools that the runtime
-          surfaces in slice 3. We render every known tool so the
-          author sees the full menu, even if they then disable a
-          subset for a narrower workflow. */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink-0">
-            <Wrench className="h-4 w-4 text-muted" />
-            Tool palette
-          </h2>
-          <p className="text-xs text-muted">
-            Which editing tools the runtime exposes. The full set covers
-            most workflows; trim it for purpose-built editors.
+          <p className="mt-2 rounded-md border border-dashed border-border px-2 py-2 text-[11px] text-muted">
+            No reference map.
+            {canEdit
+              ? ' Without one, the editor opens on a default basemap.'
+              : ''}
           </p>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-4">
+        )}
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setPickingMap(true)}
+            className="mt-2 inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+          >
+            {editor.mapId ? 'Change map' : 'Pick map'}
+          </button>
+        ) : null}
+      </section>
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <Wrench className="h-3.5 w-3.5" />
+          Tool palette
+        </h3>
+        <p className="text-[11px] text-muted">
+          Which editing tools the runtime exposes. Trim for narrower
+          workflows.
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2">
           {ALL_TOOLS.map(({ key, label, hint }) => {
             const on = editor.tools.includes(key);
             return (
               <label
                 key={key}
-                className="flex items-start gap-2 text-sm"
+                className="flex items-start gap-2 text-xs"
                 title={hint}
               >
                 <input
@@ -629,35 +587,34 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
                   checked={on}
                   disabled={!canEdit}
                   onChange={(e) => toggleTool(key, e.target.checked)}
-                  className="mt-0.5 h-4 w-4 cursor-pointer"
+                  className="mt-0.5 h-3.5 w-3.5 cursor-pointer"
                 />
                 <span>
                   <span className="font-medium text-ink-1">{label}</span>
-                  <span className="block text-[11px] text-muted">{hint}</span>
+                  <span className="block text-[10px] text-muted">{hint}</span>
                 </span>
               </label>
             );
           })}
         </div>
       </section>
-
-      {/* Snapping. tolerancePx is in screen pixels rather than map
-          units so behavior stays consistent across zooms. */}
-      <section className="rounded-lg border border-border bg-surface-1 shadow-card">
-        <div className="border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold text-ink-0">Snapping</h2>
-          <p className="text-xs text-muted">
-            Snap-to-vertex behavior shared across drawing tools.
-          </p>
-        </div>
-        <div className="space-y-3 px-4 py-3 text-sm">
+      <section>
+        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+          Snapping
+        </h3>
+        <p className="text-[11px] text-muted">
+          Snap-to-vertex behavior shared across drawing tools.
+          Tolerance is screen-pixel based so behavior is consistent
+          across zooms.
+        </p>
+        <div className="mt-2 space-y-2 text-xs">
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
               checked={editor.snapping.enabled}
               disabled={!canEdit}
               onChange={(e) => patchSnapping({ enabled: e.target.checked })}
-              className="h-4 w-4 cursor-pointer"
+              className="h-3.5 w-3.5 cursor-pointer"
             />
             <span>Enable snap</span>
           </label>
@@ -666,18 +623,19 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
               type="checkbox"
               checked={editor.snapping.selfSnap}
               disabled={!canEdit || !editor.snapping.enabled}
-              onChange={(e) => patchSnapping({ selfSnap: e.target.checked })}
-              className="h-4 w-4 cursor-pointer disabled:opacity-50"
+              onChange={(e) =>
+                patchSnapping({ selfSnap: e.target.checked })
+              }
+              className="h-3.5 w-3.5 cursor-pointer disabled:opacity-50"
             />
             <span className="text-ink-1">
-              Self-snap only{' '}
-              <span className="text-[11px] text-muted">
-                (snap only to vertices in the same layer; otherwise snap to
-                anything visible)
+              Self-snap only
+              <span className="block text-[10px] text-muted">
+                Snap only to vertices in the same layer.
               </span>
             </span>
           </label>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <label htmlFor="snap-tol" className="text-ink-1">
               Tolerance
             </label>
@@ -692,14 +650,63 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
               onChange={(e) =>
                 patchSnapping({ tolerancePx: Number(e.target.value) })
               }
-              className="w-48 cursor-pointer disabled:opacity-50"
+              className="flex-1 cursor-pointer disabled:opacity-50"
             />
-            <span className="font-mono text-xs text-muted">
+            <span className="font-mono text-[10px] text-muted">
               {editor.snapping.tolerancePx}px
             </span>
           </div>
         </div>
       </section>
+    </div>
+  );
+
+  return (
+    <>
+      <BuilderShell
+        storageKey="builder-shell:editor"
+        backHref={`/items/${itemId}`}
+        title="Editor configuration"
+        icon={<PencilRuler className="h-4 w-4 text-purple-600" />}
+        toolbarRight={toolbarRight}
+        leftPanel={targetsPanel}
+        leftPanelTitle="Targets"
+        leftRailIcon={<Layers className="h-4 w-4" />}
+        rightPanel={settingsPanel}
+        rightPanelTitle="Settings"
+        rightRailIcon={<Settings className="h-4 w-4" />}
+      >
+        <div className="absolute inset-0 flex flex-col gap-4 overflow-auto p-6">
+          {error ? (
+            <div
+              className="rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-sm text-danger"
+              role="alert"
+            >
+              {error}
+            </div>
+          ) : null}
+          <div className="mx-auto max-w-2xl rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center">
+            <PencilRuler className="mx-auto h-8 w-8 text-purple-300" />
+            <h2 className="mt-2 text-sm font-semibold text-ink-0">
+              Editor configuration
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              Add target layers in the left panel, configure the
+              reference map + tools + snapping on the right. Open
+              the editor to test the live runtime in a new tab.
+            </p>
+            <a
+              href={`/items/${itemId}/editor/run`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+            >
+              <Play className="h-3.5 w-3.5" />
+              Open editor in a new tab
+            </a>
+          </div>
+        </div>
+      </BuilderShell>
 
       <AddTargetDialog
         open={adding}
@@ -721,7 +728,7 @@ export function EditorDetail({ itemId, initial, canEdit }: Props) {
         onClose={() => setPickingMap(false)}
         onPick={(m) => pickMap(m.id)}
       />
-    </div>
+    </>
   );
 }
 
