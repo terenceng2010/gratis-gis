@@ -54,6 +54,14 @@ export default async function EditItemPage({ params }: Props) {
           tags: item.tags,
           access: item.access,
           thumbnailUrl: item.thumbnailUrl,
+          // Without this the form falls through to the type-default
+          // design on every edit-page load, wiping any saved
+          // background image / logo / opacity tweaks the next time
+          // the user clicks Save.  Conditionally spread so older
+          // rows without a design still hit the wizard's default.
+          ...(item.thumbnailDesign
+            ? { thumbnailDesign: item.thumbnailDesign }
+            : {}),
           license: item.license,
         }}
         initialData={item.data}
