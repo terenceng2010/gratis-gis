@@ -188,6 +188,45 @@ interface RuntimeInfoCtx {
 }
 const RuntimeInfoContext = createContext<RuntimeInfoCtx | null>(null);
 
+/**
+ * #87 -- runtime time-travel context.  When `at` is set, every
+ * data fetch in the runtime appends `?at=<ISO>` so the engine
+ * returns the bitemporal "current truth" as of that moment.
+ * Editing widgets (Create / Edit / Delete) read this same context
+ * and disable themselves when `at` is non-null, since writing into
+ * the past is intentionally rejected by the observation-log
+ * engine.  A null `at` means "now" -- the default.
+ */
+interface AppTimeCtx {
+  at: string | null;
+  setAt: Dispatch<SetStateAction<string | null>>;
+}
+const AppTimeContext = createContext<AppTimeCtx>({
+  at: null,
+  setAt: () => {},
+});
+
+/**
+ * Read the current app-time as an ISO string, or null if the app
+ * is showing "now".  Layer fetches, chart fetches, attribute-table
+ * fetches all gate their URL on this -- see appendAtParam.
+ */
+export function useAppTime(): string | null {
+  return useContext(AppTimeContext).at;
+}
+
+/**
+ * Append `at=<ISO>` to a URL when the app is in time-travel mode.
+ * Returns the URL unchanged when `at` is null.  Centralises the
+ * URL-building so we don't sprinkle the encoder logic across every
+ * fetch site.
+ */
+export function appendAtParam(url: string, at: string | null): string {
+  if (!at) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}at=${encodeURIComponent(at)}`;
+}
+
 function useBoundMap(
   mapWidgetId: string,
 ): {
@@ -410,7 +449,24 @@ export function CustomRuntimeClient({
     ],
   );
 
+  // #87 -- app-time state.  Initial value read from the URL's
+  // `?at=` query so deep-linking to a historical snapshot Just
+  // Works.  Future commits add a slider widget that drives this
+  // state imperatively.  Null = "now".
+  const [appAt, setAppAt] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const raw = new URLSearchParams(window.location.search).get('at');
+    if (!raw) return null;
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  });
+  const appTimeCtx = useMemo(
+    () => ({ at: appAt, setAt: setAppAt }),
+    [appAt],
+  );
+
   return (
+    <AppTimeContext.Provider value={appTimeCtx}>
     <RuntimeInfoContext.Provider value={{ itemTitle }}>
     <CustomMapsContext.Provider value={ctxValue}>
       {/* Viewport-fit container. h-screen (was h-full + min-h) so
@@ -426,6 +482,28 @@ export function CustomRuntimeClient({
         ref={themeRootRef}
         className="flex h-screen flex-col overflow-hidden bg-[hsl(var(--app-surface-0))] text-[hsl(var(--app-ink-0))]"
       >
+        {appAt ? (
+          // #87 -- time-travel banner.  Lives above the app header so
+          // it's unmissable; the user understands they're not seeing
+          // "live" data.  Read-only is also a hard rule: write
+          // widgets gate on this context and disable themselves, and
+          // the engine rejects writes that target past observations
+          // independently of the UI.
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-xs text-amber-900">
+            <span>
+              Viewing as of{' '}
+              <strong>{new Date(appAt).toLocaleString()}</strong>{' '}
+              &ndash; read-only
+            </span>
+            <button
+              type="button"
+              onClick={() => setAppAt(null)}
+              className="rounded-md border border-amber-400 bg-white px-2 py-0.5 text-amber-900 hover:bg-amber-50"
+            >
+              Return to Now
+            </button>
+          </div>
+        ) : null}
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">
             <Link
@@ -610,6 +688,7 @@ export function CustomRuntimeClient({
       </div>
     </CustomMapsContext.Provider>
     </RuntimeInfoContext.Provider>
+    </AppTimeContext.Provider>
   );
 }
 
@@ -2114,6 +2193,9 @@ function renderInline(s: string): React.ReactNode {
 function ChartWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'chart') return null;
   const ctx = useContext(CustomMapsContext);
+  // #87 -- read app-time so the chart re-fetches against the
+  // bitemporal snapshot when the user scrubs back in time.
+  const appAt = useAppTime();
   const cfg = widget.config;
   const target = ctx?.resolvedTargets[cfg.targetIndex] ?? null;
   const [data, setData] = useState<FetchedFeatures>({
@@ -2132,7 +2214,10 @@ function ChartWidgetRender({ widget }: { widget: CustomWidget }) {
     setData({ loading: true, rows: [], fields: [], error: null });
     void (async () => {
       try {
-        const url = `/api/portal/items/${target.dataLayerId}/layers/${target.layerKey}/geojson`;
+        const url = appendAtParam(
+          `/api/portal/items/${target.dataLayerId}/layers/${target.layerKey}/geojson`,
+          appAt,
+        );
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const fc = (await res.json()) as GeoJSON.FeatureCollection;
@@ -2165,7 +2250,7 @@ function ChartWidgetRender({ widget }: { widget: CustomWidget }) {
     return () => {
       abort = true;
     };
-  }, [target]);
+  }, [target, appAt]);
 
   return (
     <WidgetFrame icon={ChevronRight} title="Chart">
