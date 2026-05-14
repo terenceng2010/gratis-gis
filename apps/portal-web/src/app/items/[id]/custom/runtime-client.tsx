@@ -171,6 +171,39 @@ interface CustomMapsCtx {
   maps: Record<string, maplibregl.Map | null>;
   registerMap: (mapWidgetId: string, map: maplibregl.Map | null) => void;
   /**
+   * #89 -- per-map edit-mode claim.  Active Edit-feature widgets
+   * push their claimed MapLayer.ids + click handler here; the
+   * MapWidgetRender forwards both to MapCanvas so clicks on those
+   * layers open the edit form instead of the read-only popup.
+   * Null when no Edit widget is active for that map.
+   */
+  editClaims: Record<
+    string,
+    {
+      layerIds: ReadonlySet<string>;
+      onClick: (info: {
+        layerId: string;
+        featureId: string | number;
+        properties: Record<string, unknown>;
+        lngLat: { lng: number; lat: number };
+      }) => void;
+    } | null
+  >;
+  setEditClaim: (
+    mapWidgetId: string,
+    claim:
+      | {
+          layerIds: ReadonlySet<string>;
+          onClick: (info: {
+            layerId: string;
+            featureId: string | number;
+            properties: Record<string, unknown>;
+            lngLat: { lng: number; lat: number };
+          }) => void;
+        }
+      | null,
+  ) => void;
+  /**
    * #364: ref to the runtime grid container. Tool-mode popovers
    * with placement='floating' anchor against this so they stay
    * within the runtime even on a scrolling page. May be null until
@@ -412,6 +445,27 @@ export function CustomRuntimeClient({
     [],
   );
 
+  // #89 -- per-map edit-mode claim.  Edit-feature widgets call
+  // setEditClaim when they toggle ON, registering the editable
+  // MapLayer.ids and the click handler that should fire instead
+  // of MapCanvas's default popup.  MapWidgetRender forwards both
+  // to MapCanvas via the editClaimedLayerIds / onEditClaimedClick
+  // props (#89 plumbing in map-canvas.tsx).  Storing the claim as
+  // shared state means a sibling widget on another page slot can
+  // toggle it without prop-drilling through the grid layout.
+  const [editClaims, setEditClaims] = useState<
+    CustomMapsCtx['editClaims']
+  >({});
+  const setEditClaim = useCallback<CustomMapsCtx['setEditClaim']>(
+    (mapWidgetId, claim) => {
+      setEditClaims((cur) => {
+        if (cur[mapWidgetId] === claim) return cur;
+        return { ...cur, [mapWidgetId]: claim };
+      });
+    },
+    [],
+  );
+
   // #361: navigate-by-id for the Button widget's page-link path.
   // Pages are passed as a stripped {id, title} list to avoid leaking
   // widget data into the context.
@@ -439,6 +493,8 @@ export function CustomRuntimeClient({
       pages: pagesForCtx,
       maps,
       registerMap,
+      editClaims,
+      setEditClaim,
       runtimeContainerRef,
     }),
     [
@@ -452,6 +508,8 @@ export function CustomRuntimeClient({
       pagesForCtx,
       maps,
       registerMap,
+      editClaims,
+      setEditClaim,
     ],
   );
 
@@ -1447,6 +1505,12 @@ function MapWidgetRender({ widget }: { widget: CustomWidget }) {
   // prop changes, and MapLibre re-fetches tiles tagged with the new
   // timestamp.
   const appAt = useAppTime();
+  // #89 -- read the current edit claim for THIS map widget.  When
+  // an Edit-feature widget toggles ON, it pushes its claimed layer
+  // ids + click callback into ctx.editClaims[widget.id]; we forward
+  // both to MapCanvas so clicks on those layers open the edit form
+  // instead of the read-only popup.
+  const editClaim = ctx?.editClaims[widget.id] ?? null;
   const ref = useRef<MapCanvasHandle | null>(null);
   // Register the ref ONCE on mount so sibling widgets can use it
   // for fly-to. Re-registering on every render is harmless (same
@@ -1485,6 +1549,12 @@ function MapWidgetRender({ widget }: { widget: CustomWidget }) {
           widget.config.kind === 'map' && widget.config.showNavigation === false
         }
         asOfTime={appAt}
+        {...(editClaim
+          ? {
+              editClaimedLayerIds: editClaim.layerIds,
+              onEditClaimedClick: editClaim.onClick,
+            }
+          : {})}
       />
     </div>
   );
@@ -3003,33 +3073,36 @@ function renderWidgetInContainer(widget: CustomWidget): React.ReactNode {
   );
 }
 
-// ---- Feature-mutation widgets (#69 / #70 / #71) ----------------------------
+// ---- Feature-mutation widgets (#69 / #70 / #71, #89 pivot) ------------------
 
 /**
- * Shared scaffolding for the three feature-mutation widgets.  Each
- * follows the same pattern:
+ * Shared scaffolding for the three feature-mutation widgets after
+ * the #89 pivot to the field-runtime-style multi-layer pattern.
  *
- *   1. Bind to a Map widget by id (mapWidgetId on the config).
- *   2. Resolve the target layer via the parent app's resolvedTargets
- *      indexed by targetIndex.
- *   3. Read the bound map's `selection` state from CustomMapsContext
- *      so a sibling Select widget's picks drive the Edit / Delete
- *      flows.
- *   4. Read AppTimeContext.at and disable the button when non-null
- *      ("Editing is disabled when viewing a past snapshot").  The
- *      engine rejects past-target writes defensively, but the UX
- *      gate avoids the user even discovering the affordance in
- *      time-travel mode.
+ * The three widgets bind to a Map widget by id and operate over
+ * EVERY editable target in that map by default.  Configs still
+ * support the legacy `targetIndex` for back-compat (single-target
+ * binding), but the modern shape omits it -- one widget per app
+ * regardless of how many editable layers the bound map has.
  *
- * The three widgets diverge on the action: Create opens an empty
- * AttributeForm + a click-to-place-on-map mode; Edit opens the form
- * pre-filled with the selected feature's properties; Delete opens a
- * confirm dialog over the selected feature(s).
+ * Create renders a templates palette (one entry per editable
+ * target) and on pick enters create-mode for that specific target.
+ * Edit is a mode toggle: when ON, the runtime intercepts feature
+ * clicks on the bound map's editable layers via the
+ * editClaimedLayerIds plumbing in MapCanvas and opens the edit
+ * form against whichever layer the clicked feature belongs to.
+ * Delete operates against the bound map's selection state, which
+ * is keyed per-layer, so it dispatches DELETEs against the right
+ * (data_layer, layer) pair per selected feature.
+ *
+ * All three honor AppTimeContext: when `at` is non-null, the
+ * widgets render disabled with a tooltip.  The engine rejects
+ * past-target writes defensively, so this is UX clarity, not a
+ * security boundary.
  *
  * Schema for the AttributeForm is fetched on-demand from the
- * source data_layer's /items endpoint -- one fetch per widget mount,
- * cached for the session.  Pick lists referenced via coded-value-ref
- * domains follow the same fetch path the editor runtime uses.
+ * source data_layer's /items endpoint.  Cached per (dataLayerId,
+ * layerKey) by useLayerSchema so a re-open doesn't refetch.
  */
 type WriteBusyState =
   | { state: 'idle' }
@@ -3037,35 +3110,44 @@ type WriteBusyState =
   | { state: 'error'; message: string };
 
 /**
- * Convenience hook -- resolves the bound map widget id + target
- * indices to the things a mutation widget actually needs at render
- * time: the target's dataLayerId + layerKey, the bound map's
- * selection (for Edit / Delete), and the live MapLibre instance
- * (for Create's click-to-place).
+ * Resolved info for one editable target inside a bound map.  Used
+ * to build templates pickers, edit-click handlers, and per-target
+ * delete dispatch.  We carry the MapLayer reference so widgets can
+ * pull the layer's `renderer` (for color swatches in the templates
+ * palette) and `id` (for selection / editClaim keying).
  */
-function useFeatureMutationContext(args: {
-  mapWidgetId: string;
-  targetIndex: number;
-}): {
+interface MutationTarget {
+  index: number;
   dataLayerId: string;
   layerKey: string;
-  layerLabel: string;
-  selection: Set<number | string>;
+  title: string;
+  mapLayer: MapLayer;
+}
+
+/**
+ * Hook that resolves every editable target inside the widget's
+ * bound map.  Drops table-only sublayers (geometry passes through
+ * the map's MapLayer set; tables have no MapLayer entry).  When
+ * the config carries a legacy `targetIndex`, the result is
+ * filtered to that single target so existing recipes don't change
+ * behavior.
+ *
+ * Returns null when the bound map isn't yet ready (still mounting)
+ * or no resolved targets exist (misconfigured app).  The widgets
+ * render a friendly placeholder in that case.
+ */
+function useMutationTargets(args: {
+  mapWidgetId: string;
+  targetIndex?: number;
+}): {
+  targets: MutationTarget[];
   mapInstance: maplibregl.Map | null;
-  mapWidgetIdResolved: string | null;
+  selectionByLayerId: Record<string, Set<number | string>>;
   flyTo: (bbox: [number, number, number, number]) => void;
-  // The full target row when present, else null (misconfigured).
-  target: {
-    dataLayerId: string;
-    layerKey: string;
-    title: string;
-    mapLayer: MapLayer;
-  } | null;
+  setEditClaim: CustomMapsCtx['setEditClaim'];
 } | null {
   const ctx = useContext(CustomMapsContext);
   if (!ctx) return null;
-  const target = ctx.resolvedTargets[args.targetIndex] ?? null;
-  if (!target) return null;
   const mapWidgetIdResolved = args.mapWidgetId || null;
   const boundState = mapWidgetIdResolved
     ? ctx.states[mapWidgetIdResolved] ?? null
@@ -3073,22 +3155,40 @@ function useFeatureMutationContext(args: {
   const mapInstance = mapWidgetIdResolved
     ? ctx.maps[mapWidgetIdResolved] ?? null
     : null;
-  // Selection is keyed by MapLayer.id; the target's mapLayer.id is
-  // the same value MapCanvas registers under so the runtime's
-  // selection state matches.
-  const selectionSet =
-    boundState?.selection[target.mapLayer.id] ?? new Set<number | string>();
+  if (!boundState) {
+    return {
+      targets: [],
+      mapInstance,
+      selectionByLayerId: {},
+      flyTo: () => {},
+      setEditClaim: ctx.setEditClaim,
+    };
+  }
+  // Build the list of targets from resolvedTargets, filtering to
+  // those whose MapLayer.id exists on the bound map (an author can
+  // hide a target from a Map widget; hidden targets are not
+  // editable here).
+  const layerIds = new Set(boundState.mapData.layers.map((l) => l.id));
+  let pool: MutationTarget[] = ctx.resolvedTargets
+    .map((t, index) => ({
+      index,
+      dataLayerId: t.dataLayerId,
+      layerKey: t.layerKey,
+      title: t.title,
+      mapLayer: t.mapLayer,
+    }))
+    .filter((t) => layerIds.has(t.mapLayer.id));
+  if (typeof args.targetIndex === 'number') {
+    pool = pool.filter((t) => t.index === args.targetIndex);
+  }
   return {
-    dataLayerId: target.dataLayerId,
-    layerKey: target.layerKey,
-    layerLabel: target.title,
-    selection: selectionSet,
+    targets: pool,
     mapInstance,
-    mapWidgetIdResolved,
+    selectionByLayerId: boundState.selection,
     flyTo: (bbox) => {
       if (mapWidgetIdResolved) ctx.flyTo(mapWidgetIdResolved, bbox);
     },
-    target,
+    setEditClaim: ctx.setEditClaim,
   };
 }
 
@@ -3163,53 +3263,121 @@ function useLayerSchema(dataLayerId: string, layerKey: string): {
 }
 
 /**
- * Create-feature widget (#69).  Opens a panel with an attribute
- * form for a new row on the target layer.  Submits via
- * POST /items/:id/layers/:layerId/features.  For point-geometry
- * layers, the user is prompted to click on the map to set the
- * location before submission; for table-only layers (no
- * geometryType), the form submits directly with no geometry.
- *
- * Click-to-place is implemented inline: when the form is open and
- * a geometry is required, we attach a one-shot click handler to
- * the bound MapLibre instance.  The map cursor changes to
- * crosshair while in pick mode so the user knows where to click.
+ * Pick a fallback color for a target's templates-palette swatch
+ * when the layer's renderer doesn't provide one.  Mirrors the
+ * field-runtime helper of the same name: stable-hash the layer id
+ * into one of a small palette so two layers in the same map don't
+ * collide on the same swatch by accident.
+ */
+function pickFallbackColorForLayer(mapLayer: MapLayer): string {
+  const palette = [
+    '#2563eb',
+    '#7c3aed',
+    '#db2777',
+    '#dc2626',
+    '#ea580c',
+    '#d97706',
+    '#65a30d',
+    '#0891b2',
+  ];
+  let h = 0;
+  for (let i = 0; i < mapLayer.id.length; i++) {
+    h = (h * 31 + mapLayer.id.charCodeAt(i)) | 0;
+  }
+  return palette[Math.abs(h) % palette.length]!;
+}
+
+/**
+ * Pull the dominant fill / line color out of a MapLayer's renderer
+ * so the templates palette swatch matches what the user sees on
+ * the map.  Falls through to pickFallbackColorForLayer for renderers
+ * we can't quickly summarize (class-breaks, unique-values where we
+ * don't want to pick one category over another).
+ */
+function colorFromRenderer(mapLayer: MapLayer): string {
+  const r = mapLayer.renderer;
+  if (r?.kind === 'simple' || !r) {
+    const s = mapLayer.style;
+    // The MapLayerStyle doesn't tell us which sub-style is "the"
+    // one for a layer (the renderer paints all three based on the
+    // feature's geometry), so prefer point.color when present, then
+    // polygon.fillColor, then line.color.  Any of these is a
+    // reasonable swatch on the templates palette.
+    return (
+      s?.point?.color ||
+      s?.polygon?.fillColor ||
+      s?.line?.color ||
+      pickFallbackColorForLayer(mapLayer)
+    );
+  }
+  return pickFallbackColorForLayer(mapLayer);
+}
+
+/**
+ * Create-feature widget (#69 / #89 pivot).  Renders a single
+ * "Add feature" button.  When clicked, opens an inline templates
+ * palette listing every editable target in the bound map with a
+ * colored swatch from each layer's renderer.  Clicking a template
+ * enters create mode for that specific target.  For point-geometry
+ * layers, the user then clicks once on the bound map to place the
+ * new feature; for table-only layers, the form submits directly.
  */
 function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'create-feature') return null;
   const cfg = widget.config;
   const appAt = useAppTime();
-  const muCtx = useFeatureMutationContext({
+  const mut = useMutationTargets({
     mapWidgetId: cfg.mapWidgetId,
-    targetIndex: cfg.targetIndex,
+    ...(typeof cfg.targetIndex === 'number'
+      ? { targetIndex: cfg.targetIndex }
+      : {}),
   });
-  const [open, setOpen] = useState(false);
-  const [pickedPoint, setPickedPoint] = useState<
-    [number, number] | null
-  >(null);
+  // Three-phase state: 'closed' (button only), 'picking' (templates
+  // palette open), 'placing' (a template was picked; collect geom
+  // + attrs).  The picking phase is skipped when there's only one
+  // editable target -- jump straight to placing for that target.
+  const [phase, setPhase] = useState<
+    | { kind: 'closed' }
+    | { kind: 'picking' }
+    | { kind: 'placing'; target: MutationTarget; point: [number, number] | null }
+  >({ kind: 'closed' });
   const [busy, setBusy] = useState<WriteBusyState>({ state: 'idle' });
 
+  const inTimeTravel = appAt !== null;
+  const targets = mut?.targets ?? [];
+
+  // Resolve the schema for whichever target is in "placing" phase.
+  // useLayerSchema short-circuits when ids are empty, so it's safe
+  // to call unconditionally from the top of the component.
+  const placingTarget = phase.kind === 'placing' ? phase.target : null;
   const schema = useLayerSchema(
-    muCtx?.dataLayerId ?? '',
-    muCtx?.layerKey ?? '',
+    placingTarget?.dataLayerId ?? '',
+    placingTarget?.layerKey ?? '',
   );
   const needsGeometry =
-    !!schema.geometryType && schema.geometryType !== 'none';
+    placingTarget !== null &&
+    !!schema.geometryType &&
+    schema.geometryType !== 'none';
   const isPointLayer =
     schema.geometryType === 'point' || schema.geometryType === 'Point';
-  const inTimeTravel = appAt !== null;
 
-  // Click-to-place: attach a one-shot click handler to the bound
-  // map while the picker is active.  Removing the handler on
-  // unmount or after a successful pick keeps the map's regular
-  // click behavior intact for everything else.
+  // Click-to-place handler.  Only attached during the placing phase
+  // for a point-geometry target whose location hasn't been picked
+  // yet.  Cursor flip to crosshair signals to the user that the map
+  // is now waiting for a click.
   useEffect(() => {
-    if (!open || !needsGeometry || !muCtx?.mapInstance) return;
-    if (pickedPoint) return; // already picked
-    const map = muCtx.mapInstance;
+    if (phase.kind !== 'placing') return;
+    if (!needsGeometry) return;
+    if (phase.point) return;
+    if (!mut?.mapInstance) return;
+    const map = mut.mapInstance;
     map.getCanvas().style.cursor = 'crosshair';
     const onClick = (e: maplibregl.MapMouseEvent) => {
-      setPickedPoint([e.lngLat.lng, e.lngLat.lat]);
+      setPhase((p) =>
+        p.kind === 'placing'
+          ? { ...p, point: [e.lngLat.lng, e.lngLat.lat] }
+          : p,
+      );
       map.getCanvas().style.cursor = '';
     };
     map.on('click', onClick);
@@ -3217,15 +3385,16 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
       map.off('click', onClick);
       map.getCanvas().style.cursor = '';
     };
-  }, [open, needsGeometry, muCtx?.mapInstance, pickedPoint]);
+  }, [phase, needsGeometry, mut?.mapInstance]);
 
   async function submit(values: Record<string, unknown>) {
-    if (!muCtx) return;
+    if (phase.kind !== 'placing') return;
+    const target = phase.target;
     setBusy({ state: 'submitting' });
     try {
       const geometry =
-        needsGeometry && pickedPoint
-          ? { type: 'Point', coordinates: pickedPoint }
+        needsGeometry && phase.point
+          ? { type: 'Point', coordinates: phase.point }
           : null;
       const body = {
         features: [
@@ -3236,8 +3405,8 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
         ],
       };
       const res = await fetch(
-        `/api/portal/items/${muCtx.dataLayerId}/layers/${encodeURIComponent(
-          muCtx.layerKey,
+        `/api/portal/items/${target.dataLayerId}/layers/${encodeURIComponent(
+          target.layerKey,
         )}/features`,
         {
           method: 'POST',
@@ -3250,8 +3419,7 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
         throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ''}`);
       }
       setBusy({ state: 'idle' });
-      setOpen(false);
-      setPickedPoint(null);
+      setPhase({ kind: 'closed' });
     } catch (e) {
       setBusy({
         state: 'error',
@@ -3260,19 +3428,34 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
     }
   }
 
-  if (!muCtx) {
+  if (!mut || targets.length === 0) {
     return (
       <p className="p-3 text-xs italic text-muted">
-        Bind this widget to a Map widget and pick a target layer.
+        {cfg.mapWidgetId
+          ? 'No editable target layers in the bound map.'
+          : 'Bind this widget to a Map widget.'}
       </p>
     );
   }
+
   return (
     <div className="flex h-full w-full flex-col gap-2 p-2">
       <button
         type="button"
         disabled={inTimeTravel}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // One target = no need to show the palette; jump straight
+          // to placing for that target.  This matches the single-
+          // editable-layer case the legacy config also handled.
+          if (targets.length === 1) {
+            setPhase({ kind: 'placing', target: targets[0]!, point: null });
+          } else {
+            setPhase((p) =>
+              p.kind === 'closed' ? { kind: 'picking' } : { kind: 'closed' },
+            );
+          }
+          setBusy({ state: 'idle' });
+        }}
         className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-0 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
         title={
           inTimeTravel
@@ -3283,14 +3466,54 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
         <Plus className="h-3.5 w-3.5" />
         {cfg.label || 'Add feature'}
       </button>
-      {open ? (
+      {phase.kind === 'picking' ? (
+        <div className="flex-1 overflow-auto rounded-md border border-border bg-surface-0">
+          <p className="border-b border-border bg-surface-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Pick a layer to add to
+          </p>
+          <ul>
+            {targets.map((t) => (
+              <li key={`${t.dataLayerId}:${t.layerKey}`}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPhase({ kind: 'placing', target: t, point: null })
+                  }
+                  className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs hover:bg-surface-1"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-4 w-4 shrink-0 rounded-sm border border-border"
+                    style={{ backgroundColor: colorFromRenderer(t.mapLayer) }}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-ink-0">
+                    {t.title}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="border-t border-border bg-surface-1 px-3 py-1.5">
+            <button
+              type="button"
+              onClick={() => setPhase({ kind: 'closed' })}
+              className="text-[11px] text-muted hover:text-ink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : phase.kind === 'placing' ? (
         <div className="flex-1 overflow-auto rounded-md border border-border bg-surface-0">
           {schema.loading ? (
             <p className="p-3 text-xs italic text-muted">Loading schema…</p>
           ) : schema.error ? (
             <p className="p-3 text-xs text-rose-600">{schema.error}</p>
-          ) : needsGeometry && !pickedPoint ? (
+          ) : needsGeometry && !phase.point ? (
             <div className="space-y-2 p-3 text-xs text-ink-1">
+              <p>
+                Adding to <strong>{phase.target.title}</strong>.
+              </p>
               <p>
                 <strong>Step 1:</strong> click on the map to place the
                 new {schema.geometryType?.toLowerCase()}.
@@ -3302,26 +3525,33 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
                   polygons is queued as a follow-up.)
                 </p>
               ) : null}
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs hover:bg-surface-2"
-              >
-                Cancel
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPhase(
+                      targets.length === 1
+                        ? { kind: 'closed' }
+                        : { kind: 'picking' },
+                    )
+                  }
+                  className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs hover:bg-surface-2"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           ) : (
             <AttributeForm
               fields={schema.fields}
               editableFieldNames={null}
-              layerTitle={muCtx.layerLabel}
+              layerTitle={phase.target.title}
               submitting={busy.state === 'submitting'}
               errorMessage={
                 busy.state === 'error' ? busy.message : null
               }
               onCancel={() => {
-                setOpen(false);
-                setPickedPoint(null);
+                setPhase({ kind: 'closed' });
                 setBusy({ state: 'idle' });
               }}
               onSubmit={submit}
@@ -3336,85 +3566,118 @@ function CreateFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
 }
 
 /**
- * Edit-feature widget (#70).  Reads the bound map's selection on
- * the target layer; when exactly one feature is selected, opens a
- * pre-filled attribute form.  Multi-select goes through a "pick
- * one to edit" picker (deferred to follow-up; first cut handles
- * single-selection cleanly).  Submits via PATCH on the feature id.
+ * Edit-feature widget (#70 / #89 pivot).  Renders a mode toggle:
+ * when ON, every editable target in the bound map is "claimed"
+ * via CustomMapsContext.setEditClaim, which threads through to
+ * MapCanvas's `editClaimedLayerIds` so feature clicks on those
+ * layers open the edit form instead of the read-only popup.
+ * Match the feature -> target by MapLayer.id (the same id
+ * MapCanvas uses for popups + selection).
+ *
+ * When the user clicks an editable feature, the form opens
+ * pre-filled with the feature's current attrs (fetched via the
+ * /features-page lookup -- the click handler already gives us the
+ * tile-side properties, but those can be partial for MVT, so we
+ * refetch the canonical row).  Submit issues a PATCH; the bound
+ * map's MVT source invalidates on the next viewport settle.
  */
 function EditFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'edit-feature') return null;
   const cfg = widget.config;
   const appAt = useAppTime();
-  const muCtx = useFeatureMutationContext({
+  const mut = useMutationTargets({
     mapWidgetId: cfg.mapWidgetId,
-    targetIndex: cfg.targetIndex,
+    ...(typeof cfg.targetIndex === 'number'
+      ? { targetIndex: cfg.targetIndex }
+      : {}),
   });
-  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(false);
+  const [editing, setEditing] = useState<{
+    target: MutationTarget;
+    featureId: string;
+    properties: Record<string, unknown>;
+  } | null>(null);
   const [busy, setBusy] = useState<WriteBusyState>({ state: 'idle' });
-  const [featureProps, setFeatureProps] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
-  const [editingFeatureId, setEditingFeatureId] = useState<string | null>(
-    null,
-  );
 
-  const schema = useLayerSchema(
-    muCtx?.dataLayerId ?? '',
-    muCtx?.layerKey ?? '',
-  );
   const inTimeTravel = appAt !== null;
-  const selectionArr = useMemo(
-    () => (muCtx ? Array.from(muCtx.selection) : []),
-    [muCtx],
+  // Pre-compute the set of editable MapLayer.ids so the claim ref
+  // can stay stable as long as the bound map's target set doesn't
+  // change.  Without useMemo the Set identity flips every render
+  // and MapCanvas would rebuild its handlers needlessly.
+  const editableLayerIds = useMemo(
+    () => new Set((mut?.targets ?? []).map((t) => t.mapLayer.id)),
+    [mut?.targets],
+  );
+  const targetsByLayerId = useMemo(() => {
+    const out = new Map<string, MutationTarget>();
+    for (const t of mut?.targets ?? []) out.set(t.mapLayer.id, t);
+    return out;
+  }, [mut?.targets]);
+
+  // Schema for whichever target is in editing state.
+  const schema = useLayerSchema(
+    editing?.target.dataLayerId ?? '',
+    editing?.target.layerKey ?? '',
   );
 
-  // Resolve the selected feature's current attrs.  We fetch the
-  // single feature so we get the canonical properties (the
-  // selection state only carries ids, not the full row).
+  // Register / unregister the edit claim with the runtime as the
+  // toggle flips.  The click callback opens the editing dialog
+  // pre-filled with a feature lookup (in case the tile-side props
+  // are partial -- MVT tiles strip non-trivial properties for size).
   useEffect(() => {
-    if (!open || !muCtx) return;
-    const selected = selectionArr[0];
-    if (selected === undefined) return;
-    const fid = String(selected);
-    setEditingFeatureId(fid);
-    let cancelled = false;
-    setBusy({ state: 'submitting' });
-    fetch(
-      `/api/portal/items/${muCtx.dataLayerId}/layers/${encodeURIComponent(
-        muCtx.layerKey,
-      )}/features/${encodeURIComponent(fid)}`,
-    )
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((row: { properties?: Record<string, unknown> }) => {
-        if (cancelled) return;
-        setFeatureProps(row.properties ?? {});
-        setBusy({ state: 'idle' });
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setBusy({
-          state: 'error',
-          message: e instanceof Error ? e.message : 'Failed to load feature',
-        });
-      });
+    if (!mut || !active) return;
+    const setEditClaim = mut.setEditClaim;
+    setEditClaim(cfg.mapWidgetId, {
+      layerIds: editableLayerIds,
+      onClick: (info) => {
+        const target = targetsByLayerId.get(info.layerId);
+        if (!target) return;
+        // Refetch the canonical feature so the form is filled with
+        // the full row (the tile-side properties can be partial).
+        const fid = String(info.featureId);
+        fetch(
+          `/api/portal/items/${target.dataLayerId}/layers/${encodeURIComponent(
+            target.layerKey,
+          )}/features/${encodeURIComponent(fid)}`,
+        )
+          .then((r) => (r.ok ? r.json() : null))
+          .then((row: { properties?: Record<string, unknown> } | null) => {
+            setEditing({
+              target,
+              featureId: fid,
+              properties: row?.properties ?? info.properties,
+            });
+            setBusy({ state: 'idle' });
+          })
+          .catch(() => {
+            setEditing({
+              target,
+              featureId: fid,
+              properties: info.properties,
+            });
+            setBusy({ state: 'idle' });
+          });
+      },
+    });
     return () => {
-      cancelled = true;
+      setEditClaim(cfg.mapWidgetId, null);
     };
-  }, [open, muCtx, selectionArr]);
+  }, [
+    mut,
+    active,
+    cfg.mapWidgetId,
+    editableLayerIds,
+    targetsByLayerId,
+  ]);
 
   async function submit(values: Record<string, unknown>) {
-    if (!muCtx || !editingFeatureId) return;
+    if (!editing) return;
     setBusy({ state: 'submitting' });
     try {
       const res = await fetch(
-        `/api/portal/items/${muCtx.dataLayerId}/layers/${encodeURIComponent(
-          muCtx.layerKey,
-        )}/features/${encodeURIComponent(editingFeatureId)}`,
+        `/api/portal/items/${editing.target.dataLayerId}/layers/${encodeURIComponent(
+          editing.target.layerKey,
+        )}/features/${encodeURIComponent(editing.featureId)}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -3426,9 +3689,7 @@ function EditFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
         throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ''}`);
       }
       setBusy({ state: 'idle' });
-      setOpen(false);
-      setFeatureProps(null);
-      setEditingFeatureId(null);
+      setEditing(null);
     } catch (e) {
       setBusy({
         state: 'error',
@@ -3437,108 +3698,138 @@ function EditFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
     }
   }
 
-  if (!muCtx) {
+  if (!mut || mut.targets.length === 0) {
     return (
       <p className="p-3 text-xs italic text-muted">
-        Bind this widget to a Map widget and pick a target layer.
+        {cfg.mapWidgetId
+          ? 'No editable target layers in the bound map.'
+          : 'Bind this widget to a Map widget.'}
       </p>
     );
   }
+
   return (
     <div className="flex h-full w-full flex-col gap-2 p-2">
       <button
         type="button"
-        disabled={inTimeTravel || selectionArr.length === 0}
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-0 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={inTimeTravel}
+        onClick={() => setActive((a) => !a)}
+        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+          active
+            ? 'border-accent bg-accent text-white hover:bg-accent/90'
+            : 'border-border bg-surface-1 text-ink-0 hover:bg-surface-2'
+        }`}
         title={
           inTimeTravel
             ? 'Editing is disabled while viewing a past snapshot.'
-            : selectionArr.length === 0
-              ? 'Select a feature on the bound map first.'
-              : undefined
+            : active
+              ? 'Click an editable feature on the map to edit it. Click here again to exit edit mode.'
+              : 'Enter edit mode, then click any editable feature on the map.'
         }
       >
         <Pencil className="h-3.5 w-3.5" />
         {cfg.label || 'Edit feature'}
-        {selectionArr.length > 1 ? (
-          <span className="text-muted">
-            (1 of {selectionArr.length})
-          </span>
-        ) : null}
+        {active ? <span className="text-[10px]">(active)</span> : null}
       </button>
-      {open && featureProps ? (
-        <div className="flex-1 overflow-auto rounded-md border border-border bg-surface-0">
-          <AttributeForm
-            fields={schema.fields}
-            editableFieldNames={null}
-            initial={featureProps}
-            layerTitle={muCtx.layerLabel}
-            submitting={busy.state === 'submitting'}
-            errorMessage={busy.state === 'error' ? busy.message : null}
-            onCancel={() => {
-              setOpen(false);
-              setFeatureProps(null);
-              setEditingFeatureId(null);
-              setBusy({ state: 'idle' });
-            }}
-            onSubmit={submit}
-            submitLabel="Update"
-            title="Edit feature"
-          />
-        </div>
-      ) : open ? (
-        <p className="rounded-md border border-border bg-surface-1 p-3 text-xs italic text-muted">
-          Loading selected feature…
+      {active && !editing ? (
+        <p className="rounded-md border border-accent/50 bg-accent/10 p-2 text-[11px] text-ink-1">
+          Click any editable feature on the map.
         </p>
+      ) : null}
+      {editing ? (
+        <div className="flex-1 overflow-auto rounded-md border border-border bg-surface-0">
+          {schema.loading ? (
+            <p className="p-3 text-xs italic text-muted">Loading schema…</p>
+          ) : schema.error ? (
+            <p className="p-3 text-xs text-rose-600">{schema.error}</p>
+          ) : (
+            <AttributeForm
+              fields={schema.fields}
+              editableFieldNames={null}
+              initial={editing.properties}
+              layerTitle={editing.target.title}
+              submitting={busy.state === 'submitting'}
+              errorMessage={busy.state === 'error' ? busy.message : null}
+              onCancel={() => {
+                setEditing(null);
+                setBusy({ state: 'idle' });
+              }}
+              onSubmit={submit}
+              submitLabel="Update"
+              title="Edit feature"
+            />
+          )}
+        </div>
       ) : null}
     </div>
   );
 }
 
 /**
- * Delete-feature widget (#71).  Reads the bound map's selection on
- * the target layer; offers a Delete button with a count + confirm.
- * Issues one DELETE per selected feature.  The engine writes a
- * 'delete' observation rather than truly removing the row, so the
- * deletion is reversible by reading the layer at a moment before
- * the delete (via the #87 time slider).
+ * Delete-feature widget (#71 / #89 pivot).  Reads the bound map's
+ * selection state (which is keyed per MapLayer.id) and dispatches
+ * DELETEs against the right (data_layer, layer) pair for each
+ * selected feature.  Selections can span multiple editable
+ * targets; the widget shows a per-layer breakdown in the confirm
+ * dialog so the user knows exactly what's about to disappear.
+ *
+ * The engine writes 'delete' observations rather than truly
+ * removing rows, so a delete is reversible via the #87 time slider:
+ * scrub back to a moment before the delete and the rows return.
+ * The confirm dialog mentions this so the user isn't surprised.
  */
 function DeleteFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'delete-feature') return null;
   const cfg = widget.config;
   const appAt = useAppTime();
-  const muCtx = useFeatureMutationContext({
+  const mut = useMutationTargets({
     mapWidgetId: cfg.mapWidgetId,
-    targetIndex: cfg.targetIndex,
+    ...(typeof cfg.targetIndex === 'number'
+      ? { targetIndex: cfg.targetIndex }
+      : {}),
   });
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<WriteBusyState>({ state: 'idle' });
 
   const inTimeTravel = appAt !== null;
-  const selectionArr = useMemo(
-    () => (muCtx ? Array.from(muCtx.selection) : []),
-    [muCtx],
-  );
+  // Build per-target selection lists from the bound map's
+  // selectionByLayerId.  Filter to selections on layers the widget
+  // covers (so a stray selection on a non-editable layer doesn't
+  // count toward the total).
+  const perTarget = useMemo(() => {
+    const out: Array<{
+      target: MutationTarget;
+      ids: Array<string | number>;
+    }> = [];
+    for (const t of mut?.targets ?? []) {
+      const set = mut?.selectionByLayerId[t.mapLayer.id];
+      if (!set || set.size === 0) continue;
+      out.push({ target: t, ids: Array.from(set) });
+    }
+    return out;
+  }, [mut?.targets, mut?.selectionByLayerId]);
+  const totalSelected = perTarget.reduce((n, p) => n + p.ids.length, 0);
 
   async function doDelete() {
-    if (!muCtx || selectionArr.length === 0) return;
     setBusy({ state: 'submitting' });
     try {
-      // Sequential to keep the error surface clean.  Bulk delete is
-      // a follow-up; the engine handles individual DELETEs in a few
-      // ms each, so 10-30 selected features finish in well under a
-      // second.
-      for (const id of selectionArr) {
-        const res = await fetch(
-          `/api/portal/items/${muCtx.dataLayerId}/layers/${encodeURIComponent(
-            muCtx.layerKey,
-          )}/features/${encodeURIComponent(String(id))}`,
-          { method: 'DELETE' },
-        );
-        if (!res.ok && res.status !== 204) {
-          const text = await res.text().catch(() => '');
-          throw new Error(`HTTP ${res.status}${text ? `: ${text}` : ''}`);
+      // Sequential per (target, feature) -- bulk delete is a
+      // follow-up.  ~ms each, so dozens of features finish in
+      // under a second.
+      for (const { target, ids } of perTarget) {
+        for (const id of ids) {
+          const res = await fetch(
+            `/api/portal/items/${target.dataLayerId}/layers/${encodeURIComponent(
+              target.layerKey,
+            )}/features/${encodeURIComponent(String(id))}`,
+            { method: 'DELETE' },
+          );
+          if (!res.ok && res.status !== 204) {
+            const text = await res.text().catch(() => '');
+            throw new Error(
+              `HTTP ${res.status} on ${target.title}${text ? `: ${text}` : ''}`,
+            );
+          }
         }
       }
       setBusy({ state: 'idle' });
@@ -3551,42 +3842,53 @@ function DeleteFeatureWidgetRender({ widget }: { widget: CustomWidget }) {
     }
   }
 
-  if (!muCtx) {
+  if (!mut || mut.targets.length === 0) {
     return (
       <p className="p-3 text-xs italic text-muted">
-        Bind this widget to a Map widget and pick a target layer.
+        {cfg.mapWidgetId
+          ? 'No editable target layers in the bound map.'
+          : 'Bind this widget to a Map widget.'}
       </p>
     );
   }
+
   return (
     <div className="flex h-full w-full flex-col gap-2 p-2">
       <button
         type="button"
-        disabled={inTimeTravel || selectionArr.length === 0}
+        disabled={inTimeTravel || totalSelected === 0}
         onClick={() => setConfirming(true)}
         className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-0 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
         title={
           inTimeTravel
             ? 'Editing is disabled while viewing a past snapshot.'
-            : selectionArr.length === 0
+            : totalSelected === 0
               ? 'Select feature(s) on the bound map first.'
               : undefined
         }
       >
         <Trash2 className="h-3.5 w-3.5" />
         {cfg.label || 'Delete feature'}
-        {selectionArr.length > 0 ? (
-          <span className="text-muted">({selectionArr.length})</span>
+        {totalSelected > 0 ? (
+          <span className="text-muted">({totalSelected})</span>
         ) : null}
       </button>
       {confirming ? (
         <div className="space-y-2 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-900">
           <p>
-            Delete <strong>{selectionArr.length}</strong> feature
-            {selectionArr.length === 1 ? '' : 's'} from{' '}
-            <strong>{muCtx.layerLabel}</strong>? This is recorded as a
-            delete observation; you can read the layer "as of" a
-            moment before this action to recover.
+            Delete <strong>{totalSelected}</strong> feature
+            {totalSelected === 1 ? '' : 's'}?
+          </p>
+          <ul className="space-y-0.5 pl-3 text-[11px]">
+            {perTarget.map(({ target, ids }) => (
+              <li key={target.mapLayer.id}>
+                <strong>{target.title}</strong>: {ids.length}
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11px] text-rose-800">
+            This is recorded as a delete observation; read the layer
+            "as of" a moment before this action to recover.
           </p>
           {busy.state === 'error' ? (
             <p className="text-rose-700">{busy.message}</p>

@@ -3805,7 +3805,7 @@ function FeatureMutationWidgetConfigEditor({
   config: {
     kind: 'create-feature' | 'edit-feature' | 'delete-feature';
     mapWidgetId: string;
-    targetIndex: number;
+    targetIndex?: number;
     label?: string;
   };
   canEdit: boolean;
@@ -3813,6 +3813,14 @@ function FeatureMutationWidgetConfigEditor({
   appTargets: ViewerTarget[];
   onChangeConfig: (patch: Record<string, unknown>) => void;
 }) {
+  // #89 pivot: `targetIndex` is now optional.  When omitted (the
+  // recommended modern shape), the widget covers every editable
+  // target in the bound map -- it builds a templates palette /
+  // listens for clicks across all of them.  When set, the legacy
+  // single-target behavior kicks in.
+  const sentinel = -1;
+  const currentValue =
+    typeof config.targetIndex === 'number' ? config.targetIndex : sentinel;
   return (
     <div className="space-y-3">
       <MapBindingPicker
@@ -3821,24 +3829,33 @@ function FeatureMutationWidgetConfigEditor({
         canEdit={canEdit}
         onChange={(mapWidgetId) => onChangeConfig({ mapWidgetId })}
       />
-      <Field label="Target layer" hint="Which target row this widget acts on.">
+      <Field
+        label="Target layer"
+        hint='Defaults to "All editable targets in the bound map" -- the recommended shape since one widget handles every editable layer. Pin to a single target only when the legacy single-binding behavior is wanted.'
+      >
         <select
-          value={config.targetIndex}
+          value={currentValue}
           disabled={!canEdit || appTargets.length === 0}
-          onChange={(e) =>
-            onChangeConfig({ targetIndex: Number(e.target.value) })
-          }
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            // The sentinel -1 means "all targets"; we encode that as
+            // targetIndex: undefined on the saved config so the
+            // type stays clean.  Patching with `undefined` is a real
+            // delete here: the WidgetConfigForm wrapper does
+            // `{...current, ...patch}` and undefined overwrites the
+            // stored value.
+            onChangeConfig({ targetIndex: n === sentinel ? undefined : n });
+          }}
           className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
         >
-          {appTargets.length === 0 ? (
-            <option value={0}>(no targets configured)</option>
-          ) : (
-            appTargets.map((t, i) => (
-              <option key={i} value={i}>
-                {`Target ${i + 1} (${t.layerKey})`}
-              </option>
-            ))
-          )}
+          <option value={sentinel}>
+            All editable targets (recommended)
+          </option>
+          {appTargets.map((t, i) => (
+            <option key={i} value={i}>
+              {`Pin to target ${i + 1} (${t.layerKey})`}
+            </option>
+          ))}
         </select>
       </Field>
       <Field label="Button label" hint="Shown on the toolbar / panel header.">

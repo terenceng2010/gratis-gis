@@ -144,6 +144,31 @@ interface Props {
    * the standalone map editor leaves it unset.
    */
   asOfTime?: string | null;
+  /**
+   * #89 -- MapLayer ids the parent has claimed for in-place editing.
+   * When a click hits a feature whose layer is in this set, the
+   * canvas skips its default popup and calls `onEditClaimedClick`
+   * instead so the parent can open its own edit form.  Other layers
+   * keep their normal popup behavior.  Used by the Custom Web App
+   * runtime's Edit-feature widget to intercept clicks on every
+   * editable target in the bound map without disabling popups for
+   * unrelated layers.
+   */
+  editClaimedLayerIds?: ReadonlySet<string>;
+  /**
+   * #89 -- callback fired when a click lands on a layer in
+   * `editClaimedLayerIds`.  Receives the hit layer id, the feature
+   * id (the row's _global_id UUID for v3 data-layer sources, or a
+   * generated id otherwise), and the feature properties at click
+   * time.  The parent owns what to do with the click (open form,
+   * mark for delete, etc.).
+   */
+  onEditClaimedClick?: (info: {
+    layerId: string;
+    featureId: string | number;
+    properties: Record<string, unknown>;
+    lngLat: { lng: number; lat: number };
+  }) => void;
 }
 
 export interface MapCanvasHandle {
@@ -200,6 +225,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     onSelectionChange,
     onMapReady,
     asOfTime,
+    editClaimedLayerIds,
+    onEditClaimedClick,
     hideNavigationControl = false,
   }: Props,
   ref,
@@ -241,6 +268,18 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
   // below.
   const asOfTimeRef = useRef<string | null | undefined>(asOfTime);
   asOfTimeRef.current = asOfTime;
+  // #89: ref-shadow the edit-claimed set + click callback so the
+  // long-lived click handler (mounted once per map instance) reads
+  // the current values without forcing a remount when the parent
+  // toggles edit mode.
+  const editClaimedLayerIdsRef = useRef<ReadonlySet<string> | undefined>(
+    editClaimedLayerIds,
+  );
+  editClaimedLayerIdsRef.current = editClaimedLayerIds;
+  const onEditClaimedClickRef = useRef<typeof onEditClaimedClick>(
+    onEditClaimedClick,
+  );
+  onEditClaimedClickRef.current = onEditClaimedClick;
   // Refs the selection handlers read so we don't have to re-wire
   // mouse listeners every time the selection or tool changes.
   const selectionRef = useRef(selection);
@@ -1133,6 +1172,42 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       const layer = map.layers.find((l) =>
         overlayLayerIds(l.id).some((id) => id === hit.layer.id),
       );
+      // #89 -- edit-claimed layers intercept the click and forward
+      // to the parent's onEditClaimedClick instead of opening a
+      // popup.  When the Edit widget's mode toggle is ON for a set
+      // of editable target layers, every click on those layers
+      // opens the edit form rather than the read-only popup.  We
+      // resolve the matched layer first because the popup-skip
+      // decision is keyed by the MapLayer.id our parent supplied,
+      // not the raw maplibre paint-layer id (which has e.g. -hover
+      // suffixes the parent doesn't know about).
+      if (
+        layer &&
+        editClaimedLayerIdsRef.current &&
+        editClaimedLayerIdsRef.current.has(layer.id)
+      ) {
+        popupRef.current?.remove();
+        popupRef.current = null;
+        const cb = onEditClaimedClickRef.current;
+        if (cb) {
+          const featureId =
+            (hit.id as string | number | undefined) ??
+            (hit.properties as Record<string, unknown> | undefined)
+              ?._global_id;
+          if (
+            featureId !== undefined &&
+            (typeof featureId === 'string' || typeof featureId === 'number')
+          ) {
+            cb({
+              layerId: layer.id,
+              featureId,
+              properties: (hit.properties as Record<string, unknown>) ?? {},
+              lngLat: { lng: e.lngLat.lng, lat: e.lngLat.lat },
+            });
+          }
+        }
+        return;
+      }
       // Honour server-computed permissions when present: viewers
       // get `effective.query === false` for any layer the access
       // matrix narrowed to view-only, and popups should stay closed.

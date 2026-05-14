@@ -412,8 +412,15 @@ export interface CreateFeatureWidgetConfig {
   kind: 'create-feature';
   /** Map widget id the click-to-place mode hooks into. */
   mapWidgetId: string;
-  /** Index into the parent app's `targets` array. */
-  targetIndex: number;
+  /**
+   * Optional single-target binding (legacy).  When set, the widget
+   * skips the templates picker and immediately enters create mode
+   * for the named target.  When omitted (the recommended modern
+   * shape), the widget opens a templates palette of every editable
+   * target in the bound map -- the author drops one widget per app
+   * regardless of how many editable layers it covers.
+   */
+  targetIndex?: number;
   /** Optional button label override. Default "Add feature". */
   label?: string;
   /** Display mode (panel vs. tool). */
@@ -432,7 +439,14 @@ export interface CreateFeatureWidgetConfig {
 export interface EditFeatureWidgetConfig {
   kind: 'edit-feature';
   mapWidgetId: string;
-  targetIndex: number;
+  /**
+   * Optional single-target binding (legacy).  When set, only
+   * features in that target are click-editable.  When omitted (the
+   * recommended modern shape), every editable target in the bound
+   * map participates -- the user clicks any editable feature and
+   * the form opens against the layer that feature lives in.
+   */
+  targetIndex?: number;
   label?: string;
   displayMode?: DisplayMode;
   panelArrangement?: PanelArrangement;
@@ -449,7 +463,14 @@ export interface EditFeatureWidgetConfig {
 export interface DeleteFeatureWidgetConfig {
   kind: 'delete-feature';
   mapWidgetId: string;
-  targetIndex: number;
+  /**
+   * Optional single-target binding (legacy).  When set, only that
+   * target's selected features are deleted on confirm.  When
+   * omitted (the recommended modern shape), the widget acts against
+   * every selected feature across every target in the bound map,
+   * dispatching DELETEs per (data_layer, layer) pair.
+   */
+  targetIndex?: number;
   label?: string;
   displayMode?: DisplayMode;
   panelArrangement?: PanelArrangement;
