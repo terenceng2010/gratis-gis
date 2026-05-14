@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ReactNode } from 'react';
-import type { Item } from '@gratis-gis/shared-types';
+import { getItemTypeLabel, type Item } from '@gratis-gis/shared-types';
 import { EntityBadge } from './entity-badge';
 import { cn } from './cn';
 
@@ -90,39 +90,13 @@ const typeBadgeColor: Record<string, string> = {
   widget_package: 'bg-teal-100 text-teal-800',
 };
 
-/**
- * Human-readable badge labels keyed by item type. The card was
- * previously rendering the raw enum value (`derived_layer` etc.)
- * which leaked the snake-case shape into the UI. Mirrors the
- * portal-web `getItemTypeLabel` helper so the two surfaces agree;
- * kept here so the ui package stays self-contained and doesn't
- * import from portal-web. Falls back to the raw type string when
- * an unknown value lands so a forgotten new type still renders
- * something rather than blanking out.
- */
-const typeLabel: Record<string, string> = {
-  map: 'Map',
-  data_layer: 'Data layer',
-  derived_layer: 'Derived layer',
-  arcgis_service: 'ArcGIS service',
-  form: 'Form',
-  form_submission_collection: 'Form submissions',
-  web_app: 'Web app',
-  report_template: 'Report template',
-  dashboard: 'Dashboard',
-  file: 'File',
-  layer_package: 'Layer package',
-  tool: 'Tool',
-  widget_package: 'Widget package',
-  pick_list: 'Pick list',
-  geo_boundary: 'Boundary',
-  basemap: 'Basemap',
-  wms_service: 'WMS service',
-  wfs_service: 'WFS service',
-  folder: 'Folder',
-  editor: 'Editor',
-  data_collection: 'Data collection',
-};
+// The card defers to `getItemTypeLabel` from shared-types so new
+// item types pick up their friendly label automatically without
+// a duplicated map in this package needing to be updated.  The
+// previous local map drifted (missed geocoding_service, tile_layer,
+// viewer, survey, theme, app_template) and the card was rendering
+// the raw snake-case enum value when an item type wasn't in the
+// map.  shared-types is the single source of truth.
 
 export function ItemCard({
   item,
@@ -200,7 +174,7 @@ export function ItemCard({
       {thumbnail}
       <div className="flex items-center justify-between gap-2">
         <span className={cn('rounded px-2 py-0.5 text-xs font-medium', badgeClass)}>
-          {typeLabel[item.type] ?? item.type}
+          {getItemTypeLabel(item.type)}
         </span>
         {headerExtra ? <span className="shrink-0">{headerExtra}</span> : null}
       </div>
