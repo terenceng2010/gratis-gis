@@ -687,7 +687,13 @@ function SourceLayerPicker({
                           selected ? 'bg-accent/10 ring-1 ring-accent' : ''
                         }`}
                       >
-                        <Layers className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
+                        <Layers
+                          className={`mt-0.5 h-4 w-4 shrink-0 ${
+                            row.sourceKind === 'derived_layer'
+                              ? 'text-violet-600'
+                              : 'text-sky-600'
+                          }`}
+                        />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium text-ink-0">
                             {headline}
@@ -698,7 +704,15 @@ function SourceLayerPicker({
                             </span>
                           ) : null}
                         </span>
-                        {row.geometryType ? (
+                        {row.sourceKind === 'derived_layer' ? (
+                          // #78 -- mark chained derived sources so the
+                          // user knows they're picking a recipe, not a
+                          // raw layer.  Violet matches the FlaskConical
+                          // recipe accent in the wizard header.
+                          <span className="ml-2 mt-0.5 shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-violet-800">
+                            Derived
+                          </span>
+                        ) : row.geometryType ? (
                           <span className="ml-2 mt-0.5 shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sky-800">
                             {row.geometryType}
                           </span>
