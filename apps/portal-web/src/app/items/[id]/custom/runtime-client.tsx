@@ -725,7 +725,14 @@ export function CustomRuntimeClient({
                 // (gridTemplateColumns and gridTemplateRows are
                 // declared above this block; this comment block
                 // captures the historical context.)
-                gap: '6px',
+                // #95: gap scaled to match the v4 (192-col / 3px-row)
+                // grid resolution.  The legacy 6px gap was sized for
+                // a v3 (48-col / 12px-row) grid; at 4x finer
+                // resolution it ate a huge fraction of the available
+                // space, inflating widget heights by ~2x in the
+                // designer.  Scaling the gap by 1/4 keeps the same
+                // visual proportions across the bump.
+                gap: '1.5px',
               }}
             >
                     {/* Canvas widgets paint via the page grid. Map

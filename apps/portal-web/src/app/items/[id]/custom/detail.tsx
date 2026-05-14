@@ -1641,9 +1641,14 @@ function PageTabs({
 // position widgets with much less "snapped two cells off where I
 // wanted" friction.  The v3→v4 migration in shared-types
 // multiplies legacy widget col/row/colSpan/rowSpan by 4 so the
-// physical layout stays identical across the bump.
+// physical layout stays identical across the bump.  GAP_PX is
+// scaled by the same factor so a widget spanning N tracks renders
+// at the same physical size as it did at v3 (Item span =
+// N * track + (N-1) * gap; if both terms scale 1/4 the total
+// stays put).
 const ROW_HEIGHT_PX = 3;
 const GRID_COLS = 192;
+const GAP_PX = 1.5;
 /**
  * Floor for the canvas's working width. On viewports narrower than
  * this the designer pane scrolls horizontally instead of squeezing
@@ -2132,7 +2137,7 @@ function Canvas({
             // grid itself can scale with the viewport.
             minWidth: `${CANVAS_MIN_WIDTH_PX}px`,
             minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
-            gap: '6px',
+            gap: `${GAP_PX}px`,
           }}
         >
           {/* Map widgets paint underneath everything else so container
