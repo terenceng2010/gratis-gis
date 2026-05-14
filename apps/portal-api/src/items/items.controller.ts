@@ -350,9 +350,22 @@ export class ItemsController {
     // render as a broken-icon placeholder.  Inlining sidesteps the
     // whole problem and keeps the SVG self-contained -- one fetch
     // gets you everything, no second-trip resource loads.
+    // For basemap items, if no user-uploaded bg image is set,
+    // derive one from the basemap source itself: a sample XYZ tile
+    // at z=11 over SF for tile-url basemaps, a GetMap request for
+    // WMS basemaps.  Style-URL and pmtiles fall through to no-bg
+    // (would need headless MapLibre to render those server-side).
+    // Saves authors from screenshotting + uploading thumbnails for
+    // every basemap they configure.
+    const effectiveBgImage =
+      design.backgroundImage ??
+      (item.type === 'basemap'
+        ? deriveBasemapTileUrl(item.data as unknown)
+        : null);
+
     const inlinedDesign: ThumbnailDesign = {
       ...design,
-      backgroundImage: (await this.toDataUrl(design.backgroundImage)) ?? null,
+      backgroundImage: (await this.toDataUrl(effectiveBgImage)) ?? null,
       logo: (await this.toDataUrl(design.logo)) ?? null,
     };
 
@@ -749,4 +762,73 @@ export class ItemsController {
     }
     return this.items.bulkReassignOwner(user, patch);
   }
+}
+
+/**
+ * Derive a sample-tile URL from a basemap item's data so the
+ * thumbnail SVG can show what the basemap actually looks like
+ * without the author having to upload a screenshot.  Centered on
+ * a feature-dense city tile (SF, z=11) so raster + WMS basemaps
+ * each render with their distinguishing features visible.
+ *
+ * Returns null for shapes we can't directly fetch a tile from:
+ *   - pmtiles:// (needs the pmtiles protocol; browser-only in
+ *     practice).
+ *   - style-url (vector tiles; would need headless MapLibre).
+ *   - composed-map (phase 2; not produced today).
+ * Caller falls back to the user-supplied backgroundImage or
+ * no-image when this returns null.
+ */
+function deriveBasemapTileUrl(itemData: unknown): string | null {
+  if (!itemData || typeof itemData !== 'object') return null;
+  const d = itemData as Record<string, unknown>;
+  if (d.version !== 1) return null;
+
+  // Tile coords for z=11 over San Francisco (-122.4194, 37.7749).
+  // Pre-computed; recomputing per request is cheap but pointless.
+  const z = 11;
+  const x = 327;
+  const y = 791;
+
+  if (d.kind === 'tile-url' && typeof d.tileUrl === 'string') {
+    if (d.tileUrl.startsWith('pmtiles://')) return null;
+    return d.tileUrl
+      .replace(/\{z\}/g, String(z))
+      .replace(/\{x\}/g, String(x))
+      .replace(/\{y\}/g, String(y));
+  }
+
+  if (d.kind === 'wms' && typeof d.wmsUrl === 'string') {
+    const cfg = d.wmsConfig as Record<string, unknown> | undefined;
+    if (!cfg || typeof cfg.layers !== 'string' || cfg.layers.length === 0) {
+      return null;
+    }
+    // EPSG:3857 bbox of the same z=11 SF tile: approximate web
+    // mercator extents for tile (x=327, y=791, z=11).
+    const TILE_WIDTH = 19567.879241;
+    const ORIGIN = -20037508.342789;
+    const minX = ORIGIN + x * TILE_WIDTH;
+    const maxX = minX + TILE_WIDTH;
+    const maxY = -(ORIGIN + y * TILE_WIDTH);
+    const minY = maxY - TILE_WIDTH;
+    const version = typeof cfg.version === 'string' ? cfg.version : '1.3.0';
+    const params = new URLSearchParams({
+      SERVICE: 'WMS',
+      VERSION: version,
+      REQUEST: 'GetMap',
+      LAYERS: cfg.layers,
+      STYLES: typeof cfg.styles === 'string' ? cfg.styles : '',
+      FORMAT: typeof cfg.format === 'string' ? cfg.format : 'image/png',
+      TRANSPARENT: cfg.transparent === true ? 'TRUE' : 'FALSE',
+      [version.startsWith('1.3') ? 'CRS' : 'SRS']:
+        typeof cfg.crs === 'string' ? cfg.crs : 'EPSG:3857',
+      WIDTH: '512',
+      HEIGHT: '512',
+      BBOX: `${minX},${minY},${maxX},${maxY}`,
+    });
+    const sep = d.wmsUrl.includes('?') ? '&' : '?';
+    return `${d.wmsUrl}${sep}${params.toString()}`;
+  }
+
+  return null;
 }
