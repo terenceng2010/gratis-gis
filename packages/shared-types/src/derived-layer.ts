@@ -415,6 +415,83 @@ export interface CalculateFieldStep {
 }
 
 /**
+ * Contour-from-points step (#88).  Takes point features with a
+ * numeric attribute (elevation, water level, sample reading) and
+ * emits contour lines at user-chosen intervals.  Output is one
+ * line feature per (triangle, level) intersection, tagged with a
+ * `level` property; downstream tools can dissolve / aggregate
+ * those into per-level multilines if a single feature per level
+ * is preferred.
+ *
+ * Implementation uses a TIN-interpolated surface:
+ *   1. ST_DelaunayTriangles(ST_Collect(geom)) builds the TIN.
+ *   2. For each triangle + each contour level, compute where the
+ *      triangle's linearly-interpolated surface crosses the level.
+ *      A triangle crosses a level when min(zA,zB,zC) <= level <=
+ *      max(zA,zB,zC); the crossing produces one line segment from
+ *      the two interpolated points on the two crossing edges.
+ *   3. Emit one feature per segment, tagged with `level`.
+ *
+ * Levels are specified one of two ways:
+ *   - `mode: 'auto'`: server computes min/max of the field at
+ *     save time, generates levels at the chosen step.
+ *   - `mode: 'manual'`: an explicit list of level values the
+ *     author wants drawn (handy for "round numbers" or matched-to-
+ *     a-domain conventions like the 10-year flood line).
+ *
+ * Not supported in v1 (queued):
+ *   - Kriging (currently linear TIN interpolation).
+ *   - Polygon "filled contour" output (closed isobands between
+ *     adjacent levels).  The line output is sufficient for visual
+ *     interpolation; filled bands need a marching-squares variant
+ *     that closes the lines against an extent polygon.
+ *   - Per-feature value from a related table; the current tool
+ *     reads the value field straight off the upstream row.  Pair
+ *     with #88's eventual attribute-join tool to handle the
+ *     wells + measurements split for the groundwater scenario.
+ */
+export interface ContourStep {
+  tool: 'contour';
+  params: {
+    /**
+     * Numeric field on the upstream schema whose value is the
+     * surface height (elevation, water level, sample reading).
+     * Save-time validator rejects non-numeric fields.
+     */
+    field: string;
+    mode: 'auto' | 'manual';
+    /**
+     * Interval between contour levels, in the field's own units.
+     * Required for mode='auto'; ignored for mode='manual'.
+     */
+    interval?: number;
+    /**
+     * Lower bound for auto-generated levels.  Defaults to the
+     * field's MIN at save time when omitted.  Always tightly
+     * coupled with the cached values stamped by enrich at save.
+     */
+    minLevel?: number;
+    /** Upper bound; defaults to the field's MAX at save time. */
+    maxLevel?: number;
+    /**
+     * Explicit list of level values to draw (mode='manual').
+     * Must be a sorted ascending array of finite numbers, length
+     * 1-100.  The 100 cap matches the auto-mode safety on
+     * (max-min)/interval so the output never explodes.
+     */
+    levels?: number[];
+    /**
+     * Server-stamped cache: actual levels the read path uses.
+     * Computed from min/max/interval at save time so the SQL
+     * doesn't recompute the per-recipe range on every read.
+     * Always present on persisted recipes; the wizard never asks
+     * the author for this directly.
+     */
+    cachedLevels?: number[];
+  };
+}
+
+/**
  * Discriminated union of every available tool step. Adding a new tool
  * means adding a member here, a generator file in
  * apps/portal-api/src/derived-layers/tools/, and a wizard step in
@@ -437,7 +514,8 @@ export type ToolStep =
   | FilterStep
   | CalculateFieldStep
   | AggregateStep
-  | SpatialJoinStep;
+  | SpatialJoinStep
+  | ContourStep;
 
 /**
  * The recipe persisted in `item.data` when `type = 'derived_layer'`.
@@ -592,6 +670,15 @@ export const DEFAULT_CALCULATE_FIELD_STEP: CalculateFieldStep = {
     expression: '',
   },
 };
+export const DEFAULT_CONTOUR_STEP: ContourStep = {
+  tool: 'contour',
+  params: {
+    field: '',
+    mode: 'auto',
+    interval: 10,
+  },
+};
+
 export const DEFAULT_SPATIAL_JOIN_STEP: SpatialJoinStep = {
   tool: 'spatial-join',
   params: {
@@ -637,6 +724,7 @@ export const DEFAULT_STEPS: Record<ToolStep['tool'], ToolStep> = {
   'calculate-field': DEFAULT_CALCULATE_FIELD_STEP,
   aggregate: DEFAULT_AGGREGATE_STEP,
   'spatial-join': DEFAULT_SPATIAL_JOIN_STEP,
+  contour: DEFAULT_CONTOUR_STEP,
 };
 
 /**

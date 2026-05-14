@@ -8,6 +8,7 @@ import { bufferGenerator } from './buffer.js';
 import { calculateFieldGenerator } from './calculate-field.js';
 import { calculateGeometryGenerator } from './calculate-geometry.js';
 import { centroidGenerator } from './centroid.js';
+import { contourGenerator } from './contour.js';
 import { convexHullGenerator } from './convex-hull.js';
 import { densifyGenerator } from './densify.js';
 import { dissolveGenerator } from './dissolve.js';
@@ -65,6 +66,7 @@ const REGISTRY: Map<string, ToolGenerator<unknown>> = new Map([
     spatialJoinGenerator.kind,
     spatialJoinGenerator as ToolGenerator<unknown>,
   ],
+  [contourGenerator.kind, contourGenerator as ToolGenerator<unknown>],
 ]);
 
 /**

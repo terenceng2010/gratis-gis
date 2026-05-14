@@ -903,6 +903,7 @@ const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   'calculate-field': 'Calculate field from expression',
   aggregate: 'Group by + aggregate',
   'spatial-join': 'Spatial join (from another layer)',
+  contour: 'Contour from points',
 };
 
 const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
@@ -929,6 +930,8 @@ const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
     'Collapse rows into one per group with count / sum / avg / min / max aggregations. Geometry is unioned per group.',
   'spatial-join':
     "Join attributes (or a count) from another data layer onto each upstream row using a spatial predicate: within / intersects / nearest.",
+  contour:
+    'Interpolate contour lines from a point layer with a numeric field (elevation, water level, sample reading). Output is line features tagged with the contour level.',
 };
 
 /**
@@ -980,6 +983,12 @@ const TOOL_GROUPS: ToolGroup[] = [
     label: 'Generate',
     description: 'Create new features from scratch.',
     tools: ['fishnet'],
+  },
+  {
+    label: 'Interpolate',
+    description:
+      'Derive a surface (or its isolines) from a sparse set of point measurements.',
+    tools: ['contour'],
   },
 ];
 
@@ -1206,6 +1215,12 @@ function StepCard({
         <SpatialJoinStepEditor
           params={step.params}
           onChange={(params) => onChange({ tool: 'spatial-join', params })}
+        />
+      ) : step.tool === 'contour' ? (
+        <ContourStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'contour', params })}
+          sourceFields={sourceFields}
         />
       ) : (
         // Forward-compat fallback for a tool kind a newer server
@@ -2491,6 +2506,192 @@ function ExpressionEditor({
           Expression parses cleanly.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Contour step editor (#88).  Author picks the numeric source
+ * field + a mode (auto / manual) + the interval or explicit
+ * levels.  cachedLevels is server-computed on save so the wizard
+ * doesn't surface it directly.
+ */
+function ContourStepEditor({
+  params,
+  onChange,
+  sourceFields,
+}: {
+  params: {
+    field: string;
+    mode: 'auto' | 'manual';
+    interval?: number;
+    minLevel?: number;
+    maxLevel?: number;
+    levels?: number[];
+    cachedLevels?: number[];
+  };
+  onChange: (next: {
+    field: string;
+    mode: 'auto' | 'manual';
+    interval?: number;
+    minLevel?: number;
+    maxLevel?: number;
+    levels?: number[];
+    cachedLevels?: number[];
+  }) => void;
+  sourceFields: FeatureField[];
+}) {
+  const numericFields = sourceFields.filter((f) => f.type === 'number');
+  return (
+    <div className="space-y-3">
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          Source numeric field
+        </span>
+        <select
+          value={params.field}
+          onChange={(e) => onChange({ ...params, field: e.target.value })}
+          className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+        >
+          <option value="">(pick a numeric field)</option>
+          {numericFields.map((f) => (
+            <option key={f.name} value={f.name}>
+              {f.label ?? f.name}
+            </option>
+          ))}
+        </select>
+        {numericFields.length === 0 ? (
+          <span className="text-[11px] text-amber-700">
+            The source layer has no numeric fields. Add one (e.g. via
+            Calculate field) earlier in the pipeline.
+          </span>
+        ) : null}
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          Levels
+        </span>
+        <select
+          value={params.mode}
+          onChange={(e) =>
+            onChange({
+              ...params,
+              mode: e.target.value as 'auto' | 'manual',
+            })
+          }
+          className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+        >
+          <option value="auto">
+            Auto: walk by interval between min / max
+          </option>
+          <option value="manual">Manual: explicit list of levels</option>
+        </select>
+      </label>
+      {params.mode === 'auto' ? (
+        <div className="grid gap-2 sm:grid-cols-3">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-[11px] uppercase tracking-wide text-muted">
+              Interval
+            </span>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={params.interval ?? 10}
+              onChange={(e) =>
+                onChange({
+                  ...params,
+                  interval: Number(e.target.value),
+                })
+              }
+              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-[11px] uppercase tracking-wide text-muted">
+              Min level (optional)
+            </span>
+            <input
+              type="number"
+              step="any"
+              value={params.minLevel ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                // Build next params without minLevel, then add it
+                // back only when the input has a real value.
+                // exactOptionalPropertyTypes treats `{ x: undefined }`
+                // as distinct from `{}`, so we have to omit the
+                // key entirely.
+                const { minLevel: _drop, ...rest } = params;
+                void _drop;
+                onChange(
+                  v === '' ? rest : { ...rest, minLevel: Number(v) },
+                );
+              }}
+              placeholder="auto from data"
+              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-[11px] uppercase tracking-wide text-muted">
+              Max level (optional)
+            </span>
+            <input
+              type="number"
+              step="any"
+              value={params.maxLevel ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                const { maxLevel: _drop, ...rest } = params;
+                void _drop;
+                onChange(
+                  v === '' ? rest : { ...rest, maxLevel: Number(v) },
+                );
+              }}
+              placeholder="auto from data"
+              className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+            />
+          </label>
+        </div>
+      ) : (
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            Levels (comma-separated, ascending)
+          </span>
+          <input
+            type="text"
+            value={(params.levels ?? []).join(', ')}
+            onChange={(e) => {
+              const parts = e.target.value
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0);
+              const nums: number[] = [];
+              let bad = false;
+              for (const p of parts) {
+                const n = Number(p);
+                if (!Number.isFinite(n)) {
+                  bad = true;
+                  break;
+                }
+                nums.push(n);
+              }
+              const next = bad ? params.levels : nums;
+              const { levels: _drop, ...rest } = params;
+              void _drop;
+              onChange(next === undefined ? rest : { ...rest, levels: next });
+            }}
+            placeholder="e.g. 100, 110, 120, 130"
+            className="h-9 rounded-md border border-border bg-surface-1 px-2 text-sm focus:border-accent focus:outline-none"
+          />
+        </label>
+      )}
+      <p className="text-[11px] text-muted">
+        Output is one line feature per (triangle, level) crossing,
+        tagged with a <code>level</code> attribute. Source attributes
+        are dropped because each output line is interpolated across
+        multiple source points.
+      </p>
     </div>
   );
 }
