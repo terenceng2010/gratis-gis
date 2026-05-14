@@ -83,13 +83,22 @@ export function DerivedLayerBuilder({
   }, []);
 
   const setSourceItem = useCallback(
-    (ref: { itemId: string; layerKey?: string }) => {
+    (ref: {
+      kind: 'data_layer' | 'derived_layer';
+      itemId: string;
+      layerKey?: string;
+    }) => {
       onChange({
         ...value,
         source: {
-          kind: 'data_layer',
+          kind: ref.kind,
           itemId: ref.itemId,
-          ...(ref.layerKey ? { layerKey: ref.layerKey } : {}),
+          // layerKey is meaningless for derived_layer sources (a
+          // derived layer has a single output), so suppress it on
+          // that path even if a stale value is sitting in state.
+          ...(ref.kind === 'data_layer' && ref.layerKey
+            ? { layerKey: ref.layerKey }
+            : {}),
         },
       });
     },
@@ -197,6 +206,7 @@ export function DerivedLayerBuilder({
           selectedRef={
             value.source.itemId
               ? {
+                  kind: value.source.kind,
                   itemId: value.source.itemId,
                   ...(value.source.layerKey
                     ? { layerKey: value.source.layerKey }
@@ -207,10 +217,10 @@ export function DerivedLayerBuilder({
           onSelect={setSourceItem}
         />
         <p className="text-[11px] text-muted">
-          Lists data layers you own or have been shared with. v3
-          multi-layer items expand to one row per spatial sublayer;
-          v1 inline-GeoJSON layers are hidden because the buffer
-          tool runs SQL against the source's feature table.
+          Lists data layers and derived layers you own or have been
+          shared with (#78). v3 multi-layer items expand to one row
+          per spatial sublayer; v1 inline-GeoJSON layers are hidden
+          because the tools run SQL against the source's feature table.
         </p>
       </section>
 
@@ -276,15 +286,17 @@ export function DerivedLayerBuilder({
  * parent can write { itemId, layerKey? } into the recipe.
  */
 interface PickerRow {
-  /** Unique within the rendered list. itemId for v2, itemId#layerKey for v3. */
+  /** Unique within the rendered list. itemId for v2 or derived_layer, itemId#layerKey for v3. */
   key: string;
   /** Backing item (carries title, description, etc.). */
   item: Item;
-  /** Sublayer key when the row is a v3 sublayer; absent for v2. */
+  /** What kind of source this row is (#78). */
+  sourceKind: 'data_layer' | 'derived_layer';
+  /** Sublayer key when the row is a v3 sublayer; absent for v2 / derived. */
   layerKey?: string;
-  /** Sublayer label when v3; for v2 the row uses item.title directly. */
+  /** Sublayer label when v3; for v2 / derived the row uses item.title directly. */
   sublayerLabel?: string;
-  /** Geometry type when v3; informational, not surfaced for v2. */
+  /** Geometry type when v3; informational, not surfaced for v2 / derived. */
   geometryType?: string;
 }
 
@@ -297,8 +309,16 @@ function SourceLayerPicker({
   selectedRef,
   onSelect,
 }: {
-  selectedRef: { itemId: string; layerKey?: string } | null;
-  onSelect: (ref: { itemId: string; layerKey?: string }) => void;
+  selectedRef: {
+    kind: 'data_layer' | 'derived_layer';
+    itemId: string;
+    layerKey?: string;
+  } | null;
+  onSelect: (ref: {
+    kind: 'data_layer' | 'derived_layer';
+    itemId: string;
+    layerKey?: string;
+  }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<PickerRow[] | null>(null);
@@ -344,18 +364,32 @@ function SourceLayerPicker({
     setErr(null);
     const handle = setTimeout(async () => {
       try {
-        const qs = new URLSearchParams({ type: 'data_layer', lite: '1' });
         const q = query.trim();
-        if (q) qs.set('q', q);
-        const res = await fetch(`/api/portal/items?${qs}`, {
-          signal: controller.signal,
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as
+        const qs1 = new URLSearchParams({ type: 'data_layer', lite: '1' });
+        if (q) qs1.set('q', q);
+        const qs2 = new URLSearchParams({ type: 'derived_layer', lite: '1' });
+        if (q) qs2.set('q', q);
+        // Two parallel fetches: the items endpoint accepts a single
+        // `type` so we fan out to keep each response simple to parse.
+        const [r1, r2] = await Promise.all([
+          fetch(`/api/portal/items?${qs1}`, { signal: controller.signal }),
+          fetch(`/api/portal/items?${qs2}`, { signal: controller.signal }),
+        ]);
+        if (!r1.ok) throw new Error(`HTTP ${r1.status} on data_layer fetch`);
+        if (!r2.ok) throw new Error(`HTTP ${r2.status} on derived_layer fetch`);
+        const dataLayerBody = (await r1.json()) as
           | ItemWithLite[]
           | { items?: ItemWithLite[] };
-        const list = Array.isArray(body) ? body : (body.items ?? []);
-        const compatible = list.filter(
+        const derivedLayerBody = (await r2.json()) as
+          | ItemWithLite[]
+          | { items?: ItemWithLite[] };
+        const dataLayerList = Array.isArray(dataLayerBody)
+          ? dataLayerBody
+          : (dataLayerBody.items ?? []);
+        const derivedLayerList = Array.isArray(derivedLayerBody)
+          ? derivedLayerBody
+          : (derivedLayerBody.items ?? []);
+        const compatible = dataLayerList.filter(
           (i) => i._storageType === 'postgis',
         );
         const flattened: PickerRow[] = [];
@@ -372,14 +406,21 @@ function SourceLayerPicker({
               flattened.push({
                 key: `${item.id}#${l.id}`,
                 item,
+                sourceKind: 'data_layer',
                 layerKey: l.id,
                 sublayerLabel: l.label,
                 ...(l.geometryType ? { geometryType: l.geometryType } : {}),
               });
             }
           } else {
-            flattened.push({ key: item.id, item });
+            flattened.push({ key: item.id, item, sourceKind: 'data_layer' });
           }
+        }
+        // Each derived_layer item is a single row (no sublayer
+        // flattening; derived layers have one output).  #78 lets a
+        // recipe consume another recipe's output as input.
+        for (const item of derivedLayerList) {
+          flattened.push({ key: item.id, item, sourceKind: 'derived_layer' });
         }
         if (!cancelled) {
           setRows(flattened);
@@ -387,7 +428,7 @@ function SourceLayerPicker({
           // or v3 items still empty in the builder) effectively count
           // as incompatible from the user's POV. Track them in the
           // hidden count so the empty-state message is honest.
-          const hiddenItems = list.length - compatible.length;
+          const hiddenItems = dataLayerList.length - compatible.length;
           const itemsWithNoSpatial = compatible.filter(
             (i) => !(i._layers ?? []).some(
               (l) => typeof l.geometryType === 'string',
@@ -447,6 +488,7 @@ function SourceLayerPicker({
         setCachedSelection({
           key: selectedRefKey ?? body.id,
           item: body,
+          sourceKind: selectedRef.kind,
           ...(selectedRef.layerKey ? { layerKey: selectedRef.layerKey } : {}),
           ...(sub?.label ? { sublayerLabel: sub.label } : {}),
           ...(typeof sub?.geometryType === 'string'
@@ -488,6 +530,7 @@ function SourceLayerPicker({
     (row: PickerRow) => {
       setCachedSelection(row);
       onSelect({
+        kind: row.sourceKind,
         itemId: row.item.id,
         ...(row.layerKey ? { layerKey: row.layerKey } : {}),
       });
@@ -784,7 +827,17 @@ function FieldModeControls({
  */
 function extractFields(data: unknown, layerKey: string | undefined): FeatureField[] {
   if (!data || typeof data !== 'object') return [];
-  const d = data as { version?: unknown; layers?: unknown; fields?: unknown };
+  const d = data as {
+    version?: unknown;
+    layers?: unknown;
+    fields?: unknown;
+    outputSchema?: unknown;
+  };
+  // derived_layer items: schema lives at top-level `outputSchema`,
+  // stamped on save by DerivedLayersService.validateAndEnrich.
+  if (Array.isArray(d.outputSchema)) {
+    return d.outputSchema as FeatureField[];
+  }
   if (Array.isArray(d.layers)) {
     const layers = d.layers as Array<{
       id?: string;

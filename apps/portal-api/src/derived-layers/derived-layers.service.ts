@@ -38,6 +38,15 @@ const MAX_PIPELINE_STEPS = 10;
 const MAX_FEATURE_LIMIT = 50_000;
 
 /**
+ * Maximum depth of derived_layer chaining (#78).  A layer can have
+ * a derived_layer source which itself has a derived_layer source,
+ * and so on; cap the chain at 5 to bound peak planning cost and
+ * catch runaway-recursion configurations early.  In practice the
+ * deepest realistic chain is 2-3 (raw -> cleaned -> aggregated).
+ */
+const MAX_CHAIN_DEPTH = 5;
+
+/**
  * Approximate degrees of latitude per meter at the equator. Used
  * once when expanding a request bbox by the pipeline's outward
  * reach so features near the edge keep their halo. The value is
@@ -94,12 +103,12 @@ export class DerivedLayersService {
     const source = d.source as Record<string, unknown> | undefined;
     if (
       !source ||
-      source.kind !== 'data_layer' ||
+      (source.kind !== 'data_layer' && source.kind !== 'derived_layer') ||
       typeof source.itemId !== 'string' ||
       source.itemId.length === 0
     ) {
       throw new BadRequestException(
-        'derived_layer.source must be { kind: "data_layer", itemId: <uuid> }',
+        'derived_layer.source must be { kind: "data_layer" | "derived_layer", itemId: <uuid> }',
       );
     }
     if (source.itemId !== sourceItem.id) {
@@ -107,26 +116,64 @@ export class DerivedLayersService {
         'derived_layer.source.itemId must match the resolved source item',
       );
     }
-    if (sourceItem.type !== 'data_layer') {
+    if (sourceItem.type !== source.kind) {
       throw new BadRequestException(
-        'derived_layer.source.itemId must reference a data_layer item',
+        `derived_layer.source.itemId must reference a ${source.kind} item (got ${sourceItem.type})`,
       );
     }
 
-    // v3 multi-layer items split features across one PostGIS table per
-    // sublayer, so the recipe MUST name which sublayer to derive from.
-    // v2 single-table items have no sublayer, so layerKey must be
-    // absent. Reject both directions explicitly: a missing layerKey
-    // on a v3 source would silently query a non-existent table, and
-    // a layerKey on a v2 source would imply structure that isn't
-    // there. The check runs before tool validation so a mismatched
-    // recipe never reaches the generators.
-    const sourceVersion = readSourceVersion(sourceItem.data);
-    const sublayer = resolveSublayer(
-      sourceItem.data,
-      sourceVersion,
-      typeof source.layerKey === 'string' ? source.layerKey : undefined,
-    );
+    // For derived_layer sources (#78): walk the chain to detect
+    // cycles and depth-cap, then read schema + bbox from the
+    // source's persisted recipe.  layerKey is not meaningful for a
+    // derived_layer source (a derived layer has a single output),
+    // so reject it explicitly to surface the misconfiguration.
+    let sublayer: { id: string; fields: FeatureField[] } | null = null;
+    let sourceSchemaForChain: FeatureField[] | null = null;
+    let sourceBboxForChain: number[] | null = null;
+    if (source.kind === 'derived_layer') {
+      if (typeof source.layerKey === 'string' && source.layerKey.length > 0) {
+        throw new BadRequestException(
+          'derived_layer.source.layerKey is not valid for a derived_layer source (a derived layer has a single output)',
+        );
+      }
+      const chain = await this.walkSourceChain(sourceItem.id);
+      if (chain.depth > MAX_CHAIN_DEPTH) {
+        throw new BadRequestException(
+          `derived_layer source chain exceeds the maximum depth of ${MAX_CHAIN_DEPTH}; consider materialising an intermediate layer`,
+        );
+      }
+      // The source's recipe has a cached outputSchema (validate path
+      // recomputes it on every save), so we can read it without
+      // re-walking the parent's pipeline.
+      const sourceData = sourceItem.data as unknown as DerivedLayerData | null;
+      if (
+        !sourceData ||
+        sourceData.version !== 1 ||
+        !Array.isArray(sourceData.outputSchema)
+      ) {
+        throw new BadRequestException(
+          'derived_layer source has no cached outputSchema; re-save the source layer before chaining',
+        );
+      }
+      sourceSchemaForChain = sourceData.outputSchema;
+      sourceBboxForChain = Array.isArray(sourceData.bbox)
+        ? sourceData.bbox
+        : null;
+    } else {
+      // v3 multi-layer items split features across one PostGIS table
+      // per sublayer, so the recipe MUST name which sublayer to
+      // derive from.  v2 single-table items have no sublayer, so
+      // layerKey must be absent.  Reject both directions explicitly:
+      // a missing layerKey on a v3 source would silently query a
+      // non-existent table, and a layerKey on a v2 source would imply
+      // structure that isn't there.
+      const sourceVersion = readSourceVersion(sourceItem.data);
+      sublayer = resolveSublayer(
+        sourceItem.data,
+        sourceVersion,
+        typeof source.layerKey === 'string' ? source.layerKey : undefined,
+      );
+    }
 
     const pipeline = d.pipeline;
     if (!Array.isArray(pipeline) || pipeline.length === 0) {
@@ -163,10 +210,14 @@ export class DerivedLayersService {
     // Validate each step's params, threading the schema forward so a
     // step that changes the column shape (future: dissolve) yields
     // the right input schema for the next step. The schema comes
-    // from the resolved sublayer for v3, or top-level fields for v2.
-    const sourceSchema = sublayer
-      ? sublayer.fields
-      : readSourceSchema(sourceItem.data);
+    // from the resolved sublayer for v3, or top-level fields for v2,
+    // or the parent recipe's cached outputSchema for a derived_layer
+    // source.
+    const sourceSchema: FeatureField[] = sourceSchemaForChain
+      ? sourceSchemaForChain
+      : sublayer
+        ? sublayer.fields
+        : readSourceSchema(sourceItem.data);
     // Source feature surface for any tool's `enrich` hook that
     // needs to query against the source (buffer's field-mode max
     // computation is the only consumer in v1). After Phase 2.7,
@@ -175,13 +226,19 @@ export class DerivedLayersService {
     // can drop it into a `FROM ${sourceTable}` clause unchanged.
     // Tools see the same column names they did against the legacy
     // fs_ table: global_id, geom, properties.
-    const sourceScope = sublayer
-      ? dataLayerScope(sourceItem.id, sublayer.id)
-      : dataLayerScope(sourceItem.id, 'default');
-    // Parenthesise the engine SELECT and alias so tools can do
-    // `FROM ${sourceTable}` and reference `properties`, `geom`,
-    // `global_id` exactly as they did against the legacy fs_ table.
-    const sourceTable = `(${dataLayerSourceSqlFragment(sourceScope)}) AS source_features`;
+    //
+    // For derived_layer chained sources we don't run enrich hooks
+    // that need a materialised source CTE here (buffer's
+    // field-mode is the only one and it requires geometry types
+    // resolved at save time).  Pass an empty-table placeholder for
+    // those callers; the hook is a no-op for the common case.
+    const sourceTable = source.kind === 'derived_layer'
+      ? '(SELECT NULL::uuid AS global_id, NULL::geometry AS geom, NULL::jsonb AS properties WHERE FALSE) AS source_features'
+      : `(${dataLayerSourceSqlFragment(
+          sublayer
+            ? dataLayerScope(sourceItem.id, sublayer.id)
+            : dataLayerScope(sourceItem.id, 'default'),
+        )}) AS source_features`;
     let schema: FeatureField[] = sourceSchema;
     let totalReachMeters = 0;
     const validatedPipeline: ToolStep[] = [];
@@ -222,15 +279,22 @@ export class DerivedLayersService {
       validatedPipeline.push({ tool, params: enrichedParams } as ToolStep);
     }
 
-    const bbox = padBboxByMeters(
-      Array.isArray(sourceItem.bbox) ? sourceItem.bbox : [],
-      totalReachMeters,
-    );
+    // bbox comes from the chained source's recipe (already padded
+    // by ancestor reach) or the data_layer's stored extent.  Either
+    // way we pad it again by this layer's own outward reach so the
+    // map render pulls features near the edge of the source extent.
+    const baseBboxRaw =
+      source.kind === 'derived_layer'
+        ? (sourceBboxForChain ?? [])
+        : Array.isArray(sourceItem.bbox)
+          ? sourceItem.bbox
+          : [];
+    const bbox = padBboxByMeters(baseBboxRaw, totalReachMeters);
 
     return {
       version: 1,
       source: {
-        kind: 'data_layer',
+        kind: source.kind as 'data_layer' | 'derived_layer',
         itemId: source.itemId as string,
         ...(sublayer ? { layerKey: sublayer.id } : {}),
       },
@@ -239,6 +303,78 @@ export class DerivedLayersService {
       outputSchema: schema,
       bbox,
     };
+  }
+
+  /**
+   * Walk a chain of derived_layer sources starting at `startId`.
+   * Throws BadRequestException on cycle / orphan / non-derived
+   * member; returns the depth (1 = this layer; chain of length N
+   * has depth N) when the chain is clean.
+   *
+   * Cycle detection: we track visited item ids and throw if we ever
+   * revisit one.  The walk stops at the first non-derived_layer
+   * (data_layer) ancestor; that is the chain's root and is valid
+   * regardless of depth as long as we stayed under MAX_CHAIN_DEPTH
+   * derived_layer hops.
+   *
+   * Returns the rolled-up depth count so the caller can apply the
+   * MAX_CHAIN_DEPTH guard without re-walking.
+   */
+  private async walkSourceChain(
+    startId: string,
+  ): Promise<{ depth: number }> {
+    const visited = new Set<string>([startId]);
+    let currentId: string | null = startId;
+    let depth = 1;
+    while (currentId !== null) {
+      const id: string = currentId;
+      const node: {
+        id: string;
+        type: string;
+        data: unknown;
+        deletedAt: Date | null;
+      } | null = await this.prisma.item.findUnique({
+        where: { id },
+        select: { id: true, type: true, data: true, deletedAt: true },
+      });
+      if (!node || node.deletedAt !== null) {
+        throw new BadRequestException(
+          `derived_layer source chain references missing or trashed item ${id}`,
+        );
+      }
+      if (node.type === 'data_layer') {
+        return { depth };
+      }
+      if (node.type !== 'derived_layer') {
+        throw new BadRequestException(
+          `derived_layer source chain links through a ${node.type} item; only data_layer and derived_layer are allowed`,
+        );
+      }
+      const parentSource = (
+        node.data as { source?: { itemId?: unknown } } | null
+      )?.source;
+      const parentId: string | null =
+        parentSource && typeof parentSource.itemId === 'string'
+          ? parentSource.itemId
+          : null;
+      if (!parentId) {
+        throw new BadRequestException(
+          `derived_layer source ${id} has no source itemId`,
+        );
+      }
+      if (visited.has(parentId)) {
+        throw new BadRequestException(
+          `derived_layer source chain has a cycle through ${parentId}`,
+        );
+      }
+      visited.add(parentId);
+      depth += 1;
+      if (depth > MAX_CHAIN_DEPTH) {
+        return { depth };
+      }
+      currentId = parentId;
+    }
+    return { depth };
   }
 
   // ---------------------------------------------------------------
@@ -267,131 +403,36 @@ export class DerivedLayersService {
       // Older shape we don't recognize; safest is empty.
       return { type: 'FeatureCollection', features: [] };
     }
-    if (
-      !sourceItem ||
-      sourceItem.type !== 'data_layer' ||
-      sourceItem.id !== data.source.itemId
-    ) {
+    if (!sourceItem || sourceItem.id !== data.source.itemId) {
+      return { type: 'FeatureCollection', features: [] };
+    }
+    // The source must be either a data_layer (the historic single-
+    // source case) or a derived_layer (#78 chaining).  Caller has
+    // already done the ACL check on every item in the chain.
+    if (sourceItem.type !== data.source.kind) {
       return { type: 'FeatureCollection', features: [] };
     }
 
-    const storageType = (sourceItem.data as { storageType?: string } | null)
-      ?.storageType;
-    if (storageType !== 'postgis') {
-      // v1 inline-GeoJSON data layers don't have a PostGIS table to
-      // join against. Future work could lift the GeoJSON into a
-      // temp CTE for these; for now, empty.
-      return { type: 'FeatureCollection', features: [] };
+    // For data_layer roots, gate on PostGIS-backed storage; v1 inline
+    // -GeoJSON sources have no table to read.  For derived_layer
+    // sources we defer the check to the chain walk, which will hit a
+    // data_layer root eventually.
+    if (sourceItem.type === 'data_layer') {
+      const storageType = (sourceItem.data as { storageType?: string } | null)
+        ?.storageType;
+      if (storageType !== 'postgis') {
+        return { type: 'FeatureCollection', features: [] };
+      }
     }
 
-    // Total outward reach across the pipeline, used to expand the
-    // request bbox before querying the source so features near the
-    // edge keep their buffer halo.
-    let totalReachMeters = 0;
-    for (const step of data.pipeline) {
-      const generator = getGeneratorForStep(step);
-      totalReachMeters += generator.outwardReachMeters(
-        generator.validate(step.params),
-      );
-    }
-
-    // Phase 2.7: read the source from the engine's observation log
-    // instead of the legacy `fs_<itemId>_<layerId>` per-layer table.
-    // The engine's "current truth" projection (DISTINCT ON entity,
-    // latest valid observation, kind <> 'delete') stands in for the
-    // table; our temporal / bbox / boundary filters become
-    // pre-DISTINCT predicates on the observation rows so the latest
-    // pick already respects them.
-    const sourceScope = data.source.layerKey
-      ? dataLayerScope(data.source.itemId, data.source.layerKey)
-      : dataLayerScope(data.source.itemId, 'default');
     const queryParams: unknown[] = [];
-    const sourceConditions: string[] = [];
-
-    // Temporal: matches items.service.getGeoJson exactly so a
-    // derived layer's "as of" answers are consistent with the
-    // source's.
-    if (opts.at) {
-      const ts = new Date(opts.at);
-      if (!isNaN(ts.getTime())) {
-        queryParams.push(ts.toISOString());
-        const p = queryParams.length;
-        sourceConditions.push(
-          `valid_from <= $${p}::timestamptz AND (valid_to IS NULL OR valid_to > $${p}::timestamptz)`,
-        );
-      }
-    } else {
-      sourceConditions.push('valid_to IS NULL');
-    }
-
-    // Bbox prefilter on the source, expanded by the pipeline's
-    // outward reach. The expansion uses a single meters-per-degree
-    // approximation (see DEGREES_PER_METER comment) so we err
-    // wider at high latitudes.
-    if (opts.bbox) {
-      const padding = totalReachMeters * DEGREES_PER_METER;
-      const [minX, minY, maxX, maxY] = opts.bbox;
-      queryParams.push(
-        minX - padding,
-        minY - padding,
-        maxX + padding,
-        maxY + padding,
-      );
-      const b = queryParams.length;
-      sourceConditions.push(
-        `geom IS NOT NULL AND ST_Intersects(geom, ST_MakeEnvelope($${b - 3}, $${b - 2}, $${b - 1}, $${b}, 4326))`,
-      );
-    }
-
-    if (opts.boundaryClipId) {
-      // Boundary clip resolves through a single read of the
-      // geo_boundary item. Mirrors items.service.getGeoJson; the
-      // boundary geometry is treated as authoritative regardless of
-      // the calling user's per-boundary permissions because the
-      // map author already chose to clip to it.
-      const boundary = await this.prisma.item.findFirst({
-        where: {
-          id: opts.boundaryClipId,
-          type: 'geo_boundary',
-          deletedAt: null,
-        },
-        select: { data: true },
-      });
-      const g = (boundary?.data as { geometry?: unknown } | null)?.geometry;
-      if (g && typeof g === 'object') {
-        queryParams.push(JSON.stringify(g));
-        const p = queryParams.length;
-        sourceConditions.push(
-          `geom IS NOT NULL AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON($${p}::text), 4326))`,
-        );
-      }
-    }
-
-    // Build the full chained CTE. Step CTE names are 1-indexed so a
-    // glance at the SQL maps directly to user-facing step ordering.
-    // The `source` CTE is the engine's current-truth projection;
-    // tool-step CTEs reference it as `FROM source` exactly as they
-    // did against the legacy fs_ source.
-    const ctes: string[] = [
-      `source AS (${dataLayerSourceSqlFragment(sourceScope, {
-        extraConditions: sourceConditions,
-      })})`,
-    ];
-    let inputAlias = 'source';
-    for (let i = 0; i < data.pipeline.length; i++) {
-      const step = data.pipeline[i]!;
-      const generator = getGeneratorForStep(step);
-      const params = generator.validate(step.params);
-      const fragment = generator.toSql(
-        inputAlias,
-        params,
-        queryParams.length,
-      );
-      const cteName = `step_${i + 1}`;
-      ctes.push(`${cteName} AS (${fragment.sql})`);
-      queryParams.push(...fragment.params);
-      inputAlias = cteName;
-    }
+    let { ctes, finalAlias } = await this.composeReadCtes({
+      layerData: data,
+      depth: 0,
+      params: queryParams,
+      opts,
+      visited: new Set([item.id]),
+    });
 
     queryParams.push(data.featureLimit);
     const limitParam = queryParams.length;
@@ -399,7 +440,7 @@ export class DerivedLayersService {
     const sql = `
       WITH ${ctes.join(', ')}
       SELECT global_id, ST_AsGeoJSON(geom) AS geom, properties
-      FROM ${inputAlias}
+      FROM ${finalAlias}
       WHERE geom IS NOT NULL
       LIMIT $${limitParam}
     `;
@@ -423,6 +464,184 @@ export class DerivedLayersService {
         properties: r.properties ?? {},
       })),
     };
+  }
+
+  /**
+   * Recursively compose the CTE chain for a derived_layer's read
+   * path (#78).  Each invocation produces a list of CTEs for one
+   * layer's pipeline; when the layer's source is itself a
+   * derived_layer, the recursive call's CTEs prepend the result so
+   * the deepest ancestor sits first and each subsequent ancestor
+   * (and this layer) appends afterward.
+   *
+   * CTE naming uses a depth-prefixed scheme: `d0_source`, `d0_step_1`,
+   * `d0_step_2`, ..., `d1_source`, `d1_step_1`, ..., so adjacent
+   * derived layers don't collide on `step_N` aliases.  The final
+   * alias returned by the recursive call is the input to the next
+   * level up.
+   *
+   * Bbox / temporal / boundary filters apply ONLY to the data_layer
+   * root (depth = leaf).  Ancestor derived layers run their full
+   * pipelines against the unfiltered downstream truth; the filter
+   * is applied at the start of the source CTE because pushing it
+   * down to every step would require each generator to understand
+   * filter semantics.
+   */
+  private async composeReadCtes(args: {
+    layerData: DerivedLayerData;
+    depth: number;
+    params: unknown[];
+    opts: {
+      bbox?: [number, number, number, number];
+      at?: string;
+      boundaryClipId?: string;
+    };
+    visited: Set<string>;
+  }): Promise<{ ctes: string[]; finalAlias: string }> {
+    const { layerData, depth, params, opts, visited } = args;
+    const prefix = `d${depth}`;
+
+    // Sum outward reach across this layer's pipeline; used (only at
+    // the root) to pad the bbox prefilter so the leaf source pulls
+    // features near the edge of the requested view.
+    let layerReachMeters = 0;
+    for (const step of layerData.pipeline) {
+      const generator = getGeneratorForStep(step);
+      layerReachMeters += generator.outwardReachMeters(
+        generator.validate(step.params),
+      );
+    }
+
+    let sourceAlias: string;
+    let ctes: string[];
+
+    if (layerData.source.kind === 'derived_layer') {
+      // Recurse into the parent derived_layer.  Cycle detection
+      // here is belt-and-suspenders: validateAndEnrich rejects
+      // cycles at save time, but a stale row could still leak one
+      // through the read path.
+      if (visited.has(layerData.source.itemId)) {
+        throw new BadRequestException(
+          `derived_layer source chain has a cycle through ${layerData.source.itemId}`,
+        );
+      }
+      const next = new Set(visited);
+      next.add(layerData.source.itemId);
+      const parent = await this.prisma.item.findUnique({
+        where: { id: layerData.source.itemId },
+        select: { id: true, type: true, data: true, deletedAt: true },
+      });
+      if (
+        !parent ||
+        parent.deletedAt !== null ||
+        parent.type !== 'derived_layer'
+      ) {
+        throw new BadRequestException(
+          'derived_layer chained source is missing or no longer a derived_layer',
+        );
+      }
+      const parentData = parent.data as unknown as DerivedLayerData | null;
+      if (!parentData || parentData.version !== 1) {
+        throw new BadRequestException(
+          'derived_layer chained source has an unrecognised recipe shape',
+        );
+      }
+      if (depth + 1 > MAX_CHAIN_DEPTH) {
+        throw new BadRequestException(
+          `derived_layer source chain exceeds the maximum depth of ${MAX_CHAIN_DEPTH}`,
+        );
+      }
+      const inner = await this.composeReadCtes({
+        layerData: parentData,
+        depth: depth + 1,
+        params,
+        opts,
+        visited: next,
+      });
+      ctes = inner.ctes;
+      sourceAlias = inner.finalAlias;
+    } else {
+      // data_layer leaf: build the engine's current-truth projection
+      // with the request's bbox / temporal / boundary filters
+      // applied as predicates.  Mirrors the historical single-source
+      // code path exactly.
+      const sourceScope = layerData.source.layerKey
+        ? dataLayerScope(layerData.source.itemId, layerData.source.layerKey)
+        : dataLayerScope(layerData.source.itemId, 'default');
+      const sourceConditions: string[] = [];
+      if (opts.at) {
+        const ts = new Date(opts.at);
+        if (!isNaN(ts.getTime())) {
+          params.push(ts.toISOString());
+          const p = params.length;
+          sourceConditions.push(
+            `valid_from <= $${p}::timestamptz AND (valid_to IS NULL OR valid_to > $${p}::timestamptz)`,
+          );
+        }
+      } else {
+        sourceConditions.push('valid_to IS NULL');
+      }
+      if (opts.bbox) {
+        // Pad by THIS layer's reach.  When this layer is an ancestor
+        // in a chain, the caller's reach has already been added at
+        // an outer level; we use the per-layer figure here because
+        // each level only sees the bbox once at the leaf.
+        const padding = layerReachMeters * DEGREES_PER_METER;
+        const [minX, minY, maxX, maxY] = opts.bbox;
+        params.push(
+          minX - padding,
+          minY - padding,
+          maxX + padding,
+          maxY + padding,
+        );
+        const b = params.length;
+        sourceConditions.push(
+          `geom IS NOT NULL AND ST_Intersects(geom, ST_MakeEnvelope($${b - 3}, $${b - 2}, $${b - 1}, $${b}, 4326))`,
+        );
+      }
+      if (opts.boundaryClipId) {
+        const boundary = await this.prisma.item.findFirst({
+          where: {
+            id: opts.boundaryClipId,
+            type: 'geo_boundary',
+            deletedAt: null,
+          },
+          select: { data: true },
+        });
+        const g = (boundary?.data as { geometry?: unknown } | null)?.geometry;
+        if (g && typeof g === 'object') {
+          params.push(JSON.stringify(g));
+          const p = params.length;
+          sourceConditions.push(
+            `geom IS NOT NULL AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON($${p}::text), 4326))`,
+          );
+        }
+      }
+
+      sourceAlias = `${prefix}_source`;
+      ctes = [
+        `${sourceAlias} AS (${dataLayerSourceSqlFragment(sourceScope, {
+          extraConditions: sourceConditions,
+        })})`,
+      ];
+    }
+
+    // Apply this layer's own pipeline on top of whatever input
+    // alias the source resolution produced.  The step-N CTE names
+    // are depth-prefixed so adjacent levels never collide.
+    let inputAlias = sourceAlias;
+    for (let i = 0; i < layerData.pipeline.length; i++) {
+      const step = layerData.pipeline[i]!;
+      const generator = getGeneratorForStep(step);
+      const stepParams = generator.validate(step.params);
+      const fragment = generator.toSql(inputAlias, stepParams, params.length);
+      const cteName = `${prefix}_step_${i + 1}`;
+      ctes.push(`${cteName} AS (${fragment.sql})`);
+      params.push(...fragment.params);
+      inputAlias = cteName;
+    }
+
+    return { ctes, finalAlias: inputAlias };
   }
 
   /**
@@ -465,9 +684,17 @@ export class DerivedLayersService {
     const sliced = args.pipeline.slice(0, stop + 1);
     const previewLimit = Math.max(1, Math.min(args.limit, 50));
 
-    if (args.sourceItem.type !== 'data_layer') {
+    if (
+      args.sourceItem.type !== 'data_layer' &&
+      args.sourceItem.type !== 'derived_layer'
+    ) {
       throw new BadRequestException(
-        'derived-layer preview: source must be a data_layer item',
+        'derived-layer preview: source must be a data_layer or derived_layer item',
+      );
+    }
+    if (args.sourceItem.type !== args.source.kind) {
+      throw new BadRequestException(
+        'derived-layer preview: source.kind must match the resolved source item type',
       );
     }
 
@@ -476,17 +703,34 @@ export class DerivedLayersService {
     // the async enrich pass (the cached values aren't load-bearing
     // for read-time SQL emission; tools that depend on them treat
     // missing values as defaults).
-    const sourceVersion = readSourceVersion(args.sourceItem.data);
-    const sublayer = resolveSublayer(
-      args.sourceItem.data,
-      sourceVersion,
-      typeof args.source.layerKey === 'string'
-        ? args.source.layerKey
-        : undefined,
-    );
-    let schema: FeatureField[] = sublayer
-      ? sublayer.fields
-      : readSourceSchema(args.sourceItem.data);
+    let schema: FeatureField[];
+    if (args.sourceItem.type === 'derived_layer') {
+      const sourceData = args.sourceItem.data as unknown as
+        | DerivedLayerData
+        | null;
+      if (
+        !sourceData ||
+        sourceData.version !== 1 ||
+        !Array.isArray(sourceData.outputSchema)
+      ) {
+        throw new BadRequestException(
+          'derived-layer preview: chained source has no cached outputSchema',
+        );
+      }
+      schema = sourceData.outputSchema;
+    } else {
+      const sourceVersion = readSourceVersion(args.sourceItem.data);
+      const sublayer = resolveSublayer(
+        args.sourceItem.data,
+        sourceVersion,
+        typeof args.source.layerKey === 'string'
+          ? args.source.layerKey
+          : undefined,
+      );
+      schema = sublayer
+        ? sublayer.fields
+        : readSourceSchema(args.sourceItem.data);
+    }
     for (const step of sliced) {
       const generator = getGeneratorForStep(step);
       const validated = generator.validate(step.params, {
@@ -515,7 +759,11 @@ export class DerivedLayersService {
 
     const fc = await this.getGeoJson(
       fakeItem,
-      { id: args.sourceItem.id, type: 'data_layer', data: args.sourceItem.data },
+      {
+        id: args.sourceItem.id,
+        type: args.sourceItem.type as 'data_layer' | 'derived_layer',
+        data: args.sourceItem.data,
+      },
       {},
     );
     const allRows = fc.features as Array<{

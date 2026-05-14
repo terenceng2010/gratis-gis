@@ -17,6 +17,14 @@ import { itemBbox } from './item-bbox.js';
 const SMART_FOLDER_TYPES: readonly string[] = ITEM_TYPES;
 
 /**
+ * Mirrors MAX_CHAIN_DEPTH on DerivedLayersService (#78).  Kept as a
+ * local copy so this layer doesn't import the constant from the
+ * derived-layers module (one-directional dependency rule); the two
+ * must move together if they ever change.
+ */
+const MAX_DERIVED_CHAIN_DEPTH = 5;
+
+/**
  * Coarse degree-equivalent of a kilometer buffer. Good enough for
  * "show items near this region" search; not for any kind of
  * geodesic computation. 1 degree of latitude is roughly 111 km;
@@ -1095,28 +1103,100 @@ export class ItemsService {
         'derived_layer.source.itemId is required',
       );
     }
-    const source = await this.prisma.item.findUnique({
-      where: { id: sourceRef.itemId },
-      include: { shares: true },
-    });
-    if (
-      !source ||
-      source.deletedAt !== null ||
-      !this.sharing.canRead(user, source, source.shares)
-    ) {
-      // Match items.service.get's existence-vs-access idiom:
-      // surface the same generic error regardless of whether the
-      // source is missing, trashed, or unshared, so an attacker
-      // can't probe for hidden item ids.
-      throw new BadRequestException(
-        'derived_layer.source.itemId does not point at an accessible data layer',
-      );
-    }
+    const source = await this.assertReadableDerivedLayerChain(
+      user,
+      sourceRef.itemId,
+    );
     const enriched = await this.derivedLayers.validateAndEnrich(
       rawData,
       source,
     );
     return enriched as unknown as Prisma.JsonValue;
+  }
+
+  /**
+   * Walk a derived_layer source chain and assert the caller can
+   * read every layer along the way (#78).  Returns the immediate
+   * source item so callers can pass it to
+   * DerivedLayersService.validateAndEnrich.  Throws
+   * BadRequestException for missing / trashed / unshared ancestors
+   * or non-derived/non-data_layer interlopers.
+   *
+   * Uses the same existence-vs-access idiom items.service.get
+   * uses: any failure surfaces as the same generic error message
+   * regardless of whether the offending item was missing or just
+   * unshared, so an attacker cannot probe for hidden item ids.
+   */
+  private async assertReadableDerivedLayerChain(
+    user: AuthUser,
+    startId: string,
+  ): Promise<
+    Prisma.ItemGetPayload<{ include: { shares: true } }>
+  > {
+    type NodeRow = Prisma.ItemGetPayload<{ include: { shares: true } }>;
+    const visited = new Set<string>([startId]);
+    let currentId: string | null = startId;
+    let depth = 0;
+    let immediate: NodeRow | null = null;
+    while (currentId !== null) {
+      const id: string = currentId;
+      const node: NodeRow | null = await this.prisma.item.findUnique({
+        where: { id },
+        include: { shares: true },
+      });
+      if (
+        !node ||
+        node.deletedAt !== null ||
+        !this.sharing.canRead(user, node, node.shares)
+      ) {
+        throw new BadRequestException(
+          'derived_layer.source.itemId does not point at an accessible data layer',
+        );
+      }
+      if (depth === 0) immediate = node;
+      depth += 1;
+      if (depth > 1 + MAX_DERIVED_CHAIN_DEPTH) {
+        throw new BadRequestException(
+          'derived_layer.source chain is too deep',
+        );
+      }
+      if (node.type === 'data_layer') {
+        return immediate!;
+      }
+      if (node.type !== 'derived_layer') {
+        throw new BadRequestException(
+          'derived_layer.source.itemId does not point at an accessible data layer',
+        );
+      }
+      const parentSource = (
+        node.data as { source?: { itemId?: unknown } } | null
+      )?.source;
+      const parentId: string | null =
+        parentSource && typeof parentSource.itemId === 'string'
+          ? parentSource.itemId
+          : null;
+      if (!parentId) {
+        throw new BadRequestException(
+          'derived_layer.source.itemId does not point at an accessible data layer',
+        );
+      }
+      if (visited.has(parentId)) {
+        throw new BadRequestException(
+          'derived_layer.source chain has a cycle',
+        );
+      }
+      visited.add(parentId);
+      currentId = parentId;
+    }
+    // Unreachable in practice (the while-loop returns on
+    // data_layer), but TypeScript wants a definite return.
+    /* istanbul ignore next */
+    if (!immediate) {
+      throw new BadRequestException(
+        'derived_layer.source.itemId does not point at an accessible data layer',
+      );
+    }
+    return immediate;
   }
 
   /**
@@ -1129,7 +1209,11 @@ export class ItemsService {
   async previewDerivedLayerRecipe(
     user: AuthUser,
     args: {
-      source: { kind: 'data_layer'; itemId: string; layerKey?: string };
+      source: {
+        kind: 'data_layer' | 'derived_layer';
+        itemId: string;
+        layerKey?: string;
+      };
       pipeline: unknown[];
       upTo: number;
       limit?: number;
@@ -1154,19 +1238,13 @@ export class ItemsService {
         'preview.pipeline must be a non-empty array of tool steps',
       );
     }
-    const source = await this.prisma.item.findUnique({
-      where: { id: args.source.itemId },
-      include: { shares: true },
-    });
-    if (
-      !source ||
-      source.deletedAt !== null ||
-      !this.sharing.canRead(user, source, source.shares)
-    ) {
-      throw new BadRequestException(
-        'preview.source.itemId does not point at an accessible data layer',
-      );
-    }
+    // Use the same chain-walker enrichDerivedLayerData uses (#78) so
+    // a derived_layer-as-source preview applies the same per-link
+    // ACL check the save path does.
+    const source = await this.assertReadableDerivedLayerChain(
+      user,
+      args.source.itemId,
+    );
     // Coerce the inbound pipeline to the validator-friendly shape;
     // the validator inside DerivedLayersService.previewRecipe runs
     // each step's per-tool validate() so malformed entries surface
