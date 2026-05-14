@@ -49,6 +49,15 @@ class AppendFeatureDto {
   @IsOptional() @IsObject() properties?: Record<string, unknown>;
 }
 
+class CalculateFieldDto {
+  @IsString() expression!: string;
+  @IsString() outputName!: string;
+  @IsString() outputType!: 'number' | 'string' | 'boolean';
+  @IsString() scope!: 'all' | 'selection';
+  @IsOptional() @IsArray() @IsString({ each: true }) selectedIds?: string[];
+  @IsOptional() dryRun?: boolean;
+}
+
 class AppendFeaturesBodyDto {
   @IsArray()
   @ValidateNested({ each: true })
@@ -814,6 +823,48 @@ export class DataLayerFeaturesController {
         }`,
       );
     }
+  }
+
+  /**
+   * #83: Calculate Field on the attribute table.  Bulk-evaluate an
+   * expression against scoped features and append one `update`
+   * observation per row.  Dry-run mode returns the same shape with
+   * appliedRows=0 and a 5-row preview so the UI can show a
+   * confirm-before-applying dialog.
+   *
+   * Scoped via the `scope` field on the body:
+   *   - 'all'        every feature in the sublayer (capped server-side)
+   *   - 'selection'  only the entity ids in selectedIds
+   *
+   * Permissions: write access on the layer; row-scope shares are
+   * respected via ownRowsOnly.
+   */
+  @Post('features/calculate-field')
+  async calculateField(
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Body() body: CalculateFieldDto,
+  ) {
+    const { rowScope, isTable } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'write',
+    );
+    return this.v3.calculateField({
+      itemId,
+      layerId,
+      expression: body.expression,
+      outputName: body.outputName,
+      outputType: body.outputType,
+      scope: body.scope,
+      ...(body.selectedIds ? { selectedIds: body.selectedIds } : {}),
+      dryRun: body.dryRun === true,
+      user,
+      ownRowsOnly: rowScope === 'own',
+      isTable,
+    });
   }
 
   @Patch('features/:fid')

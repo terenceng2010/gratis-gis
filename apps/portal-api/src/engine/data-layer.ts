@@ -369,6 +369,32 @@ export class DataLayerEngine {
   }
 
   /**
+   * Bulk variant of `writeFeatureUpdate` (#83 attribute-table Calculate
+   * Field).  Same input shape per row, batched through
+   * `EngineService.writeMany` so a single calculate-field-on-N-rows
+   * call lands in batched INSERTs rather than N round-trips.
+   */
+  async writeFeaturesUpdate(
+    inputs: UpdateFeatureArgs[],
+  ): Promise<Array<{ observationId: string }>> {
+    if (inputs.length === 0) return [];
+    const observations: Observation[] = inputs.map((args) => ({
+      scope: this.scope(args.itemId, args.layerId),
+      entity: args.globalId,
+      kind: 'update',
+      validFrom: new Date(),
+      validTo: null,
+      attrs: args.properties ?? null,
+      geom: args.geometry ?? null,
+      author: args.principal,
+      source: args.source ?? DEFAULT_SOURCE,
+      parents: [],
+    }));
+    const written = await this.engine.writeMany(observations);
+    return written.map((obs) => ({ observationId: requireId(obs.id) }));
+  }
+
+  /**
    * Tombstone an entity by appending a `kind: 'delete'` observation.
    * The read path filters tombstones out, so the entity disappears
    * from feature collections without anything being physically

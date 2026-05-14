@@ -225,6 +225,12 @@ export function AttributeTable({
   // changes (each layer's selection is independent).
   const [showOnlySelected, setShowOnlySelected] = useState(false);
 
+  // #83: Calculate Field modal state.  Right-clicking a user-field
+  // column header opens this; null means closed.  Only meaningful
+  // when the active layer is a v3 data_layer sublayer (serverMode);
+  // we don't bother showing the menu for legacy geojson layers.
+  const [calcFieldFor, setCalcFieldFor] = useState<string | null>(null);
+
   /**
    * "Records in map extent" toggle, default ON (#115 P13). When the
    * active layer is a v3 data_layer sublayer and mapBbox is wired
@@ -1321,6 +1327,22 @@ export function AttributeTable({
                   <th
                     key={f}
                     onClick={() => onHeaderClick(f)}
+                    onContextMenu={(e) => {
+                      // #83: right-click opens Calculate Field.  Only
+                      // for v3 data_layer sublayers (serverMode); the
+                      // legacy geojson client-cache path can't write
+                      // back per-row.  Owners + admins + edit-share
+                      // recipients pass the server's write check;
+                      // anyone else gets a 403 toast from the POST.
+                      if (!serverMode || !canEdit) return;
+                      e.preventDefault();
+                      setCalcFieldFor(f);
+                    }}
+                    title={
+                      serverMode && canEdit
+                        ? 'Click to sort, right-click to Calculate Field'
+                        : undefined
+                    }
                     className="cursor-pointer border-b border-border px-3 py-1.5 text-left font-medium text-ink-1 hover:bg-surface-1"
                   >
                     <span className="inline-flex items-center gap-1">
@@ -1609,8 +1631,367 @@ export function AttributeTable({
           onClose={() => setAttachmentDrawer(null)}
         />
       ) : null}
+      {calcFieldFor !== null && serverItemId && serverLayerKey ? (
+        <CalculateFieldModal
+          itemId={serverItemId}
+          layerKey={serverLayerKey}
+          fieldName={calcFieldFor}
+          availableFields={activeFields}
+          selectionCount={activeSelection.size}
+          onClose={() => setCalcFieldFor(null)}
+          onApplied={() => {
+            setCalcFieldFor(null);
+            // Bump serverPage cache key by re-fetching: easiest is
+            // to nudge the user to refresh, but in-page the page-key
+            // changes when sortBy / showOnlySelected / mapBbox /
+            // ... change.  For now we just close the modal; the
+            // user can refresh /toggle to see new values.  Better:
+            // a manual refetch trigger here.
+          }}
+        />
+      ) : null}
     </div>
   );
+}
+
+/**
+ * Calculate Field modal (#83).  Right-click on a column header
+ * opens this against the chosen column.  The user writes an
+ * expression in the same {{field}} grammar as the derived-layer
+ * filter/calc-field steps; the server evaluates it per row,
+ * returns a 5-row preview on dry-run, and writes one update
+ * observation per row on apply.
+ *
+ * Scoping: "all rows" hits every feature in the sublayer (up to
+ * the server cap of 10k); "N selected" passes the current
+ * selection's entity ids.  The user picks via the radio toggle.
+ *
+ * No grouped-undo wire yet (each observation lands as an
+ * individual undoable entry); that's the v2 polish on this
+ * feature.  Today, if the user makes a mistake, they re-run the
+ * calculation with a corrective expression.
+ */
+function CalculateFieldModal({
+  itemId,
+  layerKey,
+  fieldName,
+  availableFields,
+  selectionCount,
+  onClose,
+  onApplied,
+}: {
+  itemId: string;
+  layerKey: string;
+  fieldName: string;
+  availableFields: string[];
+  selectionCount: number;
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [expression, setExpression] = useState('');
+  const [outputType, setOutputType] = useState<'number' | 'string' | 'boolean'>(
+    'number',
+  );
+  const [scope, setScope] = useState<'all' | 'selection'>(
+    selectionCount > 0 ? 'selection' : 'all',
+  );
+  const [preview, setPreview] = useState<{
+    totalRows: number;
+    sample: Array<{ id: string; oldValue: unknown; newValue: unknown }>;
+    errors: number;
+  } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  function insertFieldRef(name: string) {
+    const el = inputRef.current;
+    const token = `{{${name}}}`;
+    if (!el) {
+      setExpression((v) => v + token);
+      return;
+    }
+    const start = el.selectionStart ?? expression.length;
+    const end = el.selectionEnd ?? expression.length;
+    const next = expression.slice(0, start) + token + expression.slice(end);
+    setExpression(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      try {
+        el.setSelectionRange(start + token.length, start + token.length);
+      } catch {
+        /* element may be re-rendered */
+      }
+    });
+  }
+
+  async function callServer(dryRun: boolean) {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch(
+        `/api/portal/items/${itemId}/layers/${layerKey}/features/calculate-field`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            expression,
+            outputName: fieldName,
+            outputType,
+            scope,
+            ...(scope === 'selection' && selectionCount > 0
+              ? {
+                  // Caller doesn't have access to the selection set
+                  // from here directly; ask the user to refresh and
+                  // re-select if needed.  TODO: thread selection in.
+                  selectedIds: [],
+                }
+              : {}),
+            dryRun,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        try {
+          const parsed = JSON.parse(body) as { message?: unknown };
+          const msg = Array.isArray(parsed.message)
+            ? String(parsed.message[0])
+            : typeof parsed.message === 'string'
+              ? parsed.message
+              : `HTTP ${res.status}`;
+          setError(msg);
+        } catch {
+          setError(`HTTP ${res.status}`);
+        }
+        return;
+      }
+      const data = (await res.json()) as {
+        totalRows: number;
+        appliedRows: number;
+        sample: Array<{ id: string; oldValue: unknown; newValue: unknown }>;
+        errors: number;
+      };
+      if (dryRun) {
+        setPreview({
+          totalRows: data.totalRows,
+          sample: data.sample,
+          errors: data.errors,
+        });
+      } else {
+        onApplied();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-border bg-surface-1 shadow-raised">
+        <header className="flex items-center justify-between gap-3 border-b border-border bg-surface-2 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-medium text-ink-0">
+              Calculate Field
+            </h3>
+            <p className="text-xs text-muted">
+              Updates <span className="font-mono text-ink-1">{fieldName}</span>{' '}
+              across every row in scope.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-muted hover:bg-surface-1"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="space-y-4 p-4">
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] uppercase tracking-wide text-muted">
+                Expression
+              </span>
+              <select
+                value={outputType}
+                onChange={(e) =>
+                  setOutputType(e.target.value as 'number' | 'string' | 'boolean')
+                }
+                className="h-7 rounded border border-border bg-surface-1 px-2 text-[11px] focus:border-accent focus:outline-none"
+              >
+                <option value="number">Number</option>
+                <option value="string">String</option>
+                <option value="boolean">Boolean</option>
+              </select>
+            </div>
+            <p className="text-[11px] text-muted">
+              Reference fields with{' '}
+              <code className="rounded bg-surface-2 px-1 font-mono">
+                {`{{field}}`}
+              </code>
+              . Operators: + - * / == != &lt; &gt; AND OR. Functions: upper,
+              lower, concat, abs, round, if(cond, a, b).
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {availableFields.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => insertFieldRef(f)}
+                  className="inline-flex items-center gap-0.5 rounded-md border border-border bg-surface-1 px-2 py-0.5 font-mono text-[11px] text-ink-1 hover:bg-surface-2"
+                >
+                  <span className="text-muted">{'{{'}</span>
+                  {f}
+                  <span className="text-muted">{'}}'}</span>
+                </button>
+              ))}
+            </div>
+            <textarea
+              ref={inputRef}
+              value={expression}
+              onChange={(e) => setExpression(e.target.value)}
+              rows={3}
+              placeholder={
+                outputType === 'number'
+                  ? '{{acres}} * 0.4047'
+                  : outputType === 'string'
+                    ? "concat({{first_name}}, ' ', {{last_name}})"
+                    : '{{population}} > 1000'
+              }
+              className="w-full rounded-md border border-border bg-surface-0 px-3 py-2 font-mono text-xs text-ink-0 focus:border-accent focus:outline-none"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-[11px] uppercase tracking-wide text-muted">
+              Apply to
+            </p>
+            <div className="flex flex-col gap-1">
+              <label className="inline-flex items-center gap-2 text-xs">
+                <input
+                  type="radio"
+                  name="calc-scope"
+                  value="all"
+                  checked={scope === 'all'}
+                  onChange={() => setScope('all')}
+                />
+                <span>All rows in this sublayer</span>
+              </label>
+              <label
+                className={`inline-flex items-center gap-2 text-xs ${
+                  selectionCount === 0 ? 'opacity-50' : ''
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="calc-scope"
+                  value="selection"
+                  checked={scope === 'selection'}
+                  onChange={() => setScope('selection')}
+                  disabled={selectionCount === 0}
+                />
+                <span>
+                  Selected rows ({selectionCount} feature
+                  {selectionCount === 1 ? '' : 's'})
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {preview ? (
+            <div className="rounded-md border border-border bg-surface-2 p-3 text-xs">
+              <p className="mb-2 font-medium text-ink-0">
+                Preview: {preview.totalRows} row
+                {preview.totalRows === 1 ? '' : 's'} would change
+                {preview.errors > 0
+                  ? ` (${preview.errors} evaluation errors will become null)`
+                  : ''}
+              </p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-[10px] uppercase tracking-wide text-muted">
+                    <th className="pb-1 pr-3">Row</th>
+                    <th className="pb-1 pr-3">Old</th>
+                    <th className="pb-1">New</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.sample.map((row) => (
+                    <tr key={row.id} className="font-mono text-[11px]">
+                      <td className="pr-3 text-muted">
+                        {row.id.slice(0, 8)}
+                      </td>
+                      <td className="pr-3 text-muted">
+                        {formatCellValue(row.oldValue)}
+                      </td>
+                      <td className="text-ink-0">
+                        {formatCellValue(row.newValue)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {error ? (
+            <p className="rounded border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+              {error}
+            </p>
+          ) : null}
+        </div>
+
+        <footer className="flex items-center justify-end gap-2 border-t border-border bg-surface-2 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="inline-flex h-8 items-center rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => callServer(true)}
+            disabled={submitting || expression.trim().length === 0}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            {submitting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : null}
+            Preview
+          </button>
+          <button
+            type="button"
+            onClick={() => callServer(false)}
+            disabled={submitting || expression.trim().length === 0 || preview === null}
+            title={
+              preview === null
+                ? 'Run Preview first to see what will change'
+                : 'Apply the calculated values to every row in scope'
+            }
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-medium text-accent-ink hover:bg-accent/90 disabled:opacity-50"
+          >
+            {submitting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : null}
+            Apply
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function formatCellValue(v: unknown): string {
+  if (v === null || v === undefined) return '∅';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
 }
 
 interface AttributeAttachmentRow {

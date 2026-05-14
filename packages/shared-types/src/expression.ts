@@ -671,6 +671,117 @@ export function compileExpression(
 }
 
 /**
+ * Evaluate an AST against a single feature's properties.  Used by
+ * the attribute-table Calculate Field flow (#83) so we can compute
+ * the new value for each row server-side without round-tripping
+ * through SQL for every cell.  Faster path than `compileExpression`
+ * when the caller already has the property values in memory (e.g.
+ * after fetching a paged result for preview).
+ *
+ * Type coercions match the SQL emitter's intent so the previewed
+ * value lines up with what a SQL-based path would produce:
+ *   - numeric ops coerce both sides to Number (NaN sentinels for
+ *     empty / non-numeric inputs; consumers can clean those up
+ *     downstream)
+ *   - string ops coerce via String()
+ *   - comparisons follow JS semantics (which match SQL's lexical
+ *     vs numeric behavior for the value types we accept)
+ */
+export function evaluateExpression(
+  expr: Expr,
+  props: Record<string, unknown>,
+): unknown {
+  switch (expr.kind) {
+    case 'num':
+      return expr.value;
+    case 'str':
+      return expr.value;
+    case 'bool':
+      return expr.value;
+    case 'null':
+      return null;
+    case 'field':
+      return props[expr.name] ?? null;
+    case 'unop': {
+      const v = evaluateExpression(expr.arg, props);
+      if (expr.op === '-') return -Number(v);
+      return !v;
+    }
+    case 'binop': {
+      const l = evaluateExpression(expr.left, props);
+      const r = evaluateExpression(expr.right, props);
+      switch (expr.op) {
+        case 'AND':
+          return Boolean(l) && Boolean(r);
+        case 'OR':
+          return Boolean(l) || Boolean(r);
+        case '==':
+          // NULL == NULL is NULL in SQL but for our purposes,
+          // align with strict-equality for predictability.
+          return l === r;
+        case '!=':
+          return l !== r;
+        case '<':
+          return Number(l) < Number(r);
+        case '<=':
+          return Number(l) <= Number(r);
+        case '>':
+          return Number(l) > Number(r);
+        case '>=':
+          return Number(l) >= Number(r);
+        case '~~':
+          return String(l) + String(r);
+        case '+':
+          return Number(l) + Number(r);
+        case '-':
+          return Number(l) - Number(r);
+        case '*':
+          return Number(l) * Number(r);
+        case '/': {
+          const rn = Number(r);
+          if (rn === 0) return null;
+          return Number(l) / rn;
+        }
+        case '%': {
+          const rn = Number(r);
+          if (rn === 0) return null;
+          return Number(l) % rn;
+        }
+      }
+      return null;
+    }
+    case 'func': {
+      const args = expr.args.map((a) => evaluateExpression(a, props));
+      switch (expr.name) {
+        case 'upper':
+          return String(args[0] ?? '').toUpperCase();
+        case 'lower':
+          return String(args[0] ?? '').toLowerCase();
+        case 'length':
+          return String(args[0] ?? '').length;
+        case 'concat':
+          return args.map((a) => (a == null ? '' : String(a))).join('');
+        case 'coalesce':
+          for (const a of args) if (a != null) return a;
+          return null;
+        case 'abs':
+          return Math.abs(Number(args[0]));
+        case 'round':
+          return Math.round(Number(args[0]));
+        case 'floor':
+          return Math.floor(Number(args[0]));
+        case 'ceil':
+          return Math.ceil(Number(args[0]));
+        case 'if':
+          return args[0] ? args[1] : args[2];
+        default:
+          return null;
+      }
+    }
+  }
+}
+
+/**
  * Helper: walk an AST and collect every field reference.  Used by
  * the dependency extractor + the schema validator to know which
  * columns an expression touches.

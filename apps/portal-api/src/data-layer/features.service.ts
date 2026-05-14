@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import type { GeoJsonGeometry } from '@gratis-gis/engine';
+import {
+  ExpressionError,
+  evaluateExpression,
+  parseExpression,
+  validateExpression,
+} from '@gratis-gis/shared-types';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -446,4 +452,189 @@ export class DataLayerFeaturesService {
     });
     this.scheduleBboxRefresh(itemId);
   }
+
+  /**
+   * Bulk attribute calculation across a scope of features (#83).
+   * Parses + validates the expression once, evaluates it per row
+   * against current property values, and either returns a preview
+   * (dryRun) or emits one update observation per affected row via
+   * the engine's bulk write path.
+   *
+   * Hard server cap (MAX_CALC_FIELD_ROWS) so a runaway client can't
+   * queue a 5M-row job synchronously.  Callers that genuinely need
+   * to recalc tens of thousands of rows should keep the cap in mind
+   * and split into smaller scope batches.
+   *
+   * Output coercion follows outputType: 'number' casts the JS
+   * evaluator's result through Number() and rejects NaN; 'string'
+   * casts to String(); 'boolean' to Boolean().  null values pass
+   * through (the column on that row is cleared).
+   */
+  async calculateField(args: {
+    itemId: string;
+    layerId: string;
+    expression: string;
+    outputName: string;
+    outputType: 'number' | 'string' | 'boolean';
+    scope: 'all' | 'selection';
+    selectedIds?: string[];
+    dryRun: boolean;
+    user: AuthUser;
+    ownRowsOnly?: boolean;
+    isTable?: boolean;
+  }): Promise<{
+    totalRows: number;
+    appliedRows: number;
+    sample: Array<{
+      id: string;
+      oldValue: unknown;
+      newValue: unknown;
+    }>;
+    errors: number;
+  }> {
+    if (!FIELD_NAME_RE.test(args.outputName)) {
+      throw new BadRequestException(
+        'outputName must match [a-z_][a-z0-9_]* (letters, digits, underscores; not starting with a digit)',
+      );
+    }
+    let ast;
+    try {
+      ast = parseExpression(args.expression);
+    } catch (err) {
+      if (err instanceof ExpressionError) {
+        throw new BadRequestException(
+          `expression: ${err.message} (at position ${err.pos})`,
+        );
+      }
+      throw err;
+    }
+
+    // Fetch the affected entities.  In 'selection' mode we limit
+    // to selectedIds; otherwise we pull every entity in the
+    // sublayer.  ownRowsOnly + isTable mirror the regular update
+    // path so per-share row scoping is respected.
+    const features = await this.dataLayer.listFeatures({
+      itemId: args.itemId,
+      layerId: args.layerId,
+      ...(args.scope === 'selection' && args.selectedIds
+        ? { entityIds: args.selectedIds }
+        : {}),
+      ...(args.ownRowsOnly === true
+        ? { ownRowsOnly: { userId: args.user.id } }
+        : {}),
+      ...(args.isTable === true ? { isTable: true } : {}),
+    });
+
+    const total = features.features.length;
+    if (total > MAX_CALC_FIELD_ROWS) {
+      throw new BadRequestException(
+        `Calculate Field is capped at ${MAX_CALC_FIELD_ROWS} rows per call; narrow the scope or split into smaller batches`,
+      );
+    }
+
+    // Light schema validation against the upstream fields.  We
+    // gather field names from the first row's properties as a
+    // pragmatic stand-in for the schema; sublayer schema lookup
+    // would be more correct but the row sample matches what the
+    // user is editing.
+    const schemaSeed = features.features[0]?.properties ?? {};
+    const validationErrors = validateExpression(
+      ast,
+      Object.keys(schemaSeed).map((name) => ({ name, type: 'unknown' as const })),
+    );
+    if (validationErrors.length > 0) {
+      throw new BadRequestException(
+        `expression: ${validationErrors.join('; ')}`,
+      );
+    }
+
+    // Compute (oldValue, newValue) per row.  Eval failures (e.g. a
+    // row missing a referenced field) collapse to null + count
+    // toward `errors`; the operation continues so a few bad rows
+    // don't abort a 5000-row recalc.
+    let errors = 0;
+    const sample: Array<{ id: string; oldValue: unknown; newValue: unknown }> = [];
+    const updates: Array<{
+      id: string;
+      newProperties: Record<string, unknown>;
+      geometry: GeoJsonGeometry | null;
+    }> = [];
+    const stripUnderscoreKeys = (
+      props: Record<string, unknown>,
+    ): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(props)) {
+        if (!k.startsWith('_')) out[k] = v;
+      }
+      return out;
+    };
+    for (const f of features.features) {
+      const oldValue = (f.properties as Record<string, unknown>)[args.outputName];
+      let raw: unknown;
+      try {
+        raw = evaluateExpression(ast, f.properties as Record<string, unknown>);
+      } catch {
+        errors += 1;
+        raw = null;
+      }
+      const coerced = coerceOutputValue(raw, args.outputType);
+      if (sample.length < 5) {
+        sample.push({ id: String(f.id), oldValue, newValue: coerced });
+      }
+      const cleanedProps = stripUnderscoreKeys(
+        f.properties as Record<string, unknown>,
+      );
+      updates.push({
+        id: String(f.id),
+        newProperties: { ...cleanedProps, [args.outputName]: coerced },
+        geometry: (f.geometry ?? null) as GeoJsonGeometry | null,
+      });
+    }
+
+    if (args.dryRun) {
+      return { totalRows: total, appliedRows: 0, sample, errors };
+    }
+
+    const principal = {
+      sub: args.user.id,
+      displayName: args.user.username ?? '',
+    };
+    await this.dataLayer.writeFeaturesUpdate(
+      updates.map((u) => ({
+        itemId: args.itemId,
+        layerId: args.layerId,
+        globalId: u.id,
+        principal,
+        properties: u.newProperties,
+        geometry: u.geometry,
+      })),
+    );
+
+    void this.cacheRefresh.notifySourceWrite(
+      args.itemId,
+      args.layerId,
+      updates.map((u) => u.newProperties),
+    );
+    this.scheduleBboxRefresh(args.itemId);
+
+    return { totalRows: total, appliedRows: updates.length, sample, errors };
+  }
+}
+
+const FIELD_NAME_RE = /^[a-z_][a-z0-9_]*$/i;
+const MAX_CALC_FIELD_ROWS = 10_000;
+
+function coerceOutputValue(
+  raw: unknown,
+  outputType: 'number' | 'string' | 'boolean',
+): unknown {
+  if (raw === null || raw === undefined) return null;
+  if (outputType === 'number') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (outputType === 'boolean') {
+    return Boolean(raw);
+  }
+  return String(raw);
 }
