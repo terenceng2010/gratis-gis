@@ -39,8 +39,16 @@ interface Props {
   ariaLabel?: string;
 }
 
-const DEFAULT_CENTER: [number, number] = [-98, 39];
-const DEFAULT_ZOOM = 3;
+// Default preview center + zoom.  Tuned to a place with mixed
+// features (water, dense roads, labels, terrain) so different
+// basemaps render visually distinct at thumbnail size -- a world-
+// overview crop is too zoomed-out to tell satellite from streets
+// from dark.  San Francisco's bay + hills + grid gives every
+// raster / vector style something to show.  Callers can override
+// via the `center` / `zoom` props for the basemap config page's
+// larger preview pane.
+const DEFAULT_CENTER: [number, number] = [-122.4194, 37.7749];
+const DEFAULT_ZOOM = 11;
 
 export function BasemapPreview({
   data,
