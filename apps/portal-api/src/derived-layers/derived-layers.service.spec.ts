@@ -477,3 +477,256 @@ describe('DerivedLayersService.buildReadSql', () => {
     expect(params[5]).toBe(500);
   });
 });
+
+// -----------------------------------------------------------------
+// #78 -- derived_layer as a valid source kind (chaining)
+// -----------------------------------------------------------------
+
+describe('DerivedLayersService.validateAndEnrich (chained source)', () => {
+  /**
+   * Stand-in Prisma for the chain tests.  Tests that exercise the
+   * read path build a Map of itemId -> Item-shape and resolve
+   * findUnique against it; the service's walkSourceChain reads
+   * type/data/deletedAt off each node.
+   */
+  function makeFakePrisma(items: Map<string, unknown>) {
+    return {
+      item: {
+        findUnique: jest.fn(
+          async ({ where }: { where: { id: string } }) => {
+            return items.get(where.id) ?? null;
+          },
+        ),
+        findFirst: jest.fn(async () => null),
+      },
+      $queryRawUnsafe: jest.fn(async () => []),
+    } as unknown as ConstructorParameters<typeof DerivedLayersService>[0];
+  }
+
+  /** A persisted derived_layer item with the given source + schema. */
+  function makeDerivedSource(args: {
+    id: string;
+    sourceItemId: string;
+    sourceKind?: 'data_layer' | 'derived_layer';
+    outputSchema?: FeatureField[];
+    bbox?: number[];
+  }): {
+    id: string;
+    type: 'derived_layer';
+    data: unknown;
+    deletedAt: null;
+    bbox: number[];
+  } {
+    const data: DerivedLayerData = {
+      version: 1,
+      source: {
+        kind: args.sourceKind ?? 'data_layer',
+        itemId: args.sourceItemId,
+      },
+      pipeline: [
+        {
+          tool: 'buffer',
+          params: { mode: 'fixed', distance: 1, unit: 'meters' },
+        },
+      ],
+      featureLimit: 100,
+      outputSchema: args.outputSchema ?? [STRING_FIELD],
+      bbox: args.bbox ?? [-1, -1, 1, 1],
+    };
+    return {
+      id: args.id,
+      type: 'derived_layer',
+      data: data as unknown,
+      deletedAt: null,
+      bbox: args.bbox ?? [-1, -1, 1, 1],
+    };
+  }
+
+  it('accepts a derived_layer source and inherits its cached outputSchema', async () => {
+    const dataLayer = makeSource();
+    const parentDerived = makeDerivedSource({
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      sourceItemId: dataLayer.id,
+      outputSchema: [STRING_FIELD],
+      bbox: [-2, -2, 2, 2],
+    });
+    const items = new Map<string, unknown>([
+      [dataLayer.id, { ...dataLayer, deletedAt: null }],
+      [parentDerived.id, parentDerived],
+    ]);
+    const svc = new DerivedLayersService(makeFakePrisma(items));
+    const enriched = await svc.validateAndEnrich(
+      {
+        version: 1,
+        source: { kind: 'derived_layer', itemId: parentDerived.id },
+        pipeline: [
+          { tool: 'buffer', params: { distance: 1, unit: 'meters' } },
+        ],
+      },
+      parentDerived as unknown as Item,
+    );
+    expect(enriched.source.kind).toBe('derived_layer');
+    expect(enriched.outputSchema).toEqual([STRING_FIELD]);
+    // bbox starts from parent's [-2, -2, 2, 2] and is padded by reach.
+    expect(enriched.bbox[0]).toBeLessThanOrEqual(-2);
+    expect(enriched.bbox[3]).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rejects layerKey on a derived_layer source', async () => {
+    const dataLayer = makeSource();
+    const parentDerived = makeDerivedSource({
+      id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      sourceItemId: dataLayer.id,
+    });
+    const items = new Map<string, unknown>([
+      [dataLayer.id, { ...dataLayer, deletedAt: null }],
+      [parentDerived.id, parentDerived],
+    ]);
+    const svc = new DerivedLayersService(makeFakePrisma(items));
+    await expect(
+      svc.validateAndEnrich(
+        {
+          version: 1,
+          source: {
+            kind: 'derived_layer',
+            itemId: parentDerived.id,
+            layerKey: 'L1',
+          },
+          pipeline: [
+            { tool: 'buffer', params: { distance: 1, unit: 'meters' } },
+          ],
+        },
+        parentDerived as unknown as Item,
+      ),
+    ).rejects.toThrow(/layerKey is not valid for a derived_layer source/);
+  });
+
+  it('rejects a derived_layer source whose chain root is missing', async () => {
+    const orphan = makeDerivedSource({
+      id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      sourceItemId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    });
+    const items = new Map<string, unknown>([[orphan.id, orphan]]);
+    const svc = new DerivedLayersService(makeFakePrisma(items));
+    await expect(
+      svc.validateAndEnrich(
+        {
+          version: 1,
+          source: { kind: 'derived_layer', itemId: orphan.id },
+          pipeline: [
+            { tool: 'buffer', params: { distance: 1, unit: 'meters' } },
+          ],
+        },
+        orphan as unknown as Item,
+      ),
+    ).rejects.toThrow(/missing or trashed/);
+  });
+
+  it('detects a cycle in the chain', async () => {
+    // A points at B, B points at A.  validateAndEnrich starts at A
+    // (the immediate source).  walkSourceChain steps to B, then
+    // tries to step back to A -> cycle.
+    const a = makeDerivedSource({
+      id: '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      sourceItemId: '22222222-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      sourceKind: 'derived_layer',
+    });
+    const b = makeDerivedSource({
+      id: '22222222-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      sourceItemId: '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      sourceKind: 'derived_layer',
+    });
+    const items = new Map<string, unknown>([
+      [a.id, a],
+      [b.id, b],
+    ]);
+    const svc = new DerivedLayersService(makeFakePrisma(items));
+    await expect(
+      svc.validateAndEnrich(
+        {
+          version: 1,
+          source: { kind: 'derived_layer', itemId: a.id },
+          pipeline: [
+            { tool: 'buffer', params: { distance: 1, unit: 'meters' } },
+          ],
+        },
+        a as unknown as Item,
+      ),
+    ).rejects.toThrow(/cycle/);
+  });
+
+  it('caps the chain at MAX_CHAIN_DEPTH derived hops', async () => {
+    // Build a chain longer than the cap.  Each derived item
+    // references the next via source.itemId; the deepest references
+    // a (missing) terminal id to keep the chain pure derived.
+    const ids = Array.from({ length: 7 }).map(
+      (_, i) =>
+        `eeeeeeee-eeee-eeee-eeee-${i.toString().padStart(12, '0')}`,
+    );
+    const items = new Map<string, unknown>();
+    for (let i = 0; i < ids.length - 1; i++) {
+      const node = makeDerivedSource({
+        id: ids[i]!,
+        sourceItemId: ids[i + 1]!,
+        sourceKind: 'derived_layer',
+      });
+      items.set(ids[i]!, node);
+    }
+    // Make the terminal a data_layer so the chain can resolve --
+    // depth check should still trip before we get there.
+    const term = makeSource({
+      id: ids[ids.length - 1]!,
+      deletedAt: null,
+    } as unknown as Partial<Item>);
+    items.set(term.id!, term);
+    const head = items.get(ids[0]!) as { id: string };
+    const svc = new DerivedLayersService(makeFakePrisma(items));
+    await expect(
+      svc.validateAndEnrich(
+        {
+          version: 1,
+          source: { kind: 'derived_layer', itemId: head.id },
+          pipeline: [
+            { tool: 'buffer', params: { distance: 1, unit: 'meters' } },
+          ],
+        },
+        items.get(head.id) as unknown as Item,
+      ),
+    ).rejects.toThrow(/exceeds the maximum depth/);
+  });
+
+  it('rejects a derived_layer source with no cached outputSchema', async () => {
+    // The source claims to be a derived_layer but its data blob has
+    // no outputSchema array (which validateAndEnrich would stamp on
+    // any clean save).  This catches stale rows from before the
+    // outputSchema field landed.
+    const broken = {
+      id: '99999999-9999-9999-9999-999999999999',
+      type: 'derived_layer' as const,
+      data: {
+        version: 1,
+        source: { kind: 'data_layer', itemId: makeSource().id },
+        pipeline: [],
+      } as unknown,
+      deletedAt: null,
+      bbox: [],
+    };
+    const items = new Map<string, unknown>([
+      [broken.id, broken],
+      [makeSource().id, { ...makeSource(), deletedAt: null }],
+    ]);
+    const svc = new DerivedLayersService(makeFakePrisma(items));
+    await expect(
+      svc.validateAndEnrich(
+        {
+          version: 1,
+          source: { kind: 'derived_layer', itemId: broken.id },
+          pipeline: [
+            { tool: 'buffer', params: { distance: 1, unit: 'meters' } },
+          ],
+        },
+        broken as unknown as Item,
+      ),
+    ).rejects.toThrow(/no cached outputSchema/);
+  });
+});
