@@ -33,7 +33,6 @@ import type {
   MapData,
   ServiceData,
   CustomAppData,
-  SurveyData,
   ViewerData,
   WfsServiceData,
   WmsServiceData,
@@ -47,15 +46,12 @@ import {
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
   DEFAULT_CUSTOM_APP,
-  DEFAULT_SURVEY,
   DEFAULT_VIEWER,
   isCustomAppItem,
   isEditorItem,
-  isSurveyItem,
   isViewerItem,
   readCustomAppData,
   readEditorData,
-  readSurveyData,
   readViewerData,
 } from '@gratis-gis/shared-types';
 import { EntityBadge } from '@gratis-gis/ui';
@@ -132,12 +128,12 @@ import { FolderDetail } from './folder/folder-detail';
 import { EditorDetail } from './editor/editor-detail';
 import { FormDesigner } from './form/designer';
 import { FormActionsRow } from './form/actions-row';
+import { PairedLayerSharingNotice } from './form/paired-layer-sharing-notice';
 import { DataCollectionDetail } from './data-collection/data-collection-detail';
 import { FileDetail } from './file/file-detail';
 import { OgcServiceEditor } from './ogc-service/editor';
 import { ServiceEditor } from './service/editor';
 import { ViewerDetail } from './viewer/detail';
-import { SurveyDetail } from './survey/detail';
 import { CustomAppDetail } from './custom/detail';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
@@ -382,7 +378,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
     item.type === 'map' ||
     item.type === 'data_layer' ||
     item.type === 'arcgis_service';
-  // Web app designers (viewer / editor / survey / custom) are also
+  // Web app designers (viewer / editor / custom) are also
   // content-heavy: a 12-column drag-and-drop canvas wedged into a
   // 6xl container ends up with about 700px of usable canvas width
   // after the palette and properties rails eat their share, which
@@ -774,22 +770,6 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             canEdit={canManage}
           />
         </section>
-      ) : isSurveyItem(item) ? (
-        <section className="mb-6">
-          {/* #260: Survey Response Viewer config. Author binds a
-              form (required), optionally picks a reference map,
-              and trims the read-side toolbar. The runtime is
-              still a placeholder; the configuration plumbing is
-              live so authors can prep surveys ahead of the runtime. */}
-          <SurveyDetail
-            itemId={item.id}
-            initial={{
-              ...DEFAULT_SURVEY,
-              ...((readSurveyData(item) ?? {}) as Partial<SurveyData>),
-            }}
-            canEdit={canManage}
-          />
-        </section>
       ) : isCustomAppItem(item) && isBuilderView ? (
         <CustomAppDetail
           itemId={item.id}
@@ -1081,6 +1061,26 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
             <Users className="h-4 w-4" />
             Sharing
           </h2>
+          {/* #91: forms have a paired data_layer where every
+              submission lands; the form's own ACL controls who can
+              SUBMIT, the layer's ACL controls who can VIEW
+              responses. Surface the paired layer's current tier
+              + deep-link so authors don't have to discover the
+              dual-ACL model the hard way. */}
+          {item.type === 'form' ? (
+            <PairedLayerSharingNotice
+              formId={item.id}
+              linkedLayerId={
+                item.data &&
+                typeof item.data === 'object' &&
+                'linkedLayerId' in (item.data as object) &&
+                typeof (item.data as { linkedLayerId?: unknown })
+                  .linkedLayerId === 'string'
+                  ? ((item.data as { linkedLayerId: string }).linkedLayerId)
+                  : null
+              }
+            />
+          ) : null}
           <SharingPanel
             itemId={item.id}
             itemTitle={item.title}

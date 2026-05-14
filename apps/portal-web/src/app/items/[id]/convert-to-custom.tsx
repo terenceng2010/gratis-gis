@@ -19,23 +19,22 @@ interface Props {
   /** Source template the item is being converted from. Drives the
    *  pre-seeded widget set so the converted app feels like a richer
    *  version of the same thing rather than a blank page. */
-  sourceTemplate: 'editor' | 'viewer' | 'survey';
+  sourceTemplate: 'editor' | 'viewer';
   /** Reference map id to carry over (if set on the source). */
   sourceMapId?: string | undefined;
   /** Targets to carry over. Editor sources pass EditorTarget[];
-   *  viewer / survey pass ViewerTarget[] -- both shapes share the
-   *  identity fields (dataLayerId + layerKey) that CustomAppData's
-   *  targets use, so we accept either and project. */
+   *  viewer passes ViewerTarget[] -- both shapes share the identity
+   *  fields (dataLayerId + layerKey) that CustomAppData's targets
+   *  use, so we accept either and project. */
   sourceTargets: Array<EditorTarget | ViewerTarget>;
 }
 
 /**
  * "Convert to custom web app" escape hatch (#282). Sits on the
- * Editor / Viewer / Survey detail pages and offers an irreversible
- * one-click conversion of the item's template to 'custom'. After
- * the swap, the same item id keeps working but the detail page
- * now renders the custom-app designer instead of the focused
- * configurator.
+ * Editor / Viewer detail pages and offers an irreversible one-click
+ * conversion of the item's template to 'custom'. After the swap,
+ * the same item id keeps working but the detail page now renders
+ * the custom-app designer instead of the focused configurator.
  *
  * The conversion seeds the new CustomAppData with:
  *   1. mapId carried over (if any)
@@ -43,18 +42,16 @@ interface Props {
  *      per-target permission flags since they don't apply to a
  *      generic custom app)
  *   3. one starter page with a full-bleed map widget + a layer-list
- *      widget on the side, sized into the 12-column grid. Survey
- *      conversions also stamp an attribute-table widget pointing
- *      at the (single) target so the responses table is visible.
+ *      widget on the side, sized into the 12-column grid.
  *
  * After PATCH the page reloads so the detail-page dispatch picks
  * the new template branch up.
  *
  * Why a "danger" treatment: the conversion is one-way today. The
  * focused configurator's data shape (e.g. Editor's per-target
- * canEditAttributes flags, Survey's hideSubmitter) is dropped. We
- * could persist a "previous" snapshot for restore in a follow-up,
- * but that's beyond the scope of this slice.
+ * canEditAttributes flags) is dropped. We could persist a
+ * "previous" snapshot for restore in a follow-up, but that's
+ * beyond the scope of this slice.
  */
 export function ConvertToCustomButton({
   itemId,
@@ -115,23 +112,12 @@ export function ConvertToCustomButton({
           allowToggle: true,
         },
       });
-      // Survey -> stamp an attribute table pointed at the (single)
-      // target so the response list is visible alongside the map.
-      // Editor / Viewer skip this because their target sets are
+      // tableLayout retained for future per-template seeding -- the
+      // legacy Survey branch used it; today Editor / Viewer skip a
+      // pre-seeded attribute table because their target sets are
       // typically larger and the bottom-row table would crowd out
-      // the map; the user can add one from the page editor anyway.
-      if (sourceTemplate === 'survey' && targets.length > 0) {
-        widgets.push({
-          id: `w_at_${rid()}`,
-          kind: 'attribute-table',
-          layout: tableLayout,
-          config: {
-            kind: 'attribute-table',
-            targetIndex: 0,
-            syncWithMapWidgetId: mapWidgetId,
-          },
-        });
-      }
+      // the map. The author can drop one in from the page editor.
+      void tableLayout;
 
       const page: CustomPage = {
         id: 'home',
@@ -236,8 +222,8 @@ export function ConvertToCustomButton({
   );
 }
 
-function labelFor(t: 'editor' | 'viewer' | 'survey'): string {
-  return t === 'editor' ? 'Editor' : t === 'viewer' ? 'Viewer' : 'Survey';
+function labelFor(t: 'editor' | 'viewer'): string {
+  return t === 'editor' ? 'Editor' : 'Viewer';
 }
 
 function rid(): string {

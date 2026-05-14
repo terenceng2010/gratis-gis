@@ -27,7 +27,6 @@ import type { ItemType } from '@gratis-gis/shared-types';
 import {
   isCustomAppItem,
   isEditorItem,
-  isSurveyItem,
   isViewerItem,
 } from '@gratis-gis/shared-types';
 
@@ -160,7 +159,7 @@ export function getItemTypeIcon(type: ItemType): LucideIcon {
  * type-based helpers above show every templated web_app as the
  * generic "Web app" / Sparkles, which loses information for users
  * scanning a list. These helpers narrow first on the WebApp template
- * (Editor / Viewer / Survey / Custom) and fall back to the type-based
+ * (Editor / Viewer / Custom) and fall back to the type-based
  * Record otherwise.
  *
  * Both helpers accept the broader `Item`-shaped object so callers
@@ -174,7 +173,6 @@ export function getItemDisplayLabel(item: {
   if (item.type === 'web_app') {
     if (isEditorItem(item)) return 'Editor';
     if (isViewerItem(item)) return 'Viewer';
-    if (isSurveyItem(item)) return 'Survey';
     if (isCustomAppItem(item)) return 'Custom web app';
   }
   if ((ITEM_TYPE_LABELS as Record<string, string>)[item.type]) {
@@ -190,7 +188,6 @@ export function getItemDisplayIcon(item: {
   if (item.type === 'web_app') {
     if (isEditorItem(item)) return PencilRuler;
     if (isViewerItem(item)) return Eye;
-    if (isSurveyItem(item)) return ClipboardList;
     if (isCustomAppItem(item)) return Sparkles;
   }
   return (
@@ -230,10 +227,6 @@ export function getItemHref(item: {
   // #259: viewer template is web_app + data.template='viewer'. Deep
   // link to the viewer runtime route.
   if (isViewerItem(item)) return `/items/${item.id}/viewer/run`;
-  // #260: survey template lands at its own runtime which renders
-  // the paired data_layer's submissions as map features with
-  // form-shaped popups.
-  if (isSurveyItem(item)) return `/items/${item.id}/survey/run`;
   // #261: custom web_app template lands at its own runtime which
   // walks pages + widgets and renders them on a 12-column grid.
   if (isCustomAppItem(item)) return `/items/${item.id}/custom/run`;
@@ -257,8 +250,8 @@ export function getItemHref(item: {
  * and "Configure" (detail page); when false, there's only one
  * landing place so the menu has a single Open entry.
  *
- * Currently true for the templated web_apps (editor/viewer/survey/
- * custom), data_collection (field PWA), and form (#323 -- Open
+ * Currently true for the templated web_apps (editor/viewer/custom),
+ * data_collection (field PWA), and form (#323 -- Open
  * targets the respondent-facing runtime at /forms/<id>/respond, with
  * a separate View Responses action wired in on the form detail page
  * for the implicit response browser).
@@ -269,7 +262,6 @@ export function hasRuntime(item: {
 }): boolean {
   if (isEditorItem(item)) return true;
   if (isViewerItem(item)) return true;
-  if (isSurveyItem(item)) return true;
   if (isCustomAppItem(item)) return true;
   if (item.type === 'data_collection') return true;
   if (item.type === 'form') return true;

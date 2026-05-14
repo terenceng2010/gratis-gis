@@ -25,6 +25,7 @@ import {
   Hash,
   Home,
   Image,
+  Inbox,
   Link,
   ListOrdered,
   ListChecks,
@@ -76,7 +77,16 @@ import {
 } from '@gratis-gis/form-schema';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
-import { LayoutGrid, Settings as SettingsIcon } from 'lucide-react';
+import {
+  ExternalLink,
+  LayoutGrid,
+  Map as MapIcon,
+  Play,
+  Settings as SettingsIcon,
+  UserCircle,
+  Wrench,
+} from 'lucide-react';
+import { PickMapDialog } from '../editor/pick-map-dialog';
 import {
   FormRuntime,
   QuestionPreview,
@@ -123,7 +133,7 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
     () => initial ?? emptyForm(itemId, 'Untitled form'),
   );
   const [selectedId, setSelectedId] = useState<QuestionId | null>(null);
-  const [tab, setTab] = useState<'design' | 'preview'>('design');
+  const [tab, setTab] = useState<'design' | 'preview' | 'responses'>('design');
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -545,6 +555,23 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
           <Eye className="mr-1 inline h-3 w-3" />
           Preview
         </button>
+        {/* #91: third tab for the per-form Responses viewer. Authors
+            configure the responseView block here (reference map,
+            read-side toolbar, lookback default, hide-submitter) and
+            jump straight to /items/<id>/responses to see the live
+            view. Folds the legacy Survey app type onto the form. */}
+        <button
+          type="button"
+          onClick={() => setTab('responses')}
+          className={`px-2 py-1 ${
+            tab === 'responses'
+              ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+              : 'text-muted'
+          }`}
+        >
+          <Inbox className="mr-1 inline h-3 w-3" />
+          Responses
+        </button>
       </div>
       <button
         type="button"
@@ -606,39 +633,52 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
   // Right rail = the active question's properties + form-level
   // settings.  Properties already renders this distinction
   // internally based on whether `question` is set.
-  const propertiesPanel = (
-    <Properties
-      form={form}
-      question={selected}
-      canEdit={canEdit}
-      layerSchema={layerSchema}
-      onUnlinkLayer={unlinkLayer}
-      onChange={(patch) => {
-        if (selected) updateQuestion(selected.id, patch);
-      }}
-      onRename={(newId) => {
-        if (!selected) return;
-        if (newId === selected.id) return;
-        const ids = collectIds(form);
-        ids.delete(selected.id);
-        if (ids.has(newId)) {
-          setError(`Question id "${newId}" is already used.`);
-          return;
-        }
-        setError(null);
-        setForm((f) =>
-          updateInTree(
-            f,
-            selected.id,
-            (q) => ({ ...q, id: newId }) as Question,
-          ),
-        );
-        setSelectedId(newId);
-      }}
-      onUpdateForm={(patch) => setForm({ ...form, ...patch })}
-      onOpenImport={() => setImportOpen(true)}
-    />
-  );
+  //
+  // #91: when the Responses tab is active the rail swaps in a
+  // ResponseViewSettings panel instead -- the responseView block on
+  // the form schema (reference map, read-side toolbar, lookback,
+  // hide-submitter) has its own edit surface that doesn't intersect
+  // with question-level properties.
+  const propertiesPanel =
+    tab === 'responses' ? (
+      <ResponseViewSettings
+        form={form}
+        canEdit={canEdit}
+        onUpdateForm={(patch) => setForm({ ...form, ...patch })}
+      />
+    ) : (
+      <Properties
+        form={form}
+        question={selected}
+        canEdit={canEdit}
+        layerSchema={layerSchema}
+        onUnlinkLayer={unlinkLayer}
+        onChange={(patch) => {
+          if (selected) updateQuestion(selected.id, patch);
+        }}
+        onRename={(newId) => {
+          if (!selected) return;
+          if (newId === selected.id) return;
+          const ids = collectIds(form);
+          ids.delete(selected.id);
+          if (ids.has(newId)) {
+            setError(`Question id "${newId}" is already used.`);
+            return;
+          }
+          setError(null);
+          setForm((f) =>
+            updateInTree(
+              f,
+              selected.id,
+              (q) => ({ ...q, id: newId }) as Question,
+            ),
+          );
+          setSelectedId(newId);
+        }}
+        onUpdateForm={(patch) => setForm({ ...form, ...patch })}
+        onOpenImport={() => setImportOpen(true)}
+      />
+    );
 
   return (
     <>
@@ -652,7 +692,9 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
         leftPanelTitle="Add question"
         leftRailIcon={<LayoutGrid className="h-4 w-4" />}
         rightPanel={propertiesPanel}
-        rightPanelTitle="Properties"
+        rightPanelTitle={
+          tab === 'responses' ? 'Responses settings' : 'Properties'
+        }
         rightRailIcon={<SettingsIcon className="h-4 w-4" />}
       >
         <div className="absolute inset-0 flex flex-col overflow-hidden">
@@ -681,7 +723,7 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
                 onMove={moveQuestion}
                 onOpenImport={() => setImportOpen(true)}
               />
-            ) : (
+            ) : tab === 'preview' ? (
               <div className="bg-surface-0">
                 {/* Preview is interactive: the author should be able
                     to click radios, fill in fields, add repeat
@@ -695,6 +737,11 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
                   }}
                 />
               </div>
+            ) : (
+              <ResponsesIntro
+                itemId={itemId}
+                linkedLayerId={form.linkedLayerId ?? null}
+              />
             )}
           </div>
         </div>
@@ -707,6 +754,357 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
         />
       ) : null}
     </>
+  );
+}
+
+// ---- Responses tab -----------------------------------------------
+
+/**
+ * #91: Responses tab landing card.  The tab itself is a configurator
+ * for the form's responseView block; the canvas content here orients
+ * the author and gives a one-click jump to the live Responses page.
+ *
+ * The right rail (ResponseViewSettings) is where the actual edits
+ * happen; keeping the canvas content lightweight avoids cluttering
+ * the surface with controls that are already a few pixels away.
+ */
+function ResponsesIntro({
+  itemId,
+  linkedLayerId,
+}: {
+  itemId: string;
+  linkedLayerId: string | null;
+}) {
+  return (
+    <div className="flex h-full items-start justify-center bg-surface-0 p-8">
+      <div className="w-full max-w-2xl rounded-lg border border-dashed border-border bg-surface-1 p-8 text-center shadow-card">
+        <Inbox className="mx-auto h-8 w-8 text-orange-300" />
+        <h2 className="mt-2 text-sm font-semibold text-ink-0">
+          Form responses
+        </h2>
+        <p className="mx-auto mt-1 max-w-md text-xs text-muted">
+          Every submission to this form lands in the paired data
+          layer. The Responses viewer plots them on a map and shows
+          each one through your form&apos;s question structure. Edit
+          the reference map, read-side toolbar, and other display
+          options in the right panel.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <a
+            href={`/items/${itemId}/responses`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90"
+          >
+            <Play className="h-3.5 w-3.5" />
+            Open responses viewer
+          </a>
+          {linkedLayerId ? (
+            <a
+              href={`/items/${linkedLayerId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium text-ink-1 hover:bg-surface-2"
+            >
+              <Database className="h-3.5 w-3.5" />
+              Open paired data layer
+              <ExternalLink className="h-3 w-3 text-muted" />
+            </a>
+          ) : null}
+        </div>
+        {!linkedLayerId ? (
+          <p className="mx-auto mt-4 max-w-md rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            This form has no paired data layer yet. Save the form
+            once with at least one question to materialize the
+            layer; the Responses viewer will then have somewhere to
+            plot submissions.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Tool keys exposed in the Responses-tab toolbar editor.  Mirrors
+ *  the tool subset the legacy Survey app type used. */
+type ResponseTool =
+  | 'select'
+  | 'query'
+  | 'measure'
+  | 'attribute-table'
+  | 'legend'
+  | 'print';
+
+const ALL_RESPONSE_TOOLS: Array<{
+  key: ResponseTool;
+  label: string;
+  hint: string;
+}> = [
+  { key: 'select', label: 'Select', hint: 'Pick responses to inspect.' },
+  {
+    key: 'query',
+    label: 'Query',
+    hint: 'Filter submissions by attribute or extent.',
+  },
+  { key: 'measure', label: 'Measure', hint: 'Distance + area.' },
+  {
+    key: 'attribute-table',
+    label: 'Attribute table',
+    hint: 'Tabular browse of every submission.',
+  },
+  { key: 'legend', label: 'Legend', hint: 'Symbology key from the paired layer.' },
+  { key: 'print', label: 'Print', hint: 'Print the current view.' },
+];
+
+/** Default toolbar when the author hasn't picked one yet.  Mirrors
+ *  the runtime fallback in apps/portal-web/src/app/items/[id]/responses/page.tsx
+ *  so authors see exactly what visitors will see by default. */
+const DEFAULT_RESPONSE_TOOLS: ResponseTool[] = [
+  'select',
+  'measure',
+  'attribute-table',
+  'legend',
+];
+
+/**
+ * Right-rail panel for the Responses tab.  Edits form.responseView
+ * in place; save lands the whole form schema including the block.
+ */
+function ResponseViewSettings({
+  form,
+  canEdit,
+  onUpdateForm,
+}: {
+  form: FormSchema;
+  canEdit: boolean;
+  onUpdateForm: (patch: Partial<FormSchema>) => void;
+}) {
+  const rv = form.responseView ?? {};
+  const tools: ResponseTool[] = Array.isArray(rv.tools)
+    ? (rv.tools as ResponseTool[])
+    : DEFAULT_RESPONSE_TOOLS;
+  const mapId = typeof rv.mapId === 'string' && rv.mapId ? rv.mapId : null;
+  const [mapTitle, setMapTitle] = useState<string | null>(null);
+  const [pickingMap, setPickingMap] = useState(false);
+
+  // Resolve the picked map's title for the chip.  Same lightweight
+  // GET as survey/detail.tsx; absence is silent (the runtime falls
+  // back to the paired layer's extent anyway).
+  useEffect(() => {
+    if (!mapId) {
+      setMapTitle(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/portal/items/${mapId}`);
+        if (cancelled) return;
+        if (!res.ok) return;
+        const item = (await res.json()) as { title: string };
+        setMapTitle(item.title);
+      } catch {
+        /* silent */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mapId]);
+
+  /**
+   * Accepts patches whose values may be `undefined` (callers use that
+   * to signal "remove this key"); the cleanup step below strips those
+   * before we hand the result back to onUpdateForm so the persisted
+   * shape stays compatible with `exactOptionalPropertyTypes: true`.
+   */
+  function patchResponseView(
+    next: {
+      mapId?: string | undefined;
+      tools?: ResponseTool[] | undefined;
+      defaultLookbackDays?: number | undefined;
+      hideSubmitter?: boolean | undefined;
+    },
+  ) {
+    // Start from current rv, then apply next on top so callers can
+    // either set a key (string/number/...) OR remove it (undefined).
+    const merged: {
+      mapId?: string | undefined;
+      tools?: ResponseTool[] | undefined;
+      defaultLookbackDays?: number | undefined;
+      hideSubmitter?: boolean | undefined;
+    } = { ...rv, ...next };
+    const cleaned: NonNullable<FormSchema['responseView']> = {};
+    if (merged.mapId !== undefined) cleaned.mapId = merged.mapId;
+    if (merged.tools !== undefined) cleaned.tools = merged.tools;
+    if (merged.defaultLookbackDays !== undefined)
+      cleaned.defaultLookbackDays = merged.defaultLookbackDays;
+    if (merged.hideSubmitter !== undefined)
+      cleaned.hideSubmitter = merged.hideSubmitter;
+    onUpdateForm({ responseView: cleaned });
+  }
+
+  function toggleTool(key: ResponseTool, on: boolean) {
+    const next = on
+      ? [...tools.filter((t) => t !== key), key]
+      : tools.filter((t) => t !== key);
+    patchResponseView({ tools: next });
+  }
+
+  return (
+    <aside className="border-l border-border bg-surface-2/40 p-3 lg:sticky lg:top-0 lg:max-h-screen lg:overflow-y-auto">
+      <section className="mb-4">
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <MapIcon className="h-3.5 w-3.5" />
+          Reference map
+        </h3>
+        <p className="text-[11px] text-muted">
+          Optional. The viewer inherits this map&apos;s basemap and
+          viewport. Leave blank to frame on the submission extent.
+        </p>
+        {mapId ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border bg-surface-0 px-2 py-1.5">
+            <span className="truncate text-xs font-medium text-ink-0">
+              {mapTitle ?? mapId.slice(0, 8)}
+            </span>
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={() => patchResponseView({ mapId: undefined })}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-danger"
+                aria-label="Clear reference map"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <p className="mt-2 rounded-md border border-dashed border-border px-2 py-2 text-[11px] text-muted">
+            No reference map.
+          </p>
+        )}
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setPickingMap(true)}
+            className="mt-2 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs font-medium hover:bg-surface-2"
+          >
+            {mapId ? 'Change map' : 'Pick map'}
+          </button>
+        ) : null}
+      </section>
+
+      <section className="mb-4">
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <Wrench className="h-3.5 w-3.5" />
+          Toolbar
+        </h3>
+        <p className="text-[11px] text-muted">
+          Read-side tools to expose in the responses viewer.
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2">
+          {ALL_RESPONSE_TOOLS.map(({ key, label, hint }) => {
+            const on = tools.includes(key);
+            return (
+              <label
+                key={key}
+                className="flex items-start gap-2 text-xs"
+                title={hint}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={!canEdit}
+                  onChange={(e) => toggleTool(key, e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 cursor-pointer"
+                />
+                <span>
+                  <span className="font-medium text-ink-1">{label}</span>
+                  <span className="block text-[10px] text-muted">{hint}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          <Clock className="h-3.5 w-3.5" />
+          Response options
+        </h3>
+        <div className="space-y-3 text-xs">
+          <label className="flex items-center justify-between gap-2">
+            <span className="flex-1">
+              <span className="block font-medium text-ink-1">
+                Default look-back
+              </span>
+              <span className="block text-[10px] text-muted">
+                Pre-filter to N days back from now. Blank = show all.
+              </span>
+            </span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              disabled={!canEdit}
+              value={rv.defaultLookbackDays ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === '') {
+                  patchResponseView({ defaultLookbackDays: undefined });
+                } else {
+                  const parsed = parseInt(v, 10);
+                  patchResponseView({
+                    defaultLookbackDays: Number.isFinite(parsed)
+                      ? Math.max(0, parsed)
+                      : 0,
+                  });
+                }
+              }}
+              className="h-7 w-20 rounded-md border border-border bg-surface-0 px-2 text-xs focus:border-accent focus:outline-none"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-2">
+            <span className="inline-flex flex-1 items-center gap-1.5">
+              <UserCircle className="h-3 w-3 text-muted" />
+              <span className="flex-1">
+                <span className="block font-medium text-ink-1">
+                  Hide submitter
+                </span>
+                <span className="block text-[10px] text-muted">
+                  For anonymous-feedback workflows.
+                </span>
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              disabled={!canEdit}
+              checked={rv.hideSubmitter ?? false}
+              onChange={(e) => {
+                patchResponseView({
+                  hideSubmitter: e.target.checked ? true : undefined,
+                });
+              }}
+              className="h-3.5 w-3.5 cursor-pointer"
+            />
+          </label>
+        </div>
+        <p className="mt-2 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-[10px] text-muted">
+          Look-back and Hide submitter persist on the form schema; the
+          runtime hooks land in a follow-up.
+        </p>
+      </section>
+
+      <PickMapDialog
+        open={pickingMap}
+        onClose={() => setPickingMap(false)}
+        onPick={(m) => {
+          patchResponseView({ mapId: m.id });
+          setPickingMap(false);
+        }}
+      />
+    </aside>
   );
 }
 

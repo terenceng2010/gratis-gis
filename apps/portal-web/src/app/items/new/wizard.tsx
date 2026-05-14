@@ -63,7 +63,6 @@ import {
   DEFAULT_FOLDER,
   DEFAULT_CUSTOM_APP,
   DEFAULT_EDITOR,
-  DEFAULT_SURVEY,
   DEFAULT_VIEWER,
   ITEM_TYPES,
   APP_TEMPLATES,
@@ -124,7 +123,7 @@ interface TypeOption {
    * web_app + a template tag at submit time so the storage model
    * stays collapsed while the picker keeps Esri-friendly names.
    */
-  value: ItemType | 'viewer' | 'survey' | 'custom';
+  value: ItemType | 'viewer' | 'custom';
   label: string;
   desc: string;
   Icon: LucideIcon;
@@ -264,15 +263,9 @@ const TYPE_GROUPS: TypeGroup[] = [
       // resolve) but isn't surfaced for creation until a real
       // implementation lands.
       {
-        value: 'survey',
-        label: 'Survey responses',
-        desc: "Browse a form's submissions on a map, with click-through to a form-shaped receipt.",
-        Icon: ClipboardList,
-      },
-      {
         value: 'form',
         label: 'Form',
-        desc: 'A collection form for fieldwork or survey data. Submissions land in a paired data layer.',
+        desc: 'A collection form for fieldwork or survey data. Submissions land in a paired data layer; the form\'s Responses tab shows every submission on a map.',
         Icon: FileText,
       },
       {
@@ -388,12 +381,13 @@ export function NewItemWizard({
   // known ItemType set so a stray param can't put the wizard in a
   // bogus state.
   // Accept either a real ItemType OR one of the wizard sentinels
-  // ('viewer', 'survey', 'custom') so deep-links like "Use this
-  // template" (?type=custom&template=<id>) can skip the picker.
+  // ('viewer', 'custom') so deep-links like "Use this template"
+  // (?type=custom&template=<id>) can skip the picker.  The legacy
+  // 'survey' sentinel was retired in #91 (folded onto Form).
   const querySentinel = (
-    ['viewer', 'survey', 'custom'] as const
+    ['viewer', 'custom'] as const
   ).find((s) => s === (searchParams?.get('type') ?? ''));
-  const queryType: ItemType | 'viewer' | 'survey' | 'custom' | null =
+  const queryType: ItemType | 'viewer' | 'custom' | null =
     querySentinel
       ? querySentinel
       : searchParams &&
@@ -408,7 +402,7 @@ export function NewItemWizard({
   // (the picker stays an Esri-friendly noun while the storage stays
   // collapsed under web_app templates).
   const [type, setType] = useState<
-    ItemType | 'viewer' | 'survey' | 'custom' | null
+    ItemType | 'viewer' | 'custom' | null
   >(queryType);
 
   // Metadata persists across back/forward between steps so the user
@@ -424,12 +418,12 @@ export function NewItemWizard({
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   void setThumbnailUrl;
   // #66: auto-thumbnail design state. Resolves the wizard's
-  // wider-than-ItemType union (viewer/survey/custom all bake to
-  // web_app under the hood) to a concrete type for the designer.
-  // Author can tweak colors before saving; absent customization,
-  // we let the backend apply its own type-default on create.
+  // wider-than-ItemType union (viewer/custom both bake to web_app
+  // under the hood) to a concrete type for the designer.  Author
+  // can tweak colors before saving; absent customization, we let
+  // the backend apply its own type-default on create.
   const resolvedTypeForThumbnail: ItemType =
-    type === 'viewer' || type === 'survey' || type === 'custom'
+    type === 'viewer' || type === 'custom'
       ? 'web_app'
       : (type ?? 'file');
   const [thumbnailDesign, setThumbnailDesign] = useState<ThumbnailDesign>(() =>
@@ -619,7 +613,7 @@ export function NewItemWizard({
   const [, startTransition] = useTransition();
 
   const pickType = useCallback(
-    (t: ItemType | 'viewer' | 'survey' | 'custom') => {
+    (t: ItemType | 'viewer' | 'custom') => {
       setType(t);
       setStep('details');
       setError(null);
@@ -1155,16 +1149,6 @@ export function NewItemWizard({
         config: { template: 'viewer', viewer: DEFAULT_VIEWER },
       };
       data = webApp;
-    } else if (type === 'survey') {
-      // #260: survey response viewer. Empty defaults; the detail page
-      // gates Open until the author binds a form. Same WebAppData
-      // wrapper pattern as editor/viewer.
-      const webApp: WebAppData = {
-        version: 1,
-        template: 'survey',
-        config: { template: 'survey', survey: DEFAULT_SURVEY },
-      };
-      data = webApp;
     } else if (type === 'custom') {
       // #22: Custom Web App seeded from a user-selected app_template
       // item.  Fetch the chosen template's blueprint, stamp fresh
@@ -1309,7 +1293,6 @@ export function NewItemWizard({
     const payloadType: ItemType =
       type === 'editor' ||
       type === 'viewer' ||
-      type === 'survey' ||
       type === 'custom'
         ? 'web_app'
         : type;

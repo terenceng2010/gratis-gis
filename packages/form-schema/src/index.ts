@@ -1067,6 +1067,44 @@ export interface FormSchema {
      *  true. */
     notifyOwner?: boolean;
   };
+  /**
+   * Response viewer configuration (#91).  The Form item has a
+   * built-in "Responses" tab at `/items/<formId>/responses` that
+   * renders submissions on a map.  This block carries the author-
+   * chosen knobs for that view -- which reference map to inherit
+   * basemap/viewport from, which read-side tools to expose, an
+   * optional default time-window filter, and whether to hide the
+   * submitter column for anonymous-feedback workflows.
+   *
+   * Folding this onto the form item replaces the legacy `survey`
+   * web-app template, which was just a wrapper around these
+   * same knobs.  Forms now have one set of responses settings;
+   * the Responses tab on the Form designer lets authors edit
+   * them in-place.
+   *
+   * Absent or partial values fall through to defaults: no
+   * reference map, the full read-side toolbar minus measure, no
+   * lookback filter, submitter column visible.
+   */
+  responseView?: {
+    /** Optional `map` item id whose basemap + viewport the
+     *  responses viewer inherits.  Mirrors how the Custom Web App
+     *  uses its bound map. */
+    mapId?: string;
+    /** Subset of read-side tools to expose in the responses
+     *  toolbar.  Same enum the Viewer template uses. */
+    tools?: Array<
+      'select' | 'query' | 'measure' | 'attribute-table' | 'legend' | 'print'
+    >;
+    /** Default time-window filter, in days back from now.  Authors
+     *  set this for "respond log: last 30 days" style surveys;
+     *  users can clear it at runtime. */
+    defaultLookbackDays?: number;
+    /** When true, hide the per-respondent "submitted by" column on
+     *  the popup + attribute table.  For surveys gathered
+     *  anonymously where the captured user id is meaningless. */
+    hideSubmitter?: boolean;
+  };
   /** Designer metadata (palette state, last-edit timestamps) the
    *  runtime ignores. */
   meta?: Record<string, unknown>;

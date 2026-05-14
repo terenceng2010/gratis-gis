@@ -74,9 +74,10 @@ function basemapItemToCustomBasemap(
 
 /**
  * Loose shape we read off the form item. The form's `data` is a full
- * FormSchema (questions, title, schemaVersion) plus the form-app
- * specific fields layered on top. Keep this shape narrow so a future
- * schema bump doesn't crash this page.
+ * FormSchema (questions, title, schemaVersion, responseView) plus the
+ * form-app specific fields (linkedLayerId, linkedLayerKey) layered on
+ * top. Keep this shape narrow so a future schema bump doesn't crash
+ * this page.
  */
 interface FormShape {
   /** v3 paired data_layer materialized for this form (#283). */
@@ -88,29 +89,35 @@ interface FormShape {
   schemaVersion?: number;
   questions?: FormSchema['questions'];
   title?: string;
+  /** #91: per-form Responses tab config. Replaces the legacy Survey
+   *  web_app template. Authors edit this from the Form designer's
+   *  Responses tab. Absent values fall through to defaults below. */
+  responseView?: FormSchema['responseView'];
 }
 
 /**
- * Implicit per-form Response Viewer (#321 / #320).
+ * Per-form Response Viewer (#321 / #320 / #91).
  *
  * Every Form item gets a built-in Response Viewer at
- * `/items/<formId>/responses` -- no separate Survey web_app item to
- * create, no extra configuration to bind. The form item's data has
- * everything we need: a paired data_layer (#283), a FormSchema for
- * the side panel (#320), and the linkedLayerKey when the pair is
- * multi-layer.
+ * `/items/<formId>/responses`. The form item's data has everything
+ * we need: a paired data_layer (#283), a FormSchema for the side
+ * panel (#320), the linkedLayerKey when the pair is multi-layer,
+ * and an optional responseView config block (#91) where the author
+ * picks a reference map, the toolbar tools to expose, and other
+ * read-side knobs.
  *
  * The runtime mounts EditorRuntime with the FormView side panel
  * open by default (so the user lands on a recognizable response
- * renderer rather than a bare map). The separate Survey app item
- * (#260) still exists for power-users who want a saved, named,
- * shareable configuration with a specific reference map / toolbar /
- * default lookback window. This route is the zero-config default.
+ * renderer rather than a bare map). Authors who want to tweak the
+ * viewer (different basemap, narrower toolbar, "last 30 days"
+ * default filter) edit the responseView block on the form -- no
+ * separate Survey item to create.
  *
  * Auth: ItemsService.get() on the API enforces visibility. Anonymous
  * public-share visitors land here too -- branch the fetch path the
- * same way Viewer / Survey do. Submissions are read-only by design,
- * so canEdit is forced false regardless of the caller's permissions.
+ * same way Viewer does. Submissions are read-only by design, so
+ * canEdit is forced false regardless of the caller's permissions
+ * on the form.
  */
 export default async function FormResponsesPage({ params }: Props) {
   const isAnonymous = !(await hasSession());
@@ -133,6 +140,27 @@ export default async function FormResponsesPage({ params }: Props) {
   if (formItem.type !== 'form') notFound();
 
   const formData = (formItem.data ?? {}) as FormShape;
+
+  // #91: per-form responses config. Author sets these knobs on the
+  // form designer's Responses tab; absent values fall through to
+  // safe defaults below. The legacy Survey app type's three runtime-
+  // affecting knobs (mapId, tools, printEnabled) live here now; the
+  // other two (defaultLookbackDays, hideSubmitter) are persisted on
+  // the schema but await runtime filtering UX in a follow-up slice.
+  const responseView = formData.responseView ?? {};
+  const configuredMapId =
+    typeof responseView.mapId === 'string' && responseView.mapId.length > 0
+      ? responseView.mapId
+      : null;
+  // Default toolbar mirrors the previous implicit viewer plus the
+  // common read-side complements (legend / attribute-table) so an
+  // unconfigured Responses tab still feels useful. Authors can
+  // narrow the set via the Responses tab.
+  const configuredTools: ReadonlyArray<
+    'select' | 'query' | 'measure' | 'attribute-table' | 'legend' | 'print'
+  > = Array.isArray(responseView.tools)
+    ? responseView.tools
+    : ['select', 'measure', 'attribute-table', 'legend'];
 
   // ---- Empty states ------------------------------------------------
   if (!formData.linkedLayerId) {
@@ -215,25 +243,35 @@ export default async function FormResponsesPage({ params }: Props) {
     rowScope: 'all',
     templates: [],
   };
+  // EditorData.tools is a subset of the read-side affordances the
+  // canvas understands; map the author-chosen responseView.tools
+  // onto that subset the same way the legacy Survey runtime did.
+  // Print is a separate prop on EditorRuntime so it's hoisted out
+  // here.
+  const passthrough: Array<'select' | 'measure'> = [];
+  if (configuredTools.includes('select')) passthrough.push('select');
+  if (configuredTools.includes('measure')) passthrough.push('measure');
   const editor: EditorData = {
     version: 1,
     targets: [target],
-    // Implicit viewer ships the standard read-side toolbar: select
-    // (so the user can pick a row to render through the form view) +
-    // measure (handy on a response map). Print lands once #132 does.
-    tools: ['select', 'measure'],
+    tools: passthrough,
     snapping: { enabled: false, selfSnap: false, tolerancePx: 10 },
   };
+  if (configuredMapId) editor.mapId = configuredMapId;
 
   const [basemapItems, referencedMap] = await Promise.all([
     fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
     ),
-    // The implicit viewer doesn't carry a reference map of its own;
-    // the future per-form Response Viewer config (#260 power-user
-    // path) is what wires that up. Pass null here so EditorRuntime
-    // builds the map from just the paired layer.
-    Promise.resolve(null as Item<MapData> | null),
+    // #91: when the author picked a reference map in the Responses
+    // tab, fetch it so its basemap + viewport flow into the runtime.
+    // Absent means "build the map from just the paired layer", same
+    // as the pre-#91 implicit viewer behavior.
+    configuredMapId
+      ? fetchItem<Item<MapData>>(`/api/items/${configuredMapId}`).catch(
+          () => null,
+        )
+      : Promise.resolve(null as Item<MapData> | null),
   ]);
 
   const basemaps: CustomBasemap[] = basemapItems
@@ -338,11 +376,12 @@ export default async function FormResponsesPage({ params }: Props) {
       editor={editor}
       resolvedTargets={resolvedTargets}
       pickLists={pickLists}
-      referencedMapTitle={null}
+      referencedMapTitle={referencedMap?.title ?? null}
       initialMapData={mapData}
       targetLayerIds={targetLayerIds}
       basemaps={basemaps}
       canEdit={false}
+      printEnabled={configuredTools.includes('print')}
       formViewSchema={formViewSchema}
       surveyTargetLayerId={surveyTargetLayerId}
       surveyAttachmentsLayerItemId={dataLayerItem.id}

@@ -41,9 +41,8 @@ import { UserMenu } from './user-menu';
  *   /items/<id>/field/...     subroutes (offline shell, etc.)
  *   /items/<id>/viewer/run    web-app viewer
  *   /items/<id>/editor/run    web-app editor
- *   /items/<id>/survey/run    web-app survey runtime
  *   /items/<id>/custom/run    web-app custom runtime
- *   /items/<id>/responses     response viewer
+ *   /items/<id>/responses     per-form response viewer (#91)
  *   /forms/<id>/respond       respondent-facing form runtime (#345)
  *
  * Everything else gets the full chrome.
@@ -82,20 +81,27 @@ export function AppShellChrome({
   // Rendering bare lets a shared link open the runtime as the
   // entire viewport, just like AGOL Web App Builder.
   const isFieldRuntime = /^\/items\/[^/]+\/field(?:\/|$)/.test(pathname);
-  // Web-app runtimes that own their own header + chrome. Survey,
-  // viewer, editor, and custom each ship a configure-back link in
-  // their own header, so layering the portal sidebar on top makes a
+  // Web-app runtimes that own their own header + chrome. Viewer,
+  // editor, and custom each ship a configure-back link in their
+  // own header, so layering the portal sidebar on top makes a
   // public-share link feel cluttered and breaks AGOL parity.
   const isAppRuntime =
-    /^\/items\/[^/]+\/(?:viewer|editor|survey|custom)\/run(?:\/|$)/.test(
+    /^\/items\/[^/]+\/(?:viewer|editor|custom)\/run(?:\/|$)/.test(
       pathname,
     );
+  // #91: the per-form Responses viewer also ships its own runtime
+  // header (FormView side panel, attribute table, layer pills).
+  // Same treatment as Viewer/Editor/Custom so a public-share link
+  // to /items/<id>/responses lands on a clean canvas.
+  const isResponsesViewer = /^\/items\/[^/]+\/responses(?:\/|$)/.test(
+    pathname,
+  );
   // Form respondent runtime (#345). The detail page already opens
   // /forms/<id>/respond in a new tab; rendering bare lets the
   // tab stand on its own as a sharable submission surface, the way
   // an AGO Survey123 link does.
   const isFormRespond = /^\/forms\/[^/]+\/respond(?:\/|$)/.test(pathname);
-  if (isFieldRuntime || isAppRuntime || isFormRespond) {
+  if (isFieldRuntime || isAppRuntime || isResponsesViewer || isFormRespond) {
     return (
       <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
     );

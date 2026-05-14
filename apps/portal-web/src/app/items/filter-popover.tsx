@@ -43,8 +43,8 @@ interface Props {
   /** #258: secondary facet for `web_app` items, surfaced as a
    *  Template chip strip below Type when at least one template
    *  shows up in the visible items. Today's only template is
-   *  'editor'; viewer / survey-response / custom join the union as
-   *  they ship. Empty Set means "all templates". */
+   *  'editor'; viewer / custom join the union as they ship.
+   *  Empty Set means "all templates". */
   templateFilter: Set<WebAppTemplate>;
   templateCounts: Array<[WebAppTemplate, number]>;
   onToggleTemplate: (t: WebAppTemplate) => void;
@@ -79,7 +79,6 @@ interface Props {
 const TEMPLATE_LABELS: Record<WebAppTemplate, string> = {
   editor: 'Editor',
   viewer: 'Viewer',
-  survey: 'Survey',
   custom: 'Custom',
 };
 

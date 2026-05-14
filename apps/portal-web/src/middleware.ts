@@ -56,13 +56,12 @@ export default withAuth(
         // sign-in otherwise. The /editor/run path is left auth'd --
         // public anonymous editing is not a thing.
         //
-        // #260: /items/:id/survey/run is also a read-only runtime
-        // (you "view responses, never edit a submission"), so it
-        // shares the same anonymous-public allowlist behavior.
-        // #321: /items/:id/responses is the implicit per-form
-        // Response Viewer; same read-only public-share semantics.
+        // #321 / #91: /items/:id/responses is the per-form Response
+        // Viewer; same read-only public-share semantics as Viewer.
+        // (The legacy /survey/run runtime was folded onto this route
+        // when the survey item type was retired in #91.)
         if (
-          /^\/items\/[^/]+\/(?:viewer|survey)\/run(?:\/|$)/.test(
+          /^\/items\/[^/]+\/viewer\/run(?:\/|$)/.test(
             req.nextUrl.pathname,
           ) ||
           /^\/items\/[^/]+\/responses(?:\/|$)/.test(req.nextUrl.pathname)

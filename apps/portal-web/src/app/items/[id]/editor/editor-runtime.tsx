@@ -43,7 +43,7 @@ import type {
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import type { FormSchema } from '@gratis-gis/form-schema';
-import { FormView } from '../survey/form-view';
+import { FormView } from '../responses/form-view';
 import { MapCanvas, type MapCanvasHandle } from '../map/map-canvas';
 import {
   EDITOR_TARGET_LAYER_PREFIX,

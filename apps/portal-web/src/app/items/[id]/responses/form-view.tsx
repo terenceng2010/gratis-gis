@@ -67,7 +67,7 @@ interface Props {
 }
 
 /**
- * Form-view side panel for the Survey Response Viewer (#260 / #320).
+ * Form-view side panel for the per-form Responses viewer (#320 / #91).
  *
  * Renders the selected submission as the form, not as a row of
  * columns. Walks the FormSchema's questions list in order, looks up
@@ -333,7 +333,7 @@ function AttachmentsSection({
       </h3>
       {attachments === null ? (
         <p className="inline-flex items-center gap-1 text-xs italic text-muted">
-          <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+          <Loader2 className="h-3 w-3 animate-spin" /> Loading...
         </p>
       ) : attachments.length === 0 ? (
         <p className="text-xs italic text-muted">No attachments</p>
@@ -424,19 +424,6 @@ function QuestionAnswer({
         ? question.repeat
         : null;
     if (repeat) {
-      // #332: repeat-group answers live as an array of instance
-      // objects under values[question.id]; the runtime stores them
-      // that way (see form-runtime.tsx). Render one card per
-      // instance, recursing into each instance's child questions
-      // so they read THEIR values from that instance's bag instead
-      // of the outer parent's.
-      //
-      // Attachment-flavored repeat groups have their attachment
-      // children stripped out of properties at submit time (#292)
-      // and split into the v3 feature_attachment table; #327
-      // covers fetching those back out for display. Until that
-      // ships, attachments inside a repeat group render as "No
-      // answer" -- accurate, since the JSONB doesn't have them.
       const rawInstances = values[question.id];
       const instances: Array<Record<string, unknown>> = Array.isArray(
         rawInstances,
@@ -536,10 +523,9 @@ function QuestionAnswer({
 }
 
 /**
- * Question-type-aware value renderer. Keep simple: empty -> em-dash,
- * coded values -> labels, dates -> locale-formatted, booleans ->
- * Yes/No, attachments -> "captured" badge (a future slice can wire
- * the actual thumbnail / playback).
+ * Question-type-aware value renderer. Keep simple: empty -> placeholder,
+ * coded values -> labels, dates -> locale-formatted, booleans -> Yes/No,
+ * attachments -> inline tiles.
  */
 function renderValue(
   q: Question,
@@ -556,10 +542,6 @@ function renderValue(
     case 'geopoint':
     case 'geotrace':
     case 'geoshape': {
-      // Form runtime stores a geopoint as { lat, lng, accuracy? } and
-      // line/polygon answers as arrays of those. Render the point as
-      // "33.96942, -116.96896 (±105m)" instead of the default
-      // String(value) which prints "[object Object]".
       const v = value as
         | { lat?: unknown; lng?: unknown; accuracy?: unknown }
         | unknown[];
@@ -583,7 +565,7 @@ function renderValue(
         };
         const acc =
           typeof accuracy === 'number'
-            ? ` (±${Math.round(accuracy)}m)`
+            ? ` (+/-${Math.round(accuracy)}m)`
             : '';
         return (
           <span className="font-mono text-xs">
@@ -597,7 +579,6 @@ function renderValue(
     case 'select-one':
       return <span>{labelForCode(q, value, pickLists) ?? String(value)}</span>;
     case 'select-many': {
-      // Stored as comma-separated string by the mirror; split + label-up.
       const parts = Array.isArray(value)
         ? value.map(String)
         : String(value).split(',').map((s) => s.trim());
@@ -616,13 +597,6 @@ function renderValue(
     case 'sketch':
     case 'signature':
     case 'file': {
-      // #353: form runtime stores attachment-bearing answers as an
-      // array of descriptors { name, mimeType, sizeBytes, url, key }
-      // (#280). Render them inline as thumbnails-or-tiles right
-      // here so the user sees the photo at the question that
-      // captured it -- especially valuable inside repeat instances
-      // where the bottom Attachments section can't tell entry-1's
-      // photo from entry-2's.
       if (Array.isArray(value)) {
         const items = value.filter(
           (d): d is {
@@ -638,9 +612,6 @@ function renderValue(
         }
         return <InlineAttachmentList items={items} />;
       }
-      // Single-value legacy / non-array shape: keep the older
-      // behavior so existing rows that landed before #353 still
-      // render their URL as a link.
       const s = String(value);
       if (s.startsWith('http')) {
         return (
@@ -661,15 +632,6 @@ function renderValue(
   }
 }
 
-/**
- * Inline attachment renderer used by photo / audio / video / file /
- * sketch / signature questions when the answer is an array of
- * descriptor objects (#353). Mirrors the visual shape of the
- * AttachmentTile component used by the bottom Attachments section
- * + the AttributeTable drawer (#352) -- thumbnails for image MIME
- * types, labeled tiles for everything else, all click-to-open in
- * a new tab.
- */
 function InlineAttachmentList({
   items,
 }: {
@@ -723,7 +685,7 @@ function InlineAttachmentList({
             <div className="truncate text-[11px] text-ink-1">{name}</div>
             <div className="text-[10px] text-muted">
               {sizeBytes !== null
-                ? `${Math.max(1, Math.round(sizeBytes / 1024))} KB · `
+                ? `${Math.max(1, Math.round(sizeBytes / 1024))} KB . `
                 : ''}
               {mime || 'file'}
             </div>
@@ -745,14 +707,12 @@ function labelForCode(
   ) {
     return null;
   }
-  // Inline options take precedence: select-one with `options:[]`.
   const inline = (q as { options?: Array<{ code: string; label: string }> })
     .options;
   if (Array.isArray(inline)) {
     const hit = inline.find((o) => o.code === String(code));
     if (hit) return hit.label;
   }
-  // Pick-list ref: look up the resolved PickListData.
   const pickListId = (q as { pickListItemId?: string }).pickListItemId;
   if (pickListId && pickLists[pickListId]) {
     const pl = pickLists[pickListId]!;
