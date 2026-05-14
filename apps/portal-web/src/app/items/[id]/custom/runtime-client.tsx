@@ -1898,6 +1898,9 @@ function AttributeTableWidgetRender({ widget }: { widget: CustomWidget }) {
   // discriminant inside hook bodies otherwise).
   const cfg = widget.config;
   const ctx = useContext(CustomMapsContext);
+  // #87 -- so the table re-fetches against the bitemporal snapshot
+  // when the user scrubs the time slider.
+  const appAt = useAppTime();
 
   const mapWidgetId = cfg.syncWithMapWidgetId;
   const boundMapState = mapWidgetId ? ctx?.states[mapWidgetId] ?? null : null;
@@ -2048,6 +2051,7 @@ function AttributeTableWidgetRender({ widget }: { widget: CustomWidget }) {
       onPatchLayer={onPatchLayer}
       focusLayerId={focusLayerId}
       mapBbox={mapBbox}
+      asOfTime={appAt}
     />
   );
 }

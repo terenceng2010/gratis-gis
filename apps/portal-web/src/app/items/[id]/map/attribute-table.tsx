@@ -142,6 +142,15 @@ interface Props {
    * bottom-dock CSS fighting the popover's own sizing.
    */
   embedded?: boolean;
+  /**
+   * #87 -- optional bitemporal "as of" ISO timestamp.  When set, the
+   * server-paged `/features-page` fetch threads `at=<ISO>` so the
+   * table shows rows valid at that moment rather than current truth.
+   * Null / undefined = "now" (default).  The Custom Web App runtime
+   * passes its AppTimeContext value here so the table re-fetches
+   * when the user scrubs the time slider.
+   */
+  asOfTime?: string | null;
 }
 
 type SortDir = 'asc' | 'desc';
@@ -178,6 +187,7 @@ export function AttributeTable({
   pickLists,
   mapBbox,
   embedded = false,
+  asOfTime,
 }: Props) {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [lastPicked, setLastPicked] = useState<number | null>(null);
@@ -485,6 +495,10 @@ export function AttributeTable({
       params.set('dir', sortDir);
     }
     if (entityIdsForServer) params.set('entityIds', entityIdsForServer);
+    // #87 -- bitemporal "as of" pass-through.  When the host runtime
+    // is in time-travel mode, fetch the snapshot at the chosen
+    // moment so the table matches what the map is rendering.
+    if (asOfTime) params.set('at', asOfTime);
     setServerLoading(true);
     setServerError(null);
     void (async () => {
@@ -529,6 +543,7 @@ export function AttributeTable({
     sortBy,
     sortDir,
     entityIdsForServer,
+    asOfTime,
   ]);
 
   // Drop any cached server page when the layer changes or the table
