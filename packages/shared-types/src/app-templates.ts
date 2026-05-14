@@ -743,7 +743,7 @@ export const STARTERS: readonly StarterTemplate[] = [
     kind: 'sidebar-explorer',
     label: 'Sidebar Explorer',
     description:
-      'Top app bar with title and tools, left dock panel for layers, map fills the rest of the canvas. The classic AGO-style explorer layout.',
+      'Top app bar with title and tools, left dock panel for layers, map fills the rest of the canvas. The classic sidebar explorer layout.',
     use: 'Parcel viewers, asset inventories, internal data exploration, any "explore a map by toggling layers" workflow.',
     tags: ['explorer', 'dock', 'map-first'],
     seed: parcelViewerSeed,
