@@ -1637,16 +1637,26 @@ export function AttributeTable({
           layerKey={serverLayerKey}
           fieldName={calcFieldFor}
           availableFields={activeFields}
-          selectionCount={activeSelection.size}
+          selectedIds={(() => {
+            // The selection set carries client + UUID ids depending
+            // on the layer; the calculate-field server endpoint only
+            // accepts UUID entity ids.  Filter + cap at 1000 (same
+            // bound the selection-extent endpoint uses).
+            const UUID_RE =
+              /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+            return [...activeSelection]
+              .filter((v): v is string => typeof v === 'string' && UUID_RE.test(v))
+              .slice(0, 1000);
+          })()}
           onClose={() => setCalcFieldFor(null)}
           onApplied={() => {
             setCalcFieldFor(null);
-            // Bump serverPage cache key by re-fetching: easiest is
-            // to nudge the user to refresh, but in-page the page-key
-            // changes when sortBy / showOnlySelected / mapBbox /
-            // ... change.  For now we just close the modal; the
-            // user can refresh /toggle to see new values.  Better:
-            // a manual refetch trigger here.
+            // Force a server-paged refetch so the new values land in
+            // the visible rows without the user toggling a filter.
+            // The serverPage state key is what useEffect watches; we
+            // bump it by clearing and the next render restores from
+            // the fetch path.
+            setServerPage(null);
           }}
         />
       ) : null}
@@ -1676,7 +1686,7 @@ function CalculateFieldModal({
   layerKey,
   fieldName,
   availableFields,
-  selectionCount,
+  selectedIds,
   onClose,
   onApplied,
 }: {
@@ -1684,10 +1694,13 @@ function CalculateFieldModal({
   layerKey: string;
   fieldName: string;
   availableFields: string[];
-  selectionCount: number;
+  /** Filtered (UUID-only, capped at 1000) selection from the table.
+   *  Length == 0 disables the "Selected rows" scope option. */
+  selectedIds: string[];
   onClose: () => void;
   onApplied: () => void;
 }) {
+  const selectionCount = selectedIds.length;
   const [expression, setExpression] = useState('');
   const [outputType, setOutputType] = useState<'number' | 'string' | 'boolean'>(
     'number',
@@ -1740,12 +1753,7 @@ function CalculateFieldModal({
             outputType,
             scope,
             ...(scope === 'selection' && selectionCount > 0
-              ? {
-                  // Caller doesn't have access to the selection set
-                  // from here directly; ask the user to refresh and
-                  // re-select if needed.  TODO: thread selection in.
-                  selectedIds: [],
-                }
+              ? { selectedIds }
               : {}),
             dryRun,
           }),
