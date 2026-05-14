@@ -1254,7 +1254,23 @@ export class ItemsService {
         ...(input.tags !== undefined && { tags: input.tags }),
         ...(nextData !== undefined && { data: nextData }),
         ...(input.access !== undefined && { access: input.access }),
-        ...(input.thumbnailUrl !== undefined && { thumbnailUrl: input.thumbnailUrl }),
+        // Belt-and-suspenders for the round-trip footgun: when a
+        // client PATCHes thumbnailUrl as the synthesized SVG endpoint
+        // path (the form may have read it from a GET response and
+        // sent it back unchanged), treat it as null so the
+        // synthesizer keeps generating a fresh URL with the latest
+        // updatedAt cache-buster.  Without this, a save freezes the
+        // URL and any subsequent design edit produces a card that
+        // still serves the stale SVG.
+        ...(input.thumbnailUrl !== undefined && {
+          thumbnailUrl:
+            typeof input.thumbnailUrl === 'string' &&
+            /\/api\/portal\/items\/[^/]+\/thumbnail\.svg/.test(
+              input.thumbnailUrl,
+            )
+              ? null
+              : input.thumbnailUrl,
+        }),
         // #66: thumbnailDesign updates re-render the SVG on the
         // next read; no extra side-effect needed here because the
         // synthesized thumbnailUrl is keyed on updatedAt which

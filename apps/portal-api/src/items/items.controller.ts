@@ -341,16 +341,64 @@ export class ItemsController {
     const design =
       (item.thumbnailDesign as ThumbnailDesign | null | undefined) ??
       defaultThumbnailDesign(item.type);
+
+    // Resolve external image references (bg image + logo) to inline
+    // data: URLs BEFORE the renderer emits them.  SVGs loaded via
+    // <img src> run in image mode, which blocks cross-origin
+    // <image href> fetches unless the target sends CORS headers.
+    // Our storage subdomain doesn't, so a referenced image would
+    // render as a broken-icon placeholder.  Inlining sidesteps the
+    // whole problem and keeps the SVG self-contained -- one fetch
+    // gets you everything, no second-trip resource loads.
+    const inlinedDesign: ThumbnailDesign = {
+      ...design,
+      backgroundImage: (await this.toDataUrl(design.backgroundImage)) ?? null,
+      logo: (await this.toDataUrl(design.logo)) ?? null,
+    };
+
     const svg = renderThumbnailSvg({
       title: item.title,
       typeLabel: getItemTypeLabel(item.type),
-      design,
+      design: inlinedDesign,
     });
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
     // 5 min revalidation; the URL has an updatedAt cache-buster so
     // a longer window only helps when the design hasn't changed.
     res.setHeader('Cache-Control', 'private, max-age=300');
     res.send(svg);
+  }
+
+  /**
+   * Fetch a remote image URL server-side and return a data: URL the
+   * SVG renderer can splice in without triggering a cross-origin
+   * fetch in the browser.  Pass-through for null / undefined / data:
+   * URLs.  Failures resolve to null so a broken upstream doesn't
+   * 500 the whole thumbnail render -- the SVG just renders without
+   * that layer.
+   *
+   * Capped at 5 MB per image; thumbnails don't need bigger sources,
+   * and an oversized upstream shouldn't blow up SVG payloads or
+   * server memory.  Times out at 10 s so a slow upstream can't
+   * tail-latency the thumbnail render.
+   */
+  private async toDataUrl(
+    href: string | null | undefined,
+  ): Promise<string | null | undefined> {
+    if (!href) return href ?? null;
+    if (href.startsWith('data:')) return href;
+    try {
+      const res = await fetch(href, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) return null;
+      const contentType =
+        res.headers.get('content-type') ?? 'application/octet-stream';
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 5 * 1024 * 1024) return null;
+      return `data:${contentType};base64,${buf.toString('base64')}`;
+    } catch {
+      return null;
+    }
   }
 
   @Get(':id/permissions')

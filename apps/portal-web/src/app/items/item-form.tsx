@@ -194,8 +194,22 @@ export function ItemForm({ mode, initialValues, initialData, itemId }: Props) {
   );
   // Thumbnail state lives in the form so the uploader can update it
   // between renders and we ship the current URL with the submit.
+  //
+  // CRITICAL: the API synthesizes thumbnailUrl on response when the
+  // item has only a design and no legacy upload (see
+  // synthesizeThumbnailUrl in items.service.ts).  That synthesized
+  // URL must NEVER round-trip back through the form, or the PATCH
+  // will persist it into the DB column, freezing the cache-buster
+  // and breaking design updates forever.  Filter the synthesized
+  // shape out at init time so the form treats "synthesized URL"
+  // identically to "no upload."
+  const initialThumbnailUrl =
+    initialValues?.thumbnailUrl &&
+    !/\/api\/portal\/items\/[^/]+\/thumbnail\.svg/.test(initialValues.thumbnailUrl)
+      ? initialValues.thumbnailUrl
+      : null;
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(
-    initialValues?.thumbnailUrl ?? null,
+    initialThumbnailUrl,
   );
   // #66: thumbnail design state. Edit mode pre-populates from the
   // item; create mode lets the user customize the type-default
