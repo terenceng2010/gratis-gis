@@ -570,7 +570,18 @@ export function CustomAppDetail({
   );
 
   const addWidgetAt = useCallback(
-    (kind: CustomWidgetKind, col: number, row: number) => {
+    (
+      kind: CustomWidgetKind,
+      col: number,
+      row: number,
+      // #98: the Canvas resolves a drop-target container via DOM
+      // hit-test (works for both in-grid and partitioned-out-of-grid
+      // containers) and passes the id here.  Non-null means
+      // "drop into this container's children"; null means "use
+      // col/row for page-level placement".  Reorder/reparent of
+      // existing widgets goes through moveWidget, not this path.
+      targetParentId: string | null = null,
+    ) => {
       const layout: CustomLayout = {
         ...defaultLayoutForKind(kind),
         col: clampCol(col),
@@ -582,14 +593,15 @@ export function CustomAppDetail({
         const page = cur.pages[activePageIdx];
         if (!page) return cur;
 
-        // Themed-app container drop routing. If the drop point
-        // lands inside an app-bar / dock-panel / slideout /
-        // foldable-group, route the new widget into THAT
-        // container's children list instead of placing it on the
-        // page grid. Innermost container wins for nested layouts.
-        // The dropped widget is auto-bound to the page's single
-        // Map widget if applicable, same as the freeform path.
-        const hostContainer = findContainerHostAt(page.widgets, col, row);
+        // #98: container routing now comes from the canvas's DOM
+        // hit-test (which sees the rendered layout, including
+        // partitioned sticky/dock slots that aren't in the grid).
+        // Falls back to null for drops that didn't land on any
+        // container; we still run the tabs hit-test below for the
+        // older grid-coord-based tabs routing path.
+        const hostContainer = targetParentId
+          ? findContainerById(page.widgets, targetParentId)
+          : null;
         if (hostContainer) {
           // Children inside containers ignore col/row, but we still
           // stamp the schema-required layout fields.
@@ -951,7 +963,9 @@ export function CustomAppDetail({
               itemTitle={itemTitle}
               onSetActiveTabIdx={setActiveTabIdx}
               onSelect={setSelectedWidgetId}
-              onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
+              onCanvasDrop={(kind, col, row, targetParentId) =>
+                addWidgetAt(kind, col, row, targetParentId)
+              }
               onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
               onWidgetMove={(id, targetParentId, targetIndex, pageLayout) => {
                 setApp((cur) => ({
@@ -1758,7 +1772,14 @@ function Canvas({
   itemTitle: string;
   onSetActiveTabIdx: (widgetId: string, idx: number) => void;
   onSelect: (id: string | null) => void;
-  onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
+  onCanvasDrop: (
+    kind: CustomWidgetKind,
+    col: number,
+    row: number,
+    // #98: container the canvas's DOM hit-test routed the drop into,
+    // or null if the cursor landed on the page-level grid.
+    targetParentId: string | null,
+  ) => void;
   onWidgetLayout: (id: string, layout: CustomLayout) => void;
   /**
    * #96: reparent / reorder a widget.  Called on mouseup when the
@@ -1777,6 +1798,12 @@ function Canvas({
   ) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  // #98: separate ref for the inner CSS grid (a child of the canvas
+  // wrapper).  Used for accurate col/row arithmetic when the cursor
+  // is over the grid surface; the wrapper ref still owns drop +
+  // dragover events for the whole canvas pane including the flex-
+  // sibling slots that sticky/dock containers live in.
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
   // #53 WYSIWYG: drag-from-palette drop-target indicator.  When
   // a palette tile is hovered over a container's footprint, we
@@ -1804,10 +1831,16 @@ function Canvas({
   // Compute the canvas's grid extent from the widgets' bottom-most
   // row so dropping a widget below the current content extends the
   // canvas naturally. Always at least 12 rows so a fresh app has
-  // room to drop into.
+  // room to drop into.  #98: partitioned containers are excluded
+  // because their grid layout is ignored at render time -- counting
+  // their (often arbitrary, e.g. 16 or 240) rowSpan would inflate
+  // the grid height for no visual reason.
   const minRows = 12;
   const usedRows = widgets.reduce(
-    (n, w) => Math.max(n, w.layout.row + w.layout.rowSpan - 1),
+    (n, w) =>
+      isPartitionedContainer(w)
+        ? n
+        : Math.max(n, w.layout.row + w.layout.rowSpan - 1),
     0,
   );
   const totalRows = Math.max(minRows, usedRows + 4);
@@ -1817,17 +1850,17 @@ function Canvas({
     if (!e.dataTransfer.types.includes('text/x-widget-kind')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-    // Compute the drop-target container (if any) under the cursor
-    // so the highlight tracks the cursor as it moves over the
-    // canvas.  Mirrors the same math the drop handler uses so the
-    // visual indicator matches the actual routing decision.
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const colWidth = rect.width / GRID_COLS;
-    const col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / colWidth) + 1));
-    const row = Math.max(1, Math.floor(y / ROW_HEIGHT_PX) + 1);
-    const host = findContainerHostAt(widgets, col, row);
+    // #98: DOM hit-test against [data-widget-id] elements so the
+    // routing decision works for both in-grid containers (inline,
+    // overlay-trigger) and partitioned containers (sticky-top /
+    // sticky-bottom / dock-left / dock-right) without two coordinate
+    // systems to reconcile.
+    const host = findContainerHostAtClient(
+      canvasRef.current,
+      widgets,
+      e.clientX,
+      e.clientY,
+    );
     setDropTargetId((cur) => (cur === (host?.id ?? null) ? cur : host?.id ?? null));
   }
 
@@ -1848,13 +1881,32 @@ function Canvas({
     const kind = e.dataTransfer.getData('text/x-widget-kind');
     if (!kind) return;
     e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const colWidth = rect.width / GRID_COLS;
-    const col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / colWidth) + 1));
-    const row = Math.max(1, Math.floor(y / ROW_HEIGHT_PX) + 1);
-    onCanvasDrop(kind as CustomWidgetKind, col, row);
+    // #98: grid coords are computed from the inner grid div's rect
+    // (not the canvas wrapper, which now contains flex-sibling slots
+    // for sticky/dock containers).  Clamp so a drop landing OUTSIDE
+    // the grid (e.g. over a left-dock slot) still produces a sensible
+    // page-level position -- the upstream addWidgetAt also runs the
+    // DOM hit-test and routes into a container when one is under the
+    // cursor, so the (col,row) here is just the fallback.
+    const rect = gridRef.current?.getBoundingClientRect();
+    let col = 1;
+    let row = 1;
+    if (rect) {
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const y = Math.max(0, e.clientY - rect.top);
+      const colWidth = rect.width / GRID_COLS;
+      col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / colWidth) + 1));
+      row = Math.max(1, Math.floor(y / ROW_HEIGHT_PX) + 1);
+    }
+    // #98: same DOM hit-test used by the dragover highlight, so the
+    // routing decision is consistent with what the user just saw.
+    const host = findContainerHostAtClient(
+      canvasRef.current,
+      widgets,
+      e.clientX,
+      e.clientY,
+    );
+    onCanvasDrop(kind as CustomWidgetKind, col, row, host?.id ?? null);
   }
 
   // Begin a gesture. Called from WidgetCard's mousedown handler
@@ -1895,18 +1947,21 @@ function Canvas({
     // actually keeps us safe at runtime.
     const g = gesture;
     function pxPerCol(): number {
-      const rect = canvasRef.current?.getBoundingClientRect();
-      // 6px gap is included in the grid layout; the column width
-      // is approximately (rect.width - 11*6) / 12 but the small
-      // gap error rounds out at the snap-to-cell step.
+      // #98: track px-per-col against the INNER grid (not the canvas
+      // wrapper), since the wrapper now contains flex siblings for
+      // sticky/dock containers and is wider than the grid itself.
+      const rect = gridRef.current?.getBoundingClientRect();
       return rect ? rect.width / GRID_COLS : 100;
     }
-    /** Cursor coords -> canvas-relative grid coords (col, row). */
+    /** Cursor coords -> canvas-relative grid coords (col, row).
+     *  Clamps to the grid bounds so a cursor over a sticky / dock
+     *  slot (outside the inner grid div) still produces a valid
+     *  page-level placement when the gesture demands one. */
     function cursorToGrid(e: MouseEvent): { col: number; row: number } {
-      const rect = canvasRef.current?.getBoundingClientRect();
+      const rect = gridRef.current?.getBoundingClientRect();
       if (!rect) return { col: 1, row: 1 };
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const y = Math.max(0, e.clientY - rect.top);
       const colWidth = rect.width / GRID_COLS;
       const col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / colWidth) + 1));
       const row = Math.max(1, Math.floor(y / ROW_HEIGHT_PX) + 1);
@@ -1966,8 +2021,15 @@ function Canvas({
       // final position; this just keeps the visual indicator in
       // sync during the drag.
       if (g.kind === 'move') {
-        const { col, row } = cursorToGrid(e);
-        const host = findContainerHostAt(widgets, col, row);
+        // #98: DOM hit-test (same one the drop handler uses) so the
+        // highlight tracks containers regardless of whether they're
+        // inside the grid or in a partitioned flex slot.
+        const host = findContainerHostAtClient(
+          canvasRef.current,
+          widgets,
+          e.clientX,
+          e.clientY,
+        );
         const targetId = host && host.id !== g.widgetId ? host.id : null;
         setDropTargetId((cur) => (cur === targetId ? cur : targetId));
       }
@@ -2047,7 +2109,14 @@ function Canvas({
       // move (already applied live by onMove).
       if (g.kind === 'move') {
         const { col, row } = cursorToGrid(e);
-        const host = findContainerHostAt(widgets, col, row);
+        // #98: same DOM hit-test as the dragover handler so the
+        // mouseup decision matches the live drop-target highlight.
+        const host = findContainerHostAtClient(
+          canvasRef.current,
+          widgets,
+          e.clientX,
+          e.clientY,
+        );
         // Don't let a container drop INTO itself.
         const targetParentId =
           host && host.id !== g.widgetId ? host.id : null;
@@ -2093,6 +2162,73 @@ function Canvas({
     };
   }, [gesture, onWidgetLayout, onWidgetMove, widgets]);
 
+  // #98: partition top-level widgets the same way the runtime does
+  // (apps/portal-web/.../runtime-client.tsx ~L651): sticky / dock
+  // containers become flex siblings of the grid, NOT grid items.
+  // Inline + overlay-trigger containers + all non-container widgets
+  // stay in the grid.  This is the architectural fix for the
+  // designer-vs-runtime height mismatch on sticky containers: by
+  // taking them out of the grid the designer no longer honors their
+  // (often arbitrary) rowSpan and instead lets them content-size,
+  // exactly like the runtime does.
+  const stickyTops: CustomWidget[] = [];
+  const stickyBottoms: CustomWidget[] = [];
+  const leftDocks: CustomWidget[] = [];
+  const rightDocks: CustomWidget[] = [];
+  const canvasWidgets: CustomWidget[] = [];
+  for (const w of widgets) {
+    if (isPartitionedContainer(w) && w.config.kind === 'container') {
+      const pos = w.config.position ?? 'inline';
+      if (pos === 'sticky-top') stickyTops.push(w);
+      else if (pos === 'sticky-bottom') stickyBottoms.push(w);
+      else if (pos === 'dock-left') leftDocks.push(w);
+      else if (pos === 'dock-right') rightDocks.push(w);
+      continue;
+    }
+    canvasWidgets.push(w);
+  }
+  // Stacking order for canvasWidgets: map + tabs underneath, every
+  // other widget (overlay-trigger, inline containers, tools) on top.
+  // Same trick the runtime applies so a template with a full-canvas
+  // map doesn't paint over its inline / overlay siblings.
+  const orderedCanvas = [
+    ...canvasWidgets.filter((w) => w.kind === 'map' || w.kind === 'tabs'),
+    ...canvasWidgets.filter((w) => w.kind !== 'map' && w.kind !== 'tabs'),
+  ];
+
+  const renderWidget = (w: CustomWidget, inGrid: boolean) => (
+    <WidgetCard
+      key={w.id}
+      widget={w}
+      inGrid={inGrid}
+      selected={w.id === selectedId}
+      canEdit={canEdit}
+      gesturing={Boolean(gesture && gesture.widgetId === w.id)}
+      anyGesture={gesture !== null}
+      isDropTarget={w.id === dropTargetId}
+      // #363: prefer the widget's own map override if one is
+      // resolved, else fall through to the app default.
+      previewMapData={widgetMapData[w.id] ?? previewMapData}
+      previewBasemaps={previewBasemaps}
+      activeTabIdx={activeTabIdxByWidget[w.id] ?? 0}
+      itemTitle={itemTitle}
+      selectedChildId={selectedId}
+      onSelectChild={onSelect}
+      onSetActiveTabIdx={(idx) => onSetActiveTabIdx(w.id, idx)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect(w.id);
+      }}
+      onMoveStart={(e) => beginGesture('move', w, null, e)}
+      onChildMoveStart={(child, parentId, e) =>
+        beginGesture('move', child, parentId, e)
+      }
+      onResizeStart={(handle, e) =>
+        beginGesture(`resize-${handle}` as ActiveGesture['kind'], w, null, e)
+      }
+    />
+  );
+
   return (
     <div
       ref={themeRootRef}
@@ -2110,91 +2246,67 @@ function Canvas({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={() => onSelect(null)}
-        // Dot grid background, very subtle. Anchors to (12px, 12px)
-        // so the dots don't sit on the widget edges. Position picked
-        // empirically against a 24x24px snap grid -- the dots fall
-        // on every fourth grid intersection.
-        className="relative flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(0,0,0,0.06)_1px,transparent_0)] bg-[length:24px_24px] p-4"
+        // #98: flex column layout so sticky / dock containers can
+        // render as content-sized flex siblings of the inner grid.
+        // The outer scroll only kicks in when the COMBINED stack
+        // exceeds the canvas pane (rare; the grid carries its own
+        // min-height); inside the middle flex row, the grid wrapper
+        // gets its own scroll so a tall map-first layout still pans
+        // without pushing the dock + sticky chrome off-screen.
+        className="relative flex min-h-0 flex-1 flex-col overflow-auto bg-[hsl(var(--app-surface-0))]"
       >
-        {/* The actual grid. CSS Grid makes the placement math cheap:
-            each widget's gridColumn / gridRow line up with the
-            schema's col/row + spans, no manual translation needed.
-            Min-width keeps the canvas usable on narrower viewports
-            (matches Experience Builder + Webflow's "fixed canvas
-            with horizontal scroll" pattern); on wider viewports the
-            grid expands naturally to fill the canvas pane. */}
-        <div
-          className="grid w-full"
-          style={{
-            gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
-            gridAutoRows: `${ROW_HEIGHT_PX}px`,
-            // Earlier fixed 1400px width experiment was reverted:
-            // it broke narrow viewports (toolbar widgets ended up
-            // off-screen) and made map-first layouts cramped on
-            // wide displays. The new direction is responsive
-            // container widgets (app-bar, dock-panel, slideout)
-            // that handle their own layout inside the grid, so the
-            // grid itself can scale with the viewport.
-            minWidth: `${CANVAS_MIN_WIDTH_PX}px`,
-            minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
-            gap: `${GAP_PX}px`,
-          }}
-        >
-          {/* Map widgets paint underneath everything else so container
-              widgets (app-bar across rows 1-4, dock-panel down cols
-              1-12) stay visible even when the canvas Map widget spans
-              the whole grid. Without this, a template with a full-
-              canvas map renders as "just a map" in the designer and
-              the author thinks their dock-panel + app-bar are gone
-              (they're not — they're under the map). Matches the same
-              source-order trick the runtime applies. */}
-          {[
-            ...widgets.filter((w) => w.kind === 'map' || w.kind === 'tabs'),
-            ...widgets.filter((w) => w.kind !== 'map' && w.kind !== 'tabs'),
-          ].map((w) => (
-            <WidgetCard
-              key={w.id}
-              widget={w}
-              selected={w.id === selectedId}
-              canEdit={canEdit}
-              gesturing={Boolean(gesture && gesture.widgetId === w.id)}
-              anyGesture={gesture !== null}
-              isDropTarget={w.id === dropTargetId}
-              // #363: prefer the widget's own map override if one is
-              // resolved, else fall through to the app default.
-              previewMapData={widgetMapData[w.id] ?? previewMapData}
-              previewBasemaps={previewBasemaps}
-              activeTabIdx={activeTabIdxByWidget[w.id] ?? 0}
-              itemTitle={itemTitle}
-              selectedChildId={selectedId}
-              onSelectChild={onSelect}
-              onSetActiveTabIdx={(idx) => onSetActiveTabIdx(w.id, idx)}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect(w.id);
-              }}
-              onMoveStart={(e) => beginGesture('move', w, null, e)}
-              onChildMoveStart={(child, parentId, e) =>
-                beginGesture('move', child, parentId, e)
-              }
-              onResizeStart={(handle, e) =>
-                beginGesture(`resize-${handle}` as ActiveGesture['kind'], w, null, e)
-              }
-            />
-          ))}
-          {widgets.length === 0 && (
+        {/* Sticky-top flex slot.  Content-sized, painted above the
+            grid.  Multiple sticky-tops stack in author order. */}
+        {stickyTops.map((w) => renderWidget(w, false))}
+
+        {/* Middle flex row: left docks, scrollable grid surface,
+            right docks.  Min-h-0 so children can shrink when the
+            canvas pane is short (without it the grid's intrinsic
+            min-height pushes the parent past the viewport). */}
+        <div className="flex min-h-0 flex-1 items-stretch">
+          {leftDocks.map((w) => renderWidget(w, false))}
+          <div className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,rgba(0,0,0,0.06)_1px,transparent_0)] bg-[length:24px_24px] p-4">
+            {/* The actual grid.  CSS Grid makes the placement math
+                cheap: each widget's gridColumn / gridRow line up
+                with the schema's col/row + spans, no manual
+                translation.  Min-width keeps the canvas usable on
+                narrow viewports (matches Experience Builder +
+                Webflow's "fixed canvas with horizontal scroll"
+                pattern); on wider viewports the grid expands to
+                fill the canvas pane. */}
             <div
-              className="flex flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-surface-1/60 p-8 text-center"
-              style={{ gridColumn: '1 / -1', gridRow: '1 / span 12' }}
+              ref={gridRef}
+              className="grid w-full"
+              style={{
+                gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
+                gridAutoRows: `${ROW_HEIGHT_PX}px`,
+                minWidth: `${CANVAS_MIN_WIDTH_PX}px`,
+                minHeight: `${totalRows * ROW_HEIGHT_PX}px`,
+                gap: `${GAP_PX}px`,
+              }}
             >
-              <Square className="h-5 w-5 text-muted" strokeWidth={1.5} />
-              <p className="text-sm font-medium text-ink-0">Empty canvas</p>
-              <p className="text-xs text-muted">
-                Drag a widget from the left rail to get started.
-              </p>
+              {orderedCanvas.map((w) => renderWidget(w, true))}
+              {orderedCanvas.length === 0 && stickyTops.length === 0 &&
+                stickyBottoms.length === 0 && leftDocks.length === 0 &&
+                rightDocks.length === 0 && (
+                  <div
+                    className="flex flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-surface-1/60 p-8 text-center"
+                    style={{ gridColumn: '1 / -1', gridRow: '1 / span 12' }}
+                  >
+                    <Square className="h-5 w-5 text-muted" strokeWidth={1.5} />
+                    <p className="text-sm font-medium text-ink-0">Empty canvas</p>
+                    <p className="text-xs text-muted">
+                      Drag a widget from the left rail to get started.
+                    </p>
+                  </div>
+                )}
             </div>
-          )}
+          </div>
+          {rightDocks.map((w) => renderWidget(w, false))}
         </div>
+
+        {/* Sticky-bottom flex slot.  Same shape as sticky-top. */}
+        {stickyBottoms.map((w) => renderWidget(w, false))}
       </div>
     </div>
   );
@@ -2204,6 +2316,7 @@ function Canvas({
 
 function WidgetCard({
   widget,
+  inGrid,
   selected,
   canEdit,
   gesturing,
@@ -2222,6 +2335,16 @@ function WidgetCard({
   onChildMoveStart,
 }: {
   widget: CustomWidget;
+  /**
+   * #98: true when this card lives inside the canvas CSS grid (so it
+   * carries gridColumn / gridRow + supports the full move + 8-way
+   * resize gesture).  False when it lives in a partitioned flex slot
+   * (sticky-top / sticky-bottom / dock-left / dock-right) -- those
+   * containers are anchored by their position prop, not by the grid,
+   * so they don't apply grid styles and don't expose body-drag or
+   * resize handles.
+   */
+  inGrid: boolean;
   selected: boolean;
   canEdit: boolean;
   gesturing: boolean;
@@ -2272,29 +2395,60 @@ function WidgetCard({
   // standard title-bar + placeholder layout below.
   const isContainer = THEMED_CONTAINER_KINDS.has(widget.kind);
   if (isContainer) {
+    // #98: partitioned containers (sticky-top / sticky-bottom /
+    // dock-left / dock-right) live in flex slots OUTSIDE the canvas
+    // grid.  They size themselves via position / widthPx / content,
+    // not via gridColumn / gridRow, and can't be dragged around the
+    // canvas as units (their position is set via the property
+    // editor, not by free placement).  Children inside them are
+    // still draggable for reorder / reparent / extract.  In-grid
+    // containers (inline + overlay-trigger) keep the original
+    // grid-coord + body-drag behavior.
+    const partitioned = !inGrid;
+    const gridStyle: React.CSSProperties = inGrid
+      ? {
+          gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
+          gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
+        }
+      : {};
     return (
       <div
         role="button"
         tabIndex={0}
         onClick={onClick}
-        onMouseDown={canEdit ? onMoveStart : undefined}
+        onMouseDown={canEdit && !partitioned ? onMoveStart : undefined}
         data-widget-id={widget.id}
         style={{
-          gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
-          gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
-          cursor: canEdit ? (gesturing ? 'grabbing' : 'grab') : 'default',
+          ...gridStyle,
+          cursor: canEdit && !partitioned
+            ? gesturing
+              ? 'grabbing'
+              : 'grab'
+            : 'default',
         }}
-        // #95: min-h-0 / min-w-0 suppress CSS Grid's default
-        // `min-height: auto` on grid items, which would otherwise
-        // expand the row track when the item's content (the
-        // FlowContainer's icon row, ~46-50px) is taller than the
-        // fixed `gridAutoRows` track size (3px × rowSpan). Without
-        // these, a 16-row container that should be 70.5px tall
-        // could balloon to ~100px because the auto-min sizing
-        // grows the track to fit its content's natural height.
-        // overflow-hidden on its own isn't enough -- the row
-        // track has to be told it can shrink below auto.
-        className={`group relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md transition-shadow ${
+        // #95 (grid path) / #98 (partitioned path):
+        //
+        // GRID PATH (in-grid containers): min-h-0 / min-w-0 suppress
+        // CSS Grid's default `min-height: auto` on grid items, which
+        // would otherwise expand the row track when the item's
+        // content (e.g. the FlowContainer's icon row) is taller than
+        // the fixed `gridAutoRows` track.  Without these the container
+        // could balloon vs. its grid-defined size.  overflow-hidden
+        // on its own isn't enough -- the row track itself has to be
+        // told it can shrink below auto.
+        //
+        // PARTITIONED PATH (out-of-grid containers): no fill /
+        // sizing constraints.  Mirror the runtime's wrapper exactly
+        // (`relative shrink-0`); the Container child takes its size
+        // from its own content (sticky-top/bottom) or its widthPx
+        // prop (dock-left/right).  This is the architectural fix for
+        // the designer-vs-runtime height mismatch -- the designer
+        // now content-sizes sticky chrome the same way runtime does.
+        className={`group ${
+          partitioned
+            ? 'relative shrink-0 rounded-md transition-shadow'
+            : 'relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md transition-shadow'
+        } ${
           isDropTarget
             ? 'shadow-[0_0_0_3px_var(--color-accent,_#2563eb)]'
             : selected
@@ -2320,7 +2474,12 @@ function WidgetCard({
             </span>
           </div>
         ) : null}
-        {selected && canEdit && (
+        {/* #98: resize handles only on in-grid containers.  Sticky /
+            dock containers are sized by position + widthPx + content,
+            not by grid coords, so canvas-resize would be misleading
+            (changing rowSpan does nothing in the runtime).  Width /
+            height for those flows through the property editor. */}
+        {selected && canEdit && !partitioned && (
           <ResizeHandles onResizeStart={onResizeStart} />
         )}
       </div>
@@ -5407,51 +5566,88 @@ function findTabsHostAt(
 const THEMED_CONTAINER_KINDS = new Set<CustomWidgetKind>(['container']);
 
 /**
- * Find the deepest themed-app container at a given (col, row) drop
- * point. Walks the container tree recursively so a drop on top of a
- * Foldable Group inside a Dock Panel routes to the Foldable Group
- * (the inner-most container wins). Returns null when the drop point
- * isn't inside any themed container — the caller falls back to
- * page-level placement.
+ * #98: a "partitioned" container is one whose `position` makes it
+ * render as a flex sibling OUTSIDE the canvas grid in both the
+ * runtime AND (now) the designer.  These containers ignore their
+ * grid layout (col/row/colSpan/rowSpan) at render time -- their
+ * size is content-driven (sticky-top/sticky-bottom) or prop-driven
+ * (dock-left/dock-right via widthPx).  Keeping them out of the grid
+ * makes the designer pixel-match the runtime regardless of what
+ * rowSpan the seed happens to have.
  *
- * Container kinds: app-bar, dock-panel, slideout, foldable-group.
- * Each carries a `widgets` array of children that get rendered in
- * the container's own layout (row for app-bar, column for the
- * others) rather than at grid coordinates.
+ * Overlay-trigger containers stay INSIDE the canvas grid because
+ * their visible chrome (the floating trigger pill + drawer) is
+ * positioned absolutely against the grid cell they live in -- they
+ * already act like a content-sized overlay over a grid widget, so
+ * pulling them out of the grid would break that positioning.
+ *
+ * Inline containers also stay in the grid because they're the
+ * generic "flow region" case -- they consume grid cells like any
+ * other widget.
  */
-function findContainerHostAt(
+function isPartitionedContainer(w: CustomWidget): boolean {
+  if (w.kind !== 'container') return false;
+  if (w.config.kind !== 'container') return false;
+  const pos = w.config.position ?? 'inline';
+  return (
+    pos === 'sticky-top' ||
+    pos === 'sticky-bottom' ||
+    pos === 'dock-left' ||
+    pos === 'dock-right'
+  );
+}
+
+/**
+ * #98: DOM-based container host lookup.  Walks every [data-widget-id]
+ * element under the canvas, picks the deepest one whose bounding
+ * rect contains (clientX, clientY) AND that's a themed container.
+ * Works for both in-grid containers (inline, overlay-trigger) and
+ * out-of-grid partitioned containers (sticky-top / sticky-bottom /
+ * dock-left / dock-right) without needing to special-case the
+ * coordinate space -- the DOM rect is the source of truth either way.
+ *
+ * Used by the drop-routing handlers in place of the older
+ * `findContainerHostAt(widgets, col, row)` (which only works for
+ * grid-positioned containers and would route past sticky-top bars).
+ */
+function findContainerHostAtClient(
+  root: HTMLElement | null,
   widgets: CustomWidget[],
-  col: number,
-  row: number,
+  clientX: number,
+  clientY: number,
 ): CustomWidget | null {
-  // Search depth-first so nested containers (a foldable group inside
-  // a dock panel) route to the innermost. The Tabs-style traversal
-  // would be sufficient if we banned nesting, but a typical layout
-  // (dock-panel with foldable-group children) needs the inner one.
-  for (const w of widgets) {
+  if (!root) return null;
+  const els = Array.from(
+    root.querySelectorAll('[data-widget-id]'),
+  ) as HTMLElement[];
+  let best: { widget: CustomWidget; depth: number } | null = null;
+  for (const el of els) {
+    const id = el.getAttribute('data-widget-id');
+    if (!id) continue;
+    const found = findWidgetWithParent(widgets, id);
+    if (!found) continue;
+    const w = found.widget;
     if (!THEMED_CONTAINER_KINDS.has(w.kind)) continue;
-    const c1 = w.layout.col;
-    const c2 = w.layout.col + w.layout.colSpan - 1;
-    const r1 = w.layout.row;
-    const r2 = w.layout.row + w.layout.rowSpan - 1;
-    if (col < c1 || col > c2 || row < r1 || row > r2) continue;
-    // Recurse into the container's children first; pick the
-    // innermost hit. For nested children at a child container's
-    // sub-region we'd need that container's own bounds within the
-    // parent, which we don't track in the v3 schema (children
-    // ignore col/row). For now nested containers just live at the
-    // parent's footprint so any drop inside the parent goes to the
-    // child container if there's only one, otherwise to the parent.
-    const cfg = w.config;
-    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
-      const innerContainer = cfg.widgets.find((c) =>
-        THEMED_CONTAINER_KINDS.has(c.kind),
-      );
-      if (innerContainer) return innerContainer;
+    const rect = el.getBoundingClientRect();
+    if (
+      clientX < rect.left ||
+      clientX > rect.right ||
+      clientY < rect.top ||
+      clientY > rect.bottom
+    ) {
+      continue;
     }
-    return w;
+    // Pick the deepest DOM-nested container so a drop on a nested
+    // foldable group routes to the group, not its parent dock.
+    let depth = 0;
+    let cur: Element | null = el.parentElement;
+    while (cur && cur !== root) {
+      if (cur.hasAttribute('data-widget-id')) depth++;
+      cur = cur.parentElement;
+    }
+    if (!best || depth > best.depth) best = { widget: w, depth };
   }
-  return null;
+  return best?.widget ?? null;
 }
 
 /**
