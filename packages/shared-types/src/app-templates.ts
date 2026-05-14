@@ -190,7 +190,7 @@ function parcelViewerSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 12 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -202,7 +202,7 @@ function parcelViewerSeed(): CustomAppData {
   const leftDock: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 13, colSpan: 48, rowSpan: 244 },
+    layout: { col: 1, row: 17, colSpan: 48, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'dock-left',
@@ -272,7 +272,7 @@ function publicInfoMapSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 12 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -350,7 +350,7 @@ function fieldInspectionSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 12 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -362,7 +362,7 @@ function fieldInspectionSeed(): CustomAppData {
   const drawer: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 13, colSpan: 16, rowSpan: 244 },
+    layout: { col: 1, row: 17, colSpan: 16, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'overlay-trigger',
@@ -448,7 +448,7 @@ function editorWorkspaceSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 12 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -460,7 +460,7 @@ function editorWorkspaceSeed(): CustomAppData {
   const leftDock: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 13, colSpan: 48, rowSpan: 244 },
+    layout: { col: 1, row: 17, colSpan: 48, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'dock-left',
@@ -530,7 +530,7 @@ function viewerReadonlySeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 12 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -542,7 +542,7 @@ function viewerReadonlySeed(): CustomAppData {
   const leftDock: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 13, colSpan: 48, rowSpan: 244 },
+    layout: { col: 1, row: 17, colSpan: 48, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'dock-left',
