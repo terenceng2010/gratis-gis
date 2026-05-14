@@ -1022,7 +1022,98 @@ export function migrateCustomAppData(data: CustomAppData): CustomAppData {
       })),
     };
   }
+  // #99: spread-normalize.  Containers that hold all their children
+  // at the (1, 1, 1, 1) placeholder (the historical default for
+  // widgets dragged into a container) now get explicit cols / rows
+  // spread evenly along the container's primary axis.  Lets the
+  // free-position FlowContainer render them in their natural visual
+  // positions and lets the designer's drag gesture compute correct
+  // deltas from a real starting point.  Idempotent: a container
+  // that already has any child at col != 1 (or row != 1 for column
+  // layout) is left alone.  This runs on every load -- no version
+  // bump needed because the result is identical for already-spread
+  // data.
+  cur = {
+    ...cur,
+    pages: cur.pages.map((p) => ({
+      ...p,
+      widgets: p.widgets.map(spreadContainerChildren),
+    })),
+  };
   return cur;
+}
+
+/**
+ * #99: recursively walk a widget tree and spread each container's
+ * children evenly along its primary axis if every child sits at the
+ * origin placeholder.  Children at index i of n get axis value
+ * 1 + round((i / (n-1)) * 191), so a 4-tool app-bar maps to cols
+ * 1, 65, 128, 192 (visually: left edge, first third, second third,
+ * right edge).  Non-row/column containers (overlay-trigger, inline)
+ * and tabs are left alone -- they don't use the free-position axis
+ * for child layout.
+ */
+function spreadContainerChildren(w: CustomWidget): CustomWidget {
+  let next = w;
+  if (w.kind === 'container' && w.config.kind === 'container') {
+    const cfg = w.config;
+    const layout = cfg.layout ?? 'column';
+    const pos = cfg.position ?? 'inline';
+    const isFlow =
+      pos === 'sticky-top' ||
+      pos === 'sticky-bottom' ||
+      pos === 'inline' ||
+      pos === 'dock-left' ||
+      pos === 'dock-right';
+    if (isFlow && cfg.widgets.length > 1) {
+      const axisKey: 'col' | 'row' = layout === 'row' ? 'col' : 'row';
+      const everyAtOrigin = cfg.widgets.every(
+        (c) => (c.layout[axisKey] ?? 1) === 1,
+      );
+      if (everyAtOrigin) {
+        const n = cfg.widgets.length;
+        const respread = cfg.widgets.map((c, i) => ({
+          ...c,
+          layout: {
+            ...c.layout,
+            [axisKey]: Math.max(
+              1,
+              Math.min(192, Math.round((i / (n - 1)) * 191) + 1),
+            ),
+          },
+        }));
+        next = {
+          ...w,
+          config: { ...cfg, widgets: respread },
+        } as CustomWidget;
+      }
+    }
+  }
+  // Recurse into nested containers + tabs regardless of whether the
+  // outer widget was respread.
+  const cfg2 = next.config as { widgets?: CustomWidget[] };
+  if (Array.isArray(cfg2.widgets)) {
+    next = {
+      ...next,
+      config: {
+        ...next.config,
+        widgets: cfg2.widgets.map(spreadContainerChildren),
+      } as CustomWidget['config'],
+    };
+  }
+  if (next.kind === 'tabs' && next.config.kind === 'tabs') {
+    next = {
+      ...next,
+      config: {
+        ...next.config,
+        tabs: next.config.tabs.map((t) => ({
+          ...t,
+          widgets: t.widgets.map(spreadContainerChildren),
+        })),
+      },
+    };
+  }
+  return next;
 }
 
 /**

@@ -178,12 +178,50 @@ function FlowContainer({
       : position === 'sticky-bottom'
         ? 'sticky bottom-0 z-10'
         : '';
-  const flowClass =
-    layout === 'row'
-      ? 'flex items-stretch gap-1'
-      : 'flex flex-col gap-1';
   const heightStyle: CSSProperties =
     typeof config.heightPx === 'number' ? { height: config.heightPx } : {};
+
+  // #99: free-position children.  Row-layout containers (sticky-top
+  // toolbars, etc.) put each child at layout.col along the bar:
+  // col 1 = left edge, col 192 = right edge, col 96 ~= center.
+  // Column-layout containers do the same with layout.row.  This
+  // lets the user drag a single tool to the right (or anywhere)
+  // without having to flex-pack everything.
+  //
+  // Backwards compat: when every child has col=1 (the historical
+  // placeholder default), we auto-spread them evenly so existing
+  // apps render the same way they did under the old flex-pack
+  // model.  The first drag persists explicit cols and from then
+  // on positions are literal.  The migration step in shared-types
+  // (migrateCustomAppData) writes spread cols on load so the data
+  // and visuals match without relying on this fallback long-term.
+  const isRow = layout === 'row';
+  const axisKey: 'col' | 'row' = isRow ? 'col' : 'row';
+  const children = config.widgets;
+  const allAtOrigin =
+    children.length > 0 &&
+    children.every((c) => (c.layout[axisKey] ?? 1) === 1);
+  function childPos(child: { layout: { col: number; row: number } }, idx: number): CSSProperties {
+    if (allAtOrigin && children.length > 1) {
+      // Even-spread fallback: place child[i] at i/(n-1) of the axis,
+      // so the first sticks to the start and the last to the end.
+      const pct = (idx / (children.length - 1)) * 100;
+      return isRow
+        ? { position: 'absolute', left: `${pct}%`, top: 0, bottom: 0 }
+        : { position: 'absolute', top: `${pct}%`, left: 0, right: 0 };
+    }
+    if (allAtOrigin) {
+      // Single child: just anchor it to the start.
+      return isRow
+        ? { position: 'absolute', left: 0, top: 0, bottom: 0 }
+        : { position: 'absolute', top: 0, left: 0, right: 0 };
+    }
+    const v = (child.layout[axisKey] ?? 1) - 1;
+    const pct = (v / 191) * 100;
+    return isRow
+      ? { position: 'absolute', left: `${pct}%`, top: 0, bottom: 0 }
+      : { position: 'absolute', top: `${pct}%`, left: 0, right: 0 };
+  }
 
   // Collapsed inline / sticky containers fold their children behind
   // a chevron handle; the chrome region stays visible so the handle
@@ -214,14 +252,15 @@ function FlowContainer({
           </header>
         ) : null}
         <div
-          className={`min-h-0 min-w-0 flex-1 ${flowClass} px-4 py-1`}
+          className="relative min-h-0 min-w-0 flex-1 px-4 py-1"
           style={collapsed ? { display: 'none' } : undefined}
           aria-hidden={collapsed}
         >
-          {config.widgets.map((child) => (
+          {children.map((child, idx) => (
             <div
               key={child.id}
-              className="flex shrink-0 items-stretch"
+              className="flex items-stretch"
+              style={childPos(child, idx)}
               data-container-child
             >
               {renderChild(child)}

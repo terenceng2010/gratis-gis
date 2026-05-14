@@ -581,6 +581,12 @@ export function CustomAppDetail({
       // col/row for page-level placement".  Reorder/reparent of
       // existing widgets goes through moveWidget, not this path.
       targetParentId: string | null = null,
+      // #99: in-container layout (col/row in 1..192 axis space)
+      // computed from the cursor position inside the target
+      // container's rect.  Applied to the new child so it lands at
+      // the drop spot instead of the placeholder origin.  Ignored
+      // when targetParentId is null.
+      targetLayout: CustomLayout | null = null,
     ) => {
       const layout: CustomLayout = {
         ...defaultLayoutForKind(kind),
@@ -603,9 +609,15 @@ export function CustomAppDetail({
           ? findContainerById(page.widgets, targetParentId)
           : null;
         if (hostContainer) {
-          // Children inside containers ignore col/row, but we still
-          // stamp the schema-required layout fields.
-          const childLayout = { ...defaultLayoutForKind(kind), col: 1, row: 1 };
+          // #99: use the canvas-computed in-container layout when
+          // available, else fall back to the placeholder origin.
+          // For row-layout sticky/inline containers, the renderer
+          // maps col -> left percentage so the child lands at the
+          // drop position; for column-layout / dock containers the
+          // value is harmless extra data.
+          const childLayout = targetLayout
+            ? targetLayout
+            : { ...defaultLayoutForKind(kind), col: 1, row: 1 };
           const childWidget = stampWidget(kind, childLayout);
           const onlyMap =
             page.widgets.filter((w) => w.kind === 'map').length === 1
@@ -963,8 +975,8 @@ export function CustomAppDetail({
               itemTitle={itemTitle}
               onSetActiveTabIdx={setActiveTabIdx}
               onSelect={setSelectedWidgetId}
-              onCanvasDrop={(kind, col, row, targetParentId) =>
-                addWidgetAt(kind, col, row, targetParentId)
+              onCanvasDrop={(kind, col, row, targetParentId, targetLayout) =>
+                addWidgetAt(kind, col, row, targetParentId, targetLayout)
               }
               onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
               onWidgetMove={(id, targetParentId, targetIndex, pageLayout) => {
@@ -1722,6 +1734,17 @@ interface ActiveGesture {
    * container), or a reparent (move across container boundaries).
    */
   srcParentId: string | null;
+  /**
+   * #99: cursor's offset from the widget's top-left corner at the
+   * moment of mousedown.  When the in-container child drag handler
+   * positions the widget via free-position layout coords, we
+   * subtract this offset from the cursor so the widget's grabbed
+   * point (not its top-left corner) tracks under the cursor.
+   * Captured in pixels; combined with the container's rect to map
+   * back to layout col/row.
+   */
+  grabOffsetX: number;
+  grabOffsetY: number;
 }
 
 const DRAG_THRESHOLD_PX = 4;
@@ -1779,6 +1802,12 @@ function Canvas({
     // #98: container the canvas's DOM hit-test routed the drop into,
     // or null if the cursor landed on the page-level grid.
     targetParentId: string | null,
+    // #99: when targetParentId is non-null, this is the in-container
+    // layout (col/row in 1..192 axis space) computed from the cursor's
+    // position inside the target container's rect.  The handler
+    // applies it to the new child so the drop lands where the user
+    // released, instead of at the placeholder origin.
+    targetLayout: CustomLayout | null,
   ) => void;
   onWidgetLayout: (id: string, layout: CustomLayout) => void;
   /**
@@ -1906,7 +1935,32 @@ function Canvas({
       e.clientX,
       e.clientY,
     );
-    onCanvasDrop(kind as CustomWidgetKind, col, row, host?.id ?? null);
+    // #99: when dropping into a container, also compute the in-
+    // container layout so the new child lands where the cursor was.
+    let targetLayout: CustomLayout | null = null;
+    if (host) {
+      const targetEl = canvasRef.current?.querySelector(
+        `[data-widget-id="${host.id}"]`,
+      ) as HTMLElement | null;
+      if (targetEl) {
+        const tr = targetEl.getBoundingClientRect();
+        const xPct = Math.max(
+          0,
+          Math.min(1, (e.clientX - tr.left) / Math.max(1, tr.width)),
+        );
+        const yPct = Math.max(
+          0,
+          Math.min(1, (e.clientY - tr.top) / Math.max(1, tr.height)),
+        );
+        targetLayout = {
+          col: Math.max(1, Math.min(192, Math.round(xPct * 191) + 1)),
+          row: Math.max(1, Math.min(192, Math.round(yPct * 191) + 1)),
+          colSpan: 1,
+          rowSpan: 1,
+        };
+      }
+    }
+    onCanvasDrop(kind as CustomWidgetKind, col, row, host?.id ?? null, targetLayout);
   }
 
   // Begin a gesture. Called from WidgetCard's mousedown handler
@@ -1924,6 +1978,18 @@ function Canvas({
     ) => {
       if (!canEdit) return;
       e.stopPropagation();
+      // #99: capture grab-offset so in-container drags translate the
+      // widget under the cursor without snapping its left edge to
+      // the cursor.  The element we want is the widget root itself
+      // -- find it by data-widget-id under the canvas so we don't
+      // rely on currentTarget (which may be a resize-handle button
+      // for resize gestures).
+      const widgetEl = canvasRef.current?.querySelector(
+        `[data-widget-id="${widget.id}"], [data-child-id="${widget.id}"]`,
+      ) as HTMLElement | null;
+      const rect = widgetEl?.getBoundingClientRect();
+      const grabOffsetX = rect ? e.clientX - rect.left : 0;
+      const grabOffsetY = rect ? e.clientY - rect.top : 0;
       setGesture({
         kind,
         widgetId: widget.id,
@@ -1931,6 +1997,8 @@ function Canvas({
         startY: e.clientY,
         startLayout: widget.layout,
         srcParentId,
+        grabOffsetX,
+        grabOffsetY,
       });
     },
     [canEdit],
@@ -2038,12 +2106,51 @@ function Canvas({
       const start = g.startLayout;
       const next: CustomLayout = { ...start };
       if (g.kind === 'move') {
-        // #96: only top-level widgets get a live grid-coord update.
-        // Children inside containers don't have meaningful grid
-        // coords (children flow inside the container's layout);
-        // their final placement is decided by the mouseup handler
-        // via reorder / reparent.
-        if (g.srcParentId !== null) return;
+        if (g.srcParentId !== null) {
+          // #99: in-container child drag.  Only flow-positioned
+          // parents (inline / sticky-top / sticky-bottom -- the ones
+          // rendered by FlowContainer) participate in the free-
+          // position model.  Dock and overlay parents still use the
+          // old index-reorder-on-mouseup path because their
+          // renderers stack children with dividers, not absolute
+          // coords.
+          const parent = findWidgetWithParent(widgets, g.srcParentId);
+          const parentCfg = parent?.widget.config;
+          const isFlowParent =
+            parentCfg?.kind === 'container' &&
+            (parentCfg.position === undefined ||
+              parentCfg.position === 'inline' ||
+              parentCfg.position === 'sticky-top' ||
+              parentCfg.position === 'sticky-bottom');
+          if (!isFlowParent) return;
+          // Compute the cursor's position WITHIN the parent
+          // container's rect and map it to a col / row in the
+          // 1..192 space the renderer uses.
+          const parentEl = canvasRef.current?.querySelector(
+            `[data-widget-id="${g.srcParentId}"]`,
+          ) as HTMLElement | null;
+          if (!parentEl) return;
+          const prect = parentEl.getBoundingClientRect();
+          // #99: subtract the grab-offset so the widget's grabbed
+          // point (eg the icon the user clicked on) stays under
+          // the cursor instead of the widget's top-left edge
+          // snapping there.  Without this, dragging a tool would
+          // visually jump by ~half its width on the first move.
+          const desiredLeft = e.clientX - g.grabOffsetX;
+          const desiredTop = e.clientY - g.grabOffsetY;
+          const xPct = Math.max(
+            0,
+            Math.min(1, (desiredLeft - prect.left) / Math.max(1, prect.width)),
+          );
+          const yPct = Math.max(
+            0,
+            Math.min(1, (desiredTop - prect.top) / Math.max(1, prect.height)),
+          );
+          next.col = Math.max(1, Math.min(192, Math.round(xPct * 191) + 1));
+          next.row = Math.max(1, Math.min(192, Math.round(yPct * 191) + 1));
+          onWidgetLayout(g.widgetId, next);
+          return;
+        }
         next.col = clampCol(start.col + colDelta);
         next.row = Math.max(1, start.row + rowDelta);
         // Clamp colSpan when the move pushed the right edge past
@@ -2121,32 +2228,83 @@ function Canvas({
         const targetParentId =
           host && host.id !== g.widgetId ? host.id : null;
         if (targetParentId !== g.srcParentId) {
-          // Reparent.  Page level → container collapses layout to
-          // the placeholder; container → page level adopts the
-          // cursor's grid coords as the new layout.
+          // Reparent.
+          //
+          // Page level → container:  compute the child's in-container
+          // col/row from the cursor pos within the new container rect
+          // so it lands where the user dropped it (#99), not at the
+          // placeholder origin.
+          //
+          // Container → page level:  adopt the cursor's grid coords
+          // for the new top-level layout.
+          //
+          // Container → other container:  same in-container coord
+          // computation; the targetIndex is still passed in case a
+          // future container variant (eg a tabs-inside-container)
+          // wants ordered append semantics.
           const targetIndex =
             targetParentId === null
               ? widgets.length
               : indexInContainer(targetParentId, e, g.widgetId);
-          const pageLayout: CustomLayout | null =
-            targetParentId === null
-              ? {
-                  col: clampCol(col),
-                  row: Math.max(1, row),
-                  colSpan: g.startLayout.colSpan,
-                  rowSpan: g.startLayout.rowSpan,
-                }
-              : null;
+          let pageLayout: CustomLayout | null = null;
+          if (targetParentId === null) {
+            pageLayout = {
+              col: clampCol(col),
+              row: Math.max(1, row),
+              colSpan: g.startLayout.colSpan,
+              rowSpan: g.startLayout.rowSpan,
+            };
+          } else {
+            // #99: compute the destination col/row from the cursor
+            // position inside the target container's rect.  The
+            // child will render at that spot in the free-position
+            // FlowContainer.
+            const targetEl = canvasRef.current?.querySelector(
+              `[data-widget-id="${targetParentId}"]`,
+            ) as HTMLElement | null;
+            if (targetEl) {
+              const tr = targetEl.getBoundingClientRect();
+              const xPct = Math.max(
+                0,
+                Math.min(1, (e.clientX - tr.left) / Math.max(1, tr.width)),
+              );
+              const yPct = Math.max(
+                0,
+                Math.min(1, (e.clientY - tr.top) / Math.max(1, tr.height)),
+              );
+              pageLayout = {
+                col: Math.max(1, Math.min(192, Math.round(xPct * 191) + 1)),
+                row: Math.max(1, Math.min(192, Math.round(yPct * 191) + 1)),
+                colSpan: 1,
+                rowSpan: 1,
+              };
+            }
+          }
           onWidgetMove(g.widgetId, targetParentId, targetIndex, pageLayout);
         } else if (targetParentId !== null) {
-          // Same container: maybe reorder.  Compute index; if it
-          // differs from the source's current index, move within.
-          const targetIndex = indexInContainer(
-            targetParentId,
-            e,
-            g.widgetId,
-          );
-          onWidgetMove(g.widgetId, targetParentId, targetIndex, null);
+          // Same-container move.  For flow-positioned parents (the
+          // free-position FlowContainer ones), onMove already wrote
+          // the new col/row live -- nothing extra to do.  For dock /
+          // overlay parents (DockContainer / OverlayContainer, which
+          // stack children with dividers and ignore layout.col),
+          // fall back to the legacy index-reorder so the user can
+          // still rearrange children in those containers via drag.
+          const parent = findWidgetWithParent(widgets, targetParentId);
+          const parentCfg = parent?.widget.config;
+          const isFlowParent =
+            parentCfg?.kind === 'container' &&
+            (parentCfg.position === undefined ||
+              parentCfg.position === 'inline' ||
+              parentCfg.position === 'sticky-top' ||
+              parentCfg.position === 'sticky-bottom');
+          if (!isFlowParent) {
+            const targetIndex = indexInContainer(
+              targetParentId,
+              e,
+              g.widgetId,
+            );
+            onWidgetMove(g.widgetId, targetParentId, targetIndex, null);
+          }
         }
         // targetParentId === null && srcParentId === null: pure
         // page-level grid move; onMove already applied it.
@@ -5897,12 +6055,22 @@ function moveWidgetInTree(
       : targetIndex;
   const withoutSource = removeWidgetDeep(widgets, sourceId);
   let widgetToInsert = found.widget;
-  if (targetParentId === null && pageLayout) {
-    // Moving out to the page: adopt the cursor's grid coords.
+  if (pageLayout) {
+    // #99: pageLayout is the cursor-derived destination layout.
+    // When dropping at page level, it's the grid coords.  When
+    // dropping into a container (free-position FlowContainer), it's
+    // the in-container col/row in the 1..192 axis space the
+    // renderer maps to a left/top percent.  Either way we just
+    // overwrite the widget's layout with the cursor-derived one.
     widgetToInsert = { ...widgetToInsert, layout: pageLayout };
   } else if (targetParentId !== null && found.parentId === null) {
-    // Moving from page level into a container: collapse the layout
-    // to the placeholder.
+    // Moving from page level into a container without a pageLayout
+    // (shouldn't happen with the current canvas, but kept as a
+    // safety net for any future call site that doesn't compute a
+    // cursor-derived destination): collapse the layout to the
+    // placeholder origin.  The container's auto-spread fallback
+    // will visually distribute the child until it gets its first
+    // explicit position write.
     widgetToInsert = {
       ...widgetToInsert,
       layout: { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
