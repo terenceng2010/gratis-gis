@@ -1289,6 +1289,27 @@ const PALETTE_TILES: Array<{
     hint: 'Scrub every layer back to a past date (#87)',
     category: 'data',
   },
+  {
+    kind: 'create-feature',
+    label: 'Add feature',
+    Icon: Plus,
+    hint: 'Click-to-add a new feature on a target layer (#69)',
+    category: 'data',
+  },
+  {
+    kind: 'edit-feature',
+    label: 'Edit feature',
+    Icon: Pencil,
+    hint: 'Edit the selected feature on a target layer (#70)',
+    category: 'data',
+  },
+  {
+    kind: 'delete-feature',
+    label: 'Delete feature',
+    Icon: Trash2,
+    hint: 'Delete the selected feature(s) from a target layer (#71)',
+    category: 'data',
+  },
   // -- Page elements ---------------------------------------------
   {
     kind: 'text',
@@ -2319,6 +2340,12 @@ function widgetPlaceholderText(
       return 'Show my location';
     case 'time-slider':
       return 'Scrub the app to a past date';
+    case 'create-feature':
+      return 'Add a feature to a target layer';
+    case 'edit-feature':
+      return 'Edit the selected feature';
+    case 'delete-feature':
+      return 'Delete the selected feature(s)';
     case 'tabs':
       return 'Tab strip with nested widgets';
     default:
@@ -2363,6 +2390,12 @@ function summarizeWidget(w: CustomWidget): string {
         : 'pick a map widget';
     case 'time-slider':
       return w.config.mode === 'calendar' ? 'calendar' : 'slider';
+    case 'create-feature':
+    case 'edit-feature':
+    case 'delete-feature':
+      return w.config.mapWidgetId
+        ? `target #${w.config.targetIndex}`
+        : 'pick a map widget';
     case 'tabs': {
       const n = w.config.tabs.length;
       const totalChildren = w.config.tabs.reduce(
@@ -3048,6 +3081,18 @@ function WidgetConfigForm({
         <TimeSliderWidgetConfigEditor
           config={widget.config}
           canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
+      );
+    case 'create-feature':
+    case 'edit-feature':
+    case 'delete-feature':
+      return (
+        <FeatureMutationWidgetConfigEditor
+          config={widget.config}
+          canEdit={canEdit}
+          mapWidgets={mapWidgets}
+          appTargets={appTargets}
           onChangeConfig={onChangeConfig}
         />
       );
@@ -3740,6 +3785,79 @@ function MyLocationWidgetConfigBody({
         />
         Leave marker on the map after locating
       </label>
+    </div>
+  );
+}
+
+/**
+ * Properties editor for the feature-mutation widgets (#69 / #70 /
+ * #71).  All three share the same shape: bind to a Map widget,
+ * pick a target layer, optional label override.  We render one
+ * editor that covers all three rather than duplicating per-kind.
+ */
+function FeatureMutationWidgetConfigEditor({
+  config,
+  canEdit,
+  mapWidgets,
+  appTargets,
+  onChangeConfig,
+}: {
+  config: {
+    kind: 'create-feature' | 'edit-feature' | 'delete-feature';
+    mapWidgetId: string;
+    targetIndex: number;
+    label?: string;
+  };
+  canEdit: boolean;
+  mapWidgets: CustomWidget[];
+  appTargets: ViewerTarget[];
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <MapBindingPicker
+        mapWidgetId={config.mapWidgetId}
+        mapWidgets={mapWidgets}
+        canEdit={canEdit}
+        onChange={(mapWidgetId) => onChangeConfig({ mapWidgetId })}
+      />
+      <Field label="Target layer" hint="Which target row this widget acts on.">
+        <select
+          value={config.targetIndex}
+          disabled={!canEdit || appTargets.length === 0}
+          onChange={(e) =>
+            onChangeConfig({ targetIndex: Number(e.target.value) })
+          }
+          className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+        >
+          {appTargets.length === 0 ? (
+            <option value={0}>(no targets configured)</option>
+          ) : (
+            appTargets.map((t, i) => (
+              <option key={i} value={i}>
+                {`Target ${i + 1} (${t.layerKey})`}
+              </option>
+            ))
+          )}
+        </select>
+      </Field>
+      <Field label="Button label" hint="Shown on the toolbar / panel header.">
+        <input
+          type="text"
+          value={config.label ?? ''}
+          maxLength={40}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ label: e.target.value })}
+          placeholder={
+            config.kind === 'create-feature'
+              ? 'Add feature'
+              : config.kind === 'edit-feature'
+                ? 'Edit feature'
+                : 'Delete feature'
+          }
+          className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+        />
+      </Field>
     </div>
   );
 }
@@ -4506,6 +4624,9 @@ const WIDGET_KIND_LABEL: Record<CustomWidgetKind, string> = {
   coordinates: 'Coordinates',
   'my-location': 'My location',
   'time-slider': 'Time slider',
+  'create-feature': 'Add feature',
+  'edit-feature': 'Edit feature',
+  'delete-feature': 'Delete feature',
   'attribute-table': 'Attribute table',
   text: 'Text',
   chart: 'Chart',
@@ -5044,6 +5165,9 @@ const WIDGETS_BIND_MAP_ID = new Set<CustomWidgetKind>([
   'print',
   'select',
   'basemap-gallery',
+  'create-feature',
+  'edit-feature',
+  'delete-feature',
 ]);
 
 /**
@@ -5097,6 +5221,9 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
     case 'bookmark':
     case 'coordinates':
     case 'my-location':
+    case 'create-feature':
+    case 'edit-feature':
+    case 'delete-feature':
       return { col: 1, row: 1, colSpan: 2, rowSpan: 2 };
     case 'attribute-table':
       return { col: 1, row: 1, colSpan: 24, rowSpan: 10 };
@@ -5693,6 +5820,48 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           mode: 'date',
           label: 'Time',
           stepDays: 1,
+        },
+      };
+    case 'create-feature':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'create-feature',
+          mapWidgetId: '',
+          targetIndex: 0,
+          label: 'Add feature',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('create-feature'),
+        },
+      };
+    case 'edit-feature':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'edit-feature',
+          mapWidgetId: '',
+          targetIndex: 0,
+          label: 'Edit feature',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('edit-feature'),
+        },
+      };
+    case 'delete-feature':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'delete-feature',
+          mapWidgetId: '',
+          targetIndex: 0,
+          label: 'Delete feature',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('delete-feature'),
         },
       };
     case 'tabs':

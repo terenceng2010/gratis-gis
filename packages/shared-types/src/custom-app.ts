@@ -214,6 +214,17 @@ export type CustomWidgetKind =
   // bounds and a step.  Renders a date input + slider (or just a
   // calendar / picker, depending on mode).
   | 'time-slider'
+  // #69 / #70 / #71: feature editing widgets.  Each binds to a Map
+  // widget + a target layer (via the parent app's `targets` array).
+  // Create opens an empty attribute form; Edit reads the bound
+  // map's selection and pre-fills the form; Delete also reads the
+  // selection and confirms+removes.  All three disable themselves
+  // when AppTimeContext.at is non-null (the engine rejects past-
+  // target writes anyway; this is the UX gate so authors don't
+  // even see the buttons in time-travel mode).
+  | 'create-feature'
+  | 'edit-feature'
+  | 'delete-feature'
   // #362: layout container. Holds nested widgets organized into
   // tabs. Anti-EB: deliberately simpler than EB's Section + Views
   // pair, just one widget that renders a tab strip and routes
@@ -351,6 +362,9 @@ export type CustomWidgetConfig =
   | CoordinatesWidgetConfig
   | MyLocationWidgetConfig
   | TimeSliderWidgetConfig
+  | CreateFeatureWidgetConfig
+  | EditFeatureWidgetConfig
+  | DeleteFeatureWidgetConfig
   | TabsWidgetConfig
   | AppBarWidgetConfig
   | DockPanelWidgetConfig
@@ -384,6 +398,61 @@ export interface TimeSliderWidgetConfig {
   stepDays?: number;
   /** Optional label override; default 'Time'. */
   label?: string;
+}
+
+/**
+ * Create-feature widget config (#69).  Opens an attribute form for
+ * a new row on the chosen target layer.  For point-geometry layers
+ * the user clicks once on the bound map to set the location after
+ * filling attributes; for table-only (no geometry) layers the form
+ * submits directly.  The widget reads AppTimeContext.at and renders
+ * disabled when non-null (engine rejects past-target writes).
+ */
+export interface CreateFeatureWidgetConfig {
+  kind: 'create-feature';
+  /** Map widget id the click-to-place mode hooks into. */
+  mapWidgetId: string;
+  /** Index into the parent app's `targets` array. */
+  targetIndex: number;
+  /** Optional button label override. Default "Add feature". */
+  label?: string;
+  /** Display mode (panel vs. tool). */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
+}
+
+/**
+ * Edit-feature widget config (#70).  Reads the bound map's
+ * `selection` state; when exactly one feature is selected, opens
+ * an attribute form pre-filled with its properties.  Multi-select
+ * is supported as bulk-edit-by-shared-fields in a follow-up; the
+ * first slice handles one-at-a-time edits.  Disabled in time-travel
+ * mode.
+ */
+export interface EditFeatureWidgetConfig {
+  kind: 'edit-feature';
+  mapWidgetId: string;
+  targetIndex: number;
+  label?: string;
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
+}
+
+/**
+ * Delete-feature widget config (#71).  Reads the bound map's
+ * selection and offers a Delete button with a count + confirm.
+ * Issues one DELETE per selected feature; the engine writes a
+ * 'delete' observation rather than truly removing the row, so the
+ * deletion is reversible by changing the app-time slider back
+ * before the delete timestamp.  Disabled in time-travel mode.
+ */
+export interface DeleteFeatureWidgetConfig {
+  kind: 'delete-feature';
+  mapWidgetId: string;
+  targetIndex: number;
+  label?: string;
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
 }
 
 export interface MapWidgetConfig {
