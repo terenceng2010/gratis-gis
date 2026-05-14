@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Clock,
   Crosshair as CrosshairIcon,
   Image as ImageIcon,
   Layers as LayersIcon,
@@ -1400,6 +1401,8 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <CoordinatesWidgetRender widget={widget} />;
     case 'my-location':
       return <MyLocationWidgetRender widget={widget} />;
+    case 'time-slider':
+      return <TimeSliderWidgetRender widget={widget} />;
     case 'tabs':
       return <TabsWidgetRender widget={widget} />;
     // Themed-app containers. Each holds an array of child widgets
@@ -2985,6 +2988,177 @@ function renderWidgetInContainer(widget: CustomWidget): React.ReactNode {
   );
 }
 
+// ---- Time-slider widget (#87) ----------------------------------------------
+
+/**
+ * Time-slider widget runtime.  Drives AppTimeContext.  Authors
+ * configure mode (slider vs. calendar), date bounds, and a step.
+ * The widget itself is unbound (no map binding) -- every Map,
+ * Chart, and AttributeTable widget on the page reads the same
+ * context value, so scrubbing the slider re-fetches all of them
+ * against the bitemporal source at that moment.
+ *
+ * Two modes:
+ *   - 'date' (default): a horizontal range slider that maps a 0..N
+ *     position to a date in [minDate, maxDate] at the chosen step.
+ *     The slider's far-right position publishes null = "now" so a
+ *     full forward scrub returns to live data.
+ *   - 'calendar': a single date input.  No scrub, just snap-to-day.
+ *     Clear button next to the input resets to null.
+ */
+function TimeSliderWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'time-slider') return null;
+  const cfg = widget.config;
+  const { at, setAt } = useContext(AppTimeContext);
+
+  // Resolve the date bounds.  maxDate defaults to today; minDate
+  // defaults to one year before today.  Both are local YYYY-MM-DD
+  // strings the date input accepts as-is.
+  const todayIso = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
+  const minDate = cfg.minDate || (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  })();
+  const maxDate = cfg.maxDate || todayIso;
+  const stepDays = Math.max(1, Math.floor(cfg.stepDays ?? 1));
+  const label = cfg.label || 'Time';
+  const mode = cfg.mode ?? 'date';
+
+  // For the slider, convert the current `at` (ISO timestamp or null)
+  // back into a YYYY-MM-DD so the slider thumb sits at the right
+  // position.  Null = "now" = max position.
+  const currentDateStr = at
+    ? (() => {
+        const d = new Date(at);
+        if (isNaN(d.getTime())) return maxDate;
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      })()
+    : maxDate;
+
+  // Convert a YYYY-MM-DD picker value to the ISO `at` value we
+  // publish.  Anchored at 23:59:59 local so a "March 5" pick reads
+  // what the world looked like at end-of-day, matching the wizard's
+  // preview convention.  If the picked date equals maxDate, we
+  // publish null instead of a timestamp so the runtime drops back
+  // to current truth (the most common reset action).
+  function publish(yyyymmdd: string) {
+    if (!yyyymmdd) {
+      setAt(null);
+      return;
+    }
+    if (yyyymmdd === maxDate) {
+      setAt(null);
+      return;
+    }
+    const d = new Date(`${yyyymmdd}T23:59:59`);
+    if (isNaN(d.getTime())) {
+      setAt(null);
+      return;
+    }
+    setAt(d.toISOString());
+  }
+
+  // For the slider: compute the slider's 0..N range as days between
+  // min and max, snapped to stepDays.  The slider's value is the
+  // day-offset; we convert to a YYYY-MM-DD via minDate + offset.
+  const minMs = new Date(`${minDate}T00:00:00`).getTime();
+  const maxMs = new Date(`${maxDate}T00:00:00`).getTime();
+  const totalDays = Math.max(
+    0,
+    Math.round((maxMs - minMs) / (24 * 60 * 60 * 1000)),
+  );
+  const sliderMax = Math.max(1, Math.floor(totalDays / stepDays));
+  const currentMs = new Date(`${currentDateStr}T00:00:00`).getTime();
+  const currentDayOffset = Math.max(
+    0,
+    Math.round((currentMs - minMs) / (24 * 60 * 60 * 1000)),
+  );
+  const sliderValue = Math.min(
+    sliderMax,
+    Math.max(0, Math.floor(currentDayOffset / stepDays)),
+  );
+
+  function onSliderChange(newValue: number) {
+    const offsetDays = newValue * stepDays;
+    const d = new Date(minMs);
+    d.setDate(d.getDate() + offsetDays);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    publish(`${y}-${m}-${day}`);
+  }
+
+  return (
+    <div className="flex h-full w-full items-center gap-3 rounded-md border border-border bg-surface-1 px-3 py-2 text-xs">
+      <Clock className="h-4 w-4 shrink-0 text-muted" />
+      <span className="shrink-0 font-medium text-ink-1">{label}:</span>
+      {mode === 'calendar' ? (
+        <>
+          <input
+            type="date"
+            value={currentDateStr}
+            min={minDate}
+            max={maxDate}
+            onChange={(e) => publish(e.target.value)}
+            className="h-7 rounded-md border border-border bg-surface-0 px-2 text-xs text-ink-0 focus:border-accent focus:outline-none"
+          />
+          {at ? (
+            <button
+              type="button"
+              onClick={() => setAt(null)}
+              className="text-accent hover:underline"
+            >
+              Now
+            </button>
+          ) : (
+            <span className="text-muted">(showing current)</span>
+          )}
+        </>
+      ) : (
+        <>
+          <span className="shrink-0 tabular-nums text-muted">{minDate}</span>
+          <input
+            type="range"
+            value={sliderValue}
+            min={0}
+            max={sliderMax}
+            step={1}
+            onChange={(e) => onSliderChange(Number(e.target.value))}
+            className="flex-1 accent-accent"
+            aria-label={label}
+          />
+          <span className="shrink-0 tabular-nums text-muted">{maxDate}</span>
+          <span className="shrink-0 min-w-[5.5rem] text-right font-medium tabular-nums text-ink-0">
+            {at ? currentDateStr : 'Now'}
+          </span>
+          {at ? (
+            <button
+              type="button"
+              onClick={() => setAt(null)}
+              className="shrink-0 text-accent hover:underline"
+            >
+              Reset
+            </button>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * Render wrappers for the themed-app container widgets. Each
  * delegates to the themed-containers.tsx component, passing the
@@ -3098,6 +3272,8 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   bookmark: BookmarkIcon,
   coordinates: CrosshairIcon,
   'my-location': LocateIcon,
+  // #87 time-slider.
+  'time-slider': Clock,
   // #362 layout container.
   tabs: ChevronRight,
   // Themed-app containers (#22). Icons mirror the designer's

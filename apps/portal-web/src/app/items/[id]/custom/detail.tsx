@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   BarChart3,
   Bookmark as BookmarkIcon,
+  Clock,
   ChevronLeft,
   ChevronRight,
   Code as CodeIcon,
@@ -1281,6 +1282,13 @@ const PALETTE_TILES: Array<{
     hint: 'Bar / line / pie over a target',
     category: 'data',
   },
+  {
+    kind: 'time-slider',
+    label: 'Time slider',
+    Icon: Clock,
+    hint: 'Scrub every layer back to a past date (#87)',
+    category: 'data',
+  },
   // -- Page elements ---------------------------------------------
   {
     kind: 'text',
@@ -2309,6 +2317,8 @@ function widgetPlaceholderText(
       return 'Live cursor lat/lon';
     case 'my-location':
       return 'Show my location';
+    case 'time-slider':
+      return 'Scrub the app to a past date';
     case 'tabs':
       return 'Tab strip with nested widgets';
     default:
@@ -2351,6 +2361,8 @@ function summarizeWidget(w: CustomWidget): string {
       return w.config.mapWidgetId
         ? `→ ${w.config.mapWidgetId.slice(0, 6)}`
         : 'pick a map widget';
+    case 'time-slider':
+      return w.config.mode === 'calendar' ? 'calendar' : 'slider';
     case 'tabs': {
       const n = w.config.tabs.length;
       const totalChildren = w.config.tabs.reduce(
@@ -3030,6 +3042,14 @@ function WidgetConfigForm({
             onChangeConfig={onChangeConfig}
           />
         </>
+      );
+    case 'time-slider':
+      return (
+        <TimeSliderWidgetConfigEditor
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
       );
     case 'tabs':
       return (
@@ -3724,6 +3744,86 @@ function MyLocationWidgetConfigBody({
   );
 }
 
+/**
+ * Properties editor for the #87 time-slider widget.  Authors set
+ * mode (slider vs. calendar), bounds, step, and the visible label.
+ * The widget itself drives the app-wide AppTimeContext, so there is
+ * no map binding to configure -- every Map / Chart / Table widget
+ * on the page picks up the chosen `at` automatically.
+ */
+function TimeSliderWidgetConfigEditor({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: {
+    kind: 'time-slider';
+    mode?: 'date' | 'calendar';
+    minDate?: string;
+    maxDate?: string;
+    stepDays?: number;
+    label?: string;
+  };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="Display mode" hint="Slider for scrubbing through a range. Calendar for a single-pick date.">
+        <select
+          value={config.mode ?? 'date'}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ mode: e.target.value })}
+          className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+        >
+          <option value="date">Slider + date input</option>
+          <option value="calendar">Calendar picker</option>
+        </select>
+      </Field>
+      <Field label="Label" hint="Shown next to the slider. Default 'Time'.">
+        <input
+          type="text"
+          value={config.label ?? ''}
+          maxLength={40}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ label: e.target.value })}
+          placeholder="Time"
+          className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+        />
+      </Field>
+      <Field label="Earliest date" hint="YYYY-MM-DD. Defaults to one year before today.">
+        <input
+          type="date"
+          value={config.minDate ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ minDate: e.target.value })}
+          className="h-9 rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+        />
+      </Field>
+      <Field label="Latest date" hint="YYYY-MM-DD. Defaults to today.">
+        <input
+          type="date"
+          value={config.maxDate ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ maxDate: e.target.value })}
+          className="h-9 rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+        />
+      </Field>
+      {config.mode !== 'calendar' ? (
+        <Field label="Step (days)" hint="Slider increment. 1 is daily, 7 is weekly, 30 is monthly.">
+          <NumberInput
+            value={config.stepDays ?? 1}
+            min={1}
+            max={365}
+            disabled={!canEdit}
+            onChange={(v) => onChangeConfig({ stepDays: v })}
+          />
+        </Field>
+      ) : null}
+    </div>
+  );
+}
+
 // ---- Themed container canvas preview (#22 WYSIWYG) -----------------------
 
 /**
@@ -4405,6 +4505,7 @@ const WIDGET_KIND_LABEL: Record<CustomWidgetKind, string> = {
   bookmark: 'Bookmarks',
   coordinates: 'Coordinates',
   'my-location': 'My location',
+  'time-slider': 'Time slider',
   'attribute-table': 'Attribute table',
   text: 'Text',
   chart: 'Chart',
@@ -5011,6 +5112,11 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 24, rowSpan: 1 };
     case 'embed':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
+    case 'time-slider':
+      // Narrow strip across the bottom or top of the canvas by
+      // default; authors typically anchor it like a film-strip
+      // timeline.  16 cols wide, 4 rows (~50px) tall.
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 4 };
     case 'tabs':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
     // Themed-app containers each fill a different region of the
@@ -5575,6 +5681,18 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           keepMarker: true,
           displayMode: 'tool',
           panelArrangement: defaultPanelArrangement('my-location'),
+        },
+      };
+    case 'time-slider':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'time-slider',
+          mode: 'date',
+          label: 'Time',
+          stepDays: 1,
         },
       };
     case 'tabs':

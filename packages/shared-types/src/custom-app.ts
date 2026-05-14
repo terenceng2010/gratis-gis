@@ -207,6 +207,13 @@ export type CustomWidgetKind =
   | 'bookmark'
   | 'coordinates'
   | 'my-location'
+  // #87: time-slider drives the app-wide bitemporal "as of" state.
+  // No map binding -- when present, every map/chart/table widget on
+  // the page reads the slider value via AppTimeContext and re-fetches
+  // against that bitemporal projection.  Author configures min/max
+  // bounds and a step.  Renders a date input + slider (or just a
+  // calendar / picker, depending on mode).
+  | 'time-slider'
   // #362: layout container. Holds nested widgets organized into
   // tabs. Anti-EB: deliberately simpler than EB's Section + Views
   // pair, just one widget that renders a tab strip and routes
@@ -343,11 +350,41 @@ export type CustomWidgetConfig =
   | BookmarkWidgetConfig
   | CoordinatesWidgetConfig
   | MyLocationWidgetConfig
+  | TimeSliderWidgetConfig
   | TabsWidgetConfig
   | AppBarWidgetConfig
   | DockPanelWidgetConfig
   | SlideoutWidgetConfig
   | FoldableGroupWidgetConfig;
+
+/**
+ * Time-slider widget config (#87).  Sets the app-wide `at` state
+ * that Map / Chart / AttributeTable widgets read via AppTimeContext.
+ *
+ * - mode 'date' renders a date input with a horizontal slider
+ *   between `minDate` and `maxDate` at the given `stepDays` cadence.
+ * - mode 'calendar' renders a single date picker without the slider
+ *   (lighter UI; useful when the author only wants snap-to-day
+ *   navigation, not scrubbing).
+ *
+ * Both modes anchor the chosen day at end-of-day local time so a
+ * "March 5" pick reads what the world looked like at the close of
+ * that day, matching the wizard's preview convention.  The widget
+ * publishes null when set to "Now" (the default), and a full ISO
+ * string when set to any past date.
+ */
+export interface TimeSliderWidgetConfig {
+  kind: 'time-slider';
+  mode?: 'date' | 'calendar';
+  /** YYYY-MM-DD lower bound for the slider track. */
+  minDate?: string;
+  /** YYYY-MM-DD upper bound; defaults to "today" at render time. */
+  maxDate?: string;
+  /** Slider step in days (mode='date' only). Defaults to 1. */
+  stepDays?: number;
+  /** Optional label override; default 'Time'. */
+  label?: string;
+}
 
 export interface MapWidgetConfig {
   kind: 'map';
