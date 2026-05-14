@@ -953,6 +953,26 @@ export function CustomAppDetail({
               onSelect={setSelectedWidgetId}
               onCanvasDrop={(kind, col, row) => addWidgetAt(kind, col, row)}
               onWidgetLayout={(id, layout) => updateWidget(id, { layout })}
+              onWidgetMove={(id, targetParentId, targetIndex, pageLayout) => {
+                setApp((cur) => ({
+                  ...cur,
+                  pages: cur.pages.map((p, i) =>
+                    i !== activePageIdx
+                      ? p
+                      : {
+                          ...p,
+                          widgets: moveWidgetInTree(
+                            p.widgets,
+                            id,
+                            targetParentId,
+                            targetIndex,
+                            pageLayout,
+                          ),
+                        },
+                  ),
+                }));
+                setDirty(true);
+              }}
             />
           </div>
         </div>
@@ -1652,6 +1672,14 @@ interface ActiveGesture {
   startX: number;
   startY: number;
   startLayout: CustomLayout;
+  /**
+   * #96: container the widget currently lives inside (null when the
+   * widget is a top-level page widget).  Carried so the mouseup
+   * handler can decide whether the gesture is a fine-grid layout
+   * change (move within page level), a reorder (move within same
+   * container), or a reparent (move across container boundaries).
+   */
+  srcParentId: string | null;
 }
 
 const DRAG_THRESHOLD_PX = 4;
@@ -1671,6 +1699,7 @@ function Canvas({
   onSelect,
   onCanvasDrop,
   onWidgetLayout,
+  onWidgetMove,
 }: {
   widgets: CustomWidget[];
   selectedId: string | null;
@@ -1703,6 +1732,21 @@ function Canvas({
   onSelect: (id: string | null) => void;
   onCanvasDrop: (kind: CustomWidgetKind, col: number, row: number) => void;
   onWidgetLayout: (id: string, layout: CustomLayout) => void;
+  /**
+   * #96: reparent / reorder a widget.  Called on mouseup when the
+   * move gesture crossed a parent boundary OR reordered within the
+   * same container.  `targetParentId === null` means "land at the
+   * page level"; non-null means "drop inside this container".
+   * `pageLayout` is the new grid coords when targetParentId is
+   * null (so a widget pulled out of a container gets a sensible
+   * position); ignored when targetParentId is non-null.
+   */
+  onWidgetMove: (
+    id: string,
+    targetParentId: string | null,
+    targetIndex: number,
+    pageLayout: CustomLayout | null,
+  ) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
@@ -1787,12 +1831,15 @@ function Canvas({
 
   // Begin a gesture. Called from WidgetCard's mousedown handler
   // (move) and from the resize handles (resize-*). We capture the
-  // start point + the widget's starting layout so mousemove can
-  // compute deltas without re-reading state.
+  // start point + the widget's starting layout + the widget's
+  // current parent container (#96) so mousemove can compute deltas
+  // and mouseup can decide between fine-grid move, reorder within
+  // the current container, or reparent across containers.
   const beginGesture = useCallback(
     (
       kind: ActiveGesture['kind'],
       widget: CustomWidget,
+      srcParentId: string | null,
       e: ReactMouseEvent<HTMLElement>,
     ) => {
       if (!canEdit) return;
@@ -1803,6 +1850,7 @@ function Canvas({
         startX: e.clientX,
         startY: e.clientY,
         startLayout: widget.layout,
+        srcParentId,
       });
     },
     [canEdit],
@@ -1825,6 +1873,57 @@ function Canvas({
       // gap error rounds out at the snap-to-cell step.
       return rect ? rect.width / GRID_COLS : 100;
     }
+    /** Cursor coords -> canvas-relative grid coords (col, row). */
+    function cursorToGrid(e: MouseEvent): { col: number; row: number } {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return { col: 1, row: 1 };
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const colWidth = rect.width / GRID_COLS;
+      const col = Math.max(1, Math.min(GRID_COLS, Math.floor(x / colWidth) + 1));
+      const row = Math.max(1, Math.floor(y / ROW_HEIGHT_PX) + 1);
+      return { col, row };
+    }
+    /**
+     * Compute the insertion index inside a container based on the
+     * cursor position vs. existing children's bounding rects.  For
+     * a row-layout container, slot picked by cursor X; for column-
+     * layout, by cursor Y.  Children that match `excludeId` (the
+     * widget currently being dragged) are skipped so a reorder
+     * doesn't count its own slot.
+     */
+    function indexInContainer(
+      containerId: string,
+      e: MouseEvent,
+      excludeId: string,
+    ): number {
+      const containerEl = canvasRef.current?.querySelector(
+        `[data-widget-id="${containerId}"]`,
+      ) as HTMLElement | null;
+      if (!containerEl) return 0;
+      const children = Array.from(
+        containerEl.querySelectorAll('[data-child-id]'),
+      ) as HTMLElement[];
+      const relevant = children.filter(
+        (c) => c.getAttribute('data-child-id') !== excludeId,
+      );
+      if (relevant.length === 0) return 0;
+      // Detect layout direction by the children's center spread:
+      // wider horizontal range than vertical → row, else column.
+      const rects = relevant.map((c) => c.getBoundingClientRect());
+      const xs = rects.map((r) => r.left + r.width / 2);
+      const ys = rects.map((r) => r.top + r.height / 2);
+      const xSpread = Math.max(...xs) - Math.min(...xs);
+      const ySpread = Math.max(...ys) - Math.min(...ys);
+      const isRow = xSpread >= ySpread;
+      const cursor = isRow ? e.clientX : e.clientY;
+      const centers = isRow ? xs : ys;
+      // Insertion index: first center > cursor; else after last.
+      for (let i = 0; i < centers.length; i++) {
+        if (cursor < centers[i]!) return i;
+      }
+      return relevant.length;
+    }
     function onMove(e: MouseEvent) {
       const dx = e.clientX - g.startX;
       const dy = e.clientY - g.startY;
@@ -1834,11 +1933,27 @@ function Canvas({
       ) {
         return;
       }
+      // #96: track hovered container for drop-target highlight on
+      // every move kind.  The mouseup handler reads the cursor's
+      // final position; this just keeps the visual indicator in
+      // sync during the drag.
+      if (g.kind === 'move') {
+        const { col, row } = cursorToGrid(e);
+        const host = findContainerHostAt(widgets, col, row);
+        const targetId = host && host.id !== g.widgetId ? host.id : null;
+        setDropTargetId((cur) => (cur === targetId ? cur : targetId));
+      }
       const colDelta = Math.round(dx / pxPerCol());
       const rowDelta = Math.round(dy / ROW_HEIGHT_PX);
       const start = g.startLayout;
       const next: CustomLayout = { ...start };
       if (g.kind === 'move') {
+        // #96: only top-level widgets get a live grid-coord update.
+        // Children inside containers don't have meaningful grid
+        // coords (children flow inside the container's layout);
+        // their final placement is decided by the mouseup handler
+        // via reorder / reparent.
+        if (g.srcParentId !== null) return;
         next.col = clampCol(start.col + colDelta);
         next.row = Math.max(1, start.row + rowDelta);
         // Clamp colSpan when the move pushed the right edge past
@@ -1856,7 +1971,49 @@ function Canvas({
       }
       onWidgetLayout(g.widgetId, next);
     }
-    function onUp() {
+    function onUp(e: MouseEvent) {
+      // #96: on release of a move gesture, decide whether the
+      // gesture crossed a parent boundary (reparent), reordered
+      // within the same container, or was a pure top-level grid
+      // move (already applied live by onMove).
+      if (g.kind === 'move') {
+        const { col, row } = cursorToGrid(e);
+        const host = findContainerHostAt(widgets, col, row);
+        // Don't let a container drop INTO itself.
+        const targetParentId =
+          host && host.id !== g.widgetId ? host.id : null;
+        if (targetParentId !== g.srcParentId) {
+          // Reparent.  Page level → container collapses layout to
+          // the placeholder; container → page level adopts the
+          // cursor's grid coords as the new layout.
+          const targetIndex =
+            targetParentId === null
+              ? widgets.length
+              : indexInContainer(targetParentId, e, g.widgetId);
+          const pageLayout: CustomLayout | null =
+            targetParentId === null
+              ? {
+                  col: clampCol(col),
+                  row: Math.max(1, row),
+                  colSpan: g.startLayout.colSpan,
+                  rowSpan: g.startLayout.rowSpan,
+                }
+              : null;
+          onWidgetMove(g.widgetId, targetParentId, targetIndex, pageLayout);
+        } else if (targetParentId !== null) {
+          // Same container: maybe reorder.  Compute index; if it
+          // differs from the source's current index, move within.
+          const targetIndex = indexInContainer(
+            targetParentId,
+            e,
+            g.widgetId,
+          );
+          onWidgetMove(g.widgetId, targetParentId, targetIndex, null);
+        }
+        // targetParentId === null && srcParentId === null: pure
+        // page-level grid move; onMove already applied it.
+      }
+      setDropTargetId(null);
       setGesture(null);
     }
     window.addEventListener('mousemove', onMove);
@@ -1865,7 +2022,7 @@ function Canvas({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [gesture, onWidgetLayout]);
+  }, [gesture, onWidgetLayout, onWidgetMove, widgets]);
 
   return (
     <div
@@ -1947,7 +2104,10 @@ function Canvas({
                 e.stopPropagation();
                 onSelect(w.id);
               }}
-              onMoveStart={(e) => beginGesture('move', w, e)}
+              onMoveStart={(e) => beginGesture('move', w, null, e)}
+              onChildMoveStart={(child, parentId, e) =>
+                beginGesture('move', child, parentId, e)
+              }
               onResizeStart={(handle, e) =>
                 beginGesture(
                   handle === 'br'
@@ -1956,6 +2116,7 @@ function Canvas({
                       ? 'resize-r'
                       : 'resize-b',
                   w,
+                  null,
                   e,
                 )
               }
@@ -1998,6 +2159,7 @@ function WidgetCard({
   onClick,
   onMoveStart,
   onResizeStart,
+  onChildMoveStart,
 }: {
   widget: CustomWidget;
   selected: boolean;
@@ -2031,6 +2193,14 @@ function WidgetCard({
     handle: 'br' | 'r' | 'b',
     e: ReactMouseEvent<HTMLElement>,
   ) => void;
+  /** #96: mousedown on a container child begins a reorder/reparent
+   *  gesture.  Forwarded down through ContainerInDesigner so any
+   *  depth of nesting can begin a drag. */
+  onChildMoveStart: (
+    child: CustomWidget,
+    parentId: string,
+    e: ReactMouseEvent<HTMLElement>,
+  ) => void;
 }) {
   const tile = PALETTE_TILES.find((t) => t.kind === widget.kind);
   const Icon = tile?.Icon ?? Square;
@@ -2048,6 +2218,7 @@ function WidgetCard({
         tabIndex={0}
         onClick={onClick}
         onMouseDown={canEdit ? onMoveStart : undefined}
+        data-widget-id={widget.id}
         style={{
           gridColumn: `${widget.layout.col} / span ${widget.layout.colSpan}`,
           gridRow: `${widget.layout.row} / span ${widget.layout.rowSpan}`,
@@ -2066,6 +2237,7 @@ function WidgetCard({
           itemTitle={itemTitle}
           selectedChildId={selectedChildId}
           onSelectChild={onSelectChild}
+          onChildMoveStart={onChildMoveStart}
         />
         {/* Drop-target badge.  Visible only while a palette tile
             is being dragged over this container.  Tells the user
@@ -3935,19 +4107,34 @@ function ContainerInDesigner({
   itemTitle: _itemTitle,
   selectedChildId,
   onSelectChild,
+  onChildMoveStart,
 }: {
   widget: CustomWidget;
   itemTitle: string;
   selectedChildId: string | null;
   onSelectChild: (childId: string) => void;
+  /**
+   * #96: callback the canvas wires up so a mousedown on any child
+   * begins a drag gesture (for reorder within this container, or
+   * reparent across containers, or extraction onto the page).
+   * Threaded recursively into nested ContainerInDesigner instances
+   * so a tool inside a foldable group inside a dock works too.
+   */
+  onChildMoveStart: (
+    child: CustomWidget,
+    parentId: string,
+    e: ReactMouseEvent<HTMLElement>,
+  ) => void;
 }) {
   void _itemTitle;
   const renderChild = (child: CustomWidget): React.ReactNode => (
     <DesignerChild
       child={child}
+      parentId={widget.id}
       isSelected={selectedChildId === child.id}
       onSelect={onSelectChild}
       itemTitle={_itemTitle}
+      onChildMoveStart={onChildMoveStart}
     />
   );
 
@@ -3962,17 +4149,33 @@ function ContainerInDesigner({
  * select representation of the child widget that matches the
  * runtime visually (icon + label for tools; container chrome for
  * nested containers; small placeholder card for content widgets).
+ *
+ * #96: mousedown on the child body begins a drag gesture so the
+ * author can reorder children within their container OR drag the
+ * child OUT of the container onto the page (the canvas's
+ * gesture-track mousemove + mouseup decide which kind of move
+ * actually happened based on where the cursor lands).
  */
 function DesignerChild({
   child,
+  parentId,
   isSelected,
   onSelect,
   itemTitle,
+  onChildMoveStart,
 }: {
   child: CustomWidget;
+  /** Id of the container this child lives inside.  Threaded into
+   *  the begin-gesture call so the canvas knows the source parent. */
+  parentId: string;
   isSelected: boolean;
   onSelect: (id: string) => void;
   itemTitle: string;
+  onChildMoveStart: (
+    child: CustomWidget,
+    parentId: string,
+    e: ReactMouseEvent<HTMLElement>,
+  ) => void;
 }) {
   const tile = PALETTE_TILES.find((t) => t.kind === child.kind);
   const Icon = tile?.Icon ?? Square;
@@ -3990,6 +4193,8 @@ function DesignerChild({
           e.stopPropagation();
           onSelect(child.id);
         }}
+        onMouseDown={(e) => onChildMoveStart(child, parentId, e)}
+        data-child-id={child.id}
         className={`relative cursor-pointer ${
           isSelected ? 'outline outline-2 outline-accent' : ''
         }`}
@@ -3999,6 +4204,7 @@ function DesignerChild({
           itemTitle={itemTitle}
           selectedChildId={null}
           onSelectChild={onSelect}
+          onChildMoveStart={onChildMoveStart}
         />
       </div>
     );
@@ -4007,15 +4213,25 @@ function DesignerChild({
   // Tool widgets and other content widgets render as a small
   // labeled icon button.  Mirrors the runtime in-bar visual so
   // the canvas reads as the live app, just without active state.
+  // Use a div instead of <button> so we can attach mousedown for
+  // the drag-gesture without conflicting with the browser's
+  // default form-button mouse handling.
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={(e) => {
         e.stopPropagation();
         onSelect(child.id);
       }}
+      onMouseDown={
+        onChildMoveStart
+          ? (e) => onChildMoveStart(child, parentId, e)
+          : undefined
+      }
+      data-child-id={child.id}
       title={label}
-      className={`group/designer-child flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors ${
+      className={`group/designer-child flex h-full min-w-[64px] cursor-grab flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors active:cursor-grabbing ${
         isSelected
           ? 'bg-[hsl(var(--app-header-ink))] text-[hsl(var(--app-header-bg))]'
           : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]'
@@ -4023,7 +4239,7 @@ function DesignerChild({
     >
       <Icon className="h-5 w-5" strokeWidth={1.75} />
       <span className="text-[10px] font-medium leading-none">{label}</span>
-    </button>
+    </div>
   );
 }
 
@@ -5288,6 +5504,121 @@ function appendChildToContainer(
     }
     return w;
   });
+}
+
+/**
+ * #96: locate a widget anywhere in the tree along with its parent
+ * container's id (null = page-level) and its index in the parent's
+ * children array.  Used by the reparent gesture so the move handler
+ * can remove the widget from its source location precisely.
+ *
+ * Recurses through container.config.widgets[] and tabs.tabs[].widgets[].
+ */
+function findWidgetWithParent(
+  widgets: CustomWidget[],
+  id: string,
+  parentId: string | null = null,
+): { widget: CustomWidget; parentId: string | null; index: number } | null {
+  for (let i = 0; i < widgets.length; i++) {
+    const w = widgets[i]!;
+    if (w.id === id) return { widget: w, parentId, index: i };
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const inner = findWidgetWithParent(cfg.widgets, id, w.id);
+      if (inner) return inner;
+    }
+    if (cfg.kind === 'tabs' && Array.isArray(cfg.tabs)) {
+      for (const t of cfg.tabs) {
+        const inner = findWidgetWithParent(t.widgets, id, w.id);
+        if (inner) return inner;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * #96: insert a child widget at a specific index inside a container.
+ * `containerId === null` inserts at the page level.  index clamped
+ * to [0, parent.length].  Returns a fresh widgets array.
+ */
+function insertWidgetAt(
+  widgets: CustomWidget[],
+  containerId: string | null,
+  index: number,
+  child: CustomWidget,
+): CustomWidget[] {
+  if (containerId === null) {
+    const i = Math.max(0, Math.min(index, widgets.length));
+    return [...widgets.slice(0, i), child, ...widgets.slice(i)];
+  }
+  return widgets.map((w) => {
+    if (w.id === containerId) {
+      const cfg = w.config;
+      if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+        const i = Math.max(0, Math.min(index, cfg.widgets.length));
+        const nextChildren = [
+          ...cfg.widgets.slice(0, i),
+          child,
+          ...cfg.widgets.slice(i),
+        ];
+        return { ...w, config: { ...cfg, widgets: nextChildren } } as CustomWidget;
+      }
+      return w;
+    }
+    const cfg = w.config;
+    if ('widgets' in cfg && Array.isArray(cfg.widgets)) {
+      const nextChildren = insertWidgetAt(cfg.widgets, containerId, index, child);
+      if (nextChildren !== cfg.widgets) {
+        return { ...w, config: { ...cfg, widgets: nextChildren } } as CustomWidget;
+      }
+    }
+    return w;
+  });
+}
+
+/**
+ * #96: move a widget from wherever it lives in the tree to a new
+ * parent + index.  Performs the remove + insert in one pass so the
+ * page-level widgets array updates atomically.  When the source
+ * widget is rooted at page-level and moves into a container, its
+ * grid layout coords are reset to a (1,1,1,1) placeholder because
+ * children inside containers ignore grid coords.  When moving from
+ * a container OUT to the page level, the caller supplies a
+ * `pageLayout` overlay (the cursor's drop coords) so the widget
+ * re-acquires a sensible grid position.
+ */
+function moveWidgetInTree(
+  widgets: CustomWidget[],
+  sourceId: string,
+  targetParentId: string | null,
+  targetIndex: number,
+  pageLayout: CustomLayout | null,
+): CustomWidget[] {
+  const found = findWidgetWithParent(widgets, sourceId);
+  if (!found) return widgets;
+  // When the source and target parent are the same, removing first
+  // would shift the indices to the LEFT for any post-source index.
+  // Account for that here so callers can pass the "visual" index
+  // without thinking about the shift.
+  const adjustedIndex =
+    found.parentId === targetParentId && targetIndex > found.index
+      ? targetIndex - 1
+      : targetIndex;
+  const withoutSource = removeWidgetDeep(widgets, sourceId);
+  let widgetToInsert = found.widget;
+  if (targetParentId === null && pageLayout) {
+    // Moving out to the page: adopt the cursor's grid coords.
+    widgetToInsert = { ...widgetToInsert, layout: pageLayout };
+  } else if (targetParentId !== null && found.parentId === null) {
+    // Moving from page level into a container: collapse the layout
+    // to the placeholder.
+    widgetToInsert = {
+      ...widgetToInsert,
+      layout: { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
+    };
+  }
+  return insertWidgetAt(withoutSource, targetParentId, adjustedIndex, widgetToInsert);
 }
 
 /**
