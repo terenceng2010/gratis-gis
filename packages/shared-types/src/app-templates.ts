@@ -190,7 +190,7 @@ function parcelViewerSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -202,7 +202,7 @@ function parcelViewerSeed(): CustomAppData {
   const leftDock: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
+    layout: { col: 1, row: 17, colSpan: 48, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'dock-left',
@@ -217,12 +217,12 @@ function parcelViewerSeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 256 },
     config: { kind: 'map' },
   };
 
   return {
-    version: 3,
+    version: 4,
     themePresetId: 'default',
     targets: [],
     pages: [
@@ -272,7 +272,7 @@ function publicInfoMapSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -284,12 +284,12 @@ function publicInfoMapSeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 256 },
     config: { kind: 'map' },
   };
 
   return {
-    version: 3,
+    version: 4,
     themePresetId: 'aurora',
     targets: [],
     pages: [
@@ -350,7 +350,7 @@ function fieldInspectionSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -362,7 +362,7 @@ function fieldInspectionSeed(): CustomAppData {
   const drawer: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 5, colSpan: 4, rowSpan: 60 },
+    layout: { col: 1, row: 17, colSpan: 16, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'overlay-trigger',
@@ -378,12 +378,12 @@ function fieldInspectionSeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 256 },
     config: { kind: 'map' },
   };
 
   return {
-    version: 3,
+    version: 4,
     themePresetId: 'slate',
     targets: [],
     pages: [
@@ -448,7 +448,7 @@ function editorWorkspaceSeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -460,7 +460,7 @@ function editorWorkspaceSeed(): CustomAppData {
   const leftDock: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
+    layout: { col: 1, row: 17, colSpan: 48, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'dock-left',
@@ -475,12 +475,12 @@ function editorWorkspaceSeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 256 },
     config: { kind: 'map' },
   };
 
   return {
-    version: 3,
+    version: 4,
     themePresetId: 'slate',
     targets: [],
     pages: [
@@ -530,7 +530,7 @@ function viewerReadonlySeed(): CustomAppData {
   const topBar: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 4 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 16 },
     config: {
       kind: 'container',
       position: 'sticky-top',
@@ -542,7 +542,7 @@ function viewerReadonlySeed(): CustomAppData {
   const leftDock: CustomWidget = {
     id: wid(),
     kind: 'container',
-    layout: { col: 1, row: 5, colSpan: 12, rowSpan: 60 },
+    layout: { col: 1, row: 17, colSpan: 48, rowSpan: 240 },
     config: {
       kind: 'container',
       position: 'dock-left',
@@ -557,12 +557,12 @@ function viewerReadonlySeed(): CustomAppData {
   const map: CustomWidget = {
     id: mapId,
     kind: 'map',
-    layout: { col: 1, row: 1, colSpan: 48, rowSpan: 64 },
+    layout: { col: 1, row: 1, colSpan: 192, rowSpan: 256 },
     config: { kind: 'map' },
   };
 
   return {
-    version: 3,
+    version: 4,
     themePresetId: 'default',
     targets: [],
     pages: [
@@ -582,7 +582,7 @@ function viewerReadonlySeed(): CustomAppData {
  */
 function blankSeed(): CustomAppData {
   return {
-    version: 3,
+    version: 4,
     themePresetId: 'default',
     targets: [],
     pages: [{ id: 'home', title: 'Home', widgets: [] }],

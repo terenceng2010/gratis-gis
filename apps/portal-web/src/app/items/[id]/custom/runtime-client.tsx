@@ -709,7 +709,7 @@ export function CustomRuntimeClient({
                 // user's eye to plan), but the runtime is
                 // viewport-tall (end user sees a coherent app
                 // fitted to their screen).
-                gridTemplateColumns: 'repeat(48, minmax(0, 1fr))',
+                gridTemplateColumns: 'repeat(192, minmax(0, 1fr))',
                 gridTemplateRows: `repeat(${totalRows}, minmax(0, 1fr))`,
                 //
                 // The earlier 1400px fixed-width experiment was

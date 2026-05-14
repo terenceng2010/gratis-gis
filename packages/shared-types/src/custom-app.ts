@@ -40,7 +40,7 @@ export interface CustomAppData {
    *  rows. Migration multiplies every widget's col / row / colSpan /
    *  rowSpan by 2 per version bump and rewrites the version on the
    *  next save. */
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   /**
    * Optional reference to a `map` item the canvas-style widgets
    * (MapWidget) inherit basemap + viewport from. Individual widgets
@@ -959,7 +959,7 @@ export interface ContainerWidgetConfig {
  * the designer prompts the author to drop a widget on first open.
  */
 export const DEFAULT_CUSTOM_APP: CustomAppData = {
-  version: 3,
+  version: 4,
   targets: [],
   pages: [
     {
@@ -972,18 +972,23 @@ export const DEFAULT_CUSTOM_APP: CustomAppData = {
 
 /**
  * Migrate a CustomAppData to the latest schema version. Each bump
- * doubles every widget layout coordinate so the same physical layout
- * round-trips through a finer designer grid: v1 (12 col / 48px row)
- * -> v2 (24 col / 24px row) -> v3 (48 col / 12px row). v3 was driven
- * by user feedback that the toolbar-button snap was too coarse.
+ * scales every widget layout coordinate so the same physical layout
+ * round-trips through a finer designer grid:
+ *   v1: 12 col / 48px row
+ *   v2: 24 col / 24px row      (2x v1)
+ *   v3: 48 col / 12px row      (2x v2)
+ *   v4: 192 col / 3px row      (4x v3, #95)
+ *
+ * Each step was driven by user feedback that the snap stops were
+ * too coarse for precise placement.
  *
  * Idempotent: calling on an already-current app is a no-op. Chain
- * upgrades (a v1 app gets v1->v2 then v2->v3 on load). Caller should
- * persist the result back to the item on the next save (the
- * designer's setApp(initial) flow handles that automatically).
+ * upgrades (a v1 app gets v1->v2 then v2->v3 then v3->v4 on load).
+ * Caller should persist the result back to the item on the next save
+ * (the designer's setApp(initial) flow handles that automatically).
  *
- * Recurses through Tabs widgets (#362) so nested children also pick
- * up the new grid coordinates.
+ * Recurses through Tabs widgets (#362) + Container widgets (#92) so
+ * nested children also pick up the new grid coordinates.
  */
 export function migrateCustomAppData(data: CustomAppData): CustomAppData {
   let cur = data;
@@ -993,7 +998,7 @@ export function migrateCustomAppData(data: CustomAppData): CustomAppData {
       version: 2,
       pages: cur.pages.map((p) => ({
         ...p,
-        widgets: p.widgets.map(migrateWidgetDoubleLayout),
+        widgets: p.widgets.map((w) => migrateWidgetLayout(w, 2)),
       })),
     };
   }
@@ -1003,7 +1008,17 @@ export function migrateCustomAppData(data: CustomAppData): CustomAppData {
       version: 3,
       pages: cur.pages.map((p) => ({
         ...p,
-        widgets: p.widgets.map(migrateWidgetDoubleLayout),
+        widgets: p.widgets.map((w) => migrateWidgetLayout(w, 2)),
+      })),
+    };
+  }
+  if (cur.version === 3) {
+    cur = {
+      ...cur,
+      version: 4,
+      pages: cur.pages.map((p) => ({
+        ...p,
+        widgets: p.widgets.map((w) => migrateWidgetLayout(w, 4)),
       })),
     };
   }
@@ -1011,27 +1026,41 @@ export function migrateCustomAppData(data: CustomAppData): CustomAppData {
 }
 
 /**
- * Double every layout coordinate. Used for both the v1->v2 and the
- * v2->v3 jump: each grid bump doubled both the column count and the
- * row resolution, so the same multiplier preserves the visual layout
- * across versions.
+ * Scale every layout coordinate by `factor` (2 for v1->v2 / v2->v3,
+ * 4 for v3->v4).  Preserves the physical layout across grid bumps:
+ * a widget at v3 col=1, colSpan=48 maps to v4 col=1, colSpan=192,
+ * keeping its visual size identical.  Recurses through Tabs +
+ * Container children so nested layouts migrate too (legacy
+ * containers like app-bar / dock-panel are no longer in the schema
+ * after #92, but if an older blueprint still carries them we walk
+ * any `config.widgets` array regardless of the parent's kind).
  */
-function migrateWidgetDoubleLayout(w: CustomWidget): CustomWidget {
+function migrateWidgetLayout(
+  w: CustomWidget,
+  factor: number,
+): CustomWidget {
   const next: CustomWidget = {
     ...w,
     layout: {
-      col: ((w.layout.col - 1) * 2) + 1,
-      row: ((w.layout.row - 1) * 2) + 1,
-      colSpan: w.layout.colSpan * 2,
-      rowSpan: w.layout.rowSpan * 2,
+      col: ((w.layout.col - 1) * factor) + 1,
+      row: ((w.layout.row - 1) * factor) + 1,
+      colSpan: w.layout.colSpan * factor,
+      rowSpan: w.layout.rowSpan * factor,
     },
   };
+  const cfg = next.config as { widgets?: CustomWidget[] };
+  if (Array.isArray(cfg.widgets)) {
+    next.config = {
+      ...next.config,
+      widgets: cfg.widgets.map((c) => migrateWidgetLayout(c, factor)),
+    } as CustomWidget['config'];
+  }
   if (w.kind === 'tabs' && w.config.kind === 'tabs') {
     next.config = {
       ...w.config,
       tabs: w.config.tabs.map((t) => ({
         ...t,
-        widgets: t.widgets.map(migrateWidgetDoubleLayout),
+        widgets: t.widgets.map((c) => migrateWidgetLayout(c, factor)),
       })),
     };
   }

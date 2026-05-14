@@ -1636,8 +1636,14 @@ function PageTabs({
 //   v2 (24-col + 24px row) -> v3 (48-col + 12px row, user feedback
 //   on tool-button snap being too coarse).
 // Existing apps are migrated on load via migrateCustomAppData.
-const ROW_HEIGHT_PX = 12;
-const GRID_COLS = 48;
+// #95: v4 grid resolution.  Quadrupled vs. v3 (was 48 cols / 12px
+// rows) so the snap stops are 4x finer.  Lets authors size and
+// position widgets with much less "snapped two cells off where I
+// wanted" friction.  The v3→v4 migration in shared-types
+// multiplies legacy widget col/row/colSpan/rowSpan by 4 so the
+// physical layout stays identical across the bump.
+const ROW_HEIGHT_PX = 3;
+const GRID_COLS = 192;
 /**
  * Floor for the canvas's working width. On viewports narrower than
  * this the designer pane scrolls horizontally instead of squeezing
@@ -1667,7 +1673,24 @@ const CANVAS_MIN_WIDTH_PX = 1200;
  * looks confusing in the UI).
  */
 interface ActiveGesture {
-  kind: 'move' | 'resize-br' | 'resize-r' | 'resize-b';
+  /**
+   * Drag flavor.  'move' is the layout-position drag; the rest are
+   * resize handles named after which corner / edge is being pulled
+   * (t/r/b/l for edges, tl/tr/bl/br for corners).  Edge handles
+   * adjust the corresponding span (and position, for top / left
+   * which leave the opposite edge anchored).  Corners combine an
+   * edge horizontal + edge vertical (#97).
+   */
+  kind:
+    | 'move'
+    | 'resize-t'
+    | 'resize-r'
+    | 'resize-b'
+    | 'resize-l'
+    | 'resize-tl'
+    | 'resize-tr'
+    | 'resize-br'
+    | 'resize-bl';
   widgetId: string;
   startX: number;
   startY: number;
@@ -1960,14 +1983,55 @@ function Canvas({
         // the grid -- otherwise the widget would overflow the
         // canvas after a rightward drag.
         next.colSpan = Math.min(start.colSpan, GRID_COLS - next.col + 1);
-      } else if (g.kind === 'resize-r' || g.kind === 'resize-br') {
-        next.colSpan = Math.max(
-          1,
-          Math.min(GRID_COLS - start.col + 1, start.colSpan + colDelta),
-        );
-      }
-      if (g.kind === 'resize-b' || g.kind === 'resize-br') {
-        next.rowSpan = Math.max(1, start.rowSpan + rowDelta);
+      } else {
+        // #97: 8-direction resize.  Right/bottom edges and the
+        // bottom-right corner expand the existing span.  Top/left
+        // edges and the top corners ALSO shift the widget's
+        // origin so the opposite edge stays anchored -- e.g.
+        // dragging the top handle DOWN should move the top edge
+        // down (row += delta) and shrink the rowSpan to match
+        // (rowSpan -= delta) so the bottom stays put.
+        const right =
+          g.kind === 'resize-r' ||
+          g.kind === 'resize-tr' ||
+          g.kind === 'resize-br';
+        const bottom =
+          g.kind === 'resize-b' ||
+          g.kind === 'resize-br' ||
+          g.kind === 'resize-bl';
+        const left =
+          g.kind === 'resize-l' ||
+          g.kind === 'resize-tl' ||
+          g.kind === 'resize-bl';
+        const top =
+          g.kind === 'resize-t' ||
+          g.kind === 'resize-tl' ||
+          g.kind === 'resize-tr';
+        if (right) {
+          next.colSpan = Math.max(
+            1,
+            Math.min(GRID_COLS - start.col + 1, start.colSpan + colDelta),
+          );
+        }
+        if (bottom) {
+          next.rowSpan = Math.max(1, start.rowSpan + rowDelta);
+        }
+        if (left) {
+          // Clamp the row-leading delta so we never push past the
+          // left edge OR collapse the colSpan to zero.
+          const maxColDelta = start.colSpan - 1;
+          const minColDelta = -(start.col - 1);
+          const cd = Math.max(minColDelta, Math.min(maxColDelta, colDelta));
+          next.col = start.col + cd;
+          next.colSpan = start.colSpan - cd;
+        }
+        if (top) {
+          const maxRowDelta = start.rowSpan - 1;
+          const minRowDelta = -(start.row - 1);
+          const rd = Math.max(minRowDelta, Math.min(maxRowDelta, rowDelta));
+          next.row = start.row + rd;
+          next.rowSpan = start.rowSpan - rd;
+        }
       }
       onWidgetLayout(g.widgetId, next);
     }
@@ -2109,16 +2173,7 @@ function Canvas({
                 beginGesture('move', child, parentId, e)
               }
               onResizeStart={(handle, e) =>
-                beginGesture(
-                  handle === 'br'
-                    ? 'resize-br'
-                    : handle === 'r'
-                      ? 'resize-r'
-                      : 'resize-b',
-                  w,
-                  null,
-                  e,
-                )
+                beginGesture(`resize-${handle}` as ActiveGesture['kind'], w, null, e)
               }
             />
           ))}
@@ -2190,7 +2245,7 @@ function WidgetCard({
   onClick: (e: React.MouseEvent) => void;
   onMoveStart: (e: ReactMouseEvent<HTMLElement>) => void;
   onResizeStart: (
-    handle: 'br' | 'r' | 'b',
+    handle: 't' | 'r' | 'b' | 'l' | 'tl' | 'tr' | 'br' | 'bl',
     e: ReactMouseEvent<HTMLElement>,
   ) => void;
   /** #96: mousedown on a container child begins a reorder/reparent
@@ -2251,35 +2306,7 @@ function WidgetCard({
           </div>
         ) : null}
         {selected && canEdit && (
-          <>
-            <button
-              type="button"
-              aria-label="Resize right"
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                onResizeStart('r', e);
-              }}
-              className="absolute right-0 top-1/2 z-20 h-8 w-1.5 -translate-y-1/2 cursor-ew-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
-            />
-            <button
-              type="button"
-              aria-label="Resize bottom"
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                onResizeStart('b', e);
-              }}
-              className="absolute bottom-0 left-1/2 z-20 h-1.5 w-8 -translate-x-1/2 cursor-ns-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
-            />
-            <button
-              type="button"
-              aria-label="Resize"
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                onResizeStart('br', e);
-              }}
-              className="absolute bottom-0 right-0 z-20 h-3 w-3 cursor-nwse-resize rounded-tl-sm bg-accent opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
-            />
-          </>
+          <ResizeHandles onResizeStart={onResizeStart} />
         )}
       </div>
     );
@@ -2414,38 +2441,89 @@ function WidgetCard({
           corner for both). 8-handle resize can come if anyone
           actually misses it. Each handle stops propagation so the
           mousedown doesn't fall through to the body's move gesture. */}
-      {selected && canEdit && (
-        <>
-          <button
-            type="button"
-            aria-label="Resize right"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              onResizeStart('r', e);
-            }}
-            className="absolute right-0 top-1/2 h-8 w-1.5 -translate-y-1/2 cursor-ew-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
-          />
-          <button
-            type="button"
-            aria-label="Resize bottom"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              onResizeStart('b', e);
-            }}
-            className="absolute bottom-0 left-1/2 h-1.5 w-8 -translate-x-1/2 cursor-ns-resize rounded-full bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
-          />
-          <button
-            type="button"
-            aria-label="Resize"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              onResizeStart('br', e);
-            }}
-            className="absolute bottom-0 right-0 h-3 w-3 cursor-nwse-resize rounded-tl-sm bg-accent opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90"
-          />
-        </>
-      )}
+      {selected && canEdit && <ResizeHandles onResizeStart={onResizeStart} />}
     </div>
+  );
+}
+
+/**
+ * #97: full 8-direction resize-handle ring rendered inside a
+ * selected WidgetCard.  Four edges and four corners; each stops
+ * propagation on mousedown so the gesture doesn't fall through
+ * to the card's move-on-grab handler.  Each handle's cursor (ew /
+ * ns / nwse / nesw) matches the direction the user can drag.
+ */
+function ResizeHandles({
+  onResizeStart,
+}: {
+  onResizeStart: (
+    handle: 't' | 'r' | 'b' | 'l' | 'tl' | 'tr' | 'br' | 'bl',
+    e: ReactMouseEvent<HTMLElement>,
+  ) => void;
+}) {
+  const edgeBase =
+    'absolute z-20 bg-accent/60 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90 rounded-full';
+  const cornerBase =
+    'absolute z-20 h-3 w-3 bg-accent opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-90';
+  const handle = (
+    h: 't' | 'r' | 'b' | 'l' | 'tl' | 'tr' | 'br' | 'bl',
+    label: string,
+    className: string,
+  ) => (
+    <button
+      key={h}
+      type="button"
+      aria-label={label}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        onResizeStart(h, e);
+      }}
+      className={className}
+    />
+  );
+  return (
+    <>
+      {handle(
+        't',
+        'Resize top',
+        `${edgeBase} top-0 left-1/2 h-1.5 w-8 -translate-x-1/2 cursor-ns-resize`,
+      )}
+      {handle(
+        'r',
+        'Resize right',
+        `${edgeBase} right-0 top-1/2 h-8 w-1.5 -translate-y-1/2 cursor-ew-resize`,
+      )}
+      {handle(
+        'b',
+        'Resize bottom',
+        `${edgeBase} bottom-0 left-1/2 h-1.5 w-8 -translate-x-1/2 cursor-ns-resize`,
+      )}
+      {handle(
+        'l',
+        'Resize left',
+        `${edgeBase} left-0 top-1/2 h-8 w-1.5 -translate-y-1/2 cursor-ew-resize`,
+      )}
+      {handle(
+        'tl',
+        'Resize top-left',
+        `${cornerBase} top-0 left-0 rounded-br-sm cursor-nwse-resize`,
+      )}
+      {handle(
+        'tr',
+        'Resize top-right',
+        `${cornerBase} top-0 right-0 rounded-bl-sm cursor-nesw-resize`,
+      )}
+      {handle(
+        'br',
+        'Resize bottom-right',
+        `${cornerBase} bottom-0 right-0 rounded-tl-sm cursor-nwse-resize`,
+      )}
+      {handle(
+        'bl',
+        'Resize bottom-left',
+        `${cornerBase} bottom-0 left-0 rounded-tr-sm cursor-nesw-resize`,
+      )}
+    </>
   );
 }
 
@@ -5107,15 +5185,15 @@ function clampCol(col: number): number {
  * grid cell the user dropped into.
  */
 function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
-  // Sizes are in v2 grid units (24 cols x 24px rows). 1 v2 col is
-  // half the width of the old v1 col; 1 v2 row is half the height.
-  // Map-following kinds are sized for tool mode (icon-only card,
-  // 2x2 v2 cells). Authors flipping a widget to panel mode get
-  // a more useful initial footprint via the properties panel.
+  // #95: sizes in v4 grid units (192 cols x 3px rows).  Map-
+  // following kinds are sized for tool mode (icon-only card,
+  // 8x8 v4 cells ≈ 50px square).  Authors flipping a widget to
+  // panel mode get a more useful initial footprint via the
+  // properties panel.
   switch (kind) {
     case 'map':
-      return { col: 1, row: 1, colSpan: 16, rowSpan: 24 };
-    // Tool-mode-by-default kinds. 2x2 v2 cells = ~50px square,
+      return { col: 1, row: 1, colSpan: 64, rowSpan: 96 };
+    // Tool-mode-by-default kinds. 8x8 v4 cells ≈ 50px square,
     // big enough for a 16px icon + a comfortable click target.
     case 'layer-list':
     case 'legend':
@@ -5129,35 +5207,36 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
     case 'create-feature':
     case 'edit-feature':
     case 'delete-feature':
-      return { col: 1, row: 1, colSpan: 2, rowSpan: 2 };
-    case 'attribute-table':
-      return { col: 1, row: 1, colSpan: 24, rowSpan: 10 };
-    case 'text':
-      return { col: 1, row: 1, colSpan: 24, rowSpan: 2 };
-    case 'chart':
-      return { col: 1, row: 1, colSpan: 12, rowSpan: 12 };
-    case 'image':
       return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
+    case 'attribute-table':
+      return { col: 1, row: 1, colSpan: 96, rowSpan: 40 };
+    case 'text':
+      return { col: 1, row: 1, colSpan: 96, rowSpan: 8 };
+    case 'chart':
+      return { col: 1, row: 1, colSpan: 48, rowSpan: 48 };
+    case 'image':
+      return { col: 1, row: 1, colSpan: 32, rowSpan: 32 };
     case 'button':
-      return { col: 1, row: 1, colSpan: 4, rowSpan: 2 };
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 8 };
     case 'divider':
-      return { col: 1, row: 1, colSpan: 24, rowSpan: 1 };
+      return { col: 1, row: 1, colSpan: 96, rowSpan: 4 };
     case 'embed':
-      return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
+      return { col: 1, row: 1, colSpan: 64, rowSpan: 64 };
     case 'time-slider':
       // Narrow strip across the bottom or top of the canvas by
       // default; authors typically anchor it like a film-strip
-      // timeline.  16 cols wide, 4 rows (~50px) tall.
-      return { col: 1, row: 1, colSpan: 16, rowSpan: 4 };
+      // timeline.  64 cols wide, 16 rows (~50px) tall.
+      return { col: 1, row: 1, colSpan: 64, rowSpan: 16 };
     case 'tabs':
-      return { col: 1, row: 1, colSpan: 16, rowSpan: 16 };
+      return { col: 1, row: 1, colSpan: 64, rowSpan: 64 };
     // #92 generic container: fresh containers stamp inline by
-    // default and take a modest 16x8 region.  Once the author flips
-    // `position` to sticky-top / dock-left / etc. the runtime
-    // dispatches the container into the appropriate page slot and
-    // these grid coords become a no-op.
+    // default and take a modest 64x32 region (= 1/3 width, ~100px
+    // tall on a typical canvas).  Once the author flips `position`
+    // to sticky-top / dock-left / etc. the runtime dispatches the
+    // container into the appropriate page slot and these grid
+    // coords become a no-op.
     case 'container':
-      return { col: 1, row: 1, colSpan: 16, rowSpan: 8 };
+      return { col: 1, row: 1, colSpan: 64, rowSpan: 32 };
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
