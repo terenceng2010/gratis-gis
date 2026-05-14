@@ -282,6 +282,56 @@ export interface CalculateGeometryStep {
 }
 
 /**
+ * Spatial-join step (#79).  The most-requested geoprocessing
+ * primitive: take the upstream rows ("left side") and join in
+ * attributes (or just a count) from a second source ("right side")
+ * via a spatial predicate.
+ *
+ * v1 supports:
+ *   - predicate 'within':     left.geom is fully inside right.geom
+ *                             (typically point-in-polygon style:
+ *                             "which county does this point land in")
+ *   - predicate 'intersects': left.geom shares any space with
+ *                             right.geom (the classic overlay)
+ *   - predicate 'nearest':    right's centroid within `nearestMaxMeters`
+ *                             of left.geom (default 1000 m).  Picks
+ *                             the closest right row.
+ *
+ * attributeStrategy:
+ *   - 'count':  appends a single numeric `<prefix>count` attribute
+ *               with COUNT(*) of matching right rows.
+ *   - 'first':  appends each named attribute from the FIRST matching
+ *               right row (deterministic on entity id) under
+ *               `<prefix><attrname>`.  Single output row per left row;
+ *               no cartesian explosion.
+ *
+ * Geometry passes through unchanged from the left side.  Output
+ * schema = upstream schema + the new joined attribute(s).
+ */
+export interface SpatialJoinStep {
+  tool: 'spatial-join';
+  params: {
+    otherSource: {
+      kind: 'data_layer';
+      itemId: string;
+      layerKey?: string;
+    };
+    predicate: 'within' | 'intersects' | 'nearest';
+    /** For predicate='nearest': max distance (meters).  Defaults to
+     *  1000 when the field is missing on persisted recipes. */
+    nearestMaxMeters?: number;
+    attributeStrategy: 'count' | 'first';
+    /** For attributeStrategy='first': which right-side attribute
+     *  names to project onto each left row.  Must be non-empty
+     *  when strategy='first'; ignored for 'count'. */
+    attrsToKeep?: string[];
+    /** Prefix prepended to every joined attribute name to avoid
+     *  collisions with upstream field names.  Defaults to 'joined_'. */
+    attrPrefix?: string;
+  };
+}
+
+/**
  * Group-by aggregation step (#80).  The principled generalization
  * of dissolve: collapse N rows into one (or one-per-group) and
  * compute aggregate values across them.
@@ -386,7 +436,8 @@ export type ToolStep =
   | CalculateGeometryStep
   | FilterStep
   | CalculateFieldStep
-  | AggregateStep;
+  | AggregateStep
+  | SpatialJoinStep;
 
 /**
  * The recipe persisted in `item.data` when `type = 'derived_layer'`.
@@ -541,6 +592,15 @@ export const DEFAULT_CALCULATE_FIELD_STEP: CalculateFieldStep = {
     expression: '',
   },
 };
+export const DEFAULT_SPATIAL_JOIN_STEP: SpatialJoinStep = {
+  tool: 'spatial-join',
+  params: {
+    otherSource: { kind: 'data_layer', itemId: '' },
+    predicate: 'intersects',
+    attributeStrategy: 'count',
+    attrPrefix: 'joined_',
+  },
+};
 export const DEFAULT_AGGREGATE_STEP: AggregateStep = {
   tool: 'aggregate',
   // No groupBy + a count(*) aggregation: equivalent to the legacy
@@ -576,6 +636,7 @@ export const DEFAULT_STEPS: Record<ToolStep['tool'], ToolStep> = {
   filter: DEFAULT_FILTER_STEP,
   'calculate-field': DEFAULT_CALCULATE_FIELD_STEP,
   aggregate: DEFAULT_AGGREGATE_STEP,
+  'spatial-join': DEFAULT_SPATIAL_JOIN_STEP,
 };
 
 /**

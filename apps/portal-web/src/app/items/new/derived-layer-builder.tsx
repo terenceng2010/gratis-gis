@@ -834,6 +834,7 @@ const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   filter: 'Filter by expression',
   'calculate-field': 'Calculate field from expression',
   aggregate: 'Group by + aggregate',
+  'spatial-join': 'Spatial join (from another layer)',
 };
 
 const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
@@ -858,6 +859,8 @@ const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
     'Append a new attribute computed from any expression over the upstream fields.',
   aggregate:
     'Collapse rows into one per group with count / sum / avg / min / max aggregations. Geometry is unioned per group.',
+  'spatial-join':
+    "Join attributes (or a count) from another data layer onto each upstream row using a spatial predicate: within / intersects / nearest.",
 };
 
 /**
@@ -1122,6 +1125,11 @@ function StepCard({
           params={step.params}
           onChange={(params) => onChange({ tool: 'aggregate', params })}
           sourceFields={sourceFields}
+        />
+      ) : step.tool === 'spatial-join' ? (
+        <SpatialJoinStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'spatial-join', params })}
         />
       ) : (
         // Forward-compat fallback for a tool kind a newer server
@@ -2349,6 +2357,227 @@ function AggregateStepEditor({
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Spatial-join step editor (#79).  Three knobs:
+ *   - the second source data_layer (otherSource.itemId)
+ *   - the spatial predicate (within / intersects / nearest)
+ *   - the attribute strategy (count adds a numeric count, first
+ *     joins picked attributes from the closest / first match)
+ * 'nearest' surfaces a meters-distance input; 'first' surfaces an
+ * attrs-to-keep input.  Output attribute prefix is editable so
+ * authors can avoid collisions with upstream field names.
+ *
+ * The second-source picker is intentionally simple here: a UUID
+ * text input + helper text.  Wiring up a full picker like the
+ * top-level source picker is a polish follow-up; the field name
+ * "right source item id" is enough to use the tool once you know
+ * what you're picking.
+ */
+function SpatialJoinStepEditor({
+  params,
+  onChange,
+}: {
+  params: {
+    otherSource: { kind: 'data_layer'; itemId: string; layerKey?: string };
+    predicate: 'within' | 'intersects' | 'nearest';
+    nearestMaxMeters?: number;
+    attributeStrategy: 'count' | 'first';
+    attrsToKeep?: string[];
+    attrPrefix?: string;
+  };
+  onChange: (next: typeof params) => void;
+}) {
+  const prefix = params.attrPrefix ?? 'joined_';
+  const attrsText = (params.attrsToKeep ?? []).join(', ');
+  return (
+    <div className="space-y-3">
+      <label className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          Other source (data layer item id)
+        </span>
+        <input
+          type="text"
+          value={params.otherSource.itemId}
+          onChange={(e) =>
+            onChange({
+              ...params,
+              otherSource: {
+                kind: 'data_layer',
+                itemId: e.target.value.trim(),
+              },
+            })
+          }
+          placeholder="00000000-0000-0000-0000-000000000000"
+          className="h-9 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
+        />
+        <span className="text-[11px] text-muted">
+          UUID of the data_layer to join in.  Find it in the URL of
+          the layer&apos;s detail page.  Full picker UI is queued as
+          a follow-up; for now paste the id.
+        </span>
+      </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          Sublayer key (optional)
+        </span>
+        <input
+          type="text"
+          value={params.otherSource.layerKey ?? ''}
+          onChange={(e) => {
+            const next = { ...params };
+            const v = e.target.value.trim();
+            if (v) {
+              next.otherSource = {
+                kind: 'data_layer',
+                itemId: params.otherSource.itemId,
+                layerKey: v,
+              };
+            } else {
+              next.otherSource = {
+                kind: 'data_layer',
+                itemId: params.otherSource.itemId,
+              };
+            }
+            onChange(next);
+          }}
+          placeholder="leave blank for the default sublayer"
+          className="h-9 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
+        />
+      </label>
+
+      <div>
+        <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
+          Predicate
+        </p>
+        <div className="grid grid-cols-3 gap-2" role="radiogroup">
+          {(['intersects', 'within', 'nearest'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="radio"
+              aria-checked={params.predicate === p}
+              onClick={() => onChange({ ...params, predicate: p })}
+              className={`flex items-center justify-center rounded-md border p-2 text-xs capitalize transition-colors ${
+                params.predicate === p
+                  ? 'border-accent bg-accent/5 text-ink-0 ring-2 ring-accent/30'
+                  : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-[11px] text-muted">
+          {params.predicate === 'within'
+            ? 'Match when the upstream geometry is fully inside a feature in the other layer.'
+            : params.predicate === 'intersects'
+              ? 'Match when the upstream geometry shares any space with a feature in the other layer.'
+              : 'Match when the closest feature in the other layer is within the chosen distance.'}
+        </p>
+      </div>
+
+      {params.predicate === 'nearest' ? (
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            Max distance (meters)
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={1_000_000}
+            value={params.nearestMaxMeters ?? 1000}
+            onChange={(e) =>
+              onChange({
+                ...params,
+                nearestMaxMeters: Number(e.target.value),
+              })
+            }
+            className="h-9 w-40 rounded-md border border-border bg-surface-1 px-3 text-xs focus:border-accent focus:outline-none"
+          />
+        </label>
+      ) : null}
+
+      <div>
+        <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
+          Bring over
+        </p>
+        <div className="grid grid-cols-2 gap-2" role="radiogroup">
+          {(['count', 'first'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              role="radio"
+              aria-checked={params.attributeStrategy === s}
+              onClick={() => onChange({ ...params, attributeStrategy: s })}
+              className={`flex items-center justify-center rounded-md border p-2 text-xs capitalize transition-colors ${
+                params.attributeStrategy === s
+                  ? 'border-accent bg-accent/5 text-ink-0 ring-2 ring-accent/30'
+                  : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+              }`}
+            >
+              {s === 'count' ? 'Count of matches' : 'Attrs from first match'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {params.attributeStrategy === 'first' ? (
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            Attributes to keep
+          </span>
+          <input
+            type="text"
+            value={attrsText}
+            onChange={(e) =>
+              onChange({
+                ...params,
+                attrsToKeep: e.target.value
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean),
+              })
+            }
+            placeholder="county_name, fips, population"
+            className="h-9 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
+          />
+          <span className="text-[11px] text-muted">
+            Comma-separated field names on the other layer.  Each
+            lands on every upstream row as
+            <code className="ml-1 rounded bg-surface-2 px-1 font-mono">
+              {prefix}
+              &lt;attr&gt;
+            </code>.
+          </span>
+        </label>
+      ) : null}
+
+      <label className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          Output prefix
+        </span>
+        <input
+          type="text"
+          value={prefix}
+          onChange={(e) =>
+            onChange({
+              ...params,
+              attrPrefix: e.target.value.replace(/[^a-zA-Z0-9_]/g, '_'),
+            })
+          }
+          className="h-9 w-40 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
+        />
+        <span className="text-[11px] text-muted">
+          Prepended to every joined attribute name.  Defaults to{' '}
+          <code className="rounded bg-surface-2 px-1 font-mono">joined_</code>
+          .
+        </span>
+      </label>
     </div>
   );
 }
