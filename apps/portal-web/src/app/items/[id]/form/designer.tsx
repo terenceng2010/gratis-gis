@@ -75,6 +75,8 @@ import {
   type QuestionType,
 } from '@gratis-gis/form-schema';
 import { useConfirm } from '@/components/dialog-provider';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
+import { LayoutGrid, Settings as SettingsIcon } from 'lucide-react';
 import {
   FormRuntime,
   QuestionPreview,
@@ -503,184 +505,208 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
     });
   }
 
-  return (
-    <div className="rounded-lg border border-border bg-surface-1 shadow-card">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            value={form.title}
-            disabled={!canEdit}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-            className="rounded-md border border-border bg-surface-1 px-2 py-1 text-sm font-medium text-ink-0 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60"
-          />
-          <span className="text-[10px] uppercase tracking-wide text-muted">
-            schema v{CURRENT_FORM_SCHEMA_VERSION}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-md border border-border bg-surface-2 p-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => setTab('design')}
-              className={`px-2 py-1 ${
-                tab === 'design'
-                  ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
-                  : 'text-muted'
-              }`}
-            >
-              Design
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab('preview')}
-              className={`px-2 py-1 ${
-                tab === 'preview'
-                  ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
-                  : 'text-muted'
-              }`}
-            >
-              <Eye className="mr-1 inline h-3 w-3" />
-              Preview
-            </button>
-          </div>
+  // #18 -- toolbar lives in BuilderShell's toolbarRight.  Title
+  // input + design/preview tab toggle + Export / Import / Save
+  // all go here.  Schema version chip moves alongside the title.
+  const toolbarRight = (
+    <div className="flex items-center gap-2">
+      <input
+        type="text"
+        value={form.title}
+        disabled={!canEdit}
+        onChange={(e) => setForm({ ...form, title: e.target.value })}
+        placeholder="Untitled form"
+        className="rounded-md border border-border bg-surface-1 px-2 py-1 text-sm font-medium text-ink-0 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60"
+      />
+      <span className="text-[10px] uppercase tracking-wide text-muted">
+        v{CURRENT_FORM_SCHEMA_VERSION}
+      </span>
+      <div className="inline-flex rounded-md border border-border bg-surface-2 p-0.5 text-xs">
+        <button
+          type="button"
+          onClick={() => setTab('design')}
+          className={`px-2 py-1 ${
+            tab === 'design'
+              ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+              : 'text-muted'
+          }`}
+        >
+          Design
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('preview')}
+          className={`px-2 py-1 ${
+            tab === 'preview'
+              ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+              : 'text-muted'
+          }`}
+        >
+          <Eye className="mr-1 inline h-3 w-3" />
+          Preview
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={exportForm}
+        title="Download this form as a portable JSON file"
+        className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2"
+      >
+        <Download className="h-3.5 w-3.5" />
+        Export
+      </button>
+      {canEdit ? (
+        <>
           <button
             type="button"
-            onClick={exportForm}
-            title="Download this form as a portable JSON file"
+            onClick={() => fileInputRef.current?.click()}
+            title="Replace this form with one from a .gratisgis-form.json file"
             className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2"
           >
-            <Download className="h-3.5 w-3.5" />
-            Export
+            <Upload className="h-3.5 w-3.5" />
+            Import
           </button>
-          {canEdit ? (
-            <>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Replace this form with one from a .gratisgis-form.json file"
-                className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                Import
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json,.json"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void importFormFile(f);
-                  // Reset so picking the same file twice still fires.
-                  e.target.value = '';
-                }}
-              />
-            </>
-          ) : null}
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={saving}
-              className="inline-flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              {saving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              Save
-            </button>
-          ) : null}
-        </div>
-      </header>
-
-      {error ? (
-        <p className="border-b border-danger/40 bg-danger/5 px-4 py-2 text-xs text-danger">
-          {error}
-        </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importFormFile(f);
+              e.target.value = '';
+            }}
+          />
+        </>
       ) : null}
-      {savedAt && !error ? (
-        <p className="border-b border-emerald-300 bg-emerald-50 px-4 py-1 text-[11px] text-emerald-800">
-          Saved {savedAt.toLocaleTimeString()}.
-        </p>
-      ) : null}
-
-      {tab === 'design' ? (
-        // The grid hosts three independent columns. We use
-        // `lg:items-start` so each column can be its own scroll
-        // container without forcing the others to match height.
-        // Palette + Properties get `lg:sticky lg:top-0
-        // lg:max-h-screen lg:overflow-y-auto` (applied inside their
-        // components) so scrolling within them doesn't drag the
-        // page along. Canvas stays in normal flow -- it grows with
-        // the form's content and the user scrolls the page to
-        // navigate. Result: scrolling the palette to find a
-        // question type doesn't take the canvas out of viewport.
-        <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr_280px] lg:items-start">
-          <Palette canEdit={canEdit} onAdd={(t) => addQuestion(t, null)} />
-          <Canvas
-            form={form}
-            selectedId={selectedId}
-            canEdit={canEdit}
-            layerSchema={layerSchema}
-            isLinked={Boolean(form.linkedLayerId)}
-            onSelect={setSelectedId}
-            onRemove={removeQuestion}
-            onAddInto={addQuestion}
-            onShareRow={shareRowWith}
-            onMove={moveQuestion}
-            onOpenImport={() => setImportOpen(true)}
-          />
-          <Properties
-            form={form}
-            question={selected}
-            canEdit={canEdit}
-            layerSchema={layerSchema}
-            onUnlinkLayer={unlinkLayer}
-            onChange={(patch) => {
-              if (selected) updateQuestion(selected.id, patch);
-            }}
-            onRename={(newId) => {
-              if (!selected) return;
-              if (newId === selected.id) return;
-              const ids = collectIds(form);
-              ids.delete(selected.id);
-              if (ids.has(newId)) {
-                setError(`Question id "${newId}" is already used.`);
-                return;
-              }
-              setError(null);
-              setForm((f) =>
-                updateInTree(f, selected.id, (q) => ({ ...q, id: newId } as Question)),
-              );
-              setSelectedId(newId);
-            }}
-            onUpdateForm={(patch) => setForm({ ...form, ...patch })}
-            onOpenImport={() => setImportOpen(true)}
-          />
-        </div>
-      ) : (
-        <div className="border-t border-border bg-surface-0">
-          {/* Preview is interactive: the author should be able to
-              click radios, fill in fields, add repeat instances, hit
-              the page-break Next button, and see conditional logic
-              fire. onSubmit is a no-op so dummy data never lands
-              anywhere. */}
-          <FormRuntime
-            form={form}
-            onSubmit={async () => {
-              /* preview discards submission */
-            }}
-          />
-        </div>
-      )}
-
-      {importOpen ? (
-        <LayerImportDialog onClose={() => setImportOpen(false)} onApply={applyImported} />
+      {canEdit ? (
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="inline-flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
+          Save
+        </button>
       ) : null}
     </div>
+  );
+
+  // Left rail = question-type palette.  Click a type to append to
+  // the active page / group.
+  const palettePanel = (
+    <Palette canEdit={canEdit} onAdd={(t) => addQuestion(t, null)} />
+  );
+
+  // Right rail = the active question's properties + form-level
+  // settings.  Properties already renders this distinction
+  // internally based on whether `question` is set.
+  const propertiesPanel = (
+    <Properties
+      form={form}
+      question={selected}
+      canEdit={canEdit}
+      layerSchema={layerSchema}
+      onUnlinkLayer={unlinkLayer}
+      onChange={(patch) => {
+        if (selected) updateQuestion(selected.id, patch);
+      }}
+      onRename={(newId) => {
+        if (!selected) return;
+        if (newId === selected.id) return;
+        const ids = collectIds(form);
+        ids.delete(selected.id);
+        if (ids.has(newId)) {
+          setError(`Question id "${newId}" is already used.`);
+          return;
+        }
+        setError(null);
+        setForm((f) =>
+          updateInTree(
+            f,
+            selected.id,
+            (q) => ({ ...q, id: newId }) as Question,
+          ),
+        );
+        setSelectedId(newId);
+      }}
+      onUpdateForm={(patch) => setForm({ ...form, ...patch })}
+      onOpenImport={() => setImportOpen(true)}
+    />
+  );
+
+  return (
+    <>
+      <BuilderShell
+        storageKey="builder-shell:form"
+        backHref={`/items/${itemId}`}
+        title="Form designer"
+        icon={<FileText className="h-4 w-4 text-orange-600" />}
+        toolbarRight={toolbarRight}
+        leftPanel={palettePanel}
+        leftPanelTitle="Add question"
+        leftRailIcon={<LayoutGrid className="h-4 w-4" />}
+        rightPanel={propertiesPanel}
+        rightPanelTitle="Properties"
+        rightRailIcon={<SettingsIcon className="h-4 w-4" />}
+      >
+        <div className="absolute inset-0 flex flex-col overflow-hidden">
+          {error ? (
+            <p className="shrink-0 border-b border-danger/40 bg-danger/5 px-4 py-2 text-xs text-danger">
+              {error}
+            </p>
+          ) : null}
+          {savedAt && !error ? (
+            <p className="shrink-0 border-b border-emerald-300 bg-emerald-50 px-4 py-1 text-[11px] text-emerald-800">
+              Saved {savedAt.toLocaleTimeString()}.
+            </p>
+          ) : null}
+          <div className="flex-1 overflow-auto">
+            {tab === 'design' ? (
+              <Canvas
+                form={form}
+                selectedId={selectedId}
+                canEdit={canEdit}
+                layerSchema={layerSchema}
+                isLinked={Boolean(form.linkedLayerId)}
+                onSelect={setSelectedId}
+                onRemove={removeQuestion}
+                onAddInto={addQuestion}
+                onShareRow={shareRowWith}
+                onMove={moveQuestion}
+                onOpenImport={() => setImportOpen(true)}
+              />
+            ) : (
+              <div className="bg-surface-0">
+                {/* Preview is interactive: the author should be able
+                    to click radios, fill in fields, add repeat
+                    instances, hit the page-break Next button, and
+                    see conditional logic fire.  onSubmit is a no-op
+                    so dummy data never lands anywhere. */}
+                <FormRuntime
+                  form={form}
+                  onSubmit={async () => {
+                    /* preview discards submission */
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </BuilderShell>
+
+      {importOpen ? (
+        <LayerImportDialog
+          onClose={() => setImportOpen(false)}
+          onApply={applyImported}
+        />
+      ) : null}
+    </>
   );
 }
 
