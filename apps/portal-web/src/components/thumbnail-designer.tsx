@@ -19,8 +19,8 @@
  * presign-PUT-persist flow, same as the legacy thumbnail upload
  * path; the resulting URL lands in the design blob.
  */
-import { useMemo } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ChevronDown, RotateCcw } from 'lucide-react';
 import {
   defaultThumbnailDesign,
   getItemTypeLabel,
@@ -177,15 +177,37 @@ function LayerSection({
   hint: string;
   children: React.ReactNode;
 }) {
+  // #87b feedback -- closed by default.  The four sections combined
+  // were ~600px tall and pushed the actual item fields (Title,
+  // Description, Tags, Visibility, etc) way down the page.  Authors
+  // who want to customize the thumbnail can click open the section
+  // they care about; the live preview at the top of the designer
+  // already shows what the current design produces, so a fully
+  // collapsed designer is still informative.
+  const [open, setOpen] = useState(false);
   return (
-    <section className="rounded-md border border-border bg-surface-1 p-3">
-      <div className="mb-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ink-0">
-          {title}
-        </p>
-        <p className="text-[11px] text-muted">{hint}</p>
-      </div>
-      <div className="space-y-2">{children}</div>
+    <section className="rounded-md border border-border bg-surface-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-surface-2"
+        aria-expanded={open}
+      >
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink-0">
+            {title}
+          </p>
+          <p className="text-[11px] text-muted">{hint}</p>
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-muted transition-transform ${
+            open ? '' : '-rotate-90'
+          }`}
+        />
+      </button>
+      {open ? (
+        <div className="space-y-2 px-3 pb-3">{children}</div>
+      ) : null}
     </section>
   );
 }

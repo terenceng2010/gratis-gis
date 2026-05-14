@@ -405,18 +405,10 @@ export function ItemForm({ mode, initialValues, initialData, itemId }: Props) {
         </section>
       ) : null}
 
-      <section>
-        <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
-          Thumbnail
-        </label>
-        <ThumbnailDesigner
-          type={type}
-          title={title}
-          value={thumbnailDesign}
-          onChange={setThumbnailDesign}
-        />
-      </section>
-
+      {/* Title / Description / Tags come BEFORE the thumbnail
+          designer so the primary content fields are the first
+          thing a user sees on the page (#87b feedback). The
+          designer is dense and was pushing these way down. */}
       <section className="space-y-4">
         <div>
           <label
@@ -473,6 +465,18 @@ export function ItemForm({ mode, initialValues, initialData, itemId }: Props) {
             Used for search and filtering.
           </p>
         </div>
+      </section>
+
+      <section>
+        <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-muted">
+          Thumbnail
+        </label>
+        <ThumbnailDesigner
+          type={type}
+          title={title}
+          value={thumbnailDesign}
+          onChange={setThumbnailDesign}
+        />
       </section>
 
       <section>
