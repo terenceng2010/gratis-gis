@@ -3465,10 +3465,29 @@ function WidgetConfigForm({
           onPickMap={onPickWidgetMap}
         />
       );
+    case 'print':
+      return (
+        <MapBindingPicker
+          mapWidgetId={widget.config.mapWidgetId}
+          mapWidgets={mapWidgets}
+          canEdit={canEdit}
+          onChange={(mapWidgetId) => onChangeConfig({ mapWidgetId })}
+          extra={
+            <PrintTemplatePickerField
+              selectedIds={widget.config.templateIds ?? []}
+              canEdit={canEdit}
+              onChange={(ids) =>
+                onChangeConfig({
+                  templateIds: ids.length > 0 ? ids : undefined,
+                })
+              }
+            />
+          }
+        />
+      );
     case 'legend':
     case 'layer-list':
     case 'search':
-    case 'print':
     case 'select':
     case 'basemap-gallery':
       return (
@@ -4733,6 +4752,101 @@ function DesignerChild({
         <span className="text-[10px] font-medium leading-none">{label}</span>
       )}
     </div>
+  );
+}
+
+// ---- Print template picker --------------------------------------
+
+/**
+ * Multi-select picker for the Print widget's per-app template
+ * allowlist (#101 followup).  Fetches every print_template item
+ * the user can read, then renders a checkbox list keyed by id.
+ * Empty selection means "let the runtime show everything the user
+ * has read access to."  Non-empty means "restrict to these N
+ * templates" -- the runtime intersects this with read access at
+ * print time so revoked shares drop out automatically.
+ */
+function PrintTemplatePickerField({
+  selectedIds,
+  canEdit,
+  onChange,
+}: {
+  selectedIds: string[];
+  canEdit: boolean;
+  onChange: (ids: string[]) => void;
+}) {
+  const [available, setAvailable] = useState<
+    Array<{ id: string; title: string }> | null
+  >(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/portal/items?type=print_template', {
+          cache: 'no-store',
+        });
+        if (!res.ok) {
+          if (!cancelled) setAvailable([]);
+          return;
+        }
+        const rows = (await res.json()) as Array<{
+          id: string;
+          title: string;
+        }>;
+        if (!cancelled) setAvailable(rows.map((r) => ({ id: r.id, title: r.title })));
+      } catch {
+        if (!cancelled) setAvailable([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function toggle(id: string) {
+    if (!canEdit) return;
+    if (selectedIds.includes(id)) {
+      onChange(selectedIds.filter((x) => x !== id));
+    } else {
+      onChange([...selectedIds, id]);
+    }
+  }
+
+  return (
+    <Field
+      label="Templates"
+      hint="Pick which print templates this app exposes. Leave all unchecked to expose every print template the user can read."
+    >
+      {available === null ? (
+        <p className="text-xs text-muted">Loading…</p>
+      ) : available.length === 0 ? (
+        <p className="text-xs text-muted">
+          No print templates available. Create one via the wizard
+          first.
+        </p>
+      ) : (
+        <div className="max-h-44 space-y-1 overflow-y-auto rounded-md border border-border bg-surface-0 p-1.5">
+          {available.map((t) => {
+            const checked = selectedIds.includes(t.id);
+            return (
+              <label
+                key={t.id}
+                className="flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={!canEdit}
+                  onChange={() => toggle(t.id)}
+                  className="h-3 w-3"
+                />
+                <span className="truncate text-ink-1">{t.title}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </Field>
   );
 }
 

@@ -1888,38 +1888,59 @@ function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
     { url: string; templateTitle: string; createdAt: number }[]
   >([]);
 
+  // Per-app template allowlist.  When the author has configured a
+  // specific set in the Print widget's properties, restrict the
+  // runtime dropdown to those.  Empty / unset falls back to
+  // "every template the user can read" -- useful for orgs that
+  // haven't curated yet.
+  const configuredIds =
+    widget.config.kind === 'print' ? widget.config.templateIds ?? [] : [];
+  const configuredKey = configuredIds.join(',');
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch(
-          '/api/portal/items?type=print_template&limit=50',
+          '/api/portal/items?type=print_template',
           { cache: 'no-store' },
         );
         if (!res.ok) {
           setTemplates([]);
           return;
         }
-        const body = (await res.json()) as {
-          items: Array<{
-            id: string;
-            title: string;
-            description: string | null;
-            data: PrintTemplateData;
-          }>;
-        };
-        if (!cancelled) {
-          const tt = body.items.map((it) => ({
-            id: it.id,
-            title: it.title,
-            description: it.description,
-            data: it.data,
-          }));
-          setTemplates(tt);
-          // If only one accessible template, pre-select it.
-          if (tt.length === 1) {
-            setSelected(tt[0] ?? null);
-          }
+        // The items list endpoint returns an array directly (not a
+        // wrapped { items: [...] } envelope).  Parsing it as a
+        // wrapped object was why the dropdown showed empty even
+        // when 5+ templates were seeded.
+        const rows = (await res.json()) as Array<{
+          id: string;
+          title: string;
+          description: string | null;
+          data: PrintTemplateData;
+        }>;
+        if (cancelled) return;
+        let tt: TemplateSummary[] = rows.map((it) => ({
+          id: it.id,
+          title: it.title,
+          description: it.description,
+          data: it.data,
+        }));
+        // Apply the per-app allowlist.  Preserves the author's
+        // declared order so the dropdown reads top-down as
+        // configured, not in items-list default order.
+        if (configuredIds.length > 0) {
+          const allowed = new Set(configuredIds);
+          const byId = new Map(tt.map((t) => [t.id, t]));
+          tt = configuredIds
+            .filter((id) => allowed.has(id) && byId.has(id))
+            .map((id) => byId.get(id)!)
+            .filter(Boolean);
+        }
+        setTemplates(tt);
+        // If only one accessible template, pre-select it.
+        if (tt.length === 1) {
+          setSelected(tt[0] ?? null);
         }
       } catch {
         if (!cancelled) setTemplates([]);
@@ -1928,7 +1949,7 @@ function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [configuredKey]);
 
   // Reset parameter values to template defaults whenever the
   // selected template changes.

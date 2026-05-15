@@ -602,6 +602,16 @@ export interface PrintWidgetConfig {
   /** #364: tool-mode display. */
   displayMode?: DisplayMode;
   panelArrangement?: PanelArrangement;
+  /** #101 followup: per-app allowlist of print_template item ids
+   *  the Print widget exposes in its dropdown.  When undefined OR
+   *  empty, the widget falls back to "every print_template the
+   *  current user can read" -- useful for orgs that haven't yet
+   *  curated per-app lists.  When non-empty, the runtime fetches
+   *  only the listed templates (intersection with read access)
+   *  so a topic-specific template shared org-wide doesn't appear
+   *  in an unrelated app's Print menu just because the user can
+   *  see it. */
+  templateIds?: string[];
 }
 
 export interface SelectWidgetConfig {
