@@ -29,6 +29,8 @@ export * from './viewer';
 export * from './custom-app';
 export * from './app-themes';
 export * from './app-templates';
+export * from './print-template';
+export * from './print-template-starters';
 export * from './asset-ref';
 export * from './web-app';
 export * from './data-collection';

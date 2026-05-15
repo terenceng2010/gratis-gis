@@ -18,6 +18,7 @@ import {
   PencilRuler,
   Plug,
   Palette,
+  Printer,
   Sparkles,
   Wand2,
   Wrench,
@@ -67,6 +68,7 @@ const ITEM_TYPE_ICONS: Record<ItemType, LucideIcon> = {
   tile_layer: Layers,
   app_template: Wand2,
   theme: Palette,
+  print_template: Printer,
 };
 
 /**
@@ -116,6 +118,7 @@ const ITEM_TYPE_ACCENT: Record<ItemType, string> = {
   tile_layer: 'text-fuchsia-600',
   app_template: 'text-amber-700',
   theme: 'text-pink-600',
+  print_template: 'text-slate-700',
 };
 
 /** Tailwind class combos for the tile background used in compact
@@ -148,6 +151,7 @@ const ITEM_TYPE_TILE: Record<ItemType, string> = {
   tile_layer: 'bg-fuchsia-500/90 text-white',
   app_template: 'bg-amber-700/90 text-white',
   theme: 'bg-pink-500/90 text-white',
+  print_template: 'bg-slate-700/90 text-white',
 };
 
 export function getItemTypeIcon(type: ItemType): LucideIcon {

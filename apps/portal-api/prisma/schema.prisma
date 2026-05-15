@@ -177,6 +177,14 @@ enum ItemType {
   /// user-saved themes live here too. CustomAppData.themePresetId
   /// references one of these item ids.
   theme
+  /// #101: print-template definition for the Print tool in a
+  /// Custom Web App.  data_json carries a PrintTemplateData (paper
+  /// size + free-positioned elements: text, image, map, legend,
+  /// scalebar, north-arrow, line, rectangle; declared parameters
+  /// the runtime form prompts for at print time).  Built-in starters
+  /// (Letter portrait/landscape/large-legend/Tabloid/Field summary)
+  /// seed per-org; user-authored templates live here too.
+  print_template             @map("print-template")
 }
 
 // ---------- Tables ----------

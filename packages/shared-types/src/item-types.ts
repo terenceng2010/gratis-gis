@@ -66,6 +66,16 @@ export const ITEM_TYPES = [
   // references a theme item id (or the starter kind for back-
   // compat with apps that pre-date this refactor).
   'theme',
+  // #101: shareable print template for the Print tool in a Custom
+  // Web App.  data_json carries a PrintTemplateData (paper size +
+  // free-positioned elements + declared parameters).  Built-in
+  // starters (Letter portrait/landscape, Letter landscape large
+  // legend, Tabloid landscape, Field summary) seed per-org;
+  // user-authored templates live here too.  At print time the
+  // runtime widget reads the template's declared parameters,
+  // renders a form, and posts the resolved values to the server
+  // PDF endpoint.
+  'print_template',
 ] as const;
 
 export type ItemType = (typeof ITEM_TYPES)[number];
@@ -109,6 +119,7 @@ export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   tile_layer: 'Tile layer',
   app_template: 'Web app template',
   theme: 'Theme',
+  print_template: 'Print template',
 };
 
 export function getItemTypeLabel(t: ItemType): string {

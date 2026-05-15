@@ -33,6 +33,7 @@ import type {
   MapData,
   ServiceData,
   CustomAppData,
+  PrintTemplateData,
   ViewerData,
   WfsServiceData,
   WmsServiceData,
@@ -46,6 +47,7 @@ import {
   DEFAULT_PICK_LIST,
   DEFAULT_MAP,
   DEFAULT_CUSTOM_APP,
+  DEFAULT_PRINT_TEMPLATE,
   DEFAULT_VIEWER,
   isCustomAppItem,
   isEditorItem,
@@ -145,6 +147,7 @@ import { GeocodingServiceEditor } from './geocoding/editor';
 import { TileLayerEditor } from './tile-layer/editor';
 import { AppTemplateDetail } from './app-template/app-template-detail';
 import { AppThemeDetail } from './theme/theme-detail';
+import { PrintTemplateDetail } from './print-template/print-template-detail';
 
 interface Props {
   params: { id: string };
@@ -1038,6 +1041,17 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
               swatch?: string;
               tokens?: Record<string, string>;
             }
+          }
+          seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
+          canEdit={canManage}
+        />
+      ) : item.type === 'print_template' ? (
+        <PrintTemplateDetail
+          itemId={item.id}
+          initialBlueprint={
+            (item.data && typeof item.data === 'object'
+              ? item.data
+              : DEFAULT_PRINT_TEMPLATE) as PrintTemplateData
           }
           seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
           canEdit={canManage}

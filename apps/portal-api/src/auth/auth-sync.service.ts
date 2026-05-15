@@ -3,6 +3,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { OrgRole } from '@prisma/client';
 import {
   BUILTIN_BASEMAP_SEEDS,
+  PRINT_TEMPLATE_STARTERS,
   STARTERS,
   THEME_STARTERS,
 } from '@gratis-gis/shared-types';
@@ -92,6 +93,13 @@ export class AuthSyncService {
    */
   private readonly themeSeedChecked = new Set<string>();
   private readonly themeSeedInFlight = new Map<string, Promise<void>>();
+
+  /**
+   * #101: parallel coalesced seeding for the five starter print
+   * template items.  Same coalescing pattern as the others.
+   */
+  private readonly printTemplateSeedChecked = new Set<string>();
+  private readonly printTemplateSeedInFlight = new Map<string, Promise<void>>();
 
   /**
    * Per-process cache of `userId -> last time we wrote lastSeenAt`.
@@ -299,6 +307,24 @@ export class AuthSyncService {
       await inFlight;
     }
 
+    // #101: the same dance for the five starter print template
+    // items.
+    if (!this.printTemplateSeedChecked.has(org.id)) {
+      let inFlight = this.printTemplateSeedInFlight.get(org.id);
+      if (!inFlight) {
+        inFlight = (async () => {
+          try {
+            await this.ensureBuiltinPrintTemplates(org.id, user.id);
+            this.printTemplateSeedChecked.add(org.id);
+          } finally {
+            this.printTemplateSeedInFlight.delete(org.id);
+          }
+        })();
+        this.printTemplateSeedInFlight.set(org.id, inFlight);
+      }
+      await inFlight;
+    }
+
     // Exclude memberships whose group is in the trash. Otherwise an item
     // shared to a soft-deleted group would still match this user's
     // effective groupIds and grant read access, which would defeat
@@ -491,6 +517,50 @@ export class AuthSyncService {
       })),
       // See ensureBuiltinAppTemplates for the rationale; same
       // cross-replica race risk applies here.
+      skipDuplicates: true,
+    });
+  }
+
+  /**
+   * #101: For each built-in print template starter, insert a
+   * `print_template` item row if the org doesn't already have one
+   * with that seed_kind.  Same idempotent + restore-via-housekeeping
+   * pattern as the theme + app_template seeders.
+   */
+  private async ensureBuiltinPrintTemplates(
+    orgId: string,
+    fallbackOwnerId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.item.findMany({
+      where: { orgId, type: 'print_template', seedKind: { not: null } },
+      select: { seedKind: true },
+    });
+    const have = new Set<string>();
+    for (const row of existing) {
+      if (row.seedKind) have.add(row.seedKind);
+    }
+    const missing = PRINT_TEMPLATE_STARTERS.filter((s) => !have.has(s.kind));
+    if (missing.length === 0) return;
+
+    const admin = await this.prisma.user.findFirst({
+      where: { orgId, orgRole: 'admin' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    const ownerId = admin?.id ?? fallbackOwnerId;
+
+    await this.prisma.item.createMany({
+      data: missing.map((starter) => ({
+        orgId,
+        ownerId,
+        type: 'print_template' as const,
+        title: starter.label,
+        description: starter.description,
+        tags: ['built-in', ...starter.tags],
+        data: starter.seed() as unknown as object,
+        access: 'org' as const,
+        seedKind: starter.kind,
+      })),
       skipDuplicates: true,
     });
   }

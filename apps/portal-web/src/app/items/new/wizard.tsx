@@ -30,6 +30,7 @@ import {
   Palette,
   PencilRuler,
   Plug,
+  Printer,
   Search,
   Sparkles,
   type LucideIcon,
@@ -58,6 +59,7 @@ import {
   DEFAULT_GEO_BOUNDARY,
   DEFAULT_PICK_LIST,
   DEFAULT_GEOCODING_SERVICE,
+  DEFAULT_PRINT_TEMPLATE,
   DEFAULT_TILE_LAYER,
   DEFAULT_MAP,
   DEFAULT_FOLDER,
@@ -294,6 +296,15 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Theme',
         desc: 'Reusable color palette + geometry tokens applied to web apps. Edit the colors and a live preview shell shows where each one appears.',
         Icon: Palette,
+      },
+      {
+        // #101: print templates are items.  Starts a blank
+        // template on a Letter portrait canvas so the user lands
+        // in the print-template designer ready to drop elements.
+        value: 'print_template',
+        label: 'Print template',
+        desc: 'Layout for the Print tool in a web app: paper size, title block, map frame, legend, scalebar, north arrow. Drag elements onto a paper-sized canvas, declare parameters the print form prompts for, save.',
+        Icon: Printer,
       },
     ],
   },
@@ -1194,6 +1205,12 @@ export function NewItemWizard({
         swatch: def.swatch,
         tokens: def.tokens,
       };
+    } else if (type === 'print_template') {
+      // #101: seed a fresh print template on a Letter portrait
+      // canvas with a single Title parameter and a blank element
+      // list.  Author lands on the designer ready to drop
+      // elements onto the page.
+      data = DEFAULT_PRINT_TEMPLATE;
     } else if (type === 'tile_layer') {
       // #179: empty tile_layer. The file upload + metadata
       // extraction happen on the detail page after create,
