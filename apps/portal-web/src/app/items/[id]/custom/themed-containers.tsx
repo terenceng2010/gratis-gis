@@ -23,6 +23,7 @@
 import {
   createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -143,6 +144,9 @@ export function Container({ config, renderChild }: ContainerRenderProps) {
         layout={layout}
       />
     );
+  }
+  if (position === 'menu') {
+    return <MenuContainer config={config} renderChild={renderChild} />;
   }
   // sticky-top / sticky-bottom / inline.  Same flow region, just
   // different anchoring + (for inline) no anchoring at all.
@@ -633,6 +637,125 @@ function OverlayContainer({ config, renderChild }: OverlayProps) {
           </div>
         </div>
       </aside>
+    </div>
+  );
+}
+
+// ---- Menu container (#104) -------------------------------------
+
+/**
+ * Stack-style menu container.  Renders a single tool-sized button.
+ * Click opens a small popover below the trigger showing the
+ * container's children stacked vertically -- each child is a fully-
+ * functioning tool button via the same renderChild path.  Use for
+ * packing related actions like Add/Edit/Delete under a single
+ * "Edit" icon, instead of taking three slots in the toolbar.
+ *
+ * Position semantics:
+ *   - The trigger pretends to be a tool button.  In an AppBar
+ *     context it uses the header-ink treatment; on the plain
+ *     canvas it uses the standard raised-pill look.  Matches the
+ *     ToolButton style in runtime-client.tsx so the menu trigger
+ *     visually fits anywhere a regular tool would.
+ *   - The popover is positioned absolutely below the trigger via
+ *     a portal-free trick (relative wrapper + absolute popover at
+ *     top:100%).  Closes on Escape or click outside.
+ *   - Each child renders through renderChild, which preserves the
+ *     child's own tool-button popover behavior.  If a child opens
+ *     its popover from within the menu, the menu stays open --
+ *     the child's popover layers on top.  Typing Escape closes
+ *     the most recent popover first, then the menu.
+ */
+function MenuContainer({ config, renderChild }: ContainerRenderProps) {
+  const [open, setOpen] = useState(false);
+  const triggerLabel = config.triggerLabel ?? 'Menu';
+  const Icon =
+    config.triggerIcon === 'layers'
+      ? LayersIcon
+      : config.triggerIcon === 'filter'
+        ? FilterIcon
+        : config.triggerIcon === 'menu'
+          ? MenuIcon
+          : WrenchIcon;
+  const inAppBar = useContext(AppBarContext);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click + Escape.  Same pattern as the tool-
+  // button popover so the menu disappears when the user navigates
+  // away.
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={triggerLabel}
+        style={
+          inAppBar && open
+            ? {
+                backgroundColor: 'hsl(var(--app-header-ink))',
+                color: 'hsl(var(--app-header-bg))',
+              }
+            : undefined
+        }
+        className={
+          inAppBar
+            ? `flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors ${
+                open
+                  ? ''
+                  : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]'
+              }`
+            : `flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-md border bg-surface-1 px-2.5 py-1.5 shadow-sm transition-all ${
+                open
+                  ? 'border-ink-0 text-ink-0 ring-2 ring-ink-0/10'
+                  : 'border-border text-ink-1 hover:border-ink-1 hover:shadow-md'
+              }`
+        }
+      >
+        <Icon className="h-5 w-5" strokeWidth={1.75} />
+        <span className="text-[10px] font-medium leading-none">
+          {triggerLabel}
+        </span>
+      </button>
+      {open ? (
+        <div
+          className="absolute left-1/2 top-full z-30 mt-1 min-w-[180px] -translate-x-1/2 rounded-md border border-[hsl(var(--app-border))] bg-[hsl(var(--app-surface-1))] p-1 shadow-[var(--app-shadow-overlay)]"
+          role="menu"
+        >
+          <div className="flex flex-col gap-0.5">
+            {config.widgets.map((child) => (
+              <div key={child.id} role="menuitem" className="flex">
+                {renderChild(child)}
+              </div>
+            ))}
+            {config.widgets.length === 0 ? (
+              <div className="px-2 py-1 text-[11px] italic text-[hsl(var(--app-muted))]">
+                Empty menu -- drop tools into this stack in the
+                designer.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

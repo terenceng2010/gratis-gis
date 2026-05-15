@@ -4884,22 +4884,27 @@ function renderInlineMd(s: string): React.ReactNode {
 // ---- Rich text editor ---------------------------------------------------
 
 /**
- * Toolbar-driven markdown editor for the Text widget properties
- * panel.  Authors get Bold / Italic / Heading / List / Link / Code
- * buttons that wrap the current selection with the right markdown
- * syntax, plus a live preview pane below the textarea so they see
- * the rendered output without flipping screens.  No new
- * dependencies -- the toolbar manipulates the textarea's selection
- * directly, the preview reuses DesignerMarkdownLite.
+ * True WYSIWYG editor for the Text widget.  Renders an editable DOM
+ * region (contenteditable) so what the author sees IS what the
+ * runtime will render.  Toolbar buttons call into the editor's own
+ * formatting commands (bold, italic, inline code, h1/h2/h3, lists,
+ * links) -- no markdown syntax ever appears in the editor surface.
  *
- * Trade-off vs. a full WYSIWYG (TipTap / Lexical / etc.): the
- * textarea still shows raw markdown.  The user doesn't have to
- * TYPE markdown thanks to the toolbar, but they CAN see it.  In
- * practice that's the same affordance GitHub / Reddit / Notion
- * comment editors offer.  Bundle stays small (zero new deps), and
- * the storage format (markdown string) doesn't change so existing
- * text widgets keep rendering.  If the affordance turns out to not
- * be enough, the follow-up is to swap in TipTap.
+ * Storage stays as markdown so existing text widgets render
+ * unchanged.  We serialize the contenteditable DOM to markdown on
+ * every change (`htmlToMarkdown`) and deserialize back to HTML for
+ * the initial paint (`markdownToHtml`).  Both helpers cover the
+ * same MarkdownLite subset the runtime supports: paragraphs,
+ * headings (h1/h2/h3), bold, italic, inline code, links, and
+ * unordered lists.  Anything outside that subset is dropped on
+ * the round-trip (eg pasted HTML tables collapse to paragraphs).
+ *
+ * Trade-off acknowledged: this uses `document.execCommand` for
+ * formatting, which the spec marks deprecated but every browser
+ * still implements.  It is the simplest contenteditable path that
+ * doesn't bring in a full editor framework.  If we hit real
+ * limitations (collaborative editing, nested formatting bugs,
+ * advanced shortcuts), the followup is to swap in TipTap.
  */
 function RichTextEditor({
   value,
@@ -4910,87 +4915,59 @@ function RichTextEditor({
   disabled: boolean;
   onChange: (v: string) => void;
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  // Track whether the current focused editor matches the props
+  // value so external updates (eg widget switch, undo) re-sync the
+  // DOM, but the user's in-flight typing isn't clobbered by every
+  // round-trip serialization.
+  const lastEmittedRef = useRef<string>(value);
 
-  // Wrap the current textarea selection with `before`...`after`.
-  // If no selection, inserts the pair around the placeholder text
-  // (so clicking Bold on empty input inserts `**text**` ready to
-  // edit).  Keeps focus + cursor positioned inside the inserted
-  // span so the next keystroke lands in the right place.
-  function wrapSelection(
-    before: string,
-    after: string,
-    placeholder: string,
-  ): void {
-    const el = textareaRef.current;
+  useEffect(() => {
+    const el = editorRef.current;
     if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const selected = value.slice(start, end);
-    const middle = selected.length > 0 ? selected : placeholder;
-    const next = value.slice(0, start) + before + middle + after + value.slice(end);
-    onChange(next);
-    // Restore selection to cover the middle text on the next tick
-    // so the user can immediately retype.
-    setTimeout(() => {
-      const el2 = textareaRef.current;
-      if (!el2) return;
-      el2.focus();
-      el2.setSelectionRange(start + before.length, start + before.length + middle.length);
-    }, 0);
+    if (value === lastEmittedRef.current) return;
+    // External value changed (eg another widget selected, or
+    // initial paint).  Replace DOM content without sending an
+    // input event back.
+    el.innerHTML = markdownToHtml(value);
+    lastEmittedRef.current = value;
+  }, [value]);
+
+  function emit(): void {
+    const el = editorRef.current;
+    if (!el) return;
+    const md = htmlToMarkdown(el);
+    if (md !== lastEmittedRef.current) {
+      lastEmittedRef.current = md;
+      onChange(md);
+    }
   }
 
-  // Insert a block prefix (e.g. `## ` for a heading) at the start
-  // of the line(s) the selection touches.  If multiple lines are
-  // selected, every line gets the prefix.  No-op when the line
-  // already starts with the prefix (toggles off).
-  function prefixLines(prefix: string): void {
-    const el = textareaRef.current;
+  function exec(cmd: string, arg?: string): void {
+    if (disabled) return;
+    const el = editorRef.current;
     if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    // Expand to full lines that the selection touches.
-    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-    let lineEnd = value.indexOf('\n', end);
-    if (lineEnd === -1) lineEnd = value.length;
-    const block = value.slice(lineStart, lineEnd);
-    const lines = block.split('\n');
-    const allHavePrefix = lines.every((l) => l.startsWith(prefix));
-    const transformed = lines
-      .map((l) => (allHavePrefix ? l.slice(prefix.length) : prefix + l))
-      .join('\n');
-    const next = value.slice(0, lineStart) + transformed + value.slice(lineEnd);
-    onChange(next);
-    setTimeout(() => {
-      const el2 = textareaRef.current;
-      if (!el2) return;
-      el2.focus();
-      const delta = allHavePrefix ? -prefix.length : prefix.length;
-      el2.setSelectionRange(
-        Math.max(lineStart, start + delta),
-        end + delta * lines.length,
-      );
-    }, 0);
+    el.focus();
+    // execCommand is deprecated but still works in every browser.
+    // Wrapped in a try/catch so older browsers that throw on
+    // unsupported commands degrade quietly.
+    try {
+      document.execCommand(cmd, false, arg);
+    } catch {
+      /* ignore */
+    }
+    emit();
   }
 
   function insertLink(): void {
-    const el = textareaRef.current;
-    if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const selected = value.slice(start, end);
-    const linkText = selected.length > 0 ? selected : 'link text';
+    if (disabled) return;
     const url = window.prompt('Link URL', 'https://');
     if (!url) return;
-    const inserted = `[${linkText}](${url})`;
-    const next = value.slice(0, start) + inserted + value.slice(end);
-    onChange(next);
-    setTimeout(() => {
-      const el2 = textareaRef.current;
-      if (!el2) return;
-      el2.focus();
-      el2.setSelectionRange(start + 1, start + 1 + linkText.length);
-    }, 0);
+    exec('createLink', url);
+  }
+
+  function clearFormat(): void {
+    exec('removeFormat');
   }
 
   const btn =
@@ -5002,7 +4979,7 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => wrapSelection('**', '**', 'bold text')}
+          onClick={() => exec('bold')}
           title="Bold"
           className={`${btn} font-bold`}
         >
@@ -5011,7 +4988,7 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => wrapSelection('*', '*', 'italic text')}
+          onClick={() => exec('italic')}
           title="Italic"
           className={`${btn} italic`}
         >
@@ -5020,7 +4997,24 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => wrapSelection('`', '`', 'code')}
+          onClick={() => {
+            // execCommand has no 'code' verb; wrap selection in a
+            // <code> element manually.  Same idea as a contenteditable
+            // editor library's `toggleMark('code')`.
+            const el = editorRef.current;
+            if (!el) return;
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return;
+            const range = sel.getRangeAt(0);
+            if (range.collapsed) return;
+            const code = document.createElement('code');
+            try {
+              range.surroundContents(code);
+            } catch {
+              /* ignore -- selection spans incompatible boundaries */
+            }
+            emit();
+          }}
           title="Inline code"
           className={`${btn} font-mono`}
         >
@@ -5029,7 +5023,7 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => prefixLines('# ')}
+          onClick={() => exec('formatBlock', 'h1')}
           title="Heading 1"
           className={btn}
         >
@@ -5038,7 +5032,7 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => prefixLines('## ')}
+          onClick={() => exec('formatBlock', 'h2')}
           title="Heading 2"
           className={btn}
         >
@@ -5047,7 +5041,7 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => prefixLines('### ')}
+          onClick={() => exec('formatBlock', 'h3')}
           title="Heading 3"
           className={btn}
         >
@@ -5056,7 +5050,16 @@ function RichTextEditor({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => prefixLines('- ')}
+          onClick={() => exec('formatBlock', 'p')}
+          title="Paragraph"
+          className={btn}
+        >
+          ¶
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => exec('insertUnorderedList')}
           title="Bulleted list"
           className={btn}
         >
@@ -5071,32 +5074,164 @@ function RichTextEditor({
         >
           🔗 Link
         </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={clearFormat}
+          title="Clear formatting"
+          className={btn}
+        >
+          ✕
+        </button>
       </div>
-      <textarea
-        ref={textareaRef}
-        value={value}
-        disabled={disabled}
-        rows={5}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 font-mono text-xs"
-        placeholder="Type text here, then use the toolbar to style."
+      <div
+        ref={editorRef}
+        contentEditable={!disabled}
+        suppressContentEditableWarning
+        onInput={emit}
+        onBlur={emit}
+        // Force pasted content to plain text so a copy from Word
+        // doesn't smuggle in a font tag soup.  Bold + italic still
+        // round-trip cleanly because the user re-applies them via
+        // the toolbar after pasting.
+        onPaste={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          const text = e.clipboardData.getData('text/plain');
+          document.execCommand('insertText', false, text);
+        }}
+        className="prose-sm min-h-[120px] w-full rounded-md border border-border bg-surface-0 px-3 py-2 text-sm leading-snug text-ink-0 focus:border-accent focus:outline-none [&_code]:rounded [&_code]:bg-surface-2 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.95em] [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:mb-2 [&_h3]:text-base [&_h3]:font-semibold [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:ml-5 [&_ul]:list-disc [&_a]:text-accent [&_a]:underline"
       />
-      {/* Live preview below so authors see the rendered output
-          while editing.  Same renderer the canvas + runtime use. */}
-      <details className="rounded border border-border bg-surface-0">
-        <summary className="cursor-pointer px-2 py-1 text-[11px] text-muted">
-          Preview
-        </summary>
-        <div className="border-t border-border p-2 text-xs">
-          {value.trim().length === 0 ? (
-            <span className="italic text-muted">(empty)</span>
-          ) : (
-            <DesignerMarkdownLite text={value} />
-          )}
-        </div>
-      </details>
     </div>
   );
+}
+
+/**
+ * Markdown -> HTML for the MarkdownLite subset.  Used to paint the
+ * RichTextEditor's contenteditable surface from the persisted
+ * markdown string.  Mirrors DesignerMarkdownLite + MarkdownLite
+ * (runtime) so a round-trip preserves the same set of features.
+ */
+function markdownToHtml(md: string): string {
+  if (!md) return '';
+  const blocks = md.split(/\n\n+/);
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const t = block.trim();
+    if (!t) continue;
+    if (t.startsWith('### ')) {
+      parts.push(`<h3>${inlineMdToHtml(t.slice(4))}</h3>`);
+      continue;
+    }
+    if (t.startsWith('## ')) {
+      parts.push(`<h2>${inlineMdToHtml(t.slice(3))}</h2>`);
+      continue;
+    }
+    if (t.startsWith('# ')) {
+      parts.push(`<h1>${inlineMdToHtml(t.slice(2))}</h1>`);
+      continue;
+    }
+    const lines = t.split('\n');
+    if (lines.every((l) => /^[-*]\s/.test(l))) {
+      const items = lines.map((l) => `<li>${inlineMdToHtml(l.replace(/^[-*]\s/, ''))}</li>`).join('');
+      parts.push(`<ul>${items}</ul>`);
+      continue;
+    }
+    parts.push(`<p>${inlineMdToHtml(t).replace(/\n/g, '<br>')}</p>`);
+  }
+  return parts.join('');
+}
+
+function inlineMdToHtml(s: string): string {
+  // Escape HTML so user-typed `<` / `&` don't sneak through, THEN
+  // apply markdown transforms over the escaped string.  Same regex
+  // grammar as renderInlineMd (links / bold / italic / code).
+  let out = s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, href) => {
+    const safeHref = String(href).replace(/"/g, '&quot;');
+    return `<a href="${safeHref}">${text}</a>`;
+  });
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return out;
+}
+
+/**
+ * HTML -> markdown for the MarkdownLite subset.  Walks the
+ * contenteditable DOM and emits markdown for the blocks +
+ * inline marks the renderer supports.  Anything outside that
+ * subset (font tags from a Word paste, divs without a block tag,
+ * etc.) is flattened to text to keep the storage clean.
+ */
+function htmlToMarkdown(root: HTMLElement): string {
+  const blocks: string[] = [];
+  for (const child of Array.from(root.childNodes)) {
+    const md = domNodeToMarkdownBlock(child);
+    if (md != null) blocks.push(md);
+  }
+  return blocks.join('\n\n').trim();
+}
+
+function domNodeToMarkdownBlock(node: Node): string | null {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const t = (node.textContent ?? '').trim();
+    return t.length > 0 ? t : null;
+  }
+  if (!(node instanceof HTMLElement)) return null;
+  const tag = node.tagName.toLowerCase();
+  if (tag === 'h1') return `# ${inlineDomToMarkdown(node)}`;
+  if (tag === 'h2') return `## ${inlineDomToMarkdown(node)}`;
+  if (tag === 'h3') return `### ${inlineDomToMarkdown(node)}`;
+  if (tag === 'ul') {
+    const items: string[] = [];
+    for (const li of Array.from(node.children)) {
+      if (li.tagName.toLowerCase() === 'li') {
+        items.push(`- ${inlineDomToMarkdown(li as HTMLElement)}`);
+      }
+    }
+    return items.length > 0 ? items.join('\n') : null;
+  }
+  if (tag === 'ol') {
+    // Renderer doesn't differentiate ordered/unordered; serialize
+    // ordered lists as a `- ` list too so the round-trip preserves
+    // the visual structure (the runtime won't render numbers).
+    const items: string[] = [];
+    for (const li of Array.from(node.children)) {
+      if (li.tagName.toLowerCase() === 'li') {
+        items.push(`- ${inlineDomToMarkdown(li as HTMLElement)}`);
+      }
+    }
+    return items.length > 0 ? items.join('\n') : null;
+  }
+  if (tag === 'br') return null;
+  // p, div, span, anything else: treat as a paragraph wrapper.
+  const inner = inlineDomToMarkdown(node);
+  return inner.length > 0 ? inner : null;
+}
+
+function inlineDomToMarkdown(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent ?? '').replace(/\n/g, ' ');
+  }
+  if (!(node instanceof HTMLElement)) return '';
+  const tag = node.tagName.toLowerCase();
+  const childrenMd = Array.from(node.childNodes)
+    .map(inlineDomToMarkdown)
+    .join('');
+  if (tag === 'br') return '\n';
+  if (tag === 'strong' || tag === 'b') return `**${childrenMd}**`;
+  if (tag === 'em' || tag === 'i') return `*${childrenMd}*`;
+  if (tag === 'code') return `\`${childrenMd}\``;
+  if (tag === 'a') {
+    const href = node.getAttribute('href') ?? '';
+    return `[${childrenMd}](${href})`;
+  }
+  // span / div / p / li / unknown: pass children through.
+  return childrenMd;
 }
 
 // ---- Tabs container canvas preview (#362) ---------------------------------
@@ -5647,7 +5782,8 @@ function ContainerConfigEditor({
       | 'sticky-bottom'
       | 'dock-left'
       | 'dock-right'
-      | 'overlay-trigger';
+      | 'overlay-trigger'
+      | 'menu';
     edge?: 'left' | 'right' | 'top' | 'bottom';
     layout?: 'row' | 'column';
     variant?: 'elevated' | 'glass' | 'flat' | 'none';
@@ -5685,6 +5821,7 @@ function ContainerConfigEditor({
           <option value="dock-left">Docked left</option>
           <option value="dock-right">Docked right</option>
           <option value="overlay-trigger">Overlay drawer (trigger button)</option>
+          <option value="menu">Menu stack (icon with dropdown)</option>
         </select>
       </Field>
       <Field

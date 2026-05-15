@@ -903,6 +903,13 @@ export type ContainerVariant = 'elevated' | 'glass' | 'flat' | 'none';
  *     the container's `edge` opens the container as an overlay
  *     drawer.  Use for tool palettes the author doesn't want
  *     taking permanent space.
+ *   - 'menu' (#104): renders as a single tool-sized button.  Click
+ *     opens a small popover below the trigger showing the
+ *     container's children stacked vertically -- each child is a
+ *     fully-functioning tool button.  Use for packing related
+ *     actions like Add/Edit/Delete under a single "Edit" icon.
+ *     `triggerLabel` + `triggerIcon` style the button; children
+ *     render as menu items via the same renderChild path.
  */
 export type ContainerPosition =
   | 'inline'
@@ -910,7 +917,8 @@ export type ContainerPosition =
   | 'sticky-bottom'
   | 'dock-left'
   | 'dock-right'
-  | 'overlay-trigger';
+  | 'overlay-trigger'
+  | 'menu';
 
 /**
  * Direction children flow inside the container body.

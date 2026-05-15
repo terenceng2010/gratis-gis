@@ -223,13 +223,16 @@ export function FilterPopover({
             </div>
           )}
 
-          {/* #258: Template facet for web_app items. Renders only
-              when the visible set actually contains templated
-              web_apps (template-counts has entries) so the popover
-              stays quiet when the user has no editors / viewers /
-              etc to show. The icon mirrors the web_app type icon
-              for visual consistency. */}
-          {templateCounts.length > 0 ? (
+          {/* #258: Template facet for web_app items.  Renders only
+              when the visible set actually contains MULTIPLE
+              templated web_apps so the popover stays quiet when
+              there's nothing to narrow.  Since #58/#91 removed the
+              Editor / Viewer / Survey template variants from the
+              picker (folded into other item types or dropped),
+              new orgs have only `custom` -- a one-option facet is
+              noise, so we hide it.  Orgs with legacy data of mixed
+              templates still see the facet to filter between them. */}
+          {templateCounts.length > 1 ? (
             <>
               <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
                 <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
