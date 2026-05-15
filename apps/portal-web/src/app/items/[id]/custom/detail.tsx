@@ -2812,6 +2812,15 @@ function WidgetCard({
           activeTabIdx={activeTabIdx}
           onSetActiveTabIdx={onSetActiveTabIdx}
         />
+      ) : widget.config.kind === 'text' ? (
+        // Live preview for the Text widget.  Same MarkdownLite
+        // renderer the runtime uses, so the designer canvas shows
+        // exactly the body / heading / muted styling the live app
+        // will apply.  Without this the canvas defaulted to the
+        // generic "Drag content here" placeholder and authors had
+        // to open the runtime to see whether their text rendered
+        // the way they expected.
+        <TextWidgetCanvas widget={widget} />
       ) : (
         <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted">
           {widgetPlaceholderText(widget.kind, label)}
@@ -3596,13 +3605,11 @@ function WidgetConfigForm({
               <option value="callout">Callout</option>
             </select>
           </Field>
-          <Field label="Markdown" hint="Bold, italic, links, lists, code.">
-            <textarea
+          <Field label="Content" hint="Type your text, use the toolbar to style.">
+            <RichTextEditor
               value={widget.config.markdown}
               disabled={!canEdit}
-              rows={4}
-              onChange={(e) => onChangeConfig({ markdown: e.target.value })}
-              className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+              onChange={(v) => onChangeConfig({ markdown: v })}
             />
           </Field>
         </div>
@@ -4725,6 +4732,369 @@ function DesignerChild({
       {iconOnly ? null : (
         <span className="text-[10px] font-medium leading-none">{label}</span>
       )}
+    </div>
+  );
+}
+
+// ---- Text widget canvas preview ---------------------------------
+
+/**
+ * Designer-canvas preview for the Text widget.  Renders the same
+ * markdown content the runtime renders, with the same preset class
+ * mapping, so authors see exactly how the text will look in the
+ * live app while they edit.  Without this the canvas defaulted to
+ * the generic "Drag content here" placeholder for text widgets.
+ */
+function TextWidgetCanvas({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'text') return null;
+  const preset = widget.config.preset ?? 'body';
+  const presetCls = TEXT_PRESET_CLS_DESIGNER[preset] ?? '';
+  return (
+    <div className={`h-full w-full overflow-auto p-3 ${presetCls}`}>
+      {widget.config.markdown.trim().length === 0 ? (
+        <span className="text-xs italic text-muted">
+          (empty -- edit content in the properties panel)
+        </span>
+      ) : (
+        <DesignerMarkdownLite text={widget.config.markdown} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Designer-side mirror of the runtime's preset class map.  Lifted
+ * here from runtime-client.tsx so the designer doesn't depend on
+ * runtime internals; both stay in sync because they're trivial
+ * one-line mappings (header / subheader / body / callout each take
+ * one Tailwind class string).
+ */
+const TEXT_PRESET_CLS_DESIGNER: Record<string, string> = {
+  header: 'text-2xl font-bold text-ink-0',
+  subheader: 'text-base font-semibold text-ink-1',
+  body: 'text-sm text-ink-1',
+  callout:
+    'rounded-md border border-accent/30 bg-accent/5 text-sm text-ink-1',
+};
+
+/**
+ * Tiny markdown renderer used by the designer canvas preview.
+ * Mirrors the runtime's MarkdownLite parser (headers + paragraphs +
+ * unordered lists + bold/italic/code/links inline).  Kept in the
+ * designer module so a text-widget edit reflects in the canvas
+ * without a round-trip through the runtime module's import graph.
+ */
+function DesignerMarkdownLite({ text }: { text: string }) {
+  const blocks = text.split(/\n\n+/);
+  return (
+    <>
+      {blocks.map((block, i) => {
+        const t = block.trim();
+        if (!t) return null;
+        if (t.startsWith('### ')) {
+          return (
+            <h3 key={i} className="mb-2 text-base font-semibold text-ink-0">
+              {renderInlineMd(t.slice(4))}
+            </h3>
+          );
+        }
+        if (t.startsWith('## ')) {
+          return (
+            <h2 key={i} className="mb-2 text-lg font-bold text-ink-0">
+              {renderInlineMd(t.slice(3))}
+            </h2>
+          );
+        }
+        if (t.startsWith('# ')) {
+          return (
+            <h1 key={i} className="mb-2 text-xl font-bold text-ink-0">
+              {renderInlineMd(t.slice(2))}
+            </h1>
+          );
+        }
+        const lines = t.split('\n');
+        if (lines.every((l) => /^[-*]\s/.test(l))) {
+          return (
+            <ul key={i} className="mb-2 ml-5 list-disc space-y-0.5">
+              {lines.map((l, j) => (
+                <li key={j}>{renderInlineMd(l.replace(/^[-*]\s/, ''))}</li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={i} className="mb-2 whitespace-pre-wrap">
+            {renderInlineMd(t)}
+          </p>
+        );
+      })}
+    </>
+  );
+}
+
+function renderInlineMd(s: string): React.ReactNode {
+  const tokens: React.ReactNode[] = [];
+  const re =
+    /(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(s))) {
+    if (m.index > last) tokens.push(s.slice(last, m.index));
+    if (m[1]) {
+      tokens.push(
+        <a
+          key={key++}
+          href={m[3]}
+          target="_blank"
+          rel="noreferrer"
+          className="text-accent hover:underline"
+        >
+          {m[2]}
+        </a>,
+      );
+    } else if (m[4]) {
+      tokens.push(
+        <strong key={key++} className="font-semibold">
+          {m[5]}
+        </strong>,
+      );
+    } else if (m[6]) {
+      tokens.push(
+        <em key={key++} className="italic">
+          {m[7]}
+        </em>,
+      );
+    } else if (m[8]) {
+      tokens.push(
+        <code
+          key={key++}
+          className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.95em]"
+        >
+          {m[9]}
+        </code>,
+      );
+    }
+    last = re.lastIndex;
+  }
+  if (last < s.length) tokens.push(s.slice(last));
+  return tokens;
+}
+
+// ---- Rich text editor ---------------------------------------------------
+
+/**
+ * Toolbar-driven markdown editor for the Text widget properties
+ * panel.  Authors get Bold / Italic / Heading / List / Link / Code
+ * buttons that wrap the current selection with the right markdown
+ * syntax, plus a live preview pane below the textarea so they see
+ * the rendered output without flipping screens.  No new
+ * dependencies -- the toolbar manipulates the textarea's selection
+ * directly, the preview reuses DesignerMarkdownLite.
+ *
+ * Trade-off vs. a full WYSIWYG (TipTap / Lexical / etc.): the
+ * textarea still shows raw markdown.  The user doesn't have to
+ * TYPE markdown thanks to the toolbar, but they CAN see it.  In
+ * practice that's the same affordance GitHub / Reddit / Notion
+ * comment editors offer.  Bundle stays small (zero new deps), and
+ * the storage format (markdown string) doesn't change so existing
+ * text widgets keep rendering.  If the affordance turns out to not
+ * be enough, the follow-up is to swap in TipTap.
+ */
+function RichTextEditor({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (v: string) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Wrap the current textarea selection with `before`...`after`.
+  // If no selection, inserts the pair around the placeholder text
+  // (so clicking Bold on empty input inserts `**text**` ready to
+  // edit).  Keeps focus + cursor positioned inside the inserted
+  // span so the next keystroke lands in the right place.
+  function wrapSelection(
+    before: string,
+    after: string,
+    placeholder: string,
+  ): void {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selected = value.slice(start, end);
+    const middle = selected.length > 0 ? selected : placeholder;
+    const next = value.slice(0, start) + before + middle + after + value.slice(end);
+    onChange(next);
+    // Restore selection to cover the middle text on the next tick
+    // so the user can immediately retype.
+    setTimeout(() => {
+      const el2 = textareaRef.current;
+      if (!el2) return;
+      el2.focus();
+      el2.setSelectionRange(start + before.length, start + before.length + middle.length);
+    }, 0);
+  }
+
+  // Insert a block prefix (e.g. `## ` for a heading) at the start
+  // of the line(s) the selection touches.  If multiple lines are
+  // selected, every line gets the prefix.  No-op when the line
+  // already starts with the prefix (toggles off).
+  function prefixLines(prefix: string): void {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    // Expand to full lines that the selection touches.
+    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+    let lineEnd = value.indexOf('\n', end);
+    if (lineEnd === -1) lineEnd = value.length;
+    const block = value.slice(lineStart, lineEnd);
+    const lines = block.split('\n');
+    const allHavePrefix = lines.every((l) => l.startsWith(prefix));
+    const transformed = lines
+      .map((l) => (allHavePrefix ? l.slice(prefix.length) : prefix + l))
+      .join('\n');
+    const next = value.slice(0, lineStart) + transformed + value.slice(lineEnd);
+    onChange(next);
+    setTimeout(() => {
+      const el2 = textareaRef.current;
+      if (!el2) return;
+      el2.focus();
+      const delta = allHavePrefix ? -prefix.length : prefix.length;
+      el2.setSelectionRange(
+        Math.max(lineStart, start + delta),
+        end + delta * lines.length,
+      );
+    }, 0);
+  }
+
+  function insertLink(): void {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selected = value.slice(start, end);
+    const linkText = selected.length > 0 ? selected : 'link text';
+    const url = window.prompt('Link URL', 'https://');
+    if (!url) return;
+    const inserted = `[${linkText}](${url})`;
+    const next = value.slice(0, start) + inserted + value.slice(end);
+    onChange(next);
+    setTimeout(() => {
+      const el2 = textareaRef.current;
+      if (!el2) return;
+      el2.focus();
+      el2.setSelectionRange(start + 1, start + 1 + linkText.length);
+    }, 0);
+  }
+
+  const btn =
+    'inline-flex h-7 items-center justify-center rounded border border-border bg-surface-0 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50';
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => wrapSelection('**', '**', 'bold text')}
+          title="Bold"
+          className={`${btn} font-bold`}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => wrapSelection('*', '*', 'italic text')}
+          title="Italic"
+          className={`${btn} italic`}
+        >
+          I
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => wrapSelection('`', '`', 'code')}
+          title="Inline code"
+          className={`${btn} font-mono`}
+        >
+          {'</>'}
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => prefixLines('# ')}
+          title="Heading 1"
+          className={btn}
+        >
+          H1
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => prefixLines('## ')}
+          title="Heading 2"
+          className={btn}
+        >
+          H2
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => prefixLines('### ')}
+          title="Heading 3"
+          className={btn}
+        >
+          H3
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => prefixLines('- ')}
+          title="Bulleted list"
+          className={btn}
+        >
+          • List
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={insertLink}
+          title="Insert link"
+          className={btn}
+        >
+          🔗 Link
+        </button>
+      </div>
+      <textarea
+        ref={textareaRef}
+        value={value}
+        disabled={disabled}
+        rows={5}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 font-mono text-xs"
+        placeholder="Type text here, then use the toolbar to style."
+      />
+      {/* Live preview below so authors see the rendered output
+          while editing.  Same renderer the canvas + runtime use. */}
+      <details className="rounded border border-border bg-surface-0">
+        <summary className="cursor-pointer px-2 py-1 text-[11px] text-muted">
+          Preview
+        </summary>
+        <div className="border-t border-border p-2 text-xs">
+          {value.trim().length === 0 ? (
+            <span className="italic text-muted">(empty)</span>
+          ) : (
+            <DesignerMarkdownLite text={value} />
+          )}
+        </div>
+      </details>
     </div>
   );
 }
