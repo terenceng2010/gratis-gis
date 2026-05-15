@@ -901,8 +901,14 @@ function ToolWidgetSlot({ widget }: { widget: CustomWidget }) {
   // runtime, which IS the bar's vertical band).
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const Icon = KIND_ICON[widget.kind] ?? SquareIcon;
-  const label = KIND_TOOL_LABEL[widget.kind] ?? widget.kind;
   const arrangement = widgetPanelArrangement(widget);
+  // Author-supplied override takes priority over the kind default
+  // so a tool can read "Attributes" instead of "Attribute Table"
+  // without changing the widget kind.  Falls through to the kind
+  // default when not set.
+  const defaultLabel = KIND_TOOL_LABEL[widget.kind] ?? widget.kind;
+  const override = arrangement.labelOverride?.trim();
+  const label = override && override.length > 0 ? override : defaultLabel;
   const iconOnly = arrangement.labelMode === 'icon-only';
 
   // Esc closes; click outside closes (handled by ToolPopover via

@@ -322,6 +322,19 @@ export interface PanelArrangement {
    * for panel-mode widgets.
    */
   labelMode?: 'icon-and-label' | 'icon-only';
+  /**
+   * Author-supplied caption that overrides the tool's default label
+   * (Search / Basemaps / Attribute Table / etc.) without changing
+   * which widget kind it is.  Useful when an author wants a tool to
+   * read "Attributes" instead of "Attribute Table", or a localized
+   * caption.  Empty / undefined falls through to the built-in label
+   * for the widget kind.
+   *
+   * The override is rendered everywhere the default label is shown:
+   * the button caption (when labelMode === 'icon-and-label'), the
+   * popover header, the hover tooltip, and the aria-label.
+   */
+  labelOverride?: string;
 }
 
 /**

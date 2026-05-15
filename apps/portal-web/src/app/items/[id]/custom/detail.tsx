@@ -3374,6 +3374,9 @@ function WidgetProperties({
               }
             }
             canEdit={canEdit}
+            defaultLabel={
+              PALETTE_TILES.find((t) => t.kind === widget.kind)?.label ?? widget.kind
+            }
             onChangeConfig={onChangeConfig}
           />
         )}
@@ -4641,7 +4644,14 @@ function DesignerChild({
 }) {
   const tile = PALETTE_TILES.find((t) => t.kind === child.kind);
   const Icon = tile?.Icon ?? Square;
-  const label = tile?.label ?? child.kind;
+  // Same default-vs-override resolution the runtime does so the
+  // designer canvas matches what the live tool button will show.
+  const defaultLabel = tile?.label ?? child.kind;
+  const labelOverride = (
+    child.config as { panelArrangement?: { labelOverride?: string } }
+  ).panelArrangement?.labelOverride?.trim();
+  const label =
+    labelOverride && labelOverride.length > 0 ? labelOverride : defaultLabel;
 
   // Nested containers (foldable-group inside dock-panel, or any
   // other container that ends up here) recurse via the same
@@ -4962,6 +4972,7 @@ const ANCHOR_LABELS: Record<PanelAnchor, string> = {
 function ToolModeSection({
   config,
   canEdit,
+  defaultLabel,
   onChangeConfig,
 }: {
   config: {
@@ -4969,6 +4980,13 @@ function ToolModeSection({
     panelArrangement?: PanelArrangement;
   };
   canEdit: boolean;
+  /**
+   * Built-in label for this widget kind (Search, Basemaps,
+   * Attribute Table, etc.).  Used as the placeholder for the
+   * Caption input so the author can see what the default would
+   * have read.
+   */
+  defaultLabel: string;
   onChangeConfig: (patch: Record<string, unknown>) => void;
 }) {
   const mode = config.displayMode ?? 'panel';
@@ -5012,7 +5030,28 @@ function ToolModeSection({
       {mode === 'tool' && (
         <>
           <p className="pt-1 text-sm font-medium text-ink-0">Tool button</p>
-          <Field label="Label">
+          <Field
+            label="Caption"
+            hint="Override the default label (Search, Basemaps, Attribute Table, etc.) with custom text. Leave blank to use the default."
+          >
+            <input
+              type="text"
+              value={pa.labelOverride ?? ''}
+              disabled={!canEdit}
+              placeholder={defaultLabel}
+              onChange={(e) => {
+                // exactOptionalPropertyTypes: "unset" the override
+                // when the input is empty, otherwise set the string.
+                const patch: Partial<PanelArrangement> =
+                  e.target.value.length > 0
+                    ? { labelOverride: e.target.value }
+                    : ({ labelOverride: undefined } as unknown as Partial<PanelArrangement>);
+                patchArrangement(patch);
+              }}
+              className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+            />
+          </Field>
+          <Field label="Display">
             <div className="flex rounded-md border border-border bg-surface-1 p-0.5">
               {(
                 [
