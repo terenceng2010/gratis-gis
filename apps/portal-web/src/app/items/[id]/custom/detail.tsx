@@ -4678,6 +4678,13 @@ function DesignerChild({
   // Use a div instead of <button> so we can attach mousedown for
   // the drag-gesture without conflicting with the browser's
   // default form-button mouse handling.
+  //
+  // Respect the same labelMode='icon-only' setting the runtime
+  // uses (panelArrangement.labelMode).  Without this, the canvas
+  // looked label-on while the runtime rendered icon-only -- broke
+  // the WYSIWYG promise for that specific switch.
+  const childCfg = child.config as { panelArrangement?: { labelMode?: string } };
+  const iconOnly = childCfg.panelArrangement?.labelMode === 'icon-only';
   return (
     <div
       role="button"
@@ -4693,14 +4700,21 @@ function DesignerChild({
       }
       data-child-id={child.id}
       title={label}
-      className={`group/designer-child flex h-full min-w-[64px] cursor-grab flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors active:cursor-grabbing ${
+      // Drop the min-w-[64px] floor when icon-only: a 64-px-wide
+      // icon-only button still reads as labeled because the empty
+      // pill takes the same horizontal space.  Without the floor,
+      // icon-only tools collapse to ~32 px (icon + side padding)
+      // which is what the runtime shows.
+      className={`group/designer-child flex h-full ${iconOnly ? '' : 'min-w-[64px]'} cursor-grab flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors active:cursor-grabbing ${
         isSelected
           ? 'bg-[hsl(var(--app-header-ink))] text-[hsl(var(--app-header-bg))]'
           : 'text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]'
       }`}
     >
       <Icon className="h-5 w-5" strokeWidth={1.75} />
-      <span className="text-[10px] font-medium leading-none">{label}</span>
+      {iconOnly ? null : (
+        <span className="text-[10px] font-medium leading-none">{label}</span>
+      )}
     </div>
   );
 }
