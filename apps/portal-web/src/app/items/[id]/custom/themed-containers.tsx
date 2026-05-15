@@ -20,7 +20,15 @@
  * --app-radius, --app-shadow-card, etc.) drive the visual treatment
  * so the same container looks coherent across the theme presets.
  */
-import { createContext, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { CSSProperties } from 'react';
 import {
   ChevronDown as ChevronDownIcon,
@@ -202,94 +210,178 @@ function FlowContainer({
     children.length > 0 &&
     children.every((c) => (c.layout[axisKey] ?? 1) === 1);
 
-  // #100: no-overlap policy for tools inside a row/column flow
-  // container.  Two non-container widgets in the same parent are
-  // never allowed to render on top of each other.  We enforce that
-  // via a "leftward sweep" in axis-percentage space at render time:
-  // sort children by their stored axis value, place each at its
-  // intended pct OR at the previous tool's anchor + MIN_SPACING_PCT,
-  // whichever is larger.  This effectively turns "drag right past a
-  // sibling" into "Sortable.js-style push-aside" -- the dragged tool
-  // displaces its neighbor to keep them apart.  Persistence of the
-  // displacement is left to the renderer (the data still stores the
-  // user's intended col; the rendered position is the post-sweep
-  // value).  This is intentional: the user's intent is preserved,
-  // and any subsequent drag that breaks the overlap restores the
-  // displaced siblings to their stored cols automatically.
-  //
-  // MIN_SPACING_PCT is the minimum gap between the *anchor points*
-  // of two adjacent tools.  Set to 9% based on the geometry of
-  // tools-vs-container.  With the translateX(-P%) anchoring used
-  // below, two adjacent tools at anchors P1 and P2 leave a visible
-  // gap of (P2-P1)*(W-toolW)/100 - toolW px.  For typical 80px
-  // tools in a 1000px container that means P2-P1 = 8.7% is the
-  // "exactly touching" threshold; +1% adds ~9px of breathing room.
-  // 9% sits just above touching -- tools can sit ~3-4px apart but
-  // never overlap.  Authors who want tighter packing get it
-  // automatically as soon as they drag a tool toward its neighbor.
-  const MIN_SPACING_PCT = 9;
-  function rawPct(child: { layout: { col: number; row: number } }, idx: number): number {
-    if (allAtOrigin) {
-      return children.length > 1 ? (idx / (children.length - 1)) * 100 : 0;
-    }
-    const v = (child.layout[axisKey] ?? 1) - 1;
-    return (v / 191) * 100;
-  }
-  // Build (id -> swept-pct) by sorting children by their raw pct and
-  // sweeping left-to-right.  Index in the original array is the
-  // tiebreaker for the auto-spread fallback.
-  const sweptPctById = new Map<string, number>();
-  const indexed = children.map((c, i) => ({ c, i, p: rawPct(c, i) }));
-  const sorted = [...indexed].sort((a, b) => a.p - b.p);
-  let cursor = -Infinity;
-  for (const { c, p } of sorted) {
-    const placed = Math.max(p, cursor);
-    sweptPctById.set(c.id, placed);
-    cursor = placed + MIN_SPACING_PCT;
-  }
-  // If the sweep pushed the last tool past 100%, shift the whole
-  // group left so the last tool's anchor is at 100%.  Preserves the
-  // relative spacing established by the sweep at the cost of making
-  // the FIRST tool's stored col not match its rendered col -- but
-  // that's the correct trade-off when there's just no room for all
-  // the children at their desired spacings.
-  let lastEnd = -Infinity;
-  for (const { c } of sorted) {
-    const placed = sweptPctById.get(c.id)!;
-    if (placed > lastEnd) lastEnd = placed;
-  }
-  if (lastEnd > 100) {
-    const shift = lastEnd - 100;
-    for (const [id, p] of sweptPctById) {
-      sweptPctById.set(id, Math.max(0, p - shift));
-    }
-  }
+  // #100 / followup: no-overlap policy in PIXEL space, with measured
+  // body + child sizes from ResizeObserver.  Previous cut enforced a
+  // percentage-based MIN_SPACING (9%), which couldn't account for
+  // variable tool widths -- a tool with a long label like "Attribute
+  // Table" is wider than "Print", so any single-percent value either
+  // left visible gaps for narrow tools or allowed overlap for wide
+  // ones.  Now we measure each child's intrinsic width and the
+  // container's body width, then sweep in pixel space: each tool's
+  // ideal left = (col-1)/191 * (bodyW - childW), then bumped right
+  // only as much as needed to clear the previous tool's right edge.
+  // MIN_GAP_PX = 1 means tools can sit one pixel apart; the user can
+  // pack them visually adjacent.
+  const MIN_GAP_PX = 1;
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [bodyDim, setBodyDim] = useState<{ w: number; h: number } | null>(null);
+  const childRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [childDims, setChildDims] = useState<Map<string, { w: number; h: number }>>(
+    new Map(),
+  );
 
-  // #99: position a child by its layout axis value AND apply an
-  // equal-magnitude transform on the opposite direction so the tool
-  // stays inside the container at the extremes.
-  //
-  // The trick: with `left: P%; transform: translateX(-P%)`, the
-  // point P% from the tool's LEFT edge ends up at P% across the
-  // container.  So col=1 (P=0%) flushes the tool's left edge to the
-  // container's left edge; col=192 (P=100%) flushes the tool's RIGHT
-  // edge to the container's right edge; col=96 (P~=50%) centers it.
+  // Stable ref-callback that also remeasures the child synchronously
+  // when its DOM node mounts.  Stored in a Map so each child gets the
+  // same callback identity across renders, and so the cleanup branch
+  // can drop unmounted entries.
+  const refCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(
+    new Map(),
+  );
+  const getRefCallback = useCallback(
+    (childId: string) => {
+      let cb = refCallbacks.current.get(childId);
+      if (cb) return cb;
+      cb = (el: HTMLDivElement | null) => {
+        if (el) {
+          childRefs.current.set(childId, el);
+          // Measure synchronously so the first render computes
+          // positions from real widths, not stale Map entries.
+          const r = el.getBoundingClientRect();
+          setChildDims((cur) => {
+            const prev = cur.get(childId);
+            if (prev && prev.w === r.width && prev.h === r.height) return cur;
+            const next = new Map(cur);
+            next.set(childId, { w: r.width, h: r.height });
+            return next;
+          });
+        } else {
+          childRefs.current.delete(childId);
+          setChildDims((cur) => {
+            if (!cur.has(childId)) return cur;
+            const next = new Map(cur);
+            next.delete(childId);
+            return next;
+          });
+        }
+      };
+      refCallbacks.current.set(childId, cb);
+      return cb;
+    },
+    [],
+  );
+
+  // Body-rect tracking via ResizeObserver so dragging the canvas /
+  // resizing the window updates positions live.
+  useLayoutEffect(() => {
+    if (!bodyRef.current) return;
+    const el = bodyRef.current;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setBodyDim((cur) =>
+        cur && cur.w === r.width && cur.h === r.height
+          ? cur
+          : { w: r.width, h: r.height },
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Child-rect tracking via ResizeObserver, attached to each
+  // currently-known child.  Re-runs when the children list changes
+  // (a tool added / removed / reordered) and when childRefs gain new
+  // entries from the ref-callback above.
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      setChildDims((cur) => {
+        let next = cur;
+        for (const e of entries) {
+          const id = (e.target as HTMLElement).getAttribute('data-flow-child-id');
+          if (!id) continue;
+          const r = e.contentRect;
+          const prev = cur.get(id);
+          if (prev && prev.w === r.width && prev.h === r.height) continue;
+          if (next === cur) next = new Map(cur);
+          next.set(id, { w: r.width, h: r.height });
+        }
+        return next;
+      });
+    });
+    childRefs.current.forEach((el) => ro.observe(el));
+    return () => ro.disconnect();
+  }, [children]);
+
+  // Compute placement.  Sort by stored axis value, sweep in pixel
+  // space.  Each tool's anchor maps the col 1..192 range into the
+  // travel available for the tool (container size minus tool size),
+  // so col=1 flushes left edge to start and col=192 flushes right
+  // edge to end -- same anchoring guarantee the previous translateX
+  // trick gave, but width-aware.  Fallback child width = 80 px until
+  // we have measurements (first render frame).
+  function rawCol(child: { layout: { col: number; row: number } }, idx: number): number {
+    if (allAtOrigin) {
+      return children.length > 1 ? (idx / (children.length - 1)) * 191 + 1 : 1;
+    }
+    return child.layout[axisKey] ?? 1;
+  }
+  const positions = useMemo(() => {
+    const result = new Map<string, number>();
+    if (children.length === 0) return result;
+    const containerSize = bodyDim ? (isRow ? bodyDim.w : bodyDim.h) : null;
+    if (containerSize == null) return result;
+    const indexed = children.map((c, i) => ({ c, i, col: rawCol(c, i) }));
+    indexed.sort((a, b) => a.col - b.col);
+    let prevEnd = 0;
+    for (const { c, col } of indexed) {
+      const dim = childDims.get(c.id);
+      const childSize = (isRow ? dim?.w : dim?.h) ?? 80;
+      const travel = Math.max(0, containerSize - childSize);
+      const idealStart = ((col - 1) / 191) * travel;
+      const actualStart = Math.max(
+        idealStart,
+        prevEnd > 0 ? prevEnd + MIN_GAP_PX : 0,
+      );
+      result.set(c.id, actualStart);
+      prevEnd = actualStart + childSize;
+    }
+    // Shift-left if the last child overflows so everyone stays inside
+    // the body.  Same semantics as the percent-based sweep before.
+    if (prevEnd > containerSize) {
+      const shift = prevEnd - containerSize;
+      result.forEach((v, k) => result.set(k, Math.max(0, v - shift)));
+    }
+    return result;
+  }, [bodyDim, childDims, children, isRow, allAtOrigin, axisKey]);
+
   function childPos(child: { id: string }): CSSProperties {
-    const pct = sweptPctById.get(child.id) ?? 0;
+    const px = positions.get(child.id);
+    if (px == null) {
+      // Pre-measurement: render off-screen so the user doesn't see a
+      // flash of all-children-at-0,0 before the first measurement
+      // pass commits a real layout.  The next render frame has real
+      // px values.
+      return {
+        position: 'absolute',
+        left: -9999,
+        top: -9999,
+      };
+    }
     return isRow
       ? {
           position: 'absolute',
-          left: `${pct}%`,
+          left: `${px}px`,
           top: 0,
           bottom: 0,
-          transform: `translateX(-${pct}%)`,
         }
       : {
           position: 'absolute',
-          top: `${pct}%`,
+          top: `${px}px`,
           left: 0,
           right: 0,
-          transform: `translateY(-${pct}%)`,
         };
   }
 
@@ -322,6 +414,7 @@ function FlowContainer({
           </header>
         ) : null}
         <div
+          ref={bodyRef}
           className="relative min-h-0 min-w-0 flex-1 px-4 py-1"
           style={{
             // #99: absolute-positioned children are out of flow, so
@@ -342,9 +435,11 @@ function FlowContainer({
           {children.map((child) => (
             <div
               key={child.id}
+              ref={getRefCallback(child.id)}
               className="flex items-stretch"
               style={childPos(child)}
               data-container-child
+              data-flow-child-id={child.id}
             >
               {renderChild(child)}
             </div>
