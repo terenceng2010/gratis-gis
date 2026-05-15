@@ -4708,6 +4708,49 @@ function DesignerChild({
     );
   }
 
+  // Text widget rendered inside a container (sticky-top app-bar,
+  // dock panel, menu, etc.) gets a dedicated render path so the
+  // designer canvas shows the actual rendered text instead of the
+  // generic "T" icon + "Text" caption.  Same MarkdownLite-style
+  // renderer the canvas-grid + runtime uses.  Click still selects
+  // the widget (so the right rail flips to its properties);
+  // mousedown still begins the drag-gesture for reordering.
+  if (child.kind === 'text' && child.config.kind === 'text') {
+    const presetCls = TEXT_PRESET_CLS_DESIGNER[child.config.preset ?? 'body'] ?? '';
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(child.id);
+        }}
+        onMouseDown={
+          onChildMoveStart
+            ? (e) => onChildMoveStart(child, parentId, e)
+            : undefined
+        }
+        data-child-id={child.id}
+        title={label}
+        className={`group/designer-child flex h-full max-w-[260px] cursor-grab items-center justify-center overflow-hidden rounded-md px-2 py-1 transition-colors active:cursor-grabbing ${
+          isSelected
+            ? 'outline outline-2 outline-[hsl(var(--app-header-ink))]'
+            : ''
+        }`}
+      >
+        <div className={`overflow-hidden ${presetCls}`}>
+          {child.config.markdown.trim().length === 0 ? (
+            <span className="text-[10px] italic text-[hsl(var(--app-header-ink)/0.6)]">
+              (empty)
+            </span>
+          ) : (
+            <DesignerMarkdownLite text={child.config.markdown} />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // Tool widgets and other content widgets render as a small
   // labeled icon button.  Mirrors the runtime in-bar visual so
   // the canvas reads as the live app, just without active state.
@@ -5034,7 +5077,15 @@ function RichTextEditor({
   // value so external updates (eg widget switch, undo) re-sync the
   // DOM, but the user's in-flight typing isn't clobbered by every
   // round-trip serialization.
-  const lastEmittedRef = useRef<string>(value);
+  //
+  // Initialize to `null` (sentinel meaning "no value has been
+  // committed yet") so the FIRST effect run always paints the
+  // initial markdown into the contenteditable.  The earlier
+  // `useRef(value)` initializer made the first comparison
+  // `value === value` (always true), so the effect skipped the
+  // innerHTML write -- the editor opened blank no matter what was
+  // saved.  Reported as "text disappears on reload".
+  const lastEmittedRef = useRef<string | null>(null);
 
   useEffect(() => {
     const el = editorRef.current;
