@@ -2433,8 +2433,14 @@ const TEXT_PRESET_CLS: Record<string, string> = {
 function TextWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'text') return null;
   const cls = TEXT_PRESET_CLS[widget.config.preset ?? 'body'] ?? '';
+  // overflow-hidden (not overflow-auto): the widget cell controls
+  // size; when content exceeds the cell the right answer is for the
+  // author to resize the widget, not for the runtime to spawn
+  // scrollbars on a one-line title.  px-2 py-1 keeps a small
+  // padding inside the widget without burning all the slot height
+  // when a Text is dropped into a tight sticky-top app-bar slot.
   return (
-    <div className={`h-full w-full overflow-auto p-3 ${cls}`}>
+    <div className={`h-full w-full overflow-hidden px-2 py-1 ${cls}`}>
       <MarkdownLite text={widget.config.markdown} />
     </div>
   );
@@ -2496,47 +2502,60 @@ function MarkdownLite({ text }: { text: string }) {
 }
 
 function renderInline(s: string): React.ReactNode {
-  // Order matters: links first, then bold, italic, code. We split
-  // on each pattern in a single pass via a regex.
+  // Order matters: color-span first (HTML pass-through written by
+  // the rich-text editor's color picker), then links, then bold,
+  // italic, code.  We split on each pattern in a single pass via a
+  // regex.  Color is stored as `<span style="color:#RRGGBB">…</span>`
+  // -- a tightly-shaped HTML token the markdown serializer round-
+  // trips verbatim.  We deliberately match only the exact shape so
+  // arbitrary HTML can't leak in through the markdown parser.
   const tokens: React.ReactNode[] = [];
   const re =
-    /(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)/g;
+    /(<span style="color:\s*(#[0-9a-fA-F]{3,8})">([^<]+)<\/span>)|(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
   while ((m = re.exec(s))) {
     if (m.index > last) tokens.push(s.slice(last, m.index));
     if (m[1]) {
+      // Color span -- recurse into the inner text so bold/italic
+      // inside a colored run still renders.
+      tokens.push(
+        <span key={key++} style={{ color: m[2] }}>
+          {renderInline(m[3] ?? '')}
+        </span>,
+      );
+    } else if (m[4]) {
       tokens.push(
         <a
           key={key++}
-          href={m[3]}
+          href={m[6]}
           target="_blank"
           rel="noreferrer"
           className="text-accent hover:underline"
         >
-          {m[2]}
+          {m[5]}
         </a>,
       );
-    } else if (m[4]) {
+    } else if (m[7]) {
       tokens.push(
         <strong key={key++} className="font-semibold">
-          {m[5]}
+          {m[8]}
         </strong>,
       );
-    } else if (m[6]) {
+    } else if (m[9]) {
       tokens.push(
         <em key={key++} className="italic">
-          {m[7]}
+          {m[10]}
         </em>,
       );
-    } else if (m[8]) {
+    } else if (m[11]) {
       tokens.push(
         <code
           key={key++}
           className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.95em]"
         >
-          {m[9]}
+          {m[12]}
         </code>,
       );
     }

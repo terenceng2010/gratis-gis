@@ -101,7 +101,19 @@ export function AppShellChrome({
   // tab stand on its own as a sharable submission surface, the way
   // an AGO Survey123 link does.
   const isFormRespond = /^\/forms\/[^/]+\/respond(?:\/|$)/.test(pathname);
-  if (isFieldRuntime || isAppRuntime || isResponsesViewer || isFormRespond) {
+  // #101 print-template render page.  The page is opened in a new
+  // tab from the Print widget so the user can save-as-PDF; the
+  // portal sidebar + top bar sitting on top of the paper preview
+  // makes the print dialog capture the wrong viewport.  Render
+  // bare so the page IS the paper.
+  const isPrintRender = /^\/print\/[^/]+(?:\/|$)/.test(pathname);
+  if (
+    isFieldRuntime ||
+    isAppRuntime ||
+    isResponsesViewer ||
+    isFormRespond ||
+    isPrintRender
+  ) {
     return (
       <div className="min-h-screen bg-surface-0 text-ink-0">{children}</div>
     );

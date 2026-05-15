@@ -4906,8 +4906,14 @@ function TextWidgetCanvas({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'text') return null;
   const preset = widget.config.preset ?? 'body';
   const presetCls = TEXT_PRESET_CLS_DESIGNER[preset] ?? '';
+  // overflow-hidden + compact padding: matches runtime's
+  // TextWidgetRender so the designer canvas previews exactly what
+  // the user sees in the runtime, including the no-scrollbar
+  // behavior.  Overflow auto was burning vertical room with
+  // scroll-arrow chrome in tight slots (eg a Text in a sticky-top
+  // app-bar row), and the runtime had already moved to hidden.
   return (
-    <div className={`h-full w-full overflow-auto p-3 ${presetCls}`}>
+    <div className={`h-full w-full overflow-hidden px-2 py-1 ${presetCls}`}>
       {widget.config.markdown.trim().length === 0 ? (
         <span className="text-xs italic text-muted">
           (empty -- edit content in the properties panel)
@@ -4990,9 +4996,14 @@ function DesignerMarkdownLite({ text }: { text: string }) {
 }
 
 function renderInlineMd(s: string): React.ReactNode {
+  // Designer mirror of the runtime renderInline.  Color span first
+  // so a <span style="color:#xxx">...</span> emitted by the rich-
+  // text editor's color picker survives round-trip and previews
+  // correctly on the canvas.  See the runtime renderInline comment
+  // for the threat-model reasoning behind the tight regex shape.
   const tokens: React.ReactNode[] = [];
   const re =
-    /(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)/g;
+    /(<span style="color:\s*(#[0-9a-fA-F]{3,8})">([^<]+)<\/span>)|(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let key = 0;
@@ -5000,35 +5011,41 @@ function renderInlineMd(s: string): React.ReactNode {
     if (m.index > last) tokens.push(s.slice(last, m.index));
     if (m[1]) {
       tokens.push(
+        <span key={key++} style={{ color: m[2] }}>
+          {renderInlineMd(m[3] ?? '')}
+        </span>,
+      );
+    } else if (m[4]) {
+      tokens.push(
         <a
           key={key++}
-          href={m[3]}
+          href={m[6]}
           target="_blank"
           rel="noreferrer"
           className="text-accent hover:underline"
         >
-          {m[2]}
+          {m[5]}
         </a>,
       );
-    } else if (m[4]) {
+    } else if (m[7]) {
       tokens.push(
         <strong key={key++} className="font-semibold">
-          {m[5]}
+          {m[8]}
         </strong>,
       );
-    } else if (m[6]) {
+    } else if (m[9]) {
       tokens.push(
         <em key={key++} className="italic">
-          {m[7]}
+          {m[10]}
         </em>,
       );
-    } else if (m[8]) {
+    } else if (m[11]) {
       tokens.push(
         <code
           key={key++}
           className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.95em]"
         >
-          {m[9]}
+          {m[12]}
         </code>,
       );
     }
@@ -5122,6 +5139,50 @@ function RichTextEditor({
       /* ignore */
     }
     emit();
+  }
+
+  /**
+   * Apply a foreground color to the current selection.  We toggle
+   * styleWithCSS first so foreColor emits `<span style="color:...">`
+   * (the shape the markdown round-trip recognizes) instead of the
+   * legacy `<font color="...">` element some browsers default to.
+   * The selection has to be restored manually because clicking the
+   * color picker takes focus off the contenteditable.
+   */
+  function applyColor(color: string): void {
+    if (disabled) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    try {
+      document.execCommand('styleWithCSS', false, 'true');
+      document.execCommand('foreColor', false, color);
+    } catch {
+      /* ignore */
+    }
+    emit();
+  }
+
+  // Track the selection just before the user clicks a toolbar
+  // control that takes focus away (the color input opens a native
+  // picker which steals focus on some platforms).  Restoring the
+  // saved range right before applyColor() means the color lands on
+  // the text the user actually had selected, not on an empty
+  // caret position at the end of the editor.
+  const savedRangeRef = useRef<Range | null>(null);
+  function rememberSelection(): void {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+    }
+  }
+  function restoreSelection(): void {
+    const r = savedRangeRef.current;
+    if (!r) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    sel.removeAllRanges();
+    sel.addRange(r);
   }
 
   function insertLink(): void {
@@ -5239,11 +5300,52 @@ function RichTextEditor({
         >
           🔗 Link
         </button>
+        <label
+          className={`${btn} cursor-pointer gap-1 ${disabled ? 'pointer-events-none' : ''}`}
+          title="Text color"
+          // Save the editor's current selection on pointerdown
+          // (before the color input takes focus).  When the user
+          // picks a color the change handler restores it.
+          onPointerDown={rememberSelection}
+        >
+          <span
+            aria-hidden
+            className="inline-block h-3 w-3 rounded-sm border border-border"
+            style={{ background: 'linear-gradient(135deg,#ef4444 0%,#f59e0b 25%,#10b981 50%,#3b82f6 75%,#a855f7 100%)' }}
+          />
+          A
+          <input
+            type="color"
+            disabled={disabled}
+            // visually hidden but reachable -- the label proxies
+            // the click so the user sees the swatch + A icon.
+            className="sr-only"
+            onChange={(e) => {
+              restoreSelection();
+              applyColor(e.target.value);
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            // Clear color without nuking other formatting (bold /
+            // italic / etc.).  foreColor with 'inherit' undoes the
+            // span by collapsing the inline style; the markdown
+            // round-trip then drops the span on the next emit.
+            applyColor('inherit');
+          }}
+          title="Clear text color"
+          className={btn}
+        >
+          A↺
+        </button>
         <button
           type="button"
           disabled={disabled}
           onClick={clearFormat}
-          title="Clear formatting"
+          title="Clear all formatting"
           className={btn}
         >
           ✕
@@ -5308,10 +5410,27 @@ function markdownToHtml(md: string): string {
 }
 
 function inlineMdToHtml(s: string): string {
-  // Escape HTML so user-typed `<` / `&` don't sneak through, THEN
-  // apply markdown transforms over the escaped string.  Same regex
-  // grammar as renderInlineMd (links / bold / italic / code).
-  let out = s
+  // Preserve color spans verbatim BEFORE the HTML escape pass so a
+  // `<span style="color:#xxx">text</span>` written by the rich-text
+  // editor's color picker survives the round-trip.  Each match is
+  // stashed under a placeholder; we escape the rest, run markdown
+  // transforms, then restore canonical spans.  Only the exact shape
+  // (color style, no other attributes, no nested tags) survives --
+  // arbitrary HTML never passes through.
+  const colorSpans: string[] = [];
+  const pre = s.replace(
+    /<span style="color:\s*(#[0-9a-fA-F]{3,8})">([^<]+)<\/span>/g,
+    (_m, color, text) => {
+      const escaped = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      const idx = colorSpans.length;
+      colorSpans.push(`<span style="color: ${color}">${escaped}</span>`);
+      return ` COLOR${idx} `;
+    },
+  );
+  let out = pre
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -5322,6 +5441,9 @@ function inlineMdToHtml(s: string): string {
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  out = out.replace(/ COLOR(\d+) /g, (_m, idx) => {
+    return colorSpans[Number(idx)] ?? '';
+  });
   return out;
 }
 
@@ -5395,8 +5517,68 @@ function inlineDomToMarkdown(node: Node): string {
     const href = node.getAttribute('href') ?? '';
     return `[${childrenMd}](${href})`;
   }
-  // span / div / p / li / unknown: pass children through.
+  if (tag === 'span' || tag === 'font') {
+    // Color span: emit `<span style="color:#xxx">text</span>` so
+    // the markdown renderer's color-span regex picks it up.
+    // execCommand('foreColor', ...) emits either inline `style`
+    // OR a `<font color="#xxx">` element depending on the browser,
+    // so we look at both surfaces and normalize to the canonical
+    // shape.  rgb()/rgba() values from the color input are
+    // normalized to #RRGGBB so the regex matches.
+    const styleColor = (node.style?.color ?? '').trim();
+    const fontAttrColor = node.getAttribute('color') ?? '';
+    const raw = styleColor || fontAttrColor;
+    const hex = cssColorToHex(raw);
+    if (hex) {
+      return `<span style="color: ${hex}">${stripInnerHtmlMarkup(childrenMd)}</span>`;
+    }
+    return childrenMd;
+  }
+  // div / p / li / unknown: pass children through.
   return childrenMd;
+}
+
+/**
+ * Normalize a CSS color (rgb, rgba, named, hex) into a `#rrggbb`
+ * hex string the markdown round-trip regex understands.  Returns
+ * null for "no color set" so callers can decide to emit a plain
+ * pass-through.  Anything alpha-channel-aware is rounded to 6-digit
+ * hex (color spans don't track alpha; the editor only exposes
+ * solid colors).
+ */
+function cssColorToHex(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(v)) {
+    return `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`.toLowerCase();
+  }
+  const rgb = v.match(
+    /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[0-9.]+)?\s*\)$/,
+  );
+  if (rgb) {
+    const toHex = (n: string) =>
+      Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0');
+    return `#${toHex(rgb[1] ?? '0')}${toHex(rgb[2] ?? '0')}${toHex(rgb[3] ?? '0')}`;
+  }
+  // Named colors / unsupported syntax: skip rather than guess.
+  return null;
+}
+
+/**
+ * Color spans deliberately can't host nested markdown markup in
+ * the v1 round-trip (the renderer's regex uses `[^<]+` so the
+ * span contents must be plain text).  If a user manages to nest
+ * other inline marks (eg by selecting partly-bold text and
+ * applying color), we flatten the inner markdown back to text so
+ * the storage stays parseable.  A future v2 can move to a real
+ * recursive parser.
+ */
+function stripInnerHtmlMarkup(md: string): string {
+  return md
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1');
 }
 
 // ---- Tabs container canvas preview (#362) ---------------------------------
