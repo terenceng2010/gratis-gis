@@ -201,26 +201,41 @@ function FlowContainer({
   const allAtOrigin =
     children.length > 0 &&
     children.every((c) => (c.layout[axisKey] ?? 1) === 1);
+  // #99: position a child by its layout axis value AND apply an
+  // equal-magnitude transform on the opposite direction so the tool
+  // stays inside the container at the extremes.
+  //
+  // The trick: with `left: P%; transform: translateX(-P%)`, the
+  // point P% from the tool's LEFT edge ends up at P% across the
+  // container.  So col=1 (P=0%) flushes the tool's left edge to the
+  // container's left edge; col=192 (P=100%) flushes the tool's RIGHT
+  // edge to the container's right edge; col=96 (P~=50%) centers it.
+  // Without the transform, col=192 (left=100%) pushes the tool
+  // entirely past the right edge of the container, which is what
+  // caused Print to disappear in the first attempt at #99.
   function childPos(child: { layout: { col: number; row: number } }, idx: number): CSSProperties {
-    if (allAtOrigin && children.length > 1) {
-      // Even-spread fallback: place child[i] at i/(n-1) of the axis,
-      // so the first sticks to the start and the last to the end.
-      const pct = (idx / (children.length - 1)) * 100;
-      return isRow
-        ? { position: 'absolute', left: `${pct}%`, top: 0, bottom: 0 }
-        : { position: 'absolute', top: `${pct}%`, left: 0, right: 0 };
-    }
+    let pct: number;
     if (allAtOrigin) {
-      // Single child: just anchor it to the start.
-      return isRow
-        ? { position: 'absolute', left: 0, top: 0, bottom: 0 }
-        : { position: 'absolute', top: 0, left: 0, right: 0 };
+      pct = children.length > 1 ? (idx / (children.length - 1)) * 100 : 0;
+    } else {
+      const v = (child.layout[axisKey] ?? 1) - 1;
+      pct = (v / 191) * 100;
     }
-    const v = (child.layout[axisKey] ?? 1) - 1;
-    const pct = (v / 191) * 100;
     return isRow
-      ? { position: 'absolute', left: `${pct}%`, top: 0, bottom: 0 }
-      : { position: 'absolute', top: `${pct}%`, left: 0, right: 0 };
+      ? {
+          position: 'absolute',
+          left: `${pct}%`,
+          top: 0,
+          bottom: 0,
+          transform: `translateX(-${pct}%)`,
+        }
+      : {
+          position: 'absolute',
+          top: `${pct}%`,
+          left: 0,
+          right: 0,
+          transform: `translateY(-${pct}%)`,
+        };
   }
 
   // Collapsed inline / sticky containers fold their children behind
@@ -253,7 +268,20 @@ function FlowContainer({
         ) : null}
         <div
           className="relative min-h-0 min-w-0 flex-1 px-4 py-1"
-          style={collapsed ? { display: 'none' } : undefined}
+          style={{
+            // #99: absolute-positioned children are out of flow, so
+            // they don't contribute to the body's intrinsic height.
+            // Without an explicit minimum, the container collapses
+            // to just its chrome (~10px) and the labels render as
+            // tiny truncated text against the top edge.  56px is the
+            // natural height of a tool widget (h-5 icon + 10px label
+            // + py-1.5).  Column-layout containers don't run into
+            // the same issue at runtime in practice (they're inline
+            // content panels driven by the surrounding flex slot)
+            // but the minWidth fallback keeps them sensible too.
+            ...(isRow ? { minHeight: 56 } : { minWidth: 56 }),
+            ...(collapsed ? { display: 'none' } : undefined),
+          }}
           aria-hidden={collapsed}
         >
           {children.map((child, idx) => (

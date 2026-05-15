@@ -1745,6 +1745,19 @@ interface ActiveGesture {
    */
   grabOffsetX: number;
   grabOffsetY: number;
+  /**
+   * #99: widget's pixel size at the moment of mousedown.  The
+   * free-position anchoring in FlowContainer renders a child at
+   * `left: P%; transform: translateX(-P%)` so the P%-anchor of the
+   * child lines up with the P%-anchor of the container.  The drag
+   * math has to invert that, which requires the child's pixel width
+   * (and height for column-layout): the available travel for the
+   * child's grabbed point is (containerWidth - widgetWidth), and
+   * the cursor's position within that range maps linearly to
+   * P in 0..100.
+   */
+  widgetWidth: number;
+  widgetHeight: number;
 }
 
 const DRAG_THRESHOLD_PX = 4;
@@ -1990,6 +2003,8 @@ function Canvas({
       const rect = widgetEl?.getBoundingClientRect();
       const grabOffsetX = rect ? e.clientX - rect.left : 0;
       const grabOffsetY = rect ? e.clientY - rect.top : 0;
+      const widgetWidth = rect?.width ?? 0;
+      const widgetHeight = rect?.height ?? 0;
       setGesture({
         kind,
         widgetId: widget.id,
@@ -1999,6 +2014,8 @@ function Canvas({
         srcParentId,
         grabOffsetX,
         grabOffsetY,
+        widgetWidth,
+        widgetHeight,
       });
     },
     [canEdit],
@@ -2131,23 +2148,31 @@ function Canvas({
           ) as HTMLElement | null;
           if (!parentEl) return;
           const prect = parentEl.getBoundingClientRect();
-          // #99: subtract the grab-offset so the widget's grabbed
-          // point (eg the icon the user clicked on) stays under
-          // the cursor instead of the widget's top-left edge
-          // snapping there.  Without this, dragging a tool would
-          // visually jump by ~half its width on the first move.
-          const desiredLeft = e.clientX - g.grabOffsetX;
-          const desiredTop = e.clientY - g.grabOffsetY;
-          const xPct = Math.max(
-            0,
-            Math.min(1, (desiredLeft - prect.left) / Math.max(1, prect.width)),
-          );
-          const yPct = Math.max(
-            0,
-            Math.min(1, (desiredTop - prect.top) / Math.max(1, prect.height)),
-          );
-          next.col = Math.max(1, Math.min(192, Math.round(xPct * 191) + 1));
-          next.row = Math.max(1, Math.min(192, Math.round(yPct * 191) + 1));
+          // #99: invert the FlowContainer's anchoring math.  The
+          // renderer places a child at `left: P%; translateX(-P%)`,
+          // so the child's left edge ends up at
+          //   leftPx = (P/100) * (containerWidth - widgetWidth)
+          // and the child's grabbed point ends up at
+          //   leftPx + grabOffsetX.
+          //
+          // Solving for P given cursor X (where we want the grabbed
+          // point):
+          //   P = (cursorX - containerLeft - grabOffsetX)
+          //       / (containerWidth - widgetWidth)
+          //   col = round(P * 191) + 1
+          //
+          // The denominator is the actual travel available for the
+          // grabbed point; clamping to [0,1] keeps the child inside
+          // the container at both extremes.  Same idea on the Y
+          // axis for column-layout containers.
+          const travelX = Math.max(1, prect.width - g.widgetWidth);
+          const travelY = Math.max(1, prect.height - g.widgetHeight);
+          const xRatio = (e.clientX - prect.left - g.grabOffsetX) / travelX;
+          const yRatio = (e.clientY - prect.top - g.grabOffsetY) / travelY;
+          const xClamp = Math.max(0, Math.min(1, xRatio));
+          const yClamp = Math.max(0, Math.min(1, yRatio));
+          next.col = Math.max(1, Math.min(192, Math.round(xClamp * 191) + 1));
+          next.row = Math.max(1, Math.min(192, Math.round(yClamp * 191) + 1));
           onWidgetLayout(g.widgetId, next);
           return;
         }
@@ -2264,17 +2289,20 @@ function Canvas({
             ) as HTMLElement | null;
             if (targetEl) {
               const tr = targetEl.getBoundingClientRect();
-              const xPct = Math.max(
-                0,
-                Math.min(1, (e.clientX - tr.left) / Math.max(1, tr.width)),
-              );
-              const yPct = Math.max(
-                0,
-                Math.min(1, (e.clientY - tr.top) / Math.max(1, tr.height)),
-              );
+              // #99: same anchoring inversion the in-container
+              // drag uses (see onMove).  Without it a tool dropped
+              // near the right edge of a target container would
+              // land at col=192 and then render with its left edge
+              // at the right edge of the container, overflowing.
+              const travelX = Math.max(1, tr.width - g.widgetWidth);
+              const travelY = Math.max(1, tr.height - g.widgetHeight);
+              const xRatio = (e.clientX - tr.left - g.grabOffsetX) / travelX;
+              const yRatio = (e.clientY - tr.top - g.grabOffsetY) / travelY;
+              const xClamp = Math.max(0, Math.min(1, xRatio));
+              const yClamp = Math.max(0, Math.min(1, yRatio));
               pageLayout = {
-                col: Math.max(1, Math.min(192, Math.round(xPct * 191) + 1)),
-                row: Math.max(1, Math.min(192, Math.round(yPct * 191) + 1)),
+                col: Math.max(1, Math.min(192, Math.round(xClamp * 191) + 1)),
+                row: Math.max(1, Math.min(192, Math.round(yClamp * 191) + 1)),
                 colSpan: 1,
                 rowSpan: 1,
               };
