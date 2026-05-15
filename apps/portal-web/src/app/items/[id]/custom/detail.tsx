@@ -4906,14 +4906,14 @@ function TextWidgetCanvas({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'text') return null;
   const preset = widget.config.preset ?? 'body';
   const presetCls = TEXT_PRESET_CLS_DESIGNER[preset] ?? '';
-  // overflow-hidden + compact padding: matches runtime's
-  // TextWidgetRender so the designer canvas previews exactly what
-  // the user sees in the runtime, including the no-scrollbar
-  // behavior.  Overflow auto was burning vertical room with
-  // scroll-arrow chrome in tight slots (eg a Text in a sticky-top
-  // app-bar row), and the runtime had already moved to hidden.
+  // flex flex-col justify-center + overflow-hidden + compact
+  // padding: matches the runtime's TextWidgetRender exactly so the
+  // designer previews what the live app will show, including
+  // vertical centering of one-line titles inside tall slots.
   return (
-    <div className={`h-full w-full overflow-hidden px-2 py-1 ${presetCls}`}>
+    <div
+      className={`flex h-full w-full flex-col justify-center overflow-hidden px-2 py-1 ${presetCls}`}
+    >
       {widget.config.markdown.trim().length === 0 ? (
         <span className="text-xs italic text-muted">
           (empty -- edit content in the properties panel)
@@ -5141,34 +5141,12 @@ function RichTextEditor({
     emit();
   }
 
-  /**
-   * Apply a foreground color to the current selection.  We toggle
-   * styleWithCSS first so foreColor emits `<span style="color:...">`
-   * (the shape the markdown round-trip recognizes) instead of the
-   * legacy `<font color="...">` element some browsers default to.
-   * The selection has to be restored manually because clicking the
-   * color picker takes focus off the contenteditable.
-   */
-  function applyColor(color: string): void {
-    if (disabled) return;
-    const el = editorRef.current;
-    if (!el) return;
-    el.focus();
-    try {
-      document.execCommand('styleWithCSS', false, 'true');
-      document.execCommand('foreColor', false, color);
-    } catch {
-      /* ignore */
-    }
-    emit();
-  }
-
   // Track the selection just before the user clicks a toolbar
   // control that takes focus away (the color input opens a native
-  // picker which steals focus on some platforms).  Restoring the
-  // saved range right before applyColor() means the color lands on
-  // the text the user actually had selected, not on an empty
-  // caret position at the end of the editor.
+  // picker which steals focus on some platforms).  We capture the
+  // selection on pointerdown -- BEFORE the click commits and the
+  // contenteditable loses focus to the input -- and re-apply it
+  // when the picker fires onChange.
   const savedRangeRef = useRef<Range | null>(null);
   function rememberSelection(): void {
     const sel = window.getSelection();
@@ -5176,13 +5154,58 @@ function RichTextEditor({
       savedRangeRef.current = sel.getRangeAt(0).cloneRange();
     }
   }
-  function restoreSelection(): void {
+
+  /**
+   * Apply a foreground color to the current selection.  Three-step
+   * dance because the native `<input type="color">` opens an OS-level
+   * picker that steals focus from the contenteditable, collapsing
+   * the selection.  We must:
+   *   (1) focus the editor BEFORE restoring the range, because
+   *       `Selection.addRange` is silently ignored if the document
+   *       has no active editable element;
+   *   (2) restore the saved range AFTER focus, so the caret lands
+   *       on the user's original selection rather than wherever
+   *       focus defaulted (usually end of editor);
+   *   (3) toggle styleWithCSS so foreColor emits
+   *       `<span style="color:...">` (the markdown round-trip
+   *       shape) rather than legacy `<font color="...">`.
+   *
+   * Earlier draft called focus() inside the helper but restored
+   * the range OUTSIDE it (in the onChange handler) which meant
+   * focus() was wiping the just-restored range before execCommand
+   * ran.  Result: foreColor either no-op'd (no selection) or
+   * colored the wrong text.  Now both steps happen here in order.
+   */
+  function applyColor(color: string): void {
+    if (disabled) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
     const r = savedRangeRef.current;
-    if (!r) return;
+    if (r) {
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    }
+    try {
+      document.execCommand('styleWithCSS', false, 'true');
+      document.execCommand('foreColor', false, color);
+    } catch {
+      /* ignore */
+    }
+    // Re-capture the (now color-applied) selection so a follow-up
+    // color tweak from the same picker session lands on the same
+    // text.  Otherwise the second drag-emit would target the
+    // pre-color range that no longer maps cleanly to DOM nodes
+    // (the foreColor execCommand inserted a span; the boundary
+    // text nodes were split).
     const sel = window.getSelection();
-    if (!sel) return;
-    sel.removeAllRanges();
-    sel.addRange(r);
+    if (sel && sel.rangeCount > 0) {
+      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+    }
+    emit();
   }
 
   function insertLink(): void {
@@ -5319,9 +5342,11 @@ function RichTextEditor({
             disabled={disabled}
             // visually hidden but reachable -- the label proxies
             // the click so the user sees the swatch + A icon.
+            // applyColor handles focus + selection restore itself
+            // (the picker steals focus when it opens, so we have
+            // to put the selection back BEFORE execCommand).
             className="sr-only"
             onChange={(e) => {
-              restoreSelection();
               applyColor(e.target.value);
             }}
           />

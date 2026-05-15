@@ -2433,6 +2433,11 @@ const TEXT_PRESET_CLS: Record<string, string> = {
 function TextWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'text') return null;
   const cls = TEXT_PRESET_CLS[widget.config.preset ?? 'body'] ?? '';
+  // flex flex-col justify-center: vertically centers the rendered
+  // markdown block inside its slot.  A one-line title in a tall
+  // sticky-top app-bar row otherwise stuck to the top, which read
+  // as misaligned next to other tools that *are* centered.
+  //
   // overflow-hidden (not overflow-auto): the widget cell controls
   // size; when content exceeds the cell the right answer is for the
   // author to resize the widget, not for the runtime to spawn
@@ -2440,7 +2445,9 @@ function TextWidgetRender({ widget }: { widget: CustomWidget }) {
   // padding inside the widget without burning all the slot height
   // when a Text is dropped into a tight sticky-top app-bar slot.
   return (
-    <div className={`h-full w-full overflow-hidden px-2 py-1 ${cls}`}>
+    <div
+      className={`flex h-full w-full flex-col justify-center overflow-hidden px-2 py-1 ${cls}`}
+    >
       <MarkdownLite text={widget.config.markdown} />
     </div>
   );
