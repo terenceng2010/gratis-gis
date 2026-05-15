@@ -46,10 +46,12 @@ import {
   Printer,
   Ruler,
   Save,
+  Settings,
   Square,
   Trash2,
   Type as TypeIcon,
 } from 'lucide-react';
+import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import {
   DEFAULT_PRINT_TEMPLATE,
   DYNAMIC_TOKEN_IDS,
@@ -432,147 +434,155 @@ export function PrintTemplateDetail({
     };
   }, [gesture, updateElementBox, zoom]);
 
-  // ---- Render -----------------------------------------------------
+  // ---- Render (BuilderShell-wrapped) ------------------------------
 
-  return (
-    <section className="mb-6">
-      {/* Toolbar */}
-      <div className="mb-3 flex items-center gap-3 rounded-md border border-border bg-surface-1 px-3 py-2">
-        <Printer className="h-5 w-5 text-ink-1" />
-        <span className="text-sm font-medium text-ink-0">Print template designer</span>
-        {seedKind ? (
-          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-            built-in starter
-          </span>
-        ) : null}
-        <div className="flex-1" />
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))}
-            className="rounded border border-border bg-surface-0 px-2 py-1 text-xs hover:bg-surface-2"
-            aria-label="Zoom out"
-          >
-            <Minus className="h-3.5 w-3.5" />
-          </button>
-          <span className="w-12 text-center text-xs text-muted">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            onClick={() => setZoom((z) => Math.min(1.5, z + 0.1))}
-            className="rounded border border-border bg-surface-0 px-2 py-1 text-xs hover:bg-surface-2"
-            aria-label="Zoom in"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </div>
+  const titleSummary = `${data.elements.length} element${data.elements.length === 1 ? '' : 's'} · ${data.parameters.length} parameter${data.parameters.length === 1 ? '' : 's'}`;
+
+  const toolbarRight = (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
-          onClick={onSave}
-          disabled={!canEdit || !dirty || saving}
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-ink-2"
+          onClick={() => setZoom((z) => Math.max(0.4, z - 0.1))}
+          className="rounded border border-border bg-surface-0 px-2 py-1 text-xs hover:bg-surface-2"
+          aria-label="Zoom out"
         >
-          <Save className="h-3.5 w-3.5" />
-          {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
+          <Minus className="h-3.5 w-3.5" />
+        </button>
+        <span className="w-12 text-center text-xs text-muted">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={() => setZoom((z) => Math.min(1.5, z + 0.1))}
+          className="rounded border border-border bg-surface-0 px-2 py-1 text-xs hover:bg-surface-2"
+          aria-label="Zoom in"
+        >
+          <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-      {saveError ? (
-        <div className="mb-3 rounded border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900">
-          Save failed: {saveError}
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={!canEdit || !dirty || saving}
+        className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-ink-2"
+      >
+        <Save className="h-3.5 w-3.5" />
+        {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
+      </button>
+    </div>
+  );
+
+  const leftPanel = (
+    <div className="p-2">
+      <div className="grid grid-cols-2 gap-1.5">
+        {ELEMENT_PALETTE.map(({ kind, label, Icon }) => (
+          <button
+            key={kind}
+            type="button"
+            disabled={!canEdit}
+            onClick={() => addElement(kind)}
+            className="flex flex-col items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-2 text-[10px] font-medium text-ink-1 transition-colors hover:bg-surface-2 disabled:opacity-50"
+            title={`Add ${label}`}
+          >
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+            {label}
+          </button>
+        ))}
+      </div>
+      {seedKind ? (
+        <div className="mt-3 rounded bg-amber-100 px-2 py-1 text-[10px] font-medium text-amber-800">
+          Built-in starter
         </div>
       ) : null}
+    </div>
+  );
 
-      <div className="flex gap-3">
-        {/* Left palette */}
-        <aside className="w-44 shrink-0 rounded-md border border-border bg-surface-1 p-2">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Elements
-          </h3>
-          <div className="grid grid-cols-2 gap-1.5">
-            {ELEMENT_PALETTE.map(({ kind, label, Icon }) => (
-              <button
-                key={kind}
-                type="button"
-                disabled={!canEdit}
-                onClick={() => addElement(kind)}
-                className="flex flex-col items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-2 text-[10px] font-medium text-ink-1 transition-colors hover:bg-surface-2 disabled:opacity-50"
-                title={`Add ${label}`}
-              >
-                <Icon className="h-4 w-4" strokeWidth={1.75} />
-                {label}
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        {/* Center canvas */}
-        <div className="relative flex-1 overflow-auto rounded-md border border-border bg-surface-2/40 p-6">
-          <div
-            className="relative mx-auto shadow-lg"
-            style={{
-              width: `${canvasW}px`,
-              height: `${canvasH}px`,
-              background: '#ffffff',
-            }}
-            ref={canvasRef}
-            onClick={() => setSelectedId(null)}
-          >
-            {/* Margin guide */}
-            <div
-              className="pointer-events-none absolute border border-dashed border-slate-300"
-              style={{
-                left: margin * DESIGN_DPI * zoom,
-                top: margin * DESIGN_DPI * zoom,
-                width: (paperIn.w - margin * 2) * DESIGN_DPI * zoom,
-                height: (paperIn.h - margin * 2) * DESIGN_DPI * zoom,
-              }}
-            />
-            {data.elements.map((el) => (
-              <ElementRenderer
-                key={el.id}
-                element={el}
-                zoom={zoom}
-                parameters={data.parameters}
-                selected={el.id === selectedId}
-                canEdit={canEdit}
-                onSelect={(e) => {
-                  e.stopPropagation();
-                  setSelectedId(el.id);
-                }}
-                onMoveStart={(e) => beginGesture('move', el, e)}
-                onResizeStart={(e) => beginGesture('resize-br', el, e)}
-              />
-            ))}
-          </div>
+  const rightPanel = (
+    <div className="space-y-3 p-2">
+      <PaperPanel paper={data.paper} canEdit={canEdit} onChange={updatePaper} />
+      {selected ? (
+        <ElementPanel
+          element={selected}
+          parameters={data.parameters}
+          canEdit={canEdit}
+          onChange={(patch) => updateElement(selected.id, patch)}
+          onDelete={() => deleteElement(selected.id)}
+        />
+      ) : (
+        <div className="rounded-md border border-border bg-surface-1 p-3 text-xs text-muted">
+          Select an element on the canvas to edit its properties.
         </div>
+      )}
+      <ParameterPanel
+        parameters={data.parameters}
+        canEdit={canEdit}
+        onAdd={addParameter}
+        onUpdate={updateParameter}
+        onDelete={deleteParameter}
+      />
+    </div>
+  );
 
-        {/* Right rail: paper + element + parameters */}
-        <aside className="w-72 shrink-0 space-y-3">
-          <PaperPanel paper={data.paper} canEdit={canEdit} onChange={updatePaper} />
-          {selected ? (
-            <ElementPanel
-              element={selected}
-              parameters={data.parameters}
-              canEdit={canEdit}
-              onChange={(patch) => updateElement(selected.id, patch)}
-              onDelete={() => deleteElement(selected.id)}
-            />
-          ) : (
-            <div className="rounded-md border border-border bg-surface-1 p-3 text-xs text-muted">
-              Select an element on the canvas to edit its properties.
-            </div>
-          )}
-          <ParameterPanel
-            parameters={data.parameters}
-            canEdit={canEdit}
-            onAdd={addParameter}
-            onUpdate={updateParameter}
-            onDelete={deleteParameter}
+  return (
+    <BuilderShell
+      storageKey="builder-shell:print-template"
+      backHref={`/items/${itemId}`}
+      title={titleSummary}
+      icon={<Printer className="h-4 w-4 text-slate-700" strokeWidth={1.75} />}
+      toolbarRight={toolbarRight}
+      leftPanel={leftPanel}
+      leftPanelTitle="Elements"
+      leftRailIcon={<Printer className="h-4 w-4" />}
+      rightPanel={rightPanel}
+      rightPanelTitle="Properties"
+      rightRailIcon={<Settings className="h-4 w-4" />}
+    >
+      <div className="absolute inset-0 overflow-auto bg-surface-2/40 p-6">
+        {saveError ? (
+          <div className="mx-auto mb-3 max-w-3xl rounded border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+            Save failed: {saveError}
+          </div>
+        ) : null}
+        <div
+          className="relative mx-auto shadow-lg"
+          style={{
+            width: `${canvasW}px`,
+            height: `${canvasH}px`,
+            background: '#ffffff',
+          }}
+          ref={canvasRef}
+          onClick={() => setSelectedId(null)}
+        >
+          {/* Margin guide */}
+          <div
+            className="pointer-events-none absolute border border-dashed border-slate-300"
+            style={{
+              left: margin * DESIGN_DPI * zoom,
+              top: margin * DESIGN_DPI * zoom,
+              width: (paperIn.w - margin * 2) * DESIGN_DPI * zoom,
+              height: (paperIn.h - margin * 2) * DESIGN_DPI * zoom,
+            }}
           />
-        </aside>
+          {data.elements.map((el) => (
+            <ElementRenderer
+              key={el.id}
+              element={el}
+              zoom={zoom}
+              parameters={data.parameters}
+              selected={el.id === selectedId}
+              canEdit={canEdit}
+              onSelect={(e) => {
+                e.stopPropagation();
+                setSelectedId(el.id);
+              }}
+              onMoveStart={(e) => beginGesture('move', el, e)}
+              onResizeStart={(e) => beginGesture('resize-br', el, e)}
+            />
+          ))}
+        </div>
       </div>
-    </section>
+    </BuilderShell>
   );
 }
 

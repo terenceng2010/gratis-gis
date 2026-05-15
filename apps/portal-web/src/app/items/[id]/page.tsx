@@ -1045,7 +1045,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
           seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
           canEdit={canManage}
         />
-      ) : item.type === 'print_template' ? (
+      ) : item.type === 'print_template' && isBuilderView ? (
         <PrintTemplateDetail
           itemId={item.id}
           initialBlueprint={
@@ -1056,6 +1056,30 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
           seedKind={(item as { seedKind?: string | null }).seedKind ?? null}
           canEdit={canManage}
         />
+      ) : item.type === 'print_template' && !isBuilderView ? (
+        // Metadata-first landing for print templates -- same shape as
+        // the map / web_app gates above.  The full-screen designer
+        // opens via ?view=configure so it gets the BuilderShell's
+        // full real estate (paper canvas + element palette + props
+        // panel won't fit comfortably inside the regular item-detail
+        // chrome).
+        <section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink-0">Print template designer</p>
+            <p className="mt-0.5 text-xs text-muted">
+              Open the full-screen builder to edit the paper layout,
+              element positions, and declared parameters.
+            </p>
+          </div>
+          {canManage ? (
+            <Link
+              href={`/items/${item.id}?view=configure`}
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-accent/90"
+            >
+              Open builder
+            </Link>
+          ) : null}
+        </section>
       ) : (
         <section className="mb-6">
           <ComingSoon type={item.type} data={item.data} />
