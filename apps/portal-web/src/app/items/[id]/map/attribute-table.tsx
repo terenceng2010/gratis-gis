@@ -1266,13 +1266,16 @@ export function AttributeTable({
         <button
           type="button"
           onClick={zoomToSelection}
-          disabled={activeSelection.size === 0 || serverMode}
+          // #102: the disabled rule used to gate on `!serverMode`,
+          // but `zoomToSelection` already has a server-mode path
+          // that calls /selection-extent for the union bbox.  The
+          // guard was making the button look broken whenever the
+          // user selected a row in a paged data_layer (parcels and
+          // friends).  Only constraint left: need an actual
+          // selection.
+          disabled={activeSelection.size === 0}
           className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-          title={
-            serverMode
-              ? 'Zoom to selection is not available for paged data layers yet'
-              : 'Zoom to selected features'
-          }
+          title="Zoom to selected features"
         >
           <Focus className="h-3.5 w-3.5" />
           Zoom to
