@@ -234,6 +234,14 @@ export function AttributeTable({
   // table opens with everything visible. Resets when the active layer
   // changes (each layer's selection is independent).
   const [showOnlySelected, setShowOnlySelected] = useState(false);
+  // #102 followup: auto-zoom-on-select toggle.  When ON, clicking a
+  // row in the table immediately zooms the map to the resulting
+  // selection.  Default ON to preserve the previous unconditional
+  // client-mode auto-zoom behavior AND give server-paged users
+  // (parcels-style layers) the same convenience without a per-row
+  // click on "Zoom to".  Toggling OFF disables both paths so users
+  // who prefer click-then-zoom can opt out.
+  const [autoZoomOnSelect, setAutoZoomOnSelect] = useState(true);
 
   // #83: Calculate Field modal state.  Right-clicking a user-field
   // column header opens this; null means closed.  Only meaningful
@@ -828,21 +836,15 @@ export function AttributeTable({
     }
     updateActiveSelection(next);
     setLastPicked(displayIdx);
-    // #335: auto-zoom on row click so the user doesn't also have to
-    // click the explicit zoom-to-selection button. Especially load-
-    // bearing in the Response Viewer where users land data-first.
-    // Read directly from `next` (not activeSelection) because the
-    // setState above hasn't flushed yet inside this handler.
-    //
-    // Server-paged mode skips this: /features-page doesn't ship
-    // geometry on the response (would 10-100x payload size on a
-    // 5000-row page), so we can't compute a bbox client-side. The
-    // map already shows the row via the MVT setFeatureState path,
-    // and an explicit zoom-to from the toolbar can hit a dedicated
-    // selection-extent endpoint once that lands. (#115 P13)
-    if (!serverMode) {
-      const bbox = bboxOfKeySet(next);
-      if (bbox) onZoomTo(bbox);
+    // #335 / #102 followup: auto-zoom on row click, gated on the
+    // user-facing toggle.  Default ON preserves the previous
+    // unconditional client-mode behavior and adds server-paged
+    // auto-zoom via the /selection-extent endpoint -- so a user
+    // browsing a 1.4M-row parcels layer can step through rows and
+    // see each one zoom in automatically.  Toggle OFF returns to
+    // click-then-zoom for users who prefer that.
+    if (autoZoomOnSelect) {
+      zoomToKeys(next);
     }
   }
 
@@ -867,7 +869,7 @@ export function AttributeTable({
     return bboxOfFeatures(features);
   }
 
-  function zoomToSelection() {
+  function zoomToKeys(keys: Set<number | string>) {
     // Two paths.  In client-mode the AttributeTable already has the
     // features (with geometry) in memory, so bboxOfKeySet computes
     // the union without a round-trip.  In server-paged mode the
@@ -877,7 +879,13 @@ export function AttributeTable({
     // returns the bbox.  Either way: if the bbox resolves, fly
     // there; if not, no-op (server-side may return null when the
     // selected features are all non-spatial).
-    const localBbox = bboxOfKeySet(activeSelection);
+    //
+    // Takes the key set as an explicit parameter so callers (eg
+    // onRowClick, which has the post-mutation `next` set ready
+    // before React commits) can avoid the stale-state race that
+    // reading `activeSelection` here would expose.
+    if (keys.size === 0) return;
+    const localBbox = bboxOfKeySet(keys);
     if (localBbox) {
       onZoomTo(localBbox);
       return;
@@ -889,7 +897,7 @@ export function AttributeTable({
     // request validation.  Cap at 1000 to match the controller.
     const UUID_RE =
       /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    const ids = [...activeSelection]
+    const ids = [...keys]
       .filter((v): v is string => typeof v === 'string' && UUID_RE.test(v))
       .slice(0, 1000)
       .join(',');
@@ -909,6 +917,9 @@ export function AttributeTable({
         // Best-effort: a network blip should not derail the table.
       }
     })();
+  }
+  function zoomToSelection() {
+    zoomToKeys(activeSelection);
   }
 
   /**
@@ -1265,17 +1276,38 @@ export function AttributeTable({
         </div>
         <button
           type="button"
-          onClick={zoomToSelection}
-          // #102: the disabled rule used to gate on `!serverMode`,
-          // but `zoomToSelection` already has a server-mode path
-          // that calls /selection-extent for the union bbox.  The
-          // guard was making the button look broken whenever the
-          // user selected a row in a paged data_layer (parcels and
-          // friends).  Only constraint left: need an actual
-          // selection.
-          disabled={activeSelection.size === 0}
-          className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-          title="Zoom to selected features"
+          onClick={() => {
+            // #102 followup: split-mode button.
+            //   - One-time click with selection + toggle OFF:
+            //     zooms to the current selection AND turns the
+            //     toggle ON so subsequent row clicks auto-zoom.
+            //   - Click again with toggle ON: turns it OFF (no
+            //     extra zoom; the user just wanted to stop the
+            //     auto-zoom behavior).
+            //   - No selection + toggle OFF: still flips ON so
+            //     the next row click zooms.
+            // Net effect: button is a toggle that ALSO performs a
+            // one-shot zoom when you turn it on with a selection
+            // already in place.  Matches what most users expect
+            // from a "sticky" zoom-to button.
+            if (autoZoomOnSelect) {
+              setAutoZoomOnSelect(false);
+            } else {
+              setAutoZoomOnSelect(true);
+              if (activeSelection.size > 0) zoomToSelection();
+            }
+          }}
+          aria-pressed={autoZoomOnSelect}
+          className={`inline-flex h-7 items-center gap-1 rounded border px-2 text-xs font-medium transition-colors ${
+            autoZoomOnSelect
+              ? 'border-accent bg-accent/10 text-accent'
+              : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+          }`}
+          title={
+            autoZoomOnSelect
+              ? 'Auto-zoom on row click is ON. Click to turn off.'
+              : 'Click to turn on auto-zoom (row clicks zoom to the feature). Also zooms to the current selection once.'
+          }
         >
           <Focus className="h-3.5 w-3.5" />
           Zoom to
