@@ -218,11 +218,16 @@ function FlowContainer({
   // displaced siblings to their stored cols automatically.
   //
   // MIN_SPACING_PCT is the minimum gap between the *anchor points*
-  // of two adjacent tools.  Set to 12% as a starting heuristic that
-  // works well for typical icon-and-label tools (~64-80px in a
-  // ~1000px container = 6-8% wide; 12% anchor spacing leaves a
-  // comfortable visual gap).
-  const MIN_SPACING_PCT = 12;
+  // of two adjacent tools.  Set to 9% based on the geometry of
+  // tools-vs-container.  With the translateX(-P%) anchoring used
+  // below, two adjacent tools at anchors P1 and P2 leave a visible
+  // gap of (P2-P1)*(W-toolW)/100 - toolW px.  For typical 80px
+  // tools in a 1000px container that means P2-P1 = 8.7% is the
+  // "exactly touching" threshold; +1% adds ~9px of breathing room.
+  // 9% sits just above touching -- tools can sit ~3-4px apart but
+  // never overlap.  Authors who want tighter packing get it
+  // automatically as soon as they drag a tool toward its neighbor.
+  const MIN_SPACING_PCT = 9;
   function rawPct(child: { layout: { col: number; row: number } }, idx: number): number {
     if (allAtOrigin) {
       return children.length > 1 ? (idx / (children.length - 1)) * 100 : 0;
