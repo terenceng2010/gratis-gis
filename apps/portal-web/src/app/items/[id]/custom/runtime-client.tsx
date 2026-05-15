@@ -57,6 +57,7 @@ import type {
   MapLayer,
   PanelAnchor,
   PanelArrangement,
+  PrintTemplateData,
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { customBasemapToData } from '@/lib/custom-basemap';
@@ -1855,22 +1856,269 @@ function SearchWidgetRender({ widget }: { widget: CustomWidget }) {
 
 // ---- Print widget ----------------------------------------------------------
 
+/**
+ * #101: Print widget.  Renders a template picker + parameter form
+ * + recent-result list.  Talks to the server `/print/render`
+ * endpoint which produces a PDF for download.  Falls back to the
+ * legacy "browser print" button when the user's org has no
+ * print_template items accessible (eg fresh org pre-bootstrap, or
+ * an admin deleted them all).
+ */
 function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'print') return null;
   const { state } = useBoundMap(widget.config.mapWidgetId);
+  type TemplateSummary = {
+    id: string;
+    title: string;
+    description: string | null;
+    data: PrintTemplateData;
+  };
+  const [templates, setTemplates] = useState<TemplateSummary[] | null>(null);
+  const [selected, setSelected] = useState<TemplateSummary | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [results, setResults] = useState<
+    { url: string; templateTitle: string; createdAt: number }[]
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          '/api/portal/items?type=print_template&limit=50',
+          { cache: 'no-store' },
+        );
+        if (!res.ok) {
+          setTemplates([]);
+          return;
+        }
+        const body = (await res.json()) as {
+          items: Array<{
+            id: string;
+            title: string;
+            description: string | null;
+            data: PrintTemplateData;
+          }>;
+        };
+        if (!cancelled) {
+          const tt = body.items.map((it) => ({
+            id: it.id,
+            title: it.title,
+            description: it.description,
+            data: it.data,
+          }));
+          setTemplates(tt);
+          // If only one accessible template, pre-select it.
+          if (tt.length === 1) {
+            setSelected(tt[0] ?? null);
+          }
+        }
+      } catch {
+        if (!cancelled) setTemplates([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Reset parameter values to template defaults whenever the
+  // selected template changes.
+  useEffect(() => {
+    if (!selected) {
+      setValues({});
+      return;
+    }
+    const v: Record<string, string> = {};
+    for (const p of selected.data.parameters) {
+      v[p.id] = p.defaultValue ?? '';
+    }
+    setValues(v);
+  }, [selected]);
+
+  // #101 v1: client-side print page.  Opens a new tab at
+  // /print/<templateId>?values=<encoded>&mapWidgetId=<id> that
+  // renders the template with the user's values + the current
+  // map at its current scale.  The page auto-triggers the
+  // browser's Print dialog so the user saves as PDF.  Avoids
+  // server-side Playwright dependency for the first cut; a real
+  // server-render path with map rasterization is a followup.
+  const onRender = useCallback(() => {
+    if (!selected) return;
+    setRendering(true);
+    setRenderError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('values', JSON.stringify(values));
+      const mapWidgetId =
+        widget.config.kind === 'print' ? widget.config.mapWidgetId : '';
+      if (mapWidgetId) params.set('mapWidgetId', mapWidgetId);
+      const url = `/print/${selected.id}?${params.toString()}`;
+      const opened = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        throw new Error(
+          'Could not open the print preview window.  Allow popups for this site and try again.',
+        );
+      }
+      setResults((cur) => [
+        { url, templateTitle: selected.title, createdAt: Date.now() },
+        ...cur,
+      ]);
+    } catch (err) {
+      setRenderError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRendering(false);
+    }
+  }, [selected, values, widget.config]);
+
+  if (templates === null) {
+    return (
+      <WidgetFrame icon={Printer} title="Print">
+        <div className="p-3 text-xs text-muted">Loading templates…</div>
+      </WidgetFrame>
+    );
+  }
+  if (templates.length === 0) {
+    return (
+      <WidgetFrame icon={Printer} title="Print">
+        <div className="flex flex-col items-center gap-2 p-3 text-xs text-muted">
+          <p>No print templates available.</p>
+          <button
+            type="button"
+            disabled={!state}
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            <Printer className="h-3.5 w-3.5" />
+            Browser print
+          </button>
+        </div>
+      </WidgetFrame>
+    );
+  }
   return (
     <WidgetFrame icon={Printer} title="Print">
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-2">
-        <button
-          type="button"
-          disabled={!state}
-          onClick={() => window.print()}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
-          title={state ? 'Print this page' : 'Bind a Map widget first'}
-        >
-          <Printer className="h-3.5 w-3.5" />
-          Print
-        </button>
+      <div className="flex h-full flex-col gap-2 p-2 text-xs">
+        {!selected ? (
+          <>
+            <div className="font-medium text-ink-0">Templates</div>
+            <div className="space-y-1">
+              {templates.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setSelected(t)}
+                  className="block w-full rounded-md border border-border bg-surface-1 px-2 py-1.5 text-left text-xs hover:bg-surface-2"
+                >
+                  <div className="font-medium text-ink-0">{t.title}</div>
+                  {t.description ? (
+                    <div className="mt-0.5 text-[10px] text-muted">
+                      {t.description}
+                    </div>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                className="text-[11px] text-muted hover:underline"
+              >
+                ← Templates
+              </button>
+              <div className="ml-1 truncate font-medium text-ink-0">
+                {selected.title}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {selected.data.parameters.map((p) => (
+                <label key={p.id} className="block text-[11px] text-ink-1">
+                  {p.label}
+                  {p.type === 'longtext' ? (
+                    <textarea
+                      value={values[p.id] ?? ''}
+                      onChange={(e) =>
+                        setValues((cur) => ({ ...cur, [p.id]: e.target.value }))
+                      }
+                      rows={3}
+                      className="mt-0.5 w-full rounded border border-border bg-surface-0 px-1.5 py-1 text-[11px]"
+                    />
+                  ) : p.type === 'dropdown' ? (
+                    <select
+                      value={values[p.id] ?? ''}
+                      onChange={(e) =>
+                        setValues((cur) => ({ ...cur, [p.id]: e.target.value }))
+                      }
+                      className="mt-0.5 h-7 w-full rounded border border-border bg-surface-0 px-1.5 text-[11px]"
+                    >
+                      {(p.options ?? []).map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={
+                        p.type === 'number'
+                          ? 'number'
+                          : p.type === 'date'
+                            ? 'date'
+                            : 'text'
+                      }
+                      value={values[p.id] ?? ''}
+                      onChange={(e) =>
+                        setValues((cur) => ({ ...cur, [p.id]: e.target.value }))
+                      }
+                      className="mt-0.5 h-7 w-full rounded border border-border bg-surface-0 px-1.5 text-[11px]"
+                    />
+                  )}
+                  {p.description ? (
+                    <span className="text-[10px] text-muted">{p.description}</span>
+                  ) : null}
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={rendering}
+              onClick={onRender}
+              className="mt-1 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              {rendering ? 'Generating PDF…' : 'Print'}
+            </button>
+            {renderError ? (
+              <div className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] text-rose-900">
+                {renderError}
+              </div>
+            ) : null}
+          </>
+        )}
+        {results.length > 0 ? (
+          <div className="mt-2 border-t border-border pt-2">
+            <div className="text-[11px] font-medium text-muted">Recent prints</div>
+            <div className="mt-1 space-y-0.5">
+              {results.slice(0, 5).map((r, i) => (
+                <a
+                  key={i}
+                  href={r.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block truncate rounded px-1 py-0.5 text-[11px] text-accent hover:underline"
+                >
+                  {r.templateTitle} · {new Date(r.createdAt).toLocaleTimeString()}
+                </a>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </WidgetFrame>
   );
