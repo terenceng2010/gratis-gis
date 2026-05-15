@@ -2250,8 +2250,32 @@ function Canvas({
           e.clientY,
         );
         // Don't let a container drop INTO itself.
-        const targetParentId =
+        let targetParentId =
           host && host.id !== g.widgetId ? host.id : null;
+        // #99: extracting a child out to page level requires the
+        // cursor to actually land INSIDE the canvas grid (the dot-
+        // grid area).  Without this guard, a tiny brush past the
+        // bottom of a 56px-tall sticky-top bar reparents the tool
+        // to the grid -- mouseup just barely outside the source
+        // container with target=null was treated as "extract to
+        // page level" and produced the "tools fell off the bar"
+        // bug.  Now, if the user is dragging an in-container child
+        // and releases outside both the source AND the inner grid,
+        // we snap back to the source (target = srcParentId, so
+        // no reparent path fires).
+        if (
+          g.srcParentId !== null &&
+          targetParentId === null &&
+          gridRef.current
+        ) {
+          const gridRect = gridRef.current.getBoundingClientRect();
+          const overGrid =
+            e.clientX >= gridRect.left &&
+            e.clientX <= gridRect.right &&
+            e.clientY >= gridRect.top &&
+            e.clientY <= gridRect.bottom;
+          if (!overGrid) targetParentId = g.srcParentId;
+        }
         if (targetParentId !== g.srcParentId) {
           // Reparent.
           //
