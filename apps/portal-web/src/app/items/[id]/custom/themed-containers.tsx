@@ -201,6 +201,65 @@ function FlowContainer({
   const allAtOrigin =
     children.length > 0 &&
     children.every((c) => (c.layout[axisKey] ?? 1) === 1);
+
+  // #100: no-overlap policy for tools inside a row/column flow
+  // container.  Two non-container widgets in the same parent are
+  // never allowed to render on top of each other.  We enforce that
+  // via a "leftward sweep" in axis-percentage space at render time:
+  // sort children by their stored axis value, place each at its
+  // intended pct OR at the previous tool's anchor + MIN_SPACING_PCT,
+  // whichever is larger.  This effectively turns "drag right past a
+  // sibling" into "Sortable.js-style push-aside" -- the dragged tool
+  // displaces its neighbor to keep them apart.  Persistence of the
+  // displacement is left to the renderer (the data still stores the
+  // user's intended col; the rendered position is the post-sweep
+  // value).  This is intentional: the user's intent is preserved,
+  // and any subsequent drag that breaks the overlap restores the
+  // displaced siblings to their stored cols automatically.
+  //
+  // MIN_SPACING_PCT is the minimum gap between the *anchor points*
+  // of two adjacent tools.  Set to 12% as a starting heuristic that
+  // works well for typical icon-and-label tools (~64-80px in a
+  // ~1000px container = 6-8% wide; 12% anchor spacing leaves a
+  // comfortable visual gap).
+  const MIN_SPACING_PCT = 12;
+  function rawPct(child: { layout: { col: number; row: number } }, idx: number): number {
+    if (allAtOrigin) {
+      return children.length > 1 ? (idx / (children.length - 1)) * 100 : 0;
+    }
+    const v = (child.layout[axisKey] ?? 1) - 1;
+    return (v / 191) * 100;
+  }
+  // Build (id -> swept-pct) by sorting children by their raw pct and
+  // sweeping left-to-right.  Index in the original array is the
+  // tiebreaker for the auto-spread fallback.
+  const sweptPctById = new Map<string, number>();
+  const indexed = children.map((c, i) => ({ c, i, p: rawPct(c, i) }));
+  const sorted = [...indexed].sort((a, b) => a.p - b.p);
+  let cursor = -Infinity;
+  for (const { c, p } of sorted) {
+    const placed = Math.max(p, cursor);
+    sweptPctById.set(c.id, placed);
+    cursor = placed + MIN_SPACING_PCT;
+  }
+  // If the sweep pushed the last tool past 100%, shift the whole
+  // group left so the last tool's anchor is at 100%.  Preserves the
+  // relative spacing established by the sweep at the cost of making
+  // the FIRST tool's stored col not match its rendered col -- but
+  // that's the correct trade-off when there's just no room for all
+  // the children at their desired spacings.
+  let lastEnd = -Infinity;
+  for (const { c } of sorted) {
+    const placed = sweptPctById.get(c.id)!;
+    if (placed > lastEnd) lastEnd = placed;
+  }
+  if (lastEnd > 100) {
+    const shift = lastEnd - 100;
+    for (const [id, p] of sweptPctById) {
+      sweptPctById.set(id, Math.max(0, p - shift));
+    }
+  }
+
   // #99: position a child by its layout axis value AND apply an
   // equal-magnitude transform on the opposite direction so the tool
   // stays inside the container at the extremes.
@@ -210,17 +269,8 @@ function FlowContainer({
   // container.  So col=1 (P=0%) flushes the tool's left edge to the
   // container's left edge; col=192 (P=100%) flushes the tool's RIGHT
   // edge to the container's right edge; col=96 (P~=50%) centers it.
-  // Without the transform, col=192 (left=100%) pushes the tool
-  // entirely past the right edge of the container, which is what
-  // caused Print to disappear in the first attempt at #99.
-  function childPos(child: { layout: { col: number; row: number } }, idx: number): CSSProperties {
-    let pct: number;
-    if (allAtOrigin) {
-      pct = children.length > 1 ? (idx / (children.length - 1)) * 100 : 0;
-    } else {
-      const v = (child.layout[axisKey] ?? 1) - 1;
-      pct = (v / 191) * 100;
-    }
+  function childPos(child: { id: string }): CSSProperties {
+    const pct = sweptPctById.get(child.id) ?? 0;
     return isRow
       ? {
           position: 'absolute',
@@ -284,11 +334,11 @@ function FlowContainer({
           }}
           aria-hidden={collapsed}
         >
-          {children.map((child, idx) => (
+          {children.map((child) => (
             <div
               key={child.id}
               className="flex items-stretch"
-              style={childPos(child, idx)}
+              style={childPos(child)}
               data-container-child
             >
               {renderChild(child)}
