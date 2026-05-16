@@ -11,7 +11,6 @@ tags:
   - analysis
 related:
   - items-derived-layer
-  - items-notebook
 ---
 
 A **tool** is an item that wraps a single named analysis operation

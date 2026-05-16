@@ -63,9 +63,9 @@ section explicitly tests mobile-portrait.
 
 ### 1.2 Edge cases
 
-- [ ] **Two browsers, same user.** Sign in as alice in Chrome and Firefox simultaneously. Both sessions work; making a change in one and refreshing the other shows the change.
-- [ ] **Auto-disable.** As admin, set alice's `autoDisableAt` to a date in the past. Alice (already signed in) can keep working until token refresh; new sign-in attempts fail.
-- [ ] **Password reset flow.** As admin in `/admin/users`, click reset password for alice. Email or Keycloak-side reset link works.
+- [x] **Two browsers, same user.** Sign in as alice in Chrome and Firefox simultaneously. Both sessions work; making a change in one and refreshing the other shows the change.
+- [x] **Auto-disable.** As admin, set alice's `autoDisableAt` to a date in the past. Alice (already signed in) can keep working until token refresh; new sign-in attempts fail.
+- [x] **Password reset flow.** As admin in `/admin/users`, click reset password for alice. Email or Keycloak-side reset link works.
 
 ---
 
@@ -74,7 +74,7 @@ section explicitly tests mobile-portrait.
 - [x] **Org name + hero render.** Configured branding (title, subtitle, hero image) appears.
 - [x] **Public items grid populates.** If at least one `access: public` item exists, it shows in the grid.
 - [x] **Item card click opens runtime.** Clicking a card opens the runtime (e.g. viewer for a viewer web_app, in a new tab via `target="_blank"`).
-- [ ] **`landingShowPublicItems = false` hides the grid.** Admin toggles this in `/admin/branding`; public landing now shows just the hero + sign-in CTA.
+- [x] **`landingShowPublicItems = false` hides the grid.** Admin toggles this in `/admin/branding`; public landing now shows just the hero + sign-in CTA.
 - [x] **Empty-state copy.** With no public items, the grid section shows "Nothing has been shared publicly yet" instead of crashing.
 - [x] **Schema.org JSON-LD is present.** View source; `<script type="application/ld+json">` tag exists with `CollectionPage` + `ItemList`.
 - [x] **Project marketing section.** With `NEXT_PUBLIC_PROJECT_LANDING=1` (or `?preview=project` query param), the open-source project section renders below the hero.
@@ -90,51 +90,50 @@ section explicitly tests mobile-portrait.
 - [x] **All items toggle.** Click "All items"; visible item set expands to include items shared with the user / org / public.
 - [x] **Search bar filters.** Type partial title; grid narrows; clears on backspace.
 - [x] **Type filter chip.** Click a type chip (e.g. "Maps"); grid narrows to that type. Multiple type chips combine OR.
-- [ ] **Owner filter.** As admin viewing "All items", filter by another user's id; grid narrows.
-- [ ] **Bbox filter ("In this area").** Toggle the area filter; only items whose bbox intersects the current map extent show.
-- [ ] **Tag click filters by tag.** Clicking a tag chip on an item card narrows to all items with that tag.
+- [x] **Owner filter.** As admin viewing "All items", filter by another user's id; grid narrows.
+- [x] **Bbox filter ("In this area").** Toggle the area filter; only items whose bbox intersects the current map extent show.
+- [x] **Tag click filters by tag.** Clicking a tag chip on an item card narrows to all items with that tag.
 
 ### 3.2 Folders
 
-- [ ] **Folder rail renders.** Left sidebar shows folder tree; can expand/collapse.
-- [ ] **Click a folder navigates.** URL becomes `/items?folder=<id>`; main grid shows that folder's contents.
-- [ ] **Breadcrumbs above grid.** Clicking a parent breadcrumb navigates back up.
-- [ ] **Create folder.** "+ New folder" button opens prompt; new folder appears in rail.
-- [ ] **Drag item into folder.** Drag a card from the grid onto a folder in the rail; item now appears in that folder.
-- [ ] **Subfolder creation.** Nest a folder inside a folder; rail shows the hierarchy.
-- [ ] **Smart folders (saved query).** Create a smart folder; populate criteria; verify items matching the criteria appear.
-- [ ] **Folder cycle prevention.** Try to make folder A a child of folder B that's already a child of A; portal refuses.
-- [ ] **Folder share cascades.** Share a folder with bob; bob can see all items inside.
+- [x] **Folder rail renders.** Left sidebar shows folder tree; can expand/collapse.
+- [x] **Click a folder navigates.** URL becomes `/items?folder=<id>`; main grid shows that folder's contents.
+- [x] **Breadcrumbs above grid.** Clicking a parent breadcrumb navigates back up.
+- [x] **Create folder.** "+ New folder" button opens prompt; new folder appears in rail.
+- [x] **Drag item into folder.** Drag a card from the grid onto a folder in the rail; item now appears in that folder.
+- [x] **Subfolder creation.** Nest a folder inside a folder; rail shows the hierarchy.
+- [x] **Smart folders (saved query).** Create a smart folder; populate criteria; verify items matching the criteria appear.
+- [x] **Folder cycle prevention.** Try to make folder A a child of folder B that's already a child of A; portal refuses.
+- [x] **Folder share cascades.** Share a folder with bob; bob can see all items inside.
 
 ### 3.3 Item creation
 
-- [ ] **+ New button.** Clicking opens `/items/new` wizard.
-- [ ] **Type picker shows all groups.** Five groups visible: Data, Maps, Apps, Analysis, Organize. Each group has the right tile set.
-- [ ] **Notebook tile is gone.** No "Notebook" option in Apps or Analysis (it was removed in v1).
-- [ ] **Pick "Data layer" -> wizard advances.** Proceeds to step 2 with a title field + an Import tab.
+- [x] **+ New button.** Clicking opens `/items/new` wizard.
+- [x] **Type picker shows all groups.** Five groups visible: Data, Maps, Apps, Analysis, Organize. Each group has the right tile set.
+- [x] **Pick "Data layer" -> wizard advances.** Proceeds to step 2 with a title field + an Import tab.
 - [ ] **Import tab probes a GeoJSON.** Drop a small `.geojson` file; wizard shows feature count + field schema.
 - [ ] **Import tab probes a Shapefile zip.** Drop a `.zip` containing `.shp + .shx + .dbf + .prj`; same probe surface.
 - [ ] **Import tab probes a GeoPackage.** `.gpkg` works.
-- [ ] **Import tab probes a GDB zip.** `.zip` of a File Geodatabase works.
+- [x] **Import tab probes a GDB zip.** `.zip` of a File Geodatabase works.
 - [ ] **Type-specific inputs render.** Pick "Connected service" (or ArcGIS service); URL field appears with probe button.
 - [ ] **Probe a known good ArcGIS REST URL.** Wizard auto-detects the protocol and fills in defaults.
 - [ ] **Wizard step 2 access selector.** Three options: Private / Organization / Public; descriptions render under each.
-- [ ] **Submitting creates the item and redirects to the detail page.**
+- [x] **Submitting creates the item and redirects to the detail page.**
 
 ### 3.4 Item context menu
 
-- [ ] **Right-click (or three-dot) menu opens.** On an item card.
-- [ ] **Share opens sharing panel.** With current shares + access level prefilled.
-- [ ] **Edit opens metadata edit page.** `/items/[id]/edit`.
-- [ ] **Delete soft-deletes.** Item moves to trash; disappears from list.
-- [ ] **Add to folder works.** Item appears in chosen folder.
+- [x] **Right-click (or three-dot) menu opens.** On an item card.
+- [x] **Share opens sharing panel.** With current shares + access level prefilled.
+- [x] **Edit opens metadata edit page.** `/items/[id]/edit`.
+- [x] **Delete soft-deletes.** Item moves to trash; disappears from list.
+- [x] **Add to folder works.** Item appears in chosen folder.
 - [ ] **Reassign owner (admin only).** Visible only to admins; transfer flow completes.
 
 ### 3.5 Empty states
 
 - [x] **No items at all.** New user with zero items sees a "Create your first item" CTA.
 - [x] **No items in a folder.** Empty folder shows "This folder is empty".
-- [ ] **No items match search.** Search for nonsense; "No items match" copy renders.
+- [x] **No items match search.** Search for nonsense; "No items match" copy renders.
 
 ---
 
@@ -148,29 +147,29 @@ one), then run through the per-type checks below.
 - [x] **Map detail page renders.** Header (title, badge), MapEditor canvas, sharing panel.
 - [x] **MapLibre canvas loads.** Basemap tiles render.
 - [x] **Add layer dialog.** Right-rail "Add layer" button opens a dialog with five source tabs: Portal (with Items / Groups / Folders sub-tabs and search), File, Paste, URL, ArcGIS.
-- [ ] **Pick a data_layer.** Layer is added to the map; renders with default style.
-- [ ] **Pick a v3 multi-sublayer data_layer.** Per-sublayer fan-out: each sublayer becomes its own MapLayer entry.
-- [ ] **Layer panel toggle visibility.** Click eye icon; layer hides/shows.
-- [ ] **Layer panel reorder.** Drag a layer up/down; render order changes.
-- [ ] **Layer group.** Create a group; drag layers into it; toggling the group cascades.
-- [ ] **Style editor.** Open a layer's style; change point color; canvas updates live.
-- [ ] **Renderer editor: simple, unique-values, class-breaks.** Each kind renders correctly.
-- [ ] **Popup editor.** Add fields to popup; click feature on map; popup shows those fields.
-- [ ] **Labels editor.** Toggle labels on; labels render.
-- [ ] **Filter editor (single clause).** Add `field == value`; only matching features render.
-- [ ] **Scale visibility.** Set min/max zoom; layer hides outside range.
-- [ ] **Layer-level boundary clip (geo_boundary).** Pick a boundary; only features inside render.
-- [ ] **Per-share row scope (own / all).** Share with bob at `view, rowScope=own`; bob sees only his own features.
-- [ ] **Default extent boundary.** Pick a geo_boundary as default extent; map opens zoomed to it.
+- [x] **Pick a data_layer.** Layer is added to the map; renders with default style.
+- [x] **Pick a v3 multi-sublayer data_layer.** Per-sublayer fan-out: each sublayer becomes its own MapLayer entry.
+- [x] **Layer panel toggle visibility.** Click eye icon; layer hides/shows.
+- [x] **Layer panel reorder.** Drag a layer up/down; render order changes.
+- [x] **Layer group.** Create a group; drag layers into it; toggling the group cascades.
+- [x] **Style editor.** Open a layer's style; change point color; canvas updates live.
+- [x] **Renderer editor: simple, unique-values, class-breaks.** Each kind renders correctly.
+- [x] **Popup editor.** Add fields to popup; click feature on map; popup shows those fields.
+- [x] **Labels editor.** Toggle labels on; labels render.
+- [x] **Filter editor (single clause).** Add `field == value`; only matching features render.
+- [x] **Scale visibility.** Set min/max zoom; layer hides outside range.
+- [x] **Layer-level boundary clip (geo_boundary).** Pick a boundary; only features inside render.
+- [x] **Per-share row scope (own / all).** Share with bob at `view, rowScope=own`; bob sees only his own features.
+- [x] **Default extent boundary.** Pick a geo_boundary as default extent; map opens zoomed to it.
 - [ ] **Search bar (address).** Type an address; nominatim returns results; click flies map to it.
 - [ ] **Search bar (per-layer attribute).** Configure attribute search on a layer; type a value; matching features highlight.
-- [ ] **Save persists changes.** Edit something; refresh; change is still there.
+- [x] **Save persists changes.** Edit something; refresh; change is still there.
 
 ### 4.2 Data layer item (v3 multi-layer)
 
-- [ ] **Detail page renders.** Schema editor, sublayer list, provenance panel, version history.
-- [ ] **Add sublayer.** New sublayer with geometryType + fields appears.
-- [ ] **Add field to sublayer.** Field appears in schema; ingest reads from JSONB attrs (no DDL).
+- [x] **Detail page renders.** Schema editor, sublayer list, provenance panel, version history.
+- [x] **Add sublayer.** New sublayer with geometryType + fields appears.
+- [x] **Add field to sublayer.** Field appears in schema; ingest reads from JSONB attrs (no DDL).
 - [ ] **Mark a field as `searchable`.** Engine creates the corresponding btree expression index automatically (manual verification: `\d observation` shows the expression index).
 - [ ] **Per-feature add via map editor.** Open the map editor for a layer; click "Add point"; place a feature; attribute form opens; save.
 - [ ] **Edit a feature's geometry.** Select feature; "Edit geometry" pane opens; drag vertex; save.
@@ -265,11 +264,11 @@ one), then run through the per-type checks below.
 
 ### 4.10 Geo-boundary item
 
-- [ ] **Polygon editor renders.** MapLibre canvas with draw tool.
+- [x] **Polygon editor renders.** MapLibre canvas with draw tool.
 - [ ] **Draw a polygon.** Save; appears as named region.
 - [ ] **Reference from a share geo-limit.** Polygon clip applies.
 - [ ] **Reference from a layer-level boundary clip.** Polygon clip applies.
-- [ ] **Reference from a map's default extent.** Map opens zoomed to it.
+- [x] **Reference from a map's default extent.** Map opens zoomed to it.
 
 ### 4.11 Basemap item
 
@@ -287,10 +286,10 @@ one), then run through the per-type checks below.
 
 ### 4.13 Folder item
 
-- [ ] **Folder detail page.** Child item list, breadcrumbs, edit button.
-- [ ] **Add items to folder.** Can drop items in.
-- [ ] **Edit folder title / description.** Persists.
-- [ ] **Smart folder (saved query) populates.** Configure criteria; matching items appear automatically.
+- [x] **Folder detail page.** Child item list, breadcrumbs, edit button.
+- [x] **Add items to folder.** Can drop items in.
+- [x] **Edit folder title / description.** Persists.
+- [x] **Smart folder (saved query) populates.** Configure criteria; matching items appear automatically.
 
 ### 4.14 Data collection item
 
@@ -310,21 +309,21 @@ one), then run through the per-type checks below.
 
 ## 5. Sharing model
 
-- [ ] **Set access to private.** Only owner can see the item.
-- [ ] **Set access to org.** Same-org users can see.
-- [ ] **Set access to public.** Anonymous users (incognito) can see.
-- [ ] **Add a per-user share at view tier.** Bob (different org) can read.
+- [x] **Set access to private.** Only owner can see the item.
+- [x] **Set access to org.** Same-org users can see.
+- [x] **Set access to public.** Anonymous users (incognito) can see.
+- [x] **Add a per-user share at view tier.** Bob (different org) can read.
 - [ ] **Add a per-user share at download tier.** Bob can use the GeoJSON download endpoint.
-- [ ] **Add a per-user share at edit tier.** Bob can edit attributes.
+- [x] **Add a per-user share at edit tier.** Bob can edit attributes.
 - [ ] **Add a per-user share at admin tier.** Bob can edit but not reassign owner / purge.
 - [ ] **Per-group share.** Share with a group bob is in; bob inherits access.
 - [ ] **Time-bounded share.** Set expiresAt to 1 minute from now; wait; bob loses access.
-- [ ] **Geo-limited share.** Attach a polygon to bob's share; bob sees only features inside.
-- [ ] **Per-share row scope (own / all).** Bob with rowScope=own only sees features he created.
+- [x] **Geo-limited share.** Attach a polygon to bob's share; bob sees only features inside.
+- [x] **Per-share row scope (own / all).** Bob with rowScope=own only sees features he created.
 - [ ] **canRead via Cedar.** Verified in unit tests; manually: cross-org user without share gets 404 on item detail.
 - [ ] **canAdmin still owner-/org-admin only.** Even with admin-tier share, bob can't reassign ownership.
 - [ ] **Layer-level access matrix on web maps.** A map shared org-wide can hide a specific layer from a specific group.
-- [ ] **Sharing panel dependency audit.** For an editor item, the panel warns if shared targets aren't reachable for the share recipient.
+- [x] **Sharing panel dependency audit.** For an editor item, the panel warns if shared targets aren't reachable for the share recipient.
 
 ---
 
@@ -382,13 +381,13 @@ one), then run through the per-type checks below.
 
 ## 9. Recently deleted (trash)
 
-- [ ] **`/recently-deleted` lands on Items tab by default.**
-- [ ] **Items tab shows trashed items.** Within 30-day retention.
-- [ ] **Restore an item.** Returns to its original folder + access state.
-- [ ] **Permanent delete (purge).** Owner / admin only; confirms before purging; item is gone for good.
+- [x] **`/recently-deleted` lands on Items tab by default.**
+- [x] **Items tab shows trashed items.** Within 30-day retention.
+- [x] **Restore an item.** Returns to its original folder + access state.
+- [x] **Permanent delete (purge).** Owner / admin only; confirms before purging; item is gone for good.
 - [ ] **Cascade-revert candidates.** When restoring an item that has dependents, surfaces what else might need to come back.
 - [ ] **Groups tab.** Same flow for trashed groups.
-- [ ] **Empty state.** No trashed items shows the empty copy.
+- [x] **Empty state.** No trashed items shows the empty copy.
 
 ---
 
@@ -398,45 +397,45 @@ one), then run through the per-type checks below.
 
 ### 10.1 Branding (`/admin/branding`)
 
-- [ ] **Page renders.** Org name, landing title, subtitle, hero image.
-- [ ] **Edit landing title.** Save; public landing reflects it.
-- [ ] **Upload hero image.** Save; renders behind hero band.
-- [ ] **Toggle "show public items".** Save; public landing grid disappears or reappears.
-- [ ] **Featured items picker.** Pick 1-3 items to surface first; they reorder on the public landing.
+- [x] **Page renders.** Org name, landing title, subtitle, hero image.
+- [x] **Edit landing title.** Save; public landing reflects it.
+- [x] **Upload hero image.** Save; renders behind hero band.
+- [x] **Toggle "show public items".** Save; public landing grid disappears or reappears.
+- [x] **Featured items picker.** Pick 1-3 items to surface first; they reorder on the public landing.
 
 ### 10.2 Users (`/admin/users`)
 
-- [ ] **User list renders.** With filters for enabled / verified / last-seen.
+- [x] **User list renders.** With filters for enabled / verified / last-seen.
 - [ ] **Filters work.** Each narrows the list correctly.
 - [ ] **Edit user identity.** First/last/email; saves to Keycloak.
-- [ ] **Reset password.** Triggers Keycloak reset flow.
-- [ ] **Disable user.** Sets enabled=false; user can't sign in.
-- [ ] **Auto-disable date.** Sets future date; banner shows for that user.
-- [ ] **Resend invite email.** Goes out via SMTP.
-- [ ] **Remove user.** Confirms before deleting from Keycloak + portal.
+- [x] **Reset password.** Triggers Keycloak reset flow.
+- [x] **Disable user.** Sets enabled=false; user can't sign in.
+- [x] **Auto-disable date.** Sets future date; banner shows for that user.
+- [x] **Resend invite email.** Goes out via SMTP.
+- [x] **Remove user.** Confirms before deleting from Keycloak + portal.
 - [ ] **Helpful banner if Keycloak admin integration unconfigured.** When KC admin service account isn't set up, page surfaces a friendly explanation instead of failing silently.
 
 ### 10.3 Notifications platform (`/admin/notifications`)
 
-- [ ] **Page renders.** Notification types listed with enable/disable toggles.
-- [ ] **Test send.** Triggers a test email; arrives.
+- [x] **Page renders.** Notification types listed with enable/disable toggles.
+- [x] **Test send.** Triggers a test email; arrives.
 - [ ] **Per-org template editor.** Open a template; edit copy; saves.
 - [ ] **Variable insertion picker.** Click-to-insert known variables (`{{user.name}}`, `{{item.title}}`, etc.); inline preview shows resolved values.
 
 ### 10.4 Housekeeping (`/admin/housekeeping`)
 
-- [ ] **Summary cards.** Item count, user count, storage usage all populate with real numbers.
-- [ ] **Stale items list.** Items unused for >90 days; bulk-delete button works.
-- [ ] **Stale users list.** Users last seen >90 days ago; bulk-disable works.
-- [ ] **Large items list.** Top 10 by storage.
-- [ ] **Expiring shares.** Time-bound shares within next N days.
-- [ ] **Expiring users.** Users with auto-disable dates approaching.
-- [ ] **Storage breakdown.** Per-table sizes + per-item largest.
+- [x] **Summary cards.** Item count, user count, storage usage all populate with real numbers.
+- [x] **Stale items list.** Items unused for >90 days; bulk-delete button works.
+- [x] **Stale users list.** Users last seen >90 days ago; bulk-disable works.
+- [x] **Large items list.** Top 10 by storage.
+- [x] **Expiring shares.** Time-bound shares within next N days.
+- [x] **Expiring users.** Users with auto-disable dates approaching.
+- [x] **Storage breakdown.** Per-table sizes + per-item largest.
 - [ ] **Schedule config.** Cron expression editor; last run log shows recent invocations.
 
 ### 10.5 Backup (`/admin/backup`)
 
-- [ ] **Page renders.** Last backup timestamp, status, manual trigger button.
+- [x] **Page renders.** Last backup timestamp, status, manual trigger button.
 - [ ] **Manual trigger.** Click; archive job runs; new run appears in history.
 - [ ] **Schedule editor.** Daily / weekly / monthly / custom cron.
 - [ ] **Retention policy.** Set N days; older archives prune.

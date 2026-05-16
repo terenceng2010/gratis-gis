@@ -76,11 +76,10 @@ third party's cloud.
 6. **Tool & Widget Builder**: visual, node-graph authoring of custom
    geospatial tools and web-app widgets, friendly to non-developers
 
-Hosted notebook runtime (JupyterHub) was on the original seven-pillar list
-and has been deferred to v2. v1 ships a read-only portal data API instead so
-users can connect their own Jupyter / VS Code / RStudio with a personal access
-token; share-level geographic limits are still enforced server-side. See
-[docs/notebooks.md](./docs/notebooks.md) for the BYO-Jupyter plan.
+External clients (VS Code, RStudio, custom scripts) can connect to the
+read-only portal data API with a personal access token. Share-level
+geographic limits are still enforced server-side, so external clients
+only see data the user has access to in-portal.
 
 Underneath the pillars is the **observation-log engine**: a single
 append-only feature substrate that gives the platform bitemporal time-travel
@@ -124,7 +123,7 @@ gratis-gis/
 │   ├── portal-api/        NestJS backend
 │   ├── portal-web/        Next.js portal UI
 │   └── (future) field-app, form-designer, app-builder,
-│                report-builder, tool-builder, notebook-proxy
+│                report-builder, tool-builder
 ├── packages/
 │   ├── shared-types/      Domain types shared across apps
 │   ├── form-schema/       Form-definition types
@@ -200,7 +199,6 @@ Deeper design references:
 - [docs/llm-integration.md](./docs/llm-integration.md): local-first LLM features (semantic search, authoring assistant, NL queries, RAG help)
 - [docs/architecture/observation-log-engine.md](./docs/architecture/observation-log-engine.md): the engine substrate (observation log, lenses, bitemporal reads, provenance)
 - [docs/architecture/cedar-policy-integration.md](./docs/architecture/cedar-policy-integration.md): Cedar as the policy engine, entity model, three-phase rollout
-- [docs/notebooks.md](./docs/notebooks.md): bring-your-own Jupyter against the engine read API (deferred v2 candidate)
 - [docs/tool-builder.md](./docs/tool-builder.md): visual tool/widget builder (planned)
 - [docs/design-system.md](./docs/design-system.md): UI principles, tokens, components
 - [docs/deployment.md](./docs/deployment.md): how admins install and operate

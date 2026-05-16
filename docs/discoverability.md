@@ -9,7 +9,7 @@ Recommended:
 
 ```
 Open-source, self-hosted geospatial portal with web maps, app builder,
-offline field data collection, notebooks, and a visual tool builder.
+offline field data collection, and a visual tool builder.
 Built on PostGIS + MapLibre. Inspired by modern cloud-GIS platforms.
 ```
 
@@ -34,7 +34,6 @@ offline-first
 field-data-collection
 form-builder
 survey
-jupyter
 keycloak
 typescript
 nextjs
@@ -47,13 +46,13 @@ Apply with:
 
 ```bash
 gh repo edit <owner>/gratis-gis \
-  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, notebooks, and a visual tool builder. Built on PostGIS + MapLibre." \
+  --description "Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, and a visual tool builder. Built on PostGIS + MapLibre." \
   --homepage "https://gratisgis.org" \
   --add-topic gis --add-topic geospatial --add-topic mapping --add-topic webgis \
   --add-topic open-source-gis --add-topic open-source --add-topic self-hosted \
   --add-topic postgis --add-topic maplibre --add-topic offline-first \
   --add-topic field-data-collection --add-topic form-builder --add-topic survey \
-  --add-topic jupyter --add-topic keycloak --add-topic typescript \
+  --add-topic keycloak --add-topic typescript \
   --add-topic nextjs --add-topic nestjs --add-topic react-native --add-topic monorepo
 ```
 

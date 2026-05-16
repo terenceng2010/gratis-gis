@@ -53,7 +53,6 @@ a link to the dedicated page covering it.
 |---|---|---|
 | **Folder** | A grouping of other items by id. Items can live in many folders. | **Folder** |
 | **File** | Any arbitrary uploaded file (PDF, DOCX, ZIP). The catch-all item type. | **File** |
-| **Notebook** | Reference to a Jupyter notebook (`.ipynb`). Catalog-only; execution external. | **Notebook** |
 | **Tool** | A reusable, runnable analysis operation with a documented signature. | **Tool** |
 | **Layer package** | An archive item that bundles a data layer's schema + symbology + features for portability. | **Layer package** |
 | **Widget package** | An archive item that bundles a custom web-app widget for installation. | **Widget package** |

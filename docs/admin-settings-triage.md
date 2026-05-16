@@ -68,7 +68,7 @@ member-help requests, and our notifications system targets that
 list when a relevant trigger fires.
 
 Nav-bar visibility lets an org hide top-nav items they don't use
-(Notebooks, Open Data, etc.) so members see only what matters for
+(Open Data, Reports, etc.) so members see only what matters for
 their portal. Cheap toggle, big perceived simplification.
 
 ## Home page

@@ -9,11 +9,11 @@
  * monthly report template" recipe can sit on a dashboard, an admin
  * page, and a field workflow without re-authoring three times.
  *
- * v1 actions are URL-shaped on purpose -- "navigate the user to
+ * v1 actions are URL-shaped on purpose. "Navigate the user to
  * somewhere" covers a lot of "show me the thing" workflows and
  * needs no execution backend.  Later actions (run a derived-layer
- * pipeline, kick off a notebook, trigger a print job) can land
- * additively without changing the shape of existing tools.
+ * pipeline, trigger a print job) can land additively without
+ * changing the shape of existing tools.
  */
 
 /**

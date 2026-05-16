@@ -162,8 +162,8 @@ so the admin can narrow it afterward. This trades slightly more up-front
 configuration for much stronger safety guarantees: the same trade-off
 Postgres RLS forces, for the same reason.
 
-For non-feature-service item types (web-maps, reports, dashboards,
-notebooks) the deny-by-default row/field policies don't apply: those
+For non-feature-service item types (web-maps, reports, dashboards)
+the deny-by-default row/field policies don't apply: those
 items have no rows or fields to filter. Sharing rules from
 `data-model.md` govern them directly.
 

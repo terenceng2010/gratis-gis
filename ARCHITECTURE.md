@@ -91,21 +91,14 @@ Consumes portal-api. Uses `next-auth` with a Keycloak provider. Server
 components do data fetching with the user's JWT forwarded; client
 components handle interactive UI (maps, builders).
 
-### Hosted notebook runtime (deferred to v2)
+### External data access (read-only API)
 
-The original architecture proposed a JupyterHub instance fronted by
-Keycloak (OIDC), with each notebook registered as an `Item` of type
-`notebook`. v1 ships without it: the operational cost of running
-multi-user Jupyter doesn't fit a pre-v1 single-developer project. v1
-exposes a read-only data API per data layer instead, and users
-connect their own external Jupyter / VS Code / RStudio with a
-personal access token. Geographic share limits are still enforced
-server-side, so external notebooks only see data the user has access
-to in-portal.
-
-See [docs/notebooks.md](./docs/notebooks.md) for the BYO-Jupyter
-plan. Re-introducing the hosted runtime is a two-line schema change
-plus a UI surface once user demand justifies the operational cost.
+Each data layer exposes a read-only REST API gated by personal
+access tokens. External clients (VS Code, RStudio, command-line
+tools) authenticate with a PAT, request feature data, and let
+the server enforce geographic share limits before responding. No
+hosted execution environment ships with v1; external tools run
+wherever the user runs them.
 
 ### tool-builder + tool-runner (future)
 
@@ -115,10 +108,9 @@ graph is saved as a `tool` Item.
 
 `tool-runner` is a Node worker service that executes tools. It preferentially
 pushes work down to PostgreSQL/PostGIS (most geospatial operations already
-exist as SQL), falls back to turf.js in-process for lightweight vector ops,
-and can delegate Python-heavy steps to a notebook kernel in
-`notebook-hub`. Jobs expose status over a REST endpoint and emit progress
-events via Server-Sent Events.
+exist as SQL) and falls back to turf.js in-process for lightweight vector ops.
+Jobs expose status over a REST endpoint and emit progress events via
+Server-Sent Events.
 
 Tools can also be exported as drag-and-drop widgets consumable by
 `app-builder`. The widget manifest declares the tool's inputs, outputs, and

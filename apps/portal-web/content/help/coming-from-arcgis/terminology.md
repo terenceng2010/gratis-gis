@@ -31,7 +31,7 @@ Esri vocabulary was already the clear word.
 | Survey responses | **Form submission collection** OR a bound data layer | Spatial → data layer; non-spatial → submission collection. |
 | Operations Dashboard | **Dashboard** | The grid-of-indicators item. |
 | Story Map | (no direct equivalent yet) | Future scope. |
-| Notebook | **Notebook** | Same term, same idea. |
+| Notebook | (not built in; use a Tool item or external Jupyter against the data API) | Hosted notebooks deferred indefinitely. |
 | Tile layer (cached map service) | **Tile layer** | Same term. PMTiles at rest. |
 | Vector tile layer | **Tile layer** (vector kind) | Same item, different content. |
 | Imagery layer | (no direct equivalent today) | Raster imagery support is on the roadmap; out of v1. |

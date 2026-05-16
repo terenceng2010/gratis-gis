@@ -114,7 +114,6 @@ conditional FKs).
 | `dashboard` | panels + data bindings | - |
 | `file` | file metadata (size, mime) | MinIO object |
 | `layer-package` | style, schema | MinIO object |
-| `notebook` | kernel spec, env, schedule | MinIO object (`.ipynb`) |
 | `tool` | node-graph JSON (inputs, nodes, edges, outputs) | - |
 | `widget-package` | manifest of a tool-backed custom widget | - |
 

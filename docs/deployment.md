@@ -69,7 +69,7 @@ Every mode deploys the same set of services:
 - **minio**: object storage (replaceable by S3-compatible external)
 - **pg_tileserv**: tile server
 - **caddy**: reverse proxy with automatic HTTPS
-- **(later phases)** **jupyterhub**, **tool-runner**, **scheduler**
+- **(later phases)** **tool-runner**, **scheduler**
 
 ## Sensible defaults philosophy
 

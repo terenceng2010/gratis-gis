@@ -95,8 +95,8 @@ types into five categories:
 - **Data** — data layer, ArcGIS service, WMS / WFS, file
 - **Maps** — map, basemap, geo boundary
 - **Apps** — editor (and forms / web apps when those land)
-- **Analysis** — pick list (and dashboards / reports / notebooks
-  when those land)
+- **Analysis** — pick list (and dashboards / reports when those
+  land)
 - **Organize** — folder
 
 Pick a type → a wizard collects the minimum required input →
@@ -129,7 +129,6 @@ might land on a stub):
   instead for now.
 - **`web_app`** — Experience Builder analogue
 - **`dashboard`** — dashboards
-- **`notebook`** — JupyterHub integration
 - **`report_template`** — print / report generation
 - **`tool`**, **`widget_package`**, **`layer_package`** — tool
   builder + reusable bundles
@@ -194,7 +193,6 @@ So you don't go hunting for them:
 - Survey form authoring (use `editor` for data collection)
 - Experience Builder / web-app builder
 - Dashboards and printable reports
-- Hosted Jupyter notebooks
 - Tool / widget builder
 - Offline mobile field app (the editor is web-only today)
 - Map-as-basemap composition (one map can't yet act as a

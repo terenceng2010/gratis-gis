@@ -1,8 +1,7 @@
 # Tool & Widget Builder
 
 A visual, node-graph authoring environment for building custom geospatial
-tools and web-app widgets, with no code required for common cases and a Python
-escape hatch via notebooks when needed.
+tools and web-app widgets, with no code required for common cases.
 
 This delivers the kind of visual geoprocessing workflow analysts expect from
 a modern GIS platform, plus the extra ability to publish the same graph as a
@@ -35,7 +34,7 @@ draggable widget in the app builder.
 | Attribute | Filter, JoinByAttr, JoinBySpatial, Aggregate, Calculate |
 | Enrichment | Geocode, ElevationLookup, Weather (via plugin) |
 | Output | DataLayerSink, Chart, MapLayer, FileExport, ReportPanel |
-| Compute | SQL, JavaScript, **NotebookStep** (delegates to a Python kernel) |
+| Compute | SQL, JavaScript |
 | Control | Switch, Loop, Try/Catch (later phases) |
 
 Nodes are pluggable. A plugin declares its nodes in a manifest; plugins can
@@ -82,9 +81,6 @@ Two runners, chosen per node:
    faster than shipping data around.
 2. **Node worker**: for ops without a SQL equivalent, or for lightweight
    client-side previews, turf.js runs in-process.
-3. **Notebook kernel**: `NotebookStep` nodes hand a dataset to a Python
-   notebook kernel (via the `notebook-hub`), receive a result back. This
-   keeps the "big red button" escape hatch for anything PostGIS can't do.
 
 Jobs are persisted: each execution produces a `tool-run` record with
 status, logs, and outputs (ephemeral by default; can be promoted to a

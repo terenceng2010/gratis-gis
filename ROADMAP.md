@@ -200,23 +200,12 @@ in pre-v1.
       classifies each operationalLayer URL, builds a portal `map`
       item with one MapLayer per recognised source.
 
-## Phase 7: Hosted Jupyter (deferred to v2)
+## Phase 7: (removed)
 
-The original Phase 6 pillar (hosted JupyterHub + per-user single-user
-servers + a `gratisgis` Python client) is deferred from v1. Cost rationale:
-running multi-user JupyterHub (KubeSpawner, per-org images, secret rotation,
-kernel isolation) doesn't fit a pre-v1 single-developer project, and the
-use cases it covered are served by:
-
-- the **tool** item type (reusable, parameterised computation living
-  inside the portal sharing model)
-- **bring-your-own external Jupyter** pointed at the engine's read-only
-  data API with a personal access token; geographic share limits are
-  still enforced server-side
-
-See [docs/notebooks.md](./docs/notebooks.md). Re-introducing the hosted
-runtime is a two-line schema change plus a UI surface; nothing in the
-engine foundation forecloses it.
+Reserved for a future phase. The original Phase 7 was dropped from
+scope; the "tool" item type covers reusable computation inside the
+portal. External clients access the engine read-only data API via
+personal access tokens.
 
 ## Phase 8: Hardening
 
