@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
-  OnModuleInit,
+  OnApplicationBootstrap,
   ServiceUnavailableException,
 } from '@nestjs/common';
 
@@ -84,7 +84,7 @@ export interface KeycloakUserUpdateInput {
 }
 
 @Injectable()
-export class KeycloakAdminService implements OnModuleInit {
+export class KeycloakAdminService implements OnApplicationBootstrap {
   private readonly logger = new Logger(KeycloakAdminService.name);
   private tokenCache: TokenCache | null = null;
 
@@ -121,8 +121,17 @@ export class KeycloakAdminService implements OnModuleInit {
    * boot wave. The admin-triggered path (saveSmtp on PUT
    * /admin/notifications/smtp) intentionally remains ungated since
    * it's already a single-request operation.
+   *
+   * Why onApplicationBootstrap and not onModuleInit: the leader
+   * lock is acquired asynchronously inside LeaderElectionService's
+   * own onModuleInit, and Nest does not strictly serialize
+   * onModuleInit hooks across modules even when the import graph
+   * looks like it should. Running our gating check from
+   * onApplicationBootstrap (which fires only after every module's
+   * onModuleInit chain has resolved) ensures leader.shouldRun() has
+   * its final value.
    */
-  async onModuleInit(): Promise<void> {
+  async onApplicationBootstrap(): Promise<void> {
     if (!this.isConfigured()) return;
     // Only one replica per boot wave performs the realm-side
     // bootstrap. Non-leaders rely on the leader's converged state
