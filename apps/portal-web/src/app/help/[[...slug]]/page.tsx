@@ -189,6 +189,7 @@ function Landing({
           // src/lib/help/content.ts.
           const rank: Record<string, number> = {
             'getting-started': 10,
+            'coming-from-arcgis': 15,
             items: 20,
             'map-editing': 30,
             forms: 40,

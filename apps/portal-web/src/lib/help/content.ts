@@ -171,6 +171,7 @@ function extractHeadings(
  */
 const CATEGORY_ORDER: Record<string, number> = {
   'getting-started': 10,
+  'coming-from-arcgis': 15,
   items: 20,
   'map-editing': 30,
   forms: 40,
@@ -376,6 +377,11 @@ export async function buildNav(): Promise<HelpNavNode> {
       }
       cursor = next;
     }
+    // Skip the landing page (slug = "") from the sidebar tree.
+    // It's reachable via the help-system masthead link; rendering
+    // it as a leaf at root visually competes with real top-level
+    // categories.
+    if (d.slug === '') continue;
     cursor.children.push({
       label: d.frontmatter.title,
       slug: d.slug,
