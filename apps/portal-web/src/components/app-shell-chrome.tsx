@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import { TopBarSearch } from './top-bar-search';
+import { HelpButton } from './help-button';
 import { UserMenu } from './user-menu';
 
 /**
@@ -218,6 +219,7 @@ export function AppShellChrome({
             <TopBarSearch />
           </div>
           <div className="flex items-center gap-2">
+            <HelpButton />
             <button
               className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-surface-2"
               aria-label="Notifications"
