@@ -49,10 +49,21 @@ interface PrintRenderClientProps {
  *  paper. */
 const PRINT_DPI = 96;
 
+interface MapSnapshot {
+  dataUrl: string;
+  center: [number, number];
+  zoom: number;
+  bearing: number;
+  widthPx: number;
+  heightPx: number;
+  capturedAt: number;
+}
+
 export function PrintRenderClient({ templateId }: PrintRenderClientProps) {
   const search = useSearchParams();
   const valuesParam = search?.get('values') ?? '{}';
   const mapWidgetId = search?.get('mapWidgetId') ?? '';
+  const snapToken = search?.get('snap') ?? '';
 
   const values: Record<string, string> = useMemo(() => {
     try {
@@ -62,7 +73,27 @@ export function PrintRenderClient({ templateId }: PrintRenderClientProps) {
     }
   }, [valuesParam]);
 
-  void mapWidgetId; // followup: thread map state into MapElementRender
+  void mapWidgetId; // mapWidgetId is consumed via the snap token now
+
+  // #106: pull the bound map's PNG snapshot out of sessionStorage.
+  // The parent app stashed it under `snapToken` right before
+  // window.open(...).  We free the entry as soon as we've parsed it
+  // so a stale snapshot doesn't pile up if the user re-prints.
+  const mapSnapshot: MapSnapshot | null = useMemo(() => {
+    if (!snapToken || typeof window === 'undefined') return null;
+    try {
+      const raw = window.sessionStorage.getItem(snapToken);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as MapSnapshot;
+      // Don't remove the key here -- React Strict Mode would parse
+      // it on the second mount and find nothing.  The token is
+      // short-lived (one print session) and sessionStorage clears
+      // when the tab closes, so leaving it costs nothing.
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, [snapToken]);
 
   const [template, setTemplate] = useState<PrintTemplateData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +196,7 @@ export function PrintRenderClient({ templateId }: PrintRenderClientProps) {
             element={el}
             parameters={template.parameters}
             values={values}
+            mapSnapshot={mapSnapshot}
           />
         ))}
       </div>
@@ -176,10 +208,12 @@ function ElementRender({
   element,
   parameters,
   values,
+  mapSnapshot,
 }: {
   element: PrintElement;
   parameters: PrintTemplateParameter[];
   values: Record<string, string>;
+  mapSnapshot: MapSnapshot | null;
 }) {
   const px = (n: number) => n * PRINT_DPI;
   const baseStyle: CSSProperties = {
@@ -197,12 +231,19 @@ function ElementRender({
           parameters={parameters}
           values={values}
           baseStyle={baseStyle}
+          mapSnapshot={mapSnapshot}
         />
       );
     case 'image':
       return <ImageRender element={element} baseStyle={baseStyle} />;
     case 'map':
-      return <MapPlaceholderRender element={element} baseStyle={baseStyle} />;
+      return (
+        <MapPlaceholderRender
+          element={element}
+          baseStyle={baseStyle}
+          mapSnapshot={mapSnapshot}
+        />
+      );
     case 'legend':
       return <LegendRender element={element} baseStyle={baseStyle} />;
     case 'scalebar':
@@ -220,6 +261,7 @@ function resolveSegment(
   seg: PrintTextSegment,
   parameters: PrintTemplateParameter[],
   values: Record<string, string>,
+  mapSnapshot: MapSnapshot | null,
 ): string {
   if (seg.kind === 'literal') return seg.text;
   if (seg.source === 'parameter') {
@@ -237,9 +279,28 @@ function resolveSegment(
   if (id === 'user_display_name') return '';
   if (id === 'org_name') return '';
   if (id === 'app_name') return '';
-  if (id === 'map_scale') return '';
-  if (id === 'map_extent_bbox') return '';
-  if (id === 'map_center_latlon') return '';
+  // #106: map_* dynamic tokens are populated from the parent app's
+  // captured map state when available.  Without a snapshot we
+  // resolve to empty so the parent's literal text still flows.
+  // Scale is approximated from Web Mercator zoom: each step doubles
+  // resolution, so a denominator at zoom z is roughly
+  // 559082264 / 2^z at the equator.  Rough but recognizable to
+  // mapmakers; "1:24,000" reads correctly to the user.
+  if (id === 'map_scale') {
+    if (!mapSnapshot) return '';
+    const denom = Math.round(559082264 / Math.pow(2, mapSnapshot.zoom));
+    return `1:${denom.toLocaleString()}`;
+  }
+  if (id === 'map_extent_bbox') {
+    // bbox isn't in the snapshot today (followup); for now emit
+    // center + zoom so the user has SOMETHING locating the print.
+    if (!mapSnapshot) return '';
+    return `center ${mapSnapshot.center[1].toFixed(5)}, ${mapSnapshot.center[0].toFixed(5)} z${mapSnapshot.zoom.toFixed(1)}`;
+  }
+  if (id === 'map_center_latlon') {
+    if (!mapSnapshot) return '';
+    return `${mapSnapshot.center[1].toFixed(5)}, ${mapSnapshot.center[0].toFixed(5)}`;
+  }
   // Unknown dynamic ids resolve to empty so a renamed token doesn't
   // print a raw `{dynamic.unknown}` to the user.
   return '';
@@ -250,11 +311,13 @@ function TextRender({
   parameters,
   values,
   baseStyle,
+  mapSnapshot,
 }: {
   element: PrintTextElement;
   parameters: PrintTemplateParameter[];
   values: Record<string, string>;
   baseStyle: CSSProperties;
+  mapSnapshot: MapSnapshot | null;
 }) {
   const fontPx = (element.fontSizePt / 72) * PRINT_DPI;
   const style: CSSProperties = {
@@ -287,7 +350,7 @@ function TextRender({
     boxSizing: 'border-box',
   };
   const resolved = element.segments
-    .map((s) => resolveSegment(s, parameters, values))
+    .map((s) => resolveSegment(s, parameters, values, mapSnapshot))
     .join('');
   return (
     <div style={style}>
@@ -335,12 +398,34 @@ function ImageRender({
   );
 }
 
+/**
+ * Map element renderer.  Two modes:
+ *
+ * - When the parent app handed off a PNG snapshot of the live map
+ *   via sessionStorage (#106), render it as a paintable image that
+ *   fills the configured map box.  `object-fit: cover` reframes the
+ *   snapshot to fit the print box's aspect ratio without bars,
+ *   which is the right behavior for AGOL-style print: the box on
+ *   paper IS the viewport, so users expect "what fit the screen,
+ *   cropped to fit the paper."  A future polish can swap this for
+ *   an off-screen re-render at the box's exact pixel dimensions so
+ *   nothing crops, but that needs full MapData + basemap + idle
+ *   plumbing and the screen snapshot is a real, recognizable map
+ *   today.
+ *
+ * - Without a snapshot (eg the user opened the print URL directly,
+ *   or the snapshot capture failed because of a tile cross-origin
+ *   issue), fall back to the v1 hatch placeholder so the rest of
+ *   the template still prints cleanly.
+ */
 function MapPlaceholderRender({
   element,
   baseStyle,
+  mapSnapshot,
 }: {
   element: PrintMapElement;
   baseStyle: CSSProperties;
+  mapSnapshot: MapSnapshot | null;
 }) {
   const borderStyle: CSSProperties = element.border
     ? {
@@ -348,6 +433,32 @@ function MapPlaceholderRender({
         boxSizing: 'border-box',
       }
     : {};
+  if (mapSnapshot) {
+    return (
+      <div
+        style={{
+          ...baseStyle,
+          ...borderStyle,
+          overflow: 'hidden',
+          background: '#f3f4f6',
+        }}
+      >
+        <img
+          src={mapSnapshot.dataUrl}
+          alt="Map"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            display: 'block',
+          }}
+          // The image is a data: URL so we don't need crossOrigin,
+          // and it's already fully loaded before the browser paints
+          // it -- no need to gate window.print() on an onload event.
+        />
+      </div>
+    );
+  }
   return (
     <div
       style={{
@@ -363,7 +474,7 @@ function MapPlaceholderRender({
         justifyContent: 'center',
       }}
     >
-      Map (server-side raster rendering — followup)
+      Map preview unavailable (no snapshot captured)
     </div>
   );
 }

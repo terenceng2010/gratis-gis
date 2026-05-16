@@ -526,6 +526,14 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       bearing: map.bearing,
       pitch: map.pitch,
       attributionControl: false,
+      // #101 print snapshot: `canvas.toDataURL()` returns a blank
+      // PNG when the WebGL context has cleared its drawing buffer
+      // (the default for performance).  Preserving the buffer is
+      // a tiny perf cost but enables the Print widget to grab the
+      // live map exactly as the user sees it, no off-screen
+      // re-render needed.  Documented in the MapLibre FAQ as the
+      // recommended toggle when you need toDataURL snapshots.
+      preserveDrawingBuffer: true,
       // #115 P12: tile fetches (data_layer MVT) go through the
       // same-origin /api/portal/ BFF and need the Keycloak session
       // cookie to authenticate. MapLibre's tile worker does NOT

@@ -1873,6 +1873,20 @@ function SearchWidgetRender({ widget }: { widget: CustomWidget }) {
 function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'print') return null;
   const { state } = useBoundMap(widget.config.mapWidgetId);
+  // #106: live MapLibre handle for the bound map, so onRender can
+  // grab a PNG snapshot of what the user is currently looking at
+  // and feed it to the print page's map element.  Without this the
+  // print page falls back to the v1 "Map (followup)" placeholder
+  // because rendering a real MapLibre at print size on a fresh
+  // page is its own project (correct basemap, layer styles, idle
+  // wait, etc.).  Snapshotting the live map ships an immediate,
+  // user-recognizable print today and a higher-res off-screen
+  // re-render can land as polish later.
+  const printCtx = useContext(CustomMapsContext);
+  const liveMapForPrint =
+    widget.config.kind === 'print' && widget.config.mapWidgetId
+      ? printCtx?.maps?.[widget.config.mapWidgetId] ?? null
+      : null;
   type TemplateSummary = {
     id: string;
     title: string;
@@ -1982,6 +1996,48 @@ function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
       const mapWidgetId =
         widget.config.kind === 'print' ? widget.config.mapWidgetId : '';
       if (mapWidgetId) params.set('mapWidgetId', mapWidgetId);
+
+      // #106: capture a PNG snapshot of the bound map's live
+      // canvas so the print page can render real map content
+      // inside its map element instead of the v1 placeholder.
+      // We force a synchronous re-render first (`triggerRepaint`
+      // + a microtask wait would be nicer but isn't possible from
+      // a sync onClick), then read the canvas.  preserveDrawing-
+      // Buffer is now true on MapCanvas (see its init block) so
+      // the PNG isn't blank.  Snapshot + the camera state go into
+      // sessionStorage keyed by a one-shot token because URL-
+      // encoded data URLs blow past most browser URL length caps
+      // for anything past a tiny tile.
+      if (liveMapForPrint && typeof window !== 'undefined') {
+        try {
+          const canvas = liveMapForPrint.getCanvas();
+          // Trigger one more frame so the snapshot includes any
+          // pending paint from a recent pan/zoom that hadn't
+          // committed yet.  No-op if already idle.
+          liveMapForPrint.triggerRepaint();
+          const dataUrl = canvas.toDataURL('image/png');
+          const center = liveMapForPrint.getCenter();
+          const payload = {
+            dataUrl,
+            center: [center.lng, center.lat] as [number, number],
+            zoom: liveMapForPrint.getZoom(),
+            bearing: liveMapForPrint.getBearing(),
+            widthPx: canvas.width,
+            heightPx: canvas.height,
+            capturedAt: Date.now(),
+          };
+          const token = `print-snap-${selected.id}-${Date.now()}`;
+          window.sessionStorage.setItem(token, JSON.stringify(payload));
+          params.set('snap', token);
+        } catch (snapErr) {
+          // Snapshot failed (cross-origin tile, drawing buffer
+          // cleared, etc.).  Print page falls back to the
+          // placeholder map rather than blocking the print, so
+          // the user still gets their template + parameters.
+          console.warn('[print] map snapshot failed', snapErr);
+        }
+      }
+
       const url = `/print/${selected.id}?${params.toString()}`;
       const opened = window.open(url, '_blank', 'noopener,noreferrer');
       if (!opened) {
@@ -1998,7 +2054,7 @@ function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
     } finally {
       setRendering(false);
     }
-  }, [selected, values, widget.config]);
+  }, [selected, values, widget.config, liveMapForPrint]);
 
   if (templates === null) {
     return (
