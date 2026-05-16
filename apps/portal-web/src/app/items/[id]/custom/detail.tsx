@@ -5644,7 +5644,7 @@ function inlineMdToHtml(s: string): string {
         .replace(/>/g, '&gt;');
       const idx = colorSpans.length;
       colorSpans.push(`<span style="color: ${color}">${escaped}</span>`);
-      return ` COLOR${idx} `;
+      return ` COLOR${idx} `;
     },
   );
   let out = pre
@@ -5658,7 +5658,7 @@ function inlineMdToHtml(s: string): string {
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
-  out = out.replace(/ COLOR(\d+) /g, (_m, idx) => {
+  out = out.replace(/ COLOR(\d+) /g, (_m, idx) => {
     return colorSpans[Number(idx)] ?? '';
   });
   return out;
