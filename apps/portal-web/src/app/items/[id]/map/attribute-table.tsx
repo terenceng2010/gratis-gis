@@ -7,6 +7,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Download,
   FileIcon,
   Filter as FilterIcon,
   Focus,
@@ -19,6 +20,7 @@ import {
   Table,
   X,
 } from 'lucide-react';
+import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
 import type {
   FeatureField,
   MapLayer,
@@ -1322,6 +1324,24 @@ export function AttributeTable({
           <FilterIcon className="h-3.5 w-3.5" />
           Use as filter
         </button>
+        {/* #108: export the currently-displayed feature set to CSV
+            or Excel.  Scope follows the table's existing scope
+            controls: "all rows" exports activeFeatures; with a
+            selection + the dropdown's "Selected rows" option
+            we export only those.  Bundle (related tables +
+            attachments) is the bigger sibling tracked as #109. */}
+        <AttrTableExportMenu
+          features={activeFeatures}
+          fields={
+            activeLayer && fieldsByLayer
+              ? fieldsByLayer[activeLayer.id] ?? null
+              : null
+          }
+          layerTitle={activeLayer?.title ?? 'layer'}
+          activeSelection={activeSelection}
+          featureKeyAt={featureKeyAt}
+          disabled={activeFeatures.length === 0 || !activeLayer}
+        />
         {/* The own close button is hidden when embedded: the parent
             (a ToolPopover in the Custom Web App, etc.) owns close. */}
         {embedded ? null : (
@@ -1731,6 +1751,153 @@ export function AttributeTable({
  * feature.  Today, if the user makes a mistake, they re-run the
  * calculation with a corrective expression.
  */
+/**
+ * #108: Export dropdown for the attribute table.  Two formats
+ * today (CSV / XLSX) plus a "scope" toggle: by default we export
+ * activeFeatures (whatever the table is showing); with a non-empty
+ * selection the user gets a second option to export selected
+ * rows only.
+ *
+ * Why "what the table shows" instead of always re-fetching: the
+ * table is already filtered / scoped via its own controls (server
+ * filter, viewport-only, hide-unselected).  Exporting that exact
+ * set means "what you see is what you get", which is the least
+ * surprising behavior and avoids a second round-trip for big
+ * layers.  Bundle export (parent + related + attachments) is the
+ * sibling tracked as #109.
+ */
+function AttrTableExportMenu({
+  features,
+  fields,
+  layerTitle,
+  activeSelection,
+  featureKeyAt,
+  disabled,
+}: {
+  features: GeoJSON.Feature[];
+  fields: FeatureField[] | null;
+  layerTitle: string;
+  activeSelection: Set<number | string>;
+  featureKeyAt: (idx: number) => number | string;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasSelection = activeSelection.size > 0;
+
+  function run(format: ExportFormat, onlySelection: boolean): void {
+    setOpen(false);
+    const source = onlySelection
+      ? features.filter((_, i) => activeSelection.has(featureKeyAt(i)))
+      : features;
+    if (source.length === 0) return;
+    const filename = (layerTitle || 'layer')
+      .trim()
+      .replace(/[^\w.\- ]+/g, '_')
+      .replace(/\s+/g, '_')
+      .slice(0, 60) || 'layer';
+    // Build options inline so we only set `fields` when we actually
+    // have a schema -- exactOptionalPropertyTypes refuses
+    // `fields: undefined` because the type declares it as
+    // `fields?: T[]` not `fields?: T[] | undefined`.
+    const fieldHints = fields?.map((fld) => ({
+      name: fld.name,
+      ...(fld.label && fld.label !== fld.name ? { label: fld.label } : {}),
+    }));
+    exportFeatures(
+      source.map((f) => ({
+        // GeoJSON.Feature can carry an `id` field at the top level;
+        // when it's a number cast to string for the exporter's
+        // generic id shape.
+        ...(f.id !== undefined ? { id: String(f.id) } : {}),
+        // attribute-table server mode parks geometry as null (the
+        // server-paged path drops geometry to keep response sizes
+        // tractable), so just pass through whatever the feature has.
+        geometry: f.geometry,
+        properties: (f.properties ?? null) as Record<string, unknown> | null,
+      })),
+      format,
+      {
+        filename,
+        ...(fieldHints ? { fields: fieldHints } : {}),
+        // XLSX gets a WKT geometry column for desktop-GIS round-
+        // trip; CSV stays text-only by convention.  In server-paged
+        // mode geometry will be empty/null, so the column lands as
+        // empty strings -- acceptable for v1.
+        includeGeometryWkt: format === 'xlsx',
+      },
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+        title={
+          disabled
+            ? 'No rows to export'
+            : `Export ${features.length} row${features.length === 1 ? '' : 's'}`
+        }
+      >
+        <Download className="h-3.5 w-3.5" />
+        Export
+      </button>
+      {open ? (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            aria-hidden
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-8 z-40 w-56 rounded-md border border-border bg-surface-0 py-1 text-xs shadow-lg">
+            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted">
+              All rows ({features.length})
+            </div>
+            <button
+              type="button"
+              onClick={() => run('xlsx', false)}
+              className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+            >
+              Excel (.xlsx)
+            </button>
+            <button
+              type="button"
+              onClick={() => run('csv', false)}
+              className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+            >
+              CSV
+            </button>
+            {hasSelection ? (
+              <>
+                <div className="my-1 border-t border-border" />
+                <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted">
+                  Selected rows ({activeSelection.size})
+                </div>
+                <button
+                  type="button"
+                  onClick={() => run('xlsx', true)}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+                >
+                  Excel (.xlsx)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => run('csv', true)}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+                >
+                  CSV
+                </button>
+              </>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function CalculateFieldModal({
   itemId,
   layerKey,
