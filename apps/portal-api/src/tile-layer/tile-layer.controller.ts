@@ -57,6 +57,29 @@ export class TileLayerController {
   }
 
   /**
+   * Pre-upload space check.  Frontend calls this on file select
+   * (before requesting a presigned PUT) so a too-big upload is
+   * refused up front instead of hammering MinIO with ENOSPC after
+   * megabytes of bytes have already been transferred.  Returns
+   * `ok: false` plus a user-readable reason when the host disk
+   * doesn't have headroom for the upload + conversion pipeline.
+   * No `itemId` in the path because the check is purely about
+   * disk space; the create-item flow can call this before the
+   * item exists.
+   */
+  @Post('tile-layer/check-space')
+  async checkSpace(
+    @CurrentUser() _user: AuthUser,
+    @Body()
+    body: {
+      fileName: string;
+      sizeBytes: number;
+    },
+  ) {
+    return this.tileLayer.checkUploadSpace(body);
+  }
+
+  /**
    * Range-request proxy. MapLibre's pmtiles plugin issues many
    * range requests as the user pans / zooms; this endpoint
    * forwards each one to the underlying MinIO public URL. We

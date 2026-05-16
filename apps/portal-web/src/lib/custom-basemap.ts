@@ -2,14 +2,22 @@
 import type { StyleSpecification } from 'maplibre-gl';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
+import cogProtocol from '@geomatico/maplibre-cog-protocol';
 import type { BasemapData } from '@gratis-gis/shared-types';
 
-// Register the pmtiles:// protocol with MapLibre once per page
-// load (#179). MapLibre's setStyle / addSource use the protocol
-// transparently when a tile source's URL begins with pmtiles://,
-// so basemaps backed by a tile_layer item get range-served
-// straight from MinIO via the api's proxy endpoint with no
-// other plumbing.
+// Register the pmtiles:// AND cog:// protocols with MapLibre
+// once per page load.
+//
+//   pmtiles://  (#179) Range-serves PMTiles archives stored in
+//               MinIO via the api proxy endpoint.  Powers every
+//               tile_layer item whose `format` is 'pmtiles'.
+//
+//   cog://      Range-serves Cloud-Optimized GeoTIFFs via the
+//               same api proxy endpoint.  Powers tile_layer
+//               items in the 'cog' bridge state (raw raster
+//               uploads waiting on the PMTiles pyramid worker)
+//               and stays valid even after the pyramid lands so
+//               an older saved view still resolves.
 //
 // We do this at module load (rather than per-map mount) because
 // the protocol is global state on the maplibregl singleton; a
@@ -18,11 +26,24 @@ import type { BasemapData } from '@gratis-gis/shared-types';
 declare global {
   // eslint-disable-next-line no-var
   var __ggPmtilesRegistered: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __ggCogRegistered: boolean | undefined;
 }
 if (typeof globalThis.__ggPmtilesRegistered === 'undefined') {
   const protocol = new Protocol();
   maplibregl.addProtocol('pmtiles', protocol.tile);
   globalThis.__ggPmtilesRegistered = true;
+}
+if (typeof globalThis.__ggCogRegistered === 'undefined') {
+  // The @geomatico plugin exports the protocol handler as the
+  // default export.  Different versions of MapLibre's
+  // addProtocol() typings disagree on the handler shape, hence
+  // the unknown cast.
+  maplibregl.addProtocol(
+    'cog',
+    cogProtocol as unknown as Parameters<typeof maplibregl.addProtocol>[1],
+  );
+  globalThis.__ggCogRegistered = true;
 }
 
 /**
@@ -82,7 +103,7 @@ export function customBasemapToStyle(b: CustomBasemap): CustomStyle {
     // basemaps need their source-layer + style configured by
     // the author and are out of v1 scope here -- the user
     // would instead use a style.json (the 'vector-style' path).
-    if (b.url.startsWith('pmtiles://')) {
+    if (b.url.startsWith('pmtiles://') || b.url.startsWith('cog://')) {
       return {
         kind: 'inline',
         style: {
@@ -230,6 +251,28 @@ export function basemapDataToStyle(d: BasemapData): CustomStyle | null {
   if (d.kind === 'tile-url') {
     if (!d.tileUrl) return null;
     if (d.tileUrl.startsWith('pmtiles://')) {
+      return {
+        kind: 'inline',
+        style: {
+          version: 8,
+          glyphs: DEFAULT_GLYPHS,
+          sources: {
+            raster: {
+              type: 'raster',
+              url: d.tileUrl,
+              tileSize: 256,
+              attribution: d.attribution || undefined,
+            },
+          },
+          layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
+        } as StyleSpecification,
+      };
+    }
+    if (d.tileUrl.startsWith('cog://')) {
+      // cog:// URLs are handled by the @geomatico cog protocol
+      // plugin registered at module load.  MapLibre treats this
+      // as a raster source whose `url` returns a tile-json shape;
+      // the plugin synthesizes one from the COG's header.
       return {
         kind: 'inline',
         style: {

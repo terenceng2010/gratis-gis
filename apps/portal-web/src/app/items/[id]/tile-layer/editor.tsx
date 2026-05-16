@@ -5,6 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { PMTiles, Protocol } from 'pmtiles';
+import cogProtocol from '@geomatico/maplibre-cog-protocol';
 import {
   Check,
   Copy,
@@ -12,7 +13,10 @@ import {
   RefreshCw,
   Upload as UploadIcon,
 } from 'lucide-react';
-import type { TileLayerData } from '@gratis-gis/shared-types';
+import type {
+  TileLayerData,
+  TileLayerOriginalFormat,
+} from '@gratis-gis/shared-types';
 import { isTileLayerData } from '@gratis-gis/shared-types';
 
 /**
@@ -53,16 +57,22 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Register the pmtiles protocol with MapLibre once per page
-  // load. The Protocol class intercepts pmtiles:// URLs and
-  // serves tile bytes via range requests against the underlying
-  // HTTP URL. Idempotent registration so HMR re-renders don't
-  // double-register.
+  // Register the pmtiles and cog protocols with MapLibre once
+  // per page load.  pmtiles serves PMTiles archives via range
+  // requests; cog serves Cloud-Optimized GeoTIFFs the same way
+  // (powering the bridge state for raw raster uploads waiting on
+  // their PMTiles pyramid).  Idempotent registration so HMR re-
+  // renders don't double-register.
   useEffect(() => {
     const proto = new Protocol();
     maplibregl.addProtocol('pmtiles', proto.tile);
+    maplibregl.addProtocol(
+      'cog',
+      cogProtocol as unknown as Parameters<typeof maplibregl.addProtocol>[1],
+    );
     return () => {
       maplibregl.removeProtocol('pmtiles');
+      maplibregl.removeProtocol('cog');
     };
   }, []);
 
@@ -77,21 +87,63 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
     // re-upload of the same name shouldn't be silently ignored).
     ev.target.value = '';
     const lower = file.name.toLowerCase();
+    // Supported: pre-tiled containers + raw raster inputs that
+    // the api converts to COG at ingest (then a background
+    // worker bakes a PMTiles pyramid).
     const supported =
       lower.endsWith('.pmtiles') ||
       lower.endsWith('.mbtiles') ||
-      lower.endsWith('.zip');
+      lower.endsWith('.zip') ||
+      lower.endsWith('.tif') ||
+      lower.endsWith('.tiff') ||
+      lower.endsWith('.geotiff') ||
+      lower.endsWith('.cog') ||
+      lower.endsWith('.jp2');
     if (!supported) {
       if (lower.endsWith('.tpk') || lower.endsWith('.tpkx')) {
         setUploadError(
-          'TPK / TPKX support is on the roadmap. For now: export your tile cache to MBTiles (or convert from TPK with the pmtiles CLI) and upload that. Supported today: .pmtiles, .mbtiles, .zip (XYZ tile directory).',
+          'TPK / TPKX support is on the roadmap. For now: export your tile cache to MBTiles (or convert from TPK with the pmtiles CLI) and upload that. Supported today: .pmtiles, .mbtiles, .zip, .tif / .tiff / .geotiff, .cog, .jp2.',
+        );
+      } else if (lower.endsWith('.ecw') || lower.endsWith('.sid')) {
+        setUploadError(
+          `${lower.endsWith('.ecw') ? 'ECW' : 'MrSID'} ingest isn't supported (proprietary decoder license isn't AGPL-compatible). Convert to GeoTIFF locally with a GDAL build that includes the vendor SDK, then upload the .tif.`,
         );
       } else {
         setUploadError(
-          'Supported formats: .pmtiles, .mbtiles, .zip (XYZ tile directory).',
+          'Supported formats: .pmtiles, .mbtiles, .zip (XYZ tile directory), .tif / .tiff / .geotiff, .cog, .jp2.',
         );
       }
       return;
+    }
+    // Pre-flight space check before bothering with the presigned
+    // URL.  The api reports back whether the upload + COG
+    // conversion + (eventual) PMTiles pyramid will fit on the
+    // host's free disk.  Failing here saves megabytes of wasted
+    // PUT traffic.
+    setUploadError(null);
+    try {
+      const spaceRes = await fetch('/api/portal/tile-layer/check-space', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          sizeBytes: file.size,
+        }),
+      });
+      if (spaceRes.ok) {
+        const body = (await spaceRes.json()) as {
+          ok: boolean;
+          reason?: string;
+        };
+        if (!body.ok) {
+          setUploadError(body.reason ?? 'Not enough free disk space.');
+          return;
+        }
+      }
+      // 4xx / 5xx: fail-open and let the real upload surface the
+      // error.  The space check is best-effort.
+    } catch {
+      /* network / parse failure - fail-open, real upload will catch issues */
     }
     await runUpload(file);
   }
@@ -216,16 +268,20 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
       {/* File / upload card */}
       <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
         <div className="border-b border-border bg-surface-2 px-4 py-3">
-          <h3 className="text-sm font-medium text-ink-0">Tile cache file</h3>
+          <h3 className="text-sm font-medium text-ink-0">Tile cache or raster file</h3>
           <p className="mt-0.5 text-xs text-muted">
-            Upload a tile cache file. Accepted formats:{' '}
-            <strong>.pmtiles</strong> (served as-is),{' '}
+            Upload a pre-tiled container or a raw raster.
+            Pre-tiled: <strong>.pmtiles</strong> (served as-is),{' '}
             <strong>.mbtiles</strong> (converted to PMTiles
-            server-side at upload), and <strong>.zip</strong>{' '}
+            server-side at upload), <strong>.zip</strong>{' '}
             containing an XYZ <code>{'{z}/{x}/{y}'}</code> tile
-            directory (also converted). At rest everything is
-            PMTiles for range-served, zero-per-tile-compute
-            serving. TPK / TPKX support is on the roadmap.
+            directory (also converted). Raw raster:{' '}
+            <strong>.tif</strong> / <strong>.tiff</strong> /{' '}
+            <strong>.geotiff</strong>, <strong>.cog</strong>,{' '}
+            <strong>.jp2</strong> (GDAL normalizes to a Cloud-
+            Optimized GeoTIFF on upload, then a background worker
+            bakes a PMTiles raster pyramid). TPK / TPKX, ECW, and
+            MrSID aren't accepted (proprietary decoders).
           </p>
         </div>
         <div className="space-y-3 p-4 text-sm">
@@ -274,7 +330,7 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pmtiles,.mbtiles,.zip"
+                accept=".pmtiles,.mbtiles,.zip,.tif,.tiff,.geotiff,.cog,.jp2"
                 onChange={(e) => void onFileChange(e)}
                 className="hidden"
               />
@@ -533,9 +589,7 @@ function TilePreview({ data }: { data: TileLayerData }) {
   );
 }
 
-function originalFormatLabel(
-  fmt: 'pmtiles' | 'mbtiles' | 'xyz-zip',
-): string {
+function originalFormatLabel(fmt: TileLayerOriginalFormat): string {
   switch (fmt) {
     case 'pmtiles':
       return 'PMTiles';
@@ -543,6 +597,12 @@ function originalFormatLabel(
       return 'MBTiles';
     case 'xyz-zip':
       return 'XYZ tile directory (zip)';
+    case 'geotiff':
+      return 'GeoTIFF';
+    case 'cog':
+      return 'Cloud-Optimized GeoTIFF';
+    case 'jp2':
+      return 'JPEG 2000';
   }
 }
 

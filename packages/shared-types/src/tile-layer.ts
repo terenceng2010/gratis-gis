@@ -38,29 +38,63 @@
 import type { ISODateString } from './ids';
 
 /**
- * Recognized container formats AT REST in MinIO. After the
- * upload + conversion pipeline runs, every tile_layer's file is
- * stored as PMTiles regardless of what the user uploaded; the
- * `originalFormat` field below records what they sent us.
+ * Container formats served AT REST in MinIO.  Two flavors today:
  *
- * We unify on PMTiles at rest because the serving path
- * (range-request friendly, zero per-tile compute) only works for
- * PMTiles. MBTiles + zipped XYZ ingestion exists for user
- * convenience, not because we'd ever serve those formats
- * directly.
+ *   - **pmtiles** is the universal serving format: range-served
+ *     directly by MinIO, MapLibre reads with the pmtiles protocol
+ *     plugin, no per-tile compute.  This is what we eventually
+ *     converge on for every tile_layer item.
+ *   - **cog** (Cloud-Optimized GeoTIFF) is the bridge format used
+ *     for raw raster uploads.  GDAL normalizes a `.tif` / `.tiff`
+ *     / `.geotiff` / `.jp2` to COG at upload, MinIO range-serves
+ *     the COG, and MapLibre reads it with the cog-protocol
+ *     plugin.  A background worker then bakes the same data into
+ *     a PMTiles raster pyramid; once the PMTiles is ready, the
+ *     item's served format flips from `cog` to `pmtiles`.  The
+ *     COG is preserved as the archival source.
  */
-export type TileLayerFormat = 'pmtiles';
+export type TileLayerFormat = 'pmtiles' | 'cog';
 
 /**
- * Container formats accepted at upload. The ingest path converts
- * non-pmtiles inputs to pmtiles via the pmtiles Go CLI before
- * persisting. TPK / TPKX are documented out of v1 ingest because
- * Esri's bundle format needs its own extraction pipeline.
+ * Container formats accepted at upload.  Pre-tiled containers
+ * (pmtiles / mbtiles / xyz-zip) feed the PMTiles path directly.
+ * Raw raster formats (geotiff / cog / jp2) feed the COG-first
+ * hybrid path: convert to COG, serve immediately, build PMTiles
+ * pyramid in the background.  TPK / TPKX remain out of v1
+ * ingest -- Esri's bundle format needs its own extractor.
  */
 export type TileLayerOriginalFormat =
   | 'pmtiles'
   | 'mbtiles'
-  | 'xyz-zip';
+  | 'xyz-zip'
+  | 'geotiff'
+  | 'cog'
+  | 'jp2';
+
+/**
+ * State of the background pyramid-build job for raster-uploaded
+ * items.  Items that started life as pre-tiled containers never
+ * enter this state machine (their `format` is `pmtiles` at upload
+ * and stays there).
+ *
+ *   - **null / undefined**: item didn't come from a raw raster
+ *     upload, so there's no pyramid job.
+ *   - **cog-ready**: COG is in MinIO and being served.  Pyramid
+ *     job is queued or about to start.
+ *   - **tiling**: pyramid job is running.  `tilingProgress`
+ *     between 0 and 100 reflects how far along.
+ *   - **pmtiles-ready**: pyramid build succeeded; the item is now
+ *     served from PMTiles.  COG kept as archival source.
+ *   - **tiling-failed**: pyramid build hit an unrecoverable error
+ *     after retries.  Item continues serving from COG;
+ *     `tilingError` carries the error string.  Admin can retry
+ *     from the detail page.
+ */
+export type TileLayerProcessingState =
+  | 'cog-ready'
+  | 'tiling'
+  | 'pmtiles-ready'
+  | 'tiling-failed';
 
 /** Raster vs vector tile content. Lifted from the PMTiles header
  *  at upload time; consumers read this to decide whether to
@@ -71,8 +105,10 @@ export type TileLayerDataVersion = 1;
 
 export interface TileLayerData {
   version: TileLayerDataVersion;
-  /** Container format stored in MinIO. Always 'pmtiles' after
-   *  ingest (regardless of original upload format). */
+  /** Container format CURRENTLY served from MinIO.  Either
+   *  'pmtiles' (the steady state) or 'cog' (the bridge state for
+   *  raster items whose pyramid job hasn't finished yet).  See
+   *  the TileLayerFormat docstring for the lifecycle. */
   format: TileLayerFormat;
   /**
    * Container format the user originally uploaded. Surfaced on
@@ -93,10 +129,14 @@ export interface TileLayerData {
   conversionMs?: number;
   /** Raster vs vector content. Lifted from the PMTiles header. */
   kind: TileLayerKind;
-  /** MinIO object key. Used for delete cleanup. */
+  /** MinIO object key of the CURRENTLY-served file (matches
+   *  `format`).  For COG-state items this points at the COG; once
+   *  the pyramid job lands, storageKey is updated to point at the
+   *  new PMTiles object.  Used for delete cleanup. */
   storageKey: string;
-  /** Public MinIO URL for the file. MapLibre's pmtiles plugin
-   *  range-reads this URL directly; no per-tile API hop. */
+  /** Public MinIO URL for the currently-served file.  MapLibre's
+   *  pmtiles / cog protocol plugin (per `format`) range-reads
+   *  this URL directly; no per-tile API hop. */
   storageUrl: string;
   /** Original upload filename for display + Content-Disposition
    *  on the download affordance. */
@@ -108,6 +148,57 @@ export interface TileLayerData {
    *  because a re-upload action would keep updatedAt aligned but
    *  we want to know the bytes' age separately. */
   uploadedAt: ISODateString;
+
+  // -------------- hybrid (cog -> pmtiles) bridge state -------------
+
+  /**
+   * MinIO object key of the source COG, preserved as the archival
+   * master for raster items.  Set on raw-raster uploads; unset on
+   * pre-tiled uploads.  Stays set even after `format` flips to
+   * 'pmtiles' so we can re-tile later without re-upload.
+   */
+  cogStorageKey?: string;
+  /** Public MinIO URL of the source COG.  Surfaced as a separate
+   *  download affordance on the detail page after pyramid build. */
+  cogStorageUrl?: string;
+  /** Size of the stored COG in bytes.  May differ from
+   *  `originalSizeBytes` when the source was JPEG2000 or a non-
+   *  COG GeoTIFF that was normalized at ingest. */
+  cogSizeBytes?: number;
+  /**
+   * MinIO object key of the derived PMTiles pyramid, set once the
+   * worker job lands.  Unset before then.  Stays set even though
+   * `storageKey` redundantly points at the same value once
+   * `format` flips to 'pmtiles' -- carrying both lets the detail
+   * page surface "both files available" without inferring it.
+   */
+  pmtilesStorageKey?: string;
+  /** Public MinIO URL of the PMTiles pyramid, set with
+   *  `pmtilesStorageKey`. */
+  pmtilesStorageUrl?: string;
+  /** Size of the derived PMTiles pyramid in bytes.  Surfaced
+   *  alongside `cogSizeBytes` so admins can see the storage cost
+   *  of keeping both. */
+  pmtilesSizeBytes?: number;
+  /**
+   * Where the background pyramid job is in its lifecycle.  Unset
+   * for non-raster items.  See TileLayerProcessingState for the
+   * state machine.
+   */
+  processingState?: TileLayerProcessingState;
+  /** Pyramid build progress 0..100 while `processingState ===
+   *  'tiling'`.  Unset otherwise. */
+  tilingProgress?: number;
+  /** Human-readable error message from the most recent pyramid
+   *  build failure.  Set when `processingState ===
+   *  'tiling-failed'`, cleared on next successful run. */
+  tilingError?: string;
+  /** When the most recent pyramid build attempt started.  Used
+   *  for the "stuck job" detector and the progress card timer. */
+  tilingStartedAt?: ISODateString;
+  /** When the most recent successful pyramid build completed.
+   *  Set together with `processingState = 'pmtiles-ready'`. */
+  tilingCompletedAt?: ISODateString;
 
   // -------------------- metadata from the PMTiles header --------------------
 
@@ -172,7 +263,11 @@ export function isTileLayerData(value: unknown): value is TileLayerData {
     storageKey?: unknown;
   };
   if (v.version !== 1) return false;
-  if (v.format !== 'pmtiles') return false;
+  // Accept both legacy items (format = 'pmtiles' always) and new
+  // hybrid items in the cog-bridge state (format = 'cog' until
+  // the pyramid job lands).  Anything outside the union is a
+  // schema violation.
+  if (v.format !== 'pmtiles' && v.format !== 'cog') return false;
   if (typeof v.storageKey !== 'string') return false;
   return true;
 }

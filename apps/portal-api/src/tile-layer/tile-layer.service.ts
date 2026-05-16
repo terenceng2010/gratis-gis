@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { statfs } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import {
   BadRequestException,
   ForbiddenException,
@@ -17,9 +19,28 @@ import { StorageService } from '../storage/storage.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import {
   cleanupConversion,
-  convertToPmtiles,
+  convertUpload,
   detectOriginalFormat,
+  isRawRasterFormat,
 } from './tile-conversion.js';
+
+/**
+ * Headroom multiplier applied to an upload's claimed size before
+ * the space check passes.  The full hybrid pipeline lands three
+ * copies of the imagery on disk transiently (the raw upload, the
+ * COG output, and during pyramid build the PMTiles + tile dir
+ * scratch).  2.5x is the conservative cap: it covers the worst
+ * realistic case where the COG is ~equal to the upload, the
+ * PMTiles ends up ~equal to the COG, and there's a small scratch
+ * dir during the gdal2tiles run.
+ *
+ * Pre-tiled containers (PMTiles / MBTiles / XYZ-zip) use a lower
+ * multiplier (1.5x) since there's no PMTiles-build step; the
+ * conversion either passes through or repacks at roughly the
+ * same size.
+ */
+const RAW_RASTER_HEADROOM = 2.5;
+const PRE_TILED_HEADROOM = 1.5;
 
 /**
  * Service for the tile_layer item type (#179).
@@ -115,46 +136,15 @@ export class TileLayerService {
       );
     }
 
-    // For non-pmtiles uploads, run the converter to produce a
-    // .pmtiles file we can serve through the range-request path.
-    // For pmtiles uploads this is a no-op (the bytes are already
-    // in MinIO at the right shape). Either way, after this block
-    // `effectiveStorageKey` / `effectiveStorageUrl` point at the
-    // serving file.
-    let effectiveStorageKey = input.storageKey;
-    let effectiveStorageUrl = input.storageUrl;
-    let conversionMs = 0;
+    // Run the converter.  Returns a discriminated union: either a
+    // PMTiles result (pre-tiled inputs) or a COG result (raw
+    // raster inputs).  Pass-through inputs (already-PMTiles
+    // uploads) come back with format='pmtiles' and outputPath=''.
+    let conversion: Awaited<ReturnType<typeof convertUpload>> | null = null;
     let conversionWorkDir = '';
     try {
-      if (originalFormat !== 'pmtiles') {
-        const conv = await convertToPmtiles(input.storageUrl, input.fileName);
-        conversionWorkDir = conv.workDir;
-        conversionMs = conv.durationMs;
-        // Upload the converted .pmtiles back to MinIO under a
-        // fresh key. The original upload (mbtiles / zip) is
-        // deleted once the new key is in place; we keep only the
-        // converted serving format on long-term storage.
-        if (conv.outputPath) {
-          const uploaded = await this.storage.uploadLocalFile(
-            'item-tile-layer',
-            conv.outputPath,
-            'application/octet-stream',
-          );
-          effectiveStorageKey = uploaded.key;
-          effectiveStorageUrl = uploaded.publicUrl;
-          // Best-effort delete of the original upload. A failed
-          // delete leaks bytes in MinIO but doesn't break the
-          // tile_layer item; the orphan accounting card surfaces
-          // it. Tracked separately from the item lifecycle.
-          try {
-            await this.storage.deleteObject(input.storageKey);
-          } catch (err) {
-            this.log.warn(
-              `Failed to delete original upload ${input.storageKey}: ${err instanceof Error ? err.message : err}`,
-            );
-          }
-        }
-      }
+      conversion = await convertUpload(input.storageUrl, input.fileName);
+      conversionWorkDir = conversion.workDir;
     } catch (err) {
       // Clean up any temp dir the converter created before
       // re-raising. The original upload stays in MinIO so the
@@ -164,12 +154,104 @@ export class TileLayerService {
         `Conversion failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    if (conversionWorkDir) await cleanupConversion(conversionWorkDir);
 
-    // Read the PMTiles header via HTTP range requests against the
-    // MinIO public URL. The pmtiles library handles directory
-    // walking and metadata parsing; we only need to provide a
-    // Source that fetches byte ranges.
+    // After this block `effectiveStorageKey` / `effectiveStorageUrl`
+    // point at the served file, regardless of which branch ran.
+    let effectiveStorageKey = input.storageKey;
+    let effectiveStorageUrl = input.storageUrl;
+    let effectiveSizeBytes = input.sizeBytes;
+    const conversionMs = conversion.durationMs;
+    try {
+      if (conversion.outputPath) {
+        // Upload the converted file back to MinIO under a fresh
+        // key.  Content-type matters: PMTiles is application/
+        // octet-stream (no registered mime), COG is image/tiff so
+        // MinIO sets a sensible response header for clients that
+        // sniff it.
+        const contentType =
+          conversion.format === 'cog' ? 'image/tiff' : 'application/octet-stream';
+        const uploaded = await this.storage.uploadLocalFile(
+          'item-tile-layer',
+          conversion.outputPath,
+          contentType,
+        );
+        effectiveStorageKey = uploaded.key;
+        effectiveStorageUrl = uploaded.publicUrl;
+        effectiveSizeBytes = conversion.outputBytes;
+        // Best-effort delete of the original upload.  PMTiles
+        // pass-through uploads skip this (outputPath was '' so we
+        // never reached here); raw-raster uploads delete the
+        // source TIFF / JP2 once the COG has landed.  A failed
+        // delete leaks bytes but doesn't break the item.
+        try {
+          await this.storage.deleteObject(input.storageKey);
+        } catch (err) {
+          this.log.warn(
+            `Failed to delete original upload ${input.storageKey}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
+    } finally {
+      if (conversionWorkDir) await cleanupConversion(conversionWorkDir);
+    }
+
+    // Branch on output format.  PMTiles serves via the existing
+    // header-parsing path; COG goes through a separate metadata
+    // capture (gdalinfo) and persists the bridge-state fields.
+    if (conversion.format === 'cog') {
+      const fileNameOut = input.fileName.replace(
+        /\.(tif|tiff|geotiff|cog|jp2)$/i,
+        '.tif',
+      );
+      const data: TileLayerData = {
+        version: 1,
+        format: 'cog',
+        kind: 'raster',
+        storageKey: effectiveStorageKey,
+        storageUrl: effectiveStorageUrl,
+        fileName: fileNameOut,
+        sizeBytes: effectiveSizeBytes,
+        uploadedAt: new Date().toISOString() as ISODateString,
+        originalFormat,
+        originalFileName: input.fileName,
+        originalSizeBytes: input.sizeBytes,
+        conversionMs,
+        cogStorageKey: effectiveStorageKey,
+        cogStorageUrl: effectiveStorageUrl,
+        cogSizeBytes: effectiveSizeBytes,
+        processingState: 'cog-ready',
+        tileType: 'png',
+      };
+      if (conversion.bbox) data.bbox = conversion.bbox;
+      if (typeof conversion.maxZoom === 'number') {
+        data.maxZoom = conversion.maxZoom;
+        data.minZoom = 0;
+      }
+      if (conversion.bbox) {
+        const [w, s, e, n] = conversion.bbox;
+        data.centerLng = (w + e) / 2;
+        data.centerLat = (s + n) / 2;
+        if (typeof conversion.maxZoom === 'number') {
+          // Suggested center zoom is one step below the native
+          // max so the initial view shows some context rather
+          // than fully zoomed in.
+          data.centerZoom = Math.max(0, conversion.maxZoom - 1);
+        }
+      }
+      // cog-protocol URL.  Mirrors the pmtiles convention --
+      // MapLibre's cog-protocol plugin keys off the `cog://`
+      // prefix and treats the rest as the HTTP URL to range-read.
+      data.tileUrl = `cog:///api/portal/tile-layer/${itemId}/file`;
+      await this.items.update(user, itemId, {
+        data: data as unknown as Prisma.JsonObject,
+      });
+      return data;
+    }
+
+    // PMTiles branch.  Read the PMTiles header via HTTP range
+    // requests against the MinIO public URL. The pmtiles library
+    // handles directory walking and metadata parsing; we only
+    // need to provide a Source that fetches byte ranges.
     let header: Header | null = null;
     let metadata: Record<string, unknown> = {};
     try {
@@ -201,7 +283,7 @@ export class TileLayerService {
         originalFormat === 'pmtiles'
           ? input.fileName
           : input.fileName.replace(/\.(mbtiles|zip)$/i, '.pmtiles'),
-      sizeBytes: input.sizeBytes,
+      sizeBytes: effectiveSizeBytes,
       uploadedAt: new Date().toISOString() as ISODateString,
       originalFormat,
     };
@@ -288,6 +370,105 @@ export class TileLayerService {
   }
 
   /**
+   * Pre-upload space check.  The frontend calls this when the
+   * user picks a file but before requesting a presigned URL.
+   * Returns whether the upload + conversion + serving pipeline
+   * fits in the host's remaining disk, applying a multiplier
+   * keyed off the file's expected format (raw rasters need more
+   * headroom because they pass through both COG and PMTiles).
+   *
+   * The host-disk check uses `statfs` on the api container's
+   * `/tmp`, which lives on the same underlying volume as MinIO's
+   * bucket in the standard single-host deployment.  Multi-host
+   * deployments would need a different check; that's a follow-up.
+   *
+   * No auth gate beyond the route's JwtAuthGuard: knowing the
+   * portal's free disk space isn't sensitive (a user with edit
+   * access to an item would learn it anyway during a real
+   * upload).
+   */
+  async checkUploadSpace(input: {
+    fileName: string;
+    sizeBytes: number;
+  }): Promise<{
+    ok: boolean;
+    reason?: string;
+    requiredBytes: number;
+    hostFreeBytes: number;
+    hostTotalBytes: number;
+  }> {
+    if (
+      typeof input.sizeBytes !== 'number' ||
+      !Number.isFinite(input.sizeBytes) ||
+      input.sizeBytes <= 0
+    ) {
+      throw new BadRequestException('sizeBytes must be a positive number');
+    }
+    if (typeof input.fileName !== 'string' || input.fileName.length === 0) {
+      throw new BadRequestException('fileName is required');
+    }
+
+    // Multiplier picked from the format detection.  Unknown
+    // extensions fall through detectOriginalFormat's reject path;
+    // surface the same error to the user up front so they don't
+    // wait through the upload to find out their file isn't
+    // accepted.
+    let multiplier: number;
+    try {
+      const fmt = detectOriginalFormat(input.fileName);
+      multiplier = isRawRasterFormat(fmt) ? RAW_RASTER_HEADROOM : PRE_TILED_HEADROOM;
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'Unsupported file type',
+      );
+    }
+
+    const requiredBytes = Math.ceil(input.sizeBytes * multiplier);
+
+    // Probe the host disk.  bavail (blocks available to non-root)
+    // is the relevant figure since the api container runs as the
+    // unprivileged `app` user.  statfs returns `bigint` for size
+    // fields in modern Node; coerce to number after the math.
+    let hostFreeBytes = 0;
+    let hostTotalBytes = 0;
+    try {
+      const st = await statfs(tmpdir());
+      const bsize = Number(st.bsize);
+      hostFreeBytes = Number(st.bavail) * bsize;
+      hostTotalBytes = Number(st.blocks) * bsize;
+    } catch (err) {
+      this.log.warn(
+        `statfs(${tmpdir()}) failed: ${err instanceof Error ? err.message : err}`,
+      );
+      // If we can't read the disk, fail-open: don't block the
+      // upload purely because the probe broke.  The real upload
+      // will surface any actual ENOSPC at the storage layer.
+      return {
+        ok: true,
+        requiredBytes,
+        hostFreeBytes: -1,
+        hostTotalBytes: -1,
+      };
+    }
+
+    if (requiredBytes > hostFreeBytes) {
+      return {
+        ok: false,
+        reason: `This upload would need about ${formatBytes(requiredBytes)} of working space (${multiplier.toFixed(1)}x the file size for the upload + conversion pipeline). The host has ${formatBytes(hostFreeBytes)} free. Pick a smaller file or contact the admin to free space.`,
+        requiredBytes,
+        hostFreeBytes,
+        hostTotalBytes,
+      };
+    }
+    return {
+      ok: true,
+      requiredBytes,
+      hostFreeBytes,
+      hostTotalBytes,
+    };
+  }
+
+  /**
    * Drop the MinIO object backing this tile layer. Called by the
    * items service during purge. Best-effort: a missing key is
    * fine (the item may have been created without the upload ever
@@ -312,6 +493,20 @@ export class TileLayerService {
  * we persist on TileLayerData.tileType. Spec values:
  *   0 unknown, 1 mvt, 2 png, 3 jpeg, 4 webp, 5 avif.
  */
+/**
+ * Format a byte count for the space-check user-facing message.
+ * Mirrors the front-end's humanSize() in tile-layer/editor.tsx
+ * but lives here too so the api can produce a coherent error
+ * string without having to round-trip the raw number.
+ */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function tileTypeToken(
   t: number,
 ): 'mvt' | 'png' | 'jpg' | 'webp' | 'avif' | 'unknown' {
