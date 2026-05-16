@@ -1,7 +1,7 @@
 ---
 id: admin-organization-settings
 title: Organization settings
-summary: Org-wide preferences: default basemap, default item sharing, storage budget, allowed file types, contact info.
+summary: "Org-wide preferences: default basemap, default item sharing, storage budget, allowed file types, contact info."
 category: admin
 order: 40
 complexity: basic

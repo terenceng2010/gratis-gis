@@ -1,7 +1,7 @@
 ---
 id: map-editing-popups
 title: Popups
-summary: Customize what shows when a user clicks a feature: title, body, field list, attachments, links.
+summary: "Customize what shows when a user clicks a feature: title, body, field list, attachments, links."
 category: map-editing
 order: 40
 complexity: basic
