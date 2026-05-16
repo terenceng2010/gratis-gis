@@ -1469,6 +1469,8 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <SelectWidgetRender widget={widget} />;
     case 'export':
       return <ExportWidgetRender widget={widget} />;
+    case 'splash':
+      return <SplashWidgetRender widget={widget} />;
     case 'basemap-gallery':
       return <BasemapGalleryWidgetRender widget={widget} />;
     case 'image':
@@ -2469,6 +2471,190 @@ function ExportWidgetRender({ widget }: { widget: CustomWidget }) {
 function sanitizeExportFilename(raw: string): string {
   const s = raw.trim().replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_');
   return (s.slice(0, 60) || 'export').replace(/^_+|_+$/g, '');
+}
+
+// ---- Splash Screen widget (#111) ------------------------------------------
+
+const SPLASH_PRESET_WIDTHS = { sm: 400, md: 600, lg: 800 } as const;
+
+/**
+ * Stable 32-bit hash of a string.  We use this to derive the
+ * dismissal storage key so localStorage forgets the dismissal as
+ * soon as the splash's content changes -- users who agreed to v1
+ * of a disclaimer get re-prompted on v2.  Standard djb2 because
+ * it's tiny and good enough for change-detection.
+ */
+function splashHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
+function SplashWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'splash') return null;
+  const cfg = widget.config;
+
+  // Resolve the modal width.  Custom widths get clamped so a
+  // typo'd 5000 doesn't break the layout on every screen size.
+  let width: number = SPLASH_PRESET_WIDTHS.md;
+  if (cfg.size === 'sm') width = SPLASH_PRESET_WIDTHS.sm;
+  else if (cfg.size === 'lg') width = SPLASH_PRESET_WIDTHS.lg;
+  else if (cfg.size === 'custom' && typeof cfg.widthPx === 'number') {
+    width = Math.max(280, Math.min(1200, Math.round(cfg.widthPx)));
+  }
+
+  // Dismissal memory key: includes widget id + a hash of the
+  // content so re-authoring the splash forces a re-show for
+  // everyone, including users who previously checked "don't
+  // show again".  Title + markdown + confirm label is the user-
+  // visible surface; tweaks to size or behavior re-use the same
+  // key (we want a width change to NOT re-prompt every user).
+  const dismissKey = useMemo(() => {
+    const content = [
+      cfg.title ?? '',
+      cfg.markdown ?? '',
+      cfg.confirmLabel ?? '',
+    ].join('|');
+    return `gratis-gis:splash:${widget.id}:${splashHash(content)}`;
+  }, [widget.id, cfg.title, cfg.markdown, cfg.confirmLabel]);
+
+  const [open, setOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    if (!cfg.allowDismiss) return true;
+    try {
+      return window.localStorage.getItem(dismissKey) !== '1';
+    } catch {
+      return true;
+    }
+  });
+  const [dontShow, setDontShow] = useState<boolean>(false);
+
+  // Re-evaluate when the dismissal key changes (the author re-
+  // authored the splash; users with prior dismissals see the
+  // new version).
+  useEffect(() => {
+    if (!cfg.allowDismiss) {
+      setOpen(true);
+      return;
+    }
+    try {
+      setOpen(window.localStorage.getItem(dismissKey) !== '1');
+    } catch {
+      setOpen(true);
+    }
+  }, [dismissKey, cfg.allowDismiss]);
+
+  // Lock body scroll while the splash is open so the user can't
+  // scroll the map underneath -- matches how a modal SHOULD
+  // behave on a single-page app surface.
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Escape closes the modal unless requireConfirm is on.
+  useEffect(() => {
+    if (!open) return;
+    if (cfg.requireConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, cfg.requireConfirm]);
+
+  if (!open) return null;
+
+  function confirm(): void {
+    if (dontShow && cfg.allowDismiss) {
+      try {
+        window.localStorage.setItem(dismissKey, '1');
+      } catch {
+        /* ignore -- private mode / quota; the splash just shows again next visit */
+      }
+    }
+    setOpen(false);
+  }
+
+  function onBackdropClick(): void {
+    if (cfg.requireConfirm) return;
+    setOpen(false);
+  }
+
+  const modal = (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="splash-title"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 px-4 py-8"
+      onClick={onBackdropClick}
+    >
+      <div
+        className="relative flex max-h-full flex-col overflow-hidden rounded-lg bg-surface-0 shadow-2xl"
+        style={{ width: `${width}px`, maxWidth: '100%' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header with title.  Close-X only when requireConfirm is
+            off; otherwise the user must use the confirm button. */}
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border bg-surface-1 px-4 py-3">
+          <h2
+            id="splash-title"
+            className="text-sm font-semibold text-ink-0"
+          >
+            {cfg.title || 'Welcome'}
+          </h2>
+          {cfg.requireConfirm ? null : (
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Close"
+              className="-mr-1 -mt-1 inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2"
+            >
+              <XIcon className="h-4 w-4" />
+            </button>
+          )}
+        </header>
+
+        <div className="prose-sm flex-1 overflow-auto px-4 py-4 text-sm text-ink-1 [&_a]:text-accent [&_a]:underline [&_code]:rounded [&_code]:bg-surface-2 [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mb-2 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:mb-2 [&_h3]:text-base [&_h3]:font-semibold [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:ml-5 [&_ul]:list-disc">
+          <MarkdownLite text={cfg.markdown ?? ''} />
+        </div>
+
+        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-surface-1 px-4 py-3">
+          {cfg.allowDismiss ? (
+            <label className="flex items-center gap-2 text-xs text-ink-1">
+              <input
+                type="checkbox"
+                checked={dontShow}
+                onChange={(e) => setDontShow(e.target.checked)}
+              />
+              Don&rsquo;t show this again
+            </label>
+          ) : (
+            // Empty flex item so the confirm button stays right-
+            // aligned even without the checkbox.
+            <span />
+          )}
+          <button
+            type="button"
+            onClick={confirm}
+            className="inline-flex h-8 items-center rounded-md bg-accent px-4 text-sm font-medium text-white hover:opacity-90"
+          >
+            {cfg.confirmLabel || 'OK'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+
+  return typeof document !== 'undefined'
+    ? createPortal(modal, document.body)
+    : modal;
 }
 
 // ---- AttributeTable widget -------------------------------------------------
@@ -4898,6 +5084,11 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   // dropdown.  Discoverable at a glance to anyone who's used Esri
   // / VertiGIS where Export sits next to Print on the toolbar.
   export: Download,
+  // #111 Splash widget: not really a toolbar tool, but we need a
+  // KIND_ICON entry for the designer palette tile.  Window-with-
+  // text icon would be ideal; using SquareIcon as a neutral
+  // placeholder.
+  splash: SquareIcon,
   'basemap-gallery': ImageIcon,
   // #361 page-element kinds. The icons mirror the designer's
   // PALETTE_TILES so a future WidgetFrame.kindIcon defaults stay

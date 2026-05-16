@@ -29,6 +29,7 @@ import {
   Locate as LocateIcon,
   Loader2,
   Map as MapIcon,
+  MessageSquare,
   Minus as MinusIcon,
   MoreVertical,
   MousePointer2,
@@ -1280,6 +1281,13 @@ const PALETTE_TILES: Array<{
     Icon: Download,
     hint: 'Export visible features to CSV / Excel',
     category: 'map',
+  },
+  {
+    kind: 'splash',
+    label: 'Splash',
+    Icon: MessageSquare,
+    hint: 'Modal shown on app load with welcome text or disclaimer',
+    category: 'page',
   },
   {
     kind: 'bookmark',
@@ -2829,6 +2837,20 @@ function WidgetCard({
         // to open the runtime to see whether their text rendered
         // the way they expected.
         <TextWidgetCanvas widget={widget} />
+      ) : widget.config.kind === 'splash' ? (
+        // #111: splash renders nothing on the runtime canvas (it's
+        // a portal-rendered modal on app load), so the designer
+        // canvas just shows a small placeholder card with the
+        // splash's title so the author can confirm it's wired up.
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border bg-surface-2 p-2 text-center">
+          <MessageSquare className="h-4 w-4 text-muted" />
+          <span className="text-[10px] font-medium uppercase tracking-wide text-muted">
+            Splash
+          </span>
+          <span className="text-[11px] text-ink-1">
+            {widget.config.title?.trim() || '(no title)'}
+          </span>
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center p-3 text-xs text-muted">
           {widgetPlaceholderText(widget.kind, label)}
@@ -2949,6 +2971,8 @@ function widgetPlaceholderText(
       return 'Click / box / polygon / lasso';
     case 'export':
       return 'Export visible features';
+    case 'splash':
+      return 'Welcome / disclaimer modal on app load';
     case 'basemap-gallery':
       return 'Tiles of available basemaps';
     case 'image':
@@ -3032,6 +3056,8 @@ function summarizeWidget(w: CustomWidget): string {
       );
       return `${n} tab${n === 1 ? '' : 's'} · ${totalChildren} widget${totalChildren === 1 ? '' : 's'}`;
     }
+    case 'splash':
+      return w.config.title?.trim() || 'no title';
     default:
       return '';
   }
@@ -3659,6 +3685,14 @@ function WidgetConfigForm({
           onChangeConfig={onChangeConfig}
         />
       );
+    case 'splash':
+      return (
+        <SplashWidgetConfigForm
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
+      );
     case 'button':
       return (
         <ButtonWidgetConfig
@@ -3964,6 +3998,135 @@ function ImageWidgetConfig({
           Open in a new tab
         </label>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * #111 Splash Screen widget config.  Reuses the RichTextEditor +
+ * markdown round-trip from the Text widget for the body.  Sizing
+ * is preset-or-custom; dismissal and required-confirm are simple
+ * toggles.
+ */
+function SplashWidgetConfigForm({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: {
+    kind: 'splash';
+    title: string;
+    markdown: string;
+    size?: 'sm' | 'md' | 'lg' | 'custom';
+    widthPx?: number;
+    confirmLabel?: string;
+    allowDismiss?: boolean;
+    requireConfirm?: boolean;
+  };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="Title">
+        <input
+          type="text"
+          value={config.title ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ title: e.target.value })}
+          placeholder="Welcome"
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field
+        label="Body"
+        hint="Use the toolbar to add bold, italics, headings, lists, links, and color.  Visible to the user as the modal body."
+      >
+        <RichTextEditor
+          value={config.markdown ?? ''}
+          disabled={!canEdit}
+          onChange={(v) => onChangeConfig({ markdown: v })}
+        />
+      </Field>
+      <Field label="Confirm button label">
+        <input
+          type="text"
+          value={config.confirmLabel ?? ''}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ confirmLabel: e.target.value })}
+          placeholder="OK"
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field label="Size">
+        <select
+          value={config.size ?? 'md'}
+          disabled={!canEdit}
+          onChange={(e) =>
+            onChangeConfig({
+              size: e.target.value as 'sm' | 'md' | 'lg' | 'custom',
+            })
+          }
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="sm">Small (400px)</option>
+          <option value="md">Medium (600px)</option>
+          <option value="lg">Large (800px)</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </Field>
+      {config.size === 'custom' ? (
+        <Field
+          label="Custom width (px)"
+          hint="Clamped at 280-1200px on render so the modal stays usable on phones."
+        >
+          <input
+            type="number"
+            min={280}
+            max={1200}
+            step={20}
+            value={config.widthPx ?? 600}
+            disabled={!canEdit}
+            onChange={(e) => onChangeConfig({ widthPx: Number(e.target.value) })}
+            className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+          />
+        </Field>
+      ) : null}
+      <label className="flex items-start gap-2 text-xs text-ink-1">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={config.allowDismiss ?? false}
+          onChange={(e) =>
+            onChangeConfig({ allowDismiss: e.target.checked })
+          }
+          className="mt-0.5"
+        />
+        <span>
+          Show <strong>&ldquo;Don&rsquo;t show this again&rdquo;</strong>{' '}
+          checkbox.  When checked at confirm time, the splash is
+          remembered as dismissed (via localStorage) and skipped on
+          subsequent visits.  Editing the splash content resets the
+          dismissal for everyone.
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-xs text-ink-1">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={config.requireConfirm ?? false}
+          onChange={(e) =>
+            onChangeConfig({ requireConfirm: e.target.checked })
+          }
+          className="mt-0.5"
+        />
+        <span>
+          <strong>Require confirmation.</strong>  When on, the modal
+          has no close-X, escape does nothing, and clicking outside
+          doesn&rsquo;t dismiss.  The user must click the confirm
+          button.  Use for terms / disclaimers.
+        </span>
+      </label>
     </div>
   );
 }
@@ -6144,6 +6307,7 @@ const WIDGET_KIND_LABEL: Record<CustomWidgetKind, string> = {
   print: 'Print',
   select: 'Select',
   export: 'Export',
+  splash: 'Splash',
   'basemap-gallery': 'Basemaps',
   bookmark: 'Bookmarks',
   coordinates: 'Coordinates',
@@ -6569,6 +6733,12 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 96, rowSpan: 4 };
     case 'embed':
       return { col: 1, row: 1, colSpan: 64, rowSpan: 64 };
+    case 'splash':
+      // Splash renders nothing on the canvas at runtime (the
+      // actual modal is portal-rendered to document.body); the
+      // designer shows a small placeholder card so the author
+      // sees it's there.  16x8 ≈ 100x50px placeholder.
+      return { col: 1, row: 1, colSpan: 16, rowSpan: 8 };
     case 'time-slider':
       // Narrow strip across the bottom or top of the canvas by
       // default; authors typically anchor it like a film-strip
@@ -7214,6 +7384,22 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           defaultFormat: 'xlsx',
           displayMode: 'tool',
           panelArrangement: defaultPanelArrangement('export'),
+        },
+      };
+    case 'splash':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'splash',
+          title: 'Welcome',
+          markdown:
+            'Update this welcome message in the right rail.  Use the toolbar to add headings, lists, and links.',
+          size: 'md',
+          confirmLabel: 'OK',
+          allowDismiss: true,
+          requireConfirm: false,
         },
       };
     case 'basemap-gallery':

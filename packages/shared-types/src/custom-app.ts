@@ -194,6 +194,7 @@ export type CustomWidgetKind =
   | 'print'
   | 'select'
   | 'export'
+  | 'splash'
   | 'basemap-gallery'
   // #361: page-element widgets. None of these touch a Map widget or
   // a target layer; they're static content the author drops onto the
@@ -364,6 +365,7 @@ export type CustomWidgetConfig =
   | PrintWidgetConfig
   | SelectWidgetConfig
   | ExportWidgetConfig
+  | SplashWidgetConfig
   | BasemapGalleryWidgetConfig
   | ImageWidgetConfig
   | ButtonWidgetConfig
@@ -627,6 +629,63 @@ export interface SelectWidgetConfig {
   /** #364: tool-mode display. */
   displayMode?: DisplayMode;
   panelArrangement?: PanelArrangement;
+}
+
+/**
+ * Splash Screen widget (#111).  Renders a modal dialog once per
+ * visit when the web app loads.  Useful for disclaimers, terms
+ * of use, welcome messages, branding, and "before you continue"
+ * confirmations a la VertiGIS / AGOL splash widgets.
+ *
+ * Sits on the canvas as a small "Splash" placeholder card in the
+ * designer (so the author sees that it exists + can edit it
+ * inline), and doesn't paint anything on the runtime canvas --
+ * the actual UI is a portal-rendered modal at runtime.
+ *
+ * Dismissal memory: stored in localStorage keyed by app id +
+ * content hash.  When the author edits the splash content, the
+ * hash changes and previously-dismissed users see the new
+ * version automatically.  No server-side state needed.
+ */
+export interface SplashWidgetConfig {
+  kind: 'splash';
+  /** Modal title (plain text). */
+  title: string;
+  /** Body content stored as markdown (same shape as
+   *  TextWidgetConfig.markdown) so we can reuse the existing
+   *  RichTextEditor + markdown round-trip. */
+  markdown: string;
+  /**
+   * Modal width preset.
+   *   - 'sm'    -> 400px
+   *   - 'md'    -> 600px (default)
+   *   - 'lg'    -> 800px
+   *   - 'custom' -> uses `widthPx`
+   */
+  size?: 'sm' | 'md' | 'lg' | 'custom';
+  /** Used when `size === 'custom'`.  Clamped at runtime so the
+   *  modal stays usable on phones (min 280, max 1200). */
+  widthPx?: number;
+  /** Custom confirm-button label.  Default "OK". */
+  confirmLabel?: string;
+  /**
+   * When true, the modal includes a "Don't show again" checkbox
+   * that, when checked at confirm time, writes the dismissal key
+   * to localStorage and skips the splash on subsequent visits.
+   * Default false: the splash appears every visit.
+   */
+  allowDismiss?: boolean;
+  /**
+   * When true, treats the confirm button as required acceptance:
+   *   - no close-X button
+   *   - escape key does NOT dismiss
+   *   - backdrop click does NOT dismiss
+   *   - the user MUST click the confirm button
+   * Useful for terms-of-service or disclaimer flows where the
+   * author wants record that the user actually acknowledged it.
+   * Default false: standard dismissable modal.
+   */
+  requireConfirm?: boolean;
 }
 
 /**
