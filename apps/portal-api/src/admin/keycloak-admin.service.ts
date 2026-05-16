@@ -9,6 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 
+import { LeaderElectionService } from '../cron/leader-election.service.js';
 import { SystemSettingsService } from '../notifications/system-settings.service.js';
 
 /**
@@ -87,7 +88,10 @@ export class KeycloakAdminService implements OnModuleInit {
   private readonly logger = new Logger(KeycloakAdminService.name);
   private tokenCache: TokenCache | null = null;
 
-  constructor(private readonly settings: SystemSettingsService) {}
+  constructor(
+    private readonly settings: SystemSettingsService,
+    private readonly leader: LeaderElectionService,
+  ) {}
 
   /**
    * On boot, push our SMTP_* env vars into the Keycloak realm so that
@@ -104,9 +108,33 @@ export class KeycloakAdminService implements OnModuleInit {
    *
    * Idempotent: PUT /admin/realms/{realm} replaces the smtpServer
    * map, so repeated startups converge on the same config.
+   *
+   * Multi-replica safety: when N>1 portal-api replicas boot at the
+   * same time, two concurrent PUTs against the same realm race
+   * inside Keycloak's REALM_SMTP_CONFIG upsert (DELETE-then-INSERT
+   * across separate JDBC transactions), and the loser surfaces as a
+   * 409 "Realm with same name exists" plus a unique-constraint
+   * violation in the Keycloak postgres logs. The end-state config is
+   * still correct (whichever replica wins writes the right values),
+   * but the noise hides real errors. Gating boot-time sync behind
+   * the cron leader lock serializes the work to one replica per
+   * boot wave. The admin-triggered path (saveSmtp on PUT
+   * /admin/notifications/smtp) intentionally remains ungated since
+   * it's already a single-request operation.
    */
   async onModuleInit(): Promise<void> {
     if (!this.isConfigured()) return;
+    // Only one replica per boot wave performs the realm-side
+    // bootstrap. Non-leaders rely on the leader's converged state
+    // and, in the rare leader-handoff case, the next leader's own
+    // boot wave will re-sync. See class doc above.
+    if (!this.leader.shouldRun()) {
+      this.logger.log(
+        'Skipping Keycloak realm bootstrap on this replica: another process holds the cron-leader lock. ' +
+          'The admin can still trigger a sync at any time via PUT /admin/notifications/smtp.',
+      );
+      return;
+    }
     // Self-heal: if the admin service-account client doesn't have
     // manage-realm yet, grant it now so the SMTP sync below can
     // succeed. Idempotent and safe to call repeatedly. Failure here
