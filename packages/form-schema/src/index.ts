@@ -2712,3 +2712,15 @@ export {
   type LayerPopupConfigForGeneration,
   type AutoFormOptions,
 } from './from-layer';
+
+// #103: XLSForm / Survey123 importer.  Pure translator from a
+// parsed XLSForm workbook into a FormSchema.  See xlsform-import.ts
+// for what we translate vs. preserve-as-meta.
+export {
+  importXlsForm,
+  type ImportResult as XlsFormImportResult,
+  type XlsFormWorkbook,
+  type XlsFormSurveyRow,
+  type XlsFormChoicesRow,
+  type XlsFormSettingsRow,
+} from './xlsform-import';

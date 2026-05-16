@@ -62,6 +62,7 @@ import {
   defaultQuestion,
   emptyForm,
   fromImportEnvelope,
+  importXlsForm,
   parseExportEnvelope,
   QUESTION_TYPES,
   suggestExportFilename,
@@ -74,6 +75,7 @@ import {
   type Question,
   type QuestionId,
   type QuestionType,
+  type XlsFormWorkbook,
 } from '@gratis-gis/form-schema';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
@@ -458,6 +460,23 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
 
   async function importFormFile(file: File) {
     setError(null);
+    // #103: route .xlsx (and .xls / .xlsm) files through the
+    // XLSForm/Survey123 importer instead of the JSON envelope parser.
+    // Detected by extension because Survey123 templates and other
+    // XLSForm authoring tools always emit one of these.  The xlsx
+    // package is already a portal-web dep so the dynamic import
+    // adds no install footprint, just a separate chunk so the
+    // ~600KB SheetJS bundle isn't shipped to every form designer
+    // session.
+    const lower = file.name.toLowerCase();
+    const isXlsx =
+      lower.endsWith('.xlsx') ||
+      lower.endsWith('.xls') ||
+      lower.endsWith('.xlsm');
+    if (isXlsx) {
+      await importXlsFormFile(file);
+      return;
+    }
     let raw: unknown;
     try {
       raw = JSON.parse(await file.text());
@@ -483,6 +502,77 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
     }
     setForm(fromImportEnvelope(result, itemId));
     setSelectedId(null);
+  }
+
+  /**
+   * #103: XLSForm / Survey123 import path.  Parses the workbook
+   * client-side with SheetJS, hands the row arrays to the pure
+   * translator in @gratis-gis/form-schema, and replaces the
+   * current form with the result (after a confirm if there are
+   * existing questions).  Warnings from the translator surface in
+   * a follow-up dialog so the author knows which expressions /
+   * unsupported types need a manual pass.
+   */
+  async function importXlsFormFile(file: File) {
+    let workbook: XlsFormWorkbook;
+    try {
+      // Dynamic import keeps the ~600KB SheetJS bundle out of the
+      // initial designer chunk -- only authors who actually import
+      // an XLSForm pay for it.
+      const XLSX = await import('xlsx');
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheetTo = (name: string): Record<string, unknown>[] => {
+        const ws = wb.Sheets[name];
+        if (!ws) return [];
+        // defval: '' so blank cells come through as empty strings
+        // rather than missing keys -- makes the translator's
+        // optional-field handling simpler.
+        return XLSX.utils.sheet_to_json(ws, { defval: '' }) as Record<
+          string,
+          unknown
+        >[];
+      };
+      workbook = {
+        survey: sheetTo('survey'),
+        choices: sheetTo('choices'),
+        settings: sheetTo('settings'),
+      };
+      if (workbook.survey.length === 0) {
+        setError(
+          'That .xlsx has no rows on the `survey` sheet -- doesn\'t look like an XLSForm.',
+        );
+        return;
+      }
+    } catch (err) {
+      setError(
+        `Couldn't read the .xlsx: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    const { schema, warnings } = importXlsForm(workbook, { itemId });
+    const hasContent = form.questions.length > 0;
+    if (hasContent) {
+      const ok = await confirmDialog({
+        title: 'Replace this form?',
+        message: `Importing "${schema.title}" (${schema.questions.length} question${schema.questions.length === 1 ? '' : 's'}) will replace the current form. This can't be undone.`,
+        confirmLabel: 'Replace',
+        variant: 'danger',
+      });
+      if (!ok) return;
+    }
+    setForm(schema);
+    setSelectedId(null);
+    if (warnings.length > 0) {
+      // Stuff warnings in the error state so the existing banner
+      // surfaces them.  We prefix "Imported with warnings" so the
+      // user can tell it's not a failure.
+      setError(
+        `Imported with ${warnings.length} warning${warnings.length === 1 ? '' : 's'}:\n` +
+          warnings.slice(0, 12).join('\n') +
+          (warnings.length > 12 ? `\n...and ${warnings.length - 12} more.` : ''),
+      );
+    }
   }
 
   function applyImported(
@@ -587,7 +677,7 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            title="Replace this form with one from a .gratisgis-form.json file"
+            title="Replace this form with one from a .gratisgis-form.json export OR a Survey123 / XLSForm .xlsx"
             className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2"
           >
             <Upload className="h-3.5 w-3.5" />
@@ -596,7 +686,12 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/json,.json"
+            // Accept both the native JSON envelope and XLSForm
+            // workbooks (Survey123, KoboToolbox, ODK, etc.).  We
+            // route by extension inside importFormFile -- having
+            // the picker offer both gives the author one button
+            // to discover instead of "Import" vs "Import XLSForm".
+            accept="application/json,.json,.xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
