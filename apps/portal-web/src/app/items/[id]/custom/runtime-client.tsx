@@ -1584,66 +1584,198 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'layer-list') return null;
   const { state, update } = useBoundMap(widget.config.mapWidgetId);
   const allowToggle = widget.config.allowToggle !== false;
+  const layers = state?.mapData.layers ?? [];
+
+  // #112: layer groups (source.kind === 'group') were rendering
+  // as siblings of their children instead of as parent rows that
+  // contain them.  Build a parent->children index so we can
+  // render the tree.  Top-level rows are layers whose groupId is
+  // undefined OR whose groupId doesn't resolve to an existing
+  // layer (orphans -- the group was deleted -- fall back to top
+  // level rather than disappear).
+  const layerById = useMemo(() => {
+    const m = new Map<string, MapLayer>();
+    for (const l of layers) m.set(l.id, l);
+    return m;
+  }, [layers]);
+
+  const rootLayers = useMemo(
+    () =>
+      layers.filter((l) => !l.groupId || !layerById.has(l.groupId)),
+    [layers, layerById],
+  );
+
+  const childrenByParent = useMemo(() => {
+    const m = new Map<string, MapLayer[]>();
+    for (const l of layers) {
+      if (!l.groupId) continue;
+      if (!layerById.has(l.groupId)) continue;
+      const bucket = m.get(l.groupId) ?? [];
+      bucket.push(l);
+      m.set(l.groupId, bucket);
+    }
+    return m;
+  }, [layers, layerById]);
+
+  const toggleVisible = useCallback(
+    (id: string, next: boolean) => {
+      // Cascading toggle: flipping a group OFF hides every
+      // descendant; flipping a group ON shows the group itself
+      // but does NOT force every child back on (the children
+      // remember their own visibility state).  That mirrors how
+      // the map item's layer panel behaves and matches what users
+      // expect from "turn the whole flood overlay off, then back
+      // on" -- the floods don't all suddenly become visible if
+      // some were hidden before.
+      const affected = new Set<string>([id]);
+      if (next === false) {
+        // Walk descendants and turn them off too.
+        const stack = [id];
+        while (stack.length > 0) {
+          const parent = stack.pop()!;
+          for (const child of childrenByParent.get(parent) ?? []) {
+            if (affected.has(child.id)) continue;
+            affected.add(child.id);
+            stack.push(child.id);
+          }
+        }
+      }
+      update((cur) => ({
+        ...cur,
+        mapData: {
+          ...cur.mapData,
+          layers: (cur.mapData.layers ?? []).map((x) =>
+            affected.has(x.id) ? { ...x, visible: next } : x,
+          ),
+        },
+      }));
+    },
+    [childrenByParent, update],
+  );
+
   return (
     <WidgetFrame icon={LayersIcon} title="Layers">
       {!state ? (
         <p className="p-2 text-xs italic text-muted">No bound map.</p>
-      ) : (state.mapData.layers ?? []).length === 0 ? (
+      ) : layers.length === 0 ? (
         <p className="p-2 text-xs italic text-muted">No layers.</p>
       ) : (
         <ul className="space-y-0.5 p-1.5">
-          {(state.mapData.layers ?? []).map((l) => {
-            // Legend swatch inline with the row. Falls back through
-            // point > line > polygon-fill > a neutral indigo so
-            // every layer renders some color cue rather than a blank
-            // gap. Combining the swatch into the layer row replaces
-            // the separate Legend widget that templates used to
-            // stamp underneath the Layers list: same information,
-            // half the vertical space, and the toggle + identity sit
-            // on the same line.
-            const swatchColor =
-              l.style?.point?.color ??
-              l.style?.line?.color ??
-              l.style?.polygon?.fillColor ??
-              '#6366f1';
-            return (
-              <li
-                key={l.id}
-                className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
-              >
-                <input
-                  type="checkbox"
-                  checked={l.visible !== false}
-                  disabled={!allowToggle}
-                  onChange={(e) =>
-                    update((cur) => ({
-                      ...cur,
-                      mapData: {
-                        ...cur.mapData,
-                        layers: (cur.mapData.layers ?? []).map((x) =>
-                          x.id === l.id
-                            ? { ...x, visible: e.target.checked }
-                            : x,
-                        ),
-                      },
-                    }))
-                  }
-                  className="h-3 w-3"
-                />
-                <span
-                  aria-hidden
-                  className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border"
-                  style={{ backgroundColor: swatchColor }}
-                />
-                <span className="flex-1 truncate text-ink-1" title={l.title}>
-                  {l.title}
-                </span>
-              </li>
-            );
-          })}
+          {rootLayers.map((l) => (
+            <LayerListRow
+              key={l.id}
+              layer={l}
+              childrenByParent={childrenByParent}
+              allowToggle={allowToggle}
+              depth={0}
+              onToggle={toggleVisible}
+            />
+          ))}
         </ul>
       )}
     </WidgetFrame>
+  );
+}
+
+/**
+ * Recursive row renderer for the LayerList widget.  Groups paint
+ * a chevron + title (no swatch); leaves paint a checkbox + swatch
+ * + title.  Indentation comes from `depth` so the visual hierarchy
+ * matches the data hierarchy.
+ *
+ * Collapse state lives locally per group (defaultOpen on first
+ * render).  We don't persist it: the LayerList is short-lived UI
+ * and re-expanding on next open is fine.
+ */
+function LayerListRow({
+  layer,
+  childrenByParent,
+  allowToggle,
+  depth,
+  onToggle,
+}: {
+  layer: MapLayer;
+  childrenByParent: Map<string, MapLayer[]>;
+  allowToggle: boolean;
+  depth: number;
+  onToggle: (id: string, next: boolean) => void;
+}) {
+  const isGroup = layer.source.kind === 'group';
+  const children = isGroup ? childrenByParent.get(layer.id) ?? [] : [];
+  const [open, setOpen] = useState(true);
+  // px-per-level indent.  10px nests visibly without burning
+  // horizontal room in a narrow dock-panel.
+  const indent = depth * 10;
+  return (
+    <li>
+      <div
+        className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
+        style={{ paddingLeft: `${6 + indent}px` }}
+      >
+        {isGroup ? (
+          <button
+            type="button"
+            aria-label={open ? 'Collapse group' : 'Expand group'}
+            onClick={() => setOpen((v) => !v)}
+            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2"
+          >
+            {open ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+          </button>
+        ) : (
+          // Spacer so leaves align with sibling groups' titles.
+          <span className="inline-block h-4 w-4 shrink-0" aria-hidden />
+        )}
+        <input
+          type="checkbox"
+          checked={layer.visible !== false}
+          disabled={!allowToggle}
+          onChange={(e) => onToggle(layer.id, e.target.checked)}
+          className="h-3 w-3"
+        />
+        {isGroup ? (
+          // Groups don't get a swatch -- they're containers, not a
+          // single symbology.  A folder-style spacer keeps the
+          // text alignment consistent with leaf rows.
+          <span className="inline-block h-3 w-3 shrink-0" aria-hidden />
+        ) : (
+          <span
+            aria-hidden
+            className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border"
+            style={{
+              backgroundColor:
+                layer.style?.point?.color ??
+                layer.style?.line?.color ??
+                layer.style?.polygon?.fillColor ??
+                '#6366f1',
+            }}
+          />
+        )}
+        <span
+          className={`flex-1 truncate ${isGroup ? 'font-medium text-ink-0' : 'text-ink-1'}`}
+          title={layer.title}
+        >
+          {layer.title}
+        </span>
+      </div>
+      {isGroup && open && children.length > 0 ? (
+        <ul className="space-y-0.5">
+          {children.map((c) => (
+            <LayerListRow
+              key={c.id}
+              layer={c}
+              childrenByParent={childrenByParent}
+              allowToggle={allowToggle}
+              depth={depth + 1}
+              onToggle={onToggle}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </li>
   );
 }
 
