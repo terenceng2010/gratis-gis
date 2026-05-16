@@ -21,7 +21,8 @@
  */
 export type ToolAction =
   | OpenItemAction
-  | OpenUrlAction;
+  | OpenUrlAction
+  | ExportLayerAction;
 
 /**
  * Open another portal item in the same browser tab.  Resolves to
@@ -56,6 +57,26 @@ export interface OpenUrlAction {
   url: string;
   /** When true, opens in a new tab via target="_blank". */
   newTab?: boolean;
+}
+
+/**
+ * Export a data_layer sublayer to CSV or XLSX.  Same client-side
+ * code path the Export widget uses (#110), reachable from a
+ * Button widget bound to a tool.  Letting an export live as a
+ * reusable tool means an org with five apps that all need
+ * "download the parcels" can author the tool once and point five
+ * buttons at it -- update the format / scope in one place.
+ */
+export interface ExportLayerAction {
+  kind: 'export-layer';
+  /** data_layer item id whose features to export. */
+  targetItemId: string;
+  /** Sublayer key inside the data_layer.  Required because v3
+   *  data_layer items are multi-layer; the tool authors pick a
+   *  specific sublayer rather than dumping every one. */
+  layerKey: string;
+  /** Output format. */
+  format: 'csv' | 'xlsx';
 }
 
 /**

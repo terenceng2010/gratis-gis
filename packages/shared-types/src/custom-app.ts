@@ -193,6 +193,7 @@ export type CustomWidgetKind =
   | 'search'
   | 'print'
   | 'select'
+  | 'export'
   | 'basemap-gallery'
   // #361: page-element widgets. None of these touch a Map widget or
   // a target layer; they're static content the author drops onto the
@@ -362,6 +363,7 @@ export type CustomWidgetConfig =
   | SearchWidgetConfig
   | PrintWidgetConfig
   | SelectWidgetConfig
+  | ExportWidgetConfig
   | BasemapGalleryWidgetConfig
   | ImageWidgetConfig
   | ButtonWidgetConfig
@@ -622,6 +624,43 @@ export interface SelectWidgetConfig {
    *  four when omitted. The runtime button order matches this
    *  array order, so authors can promote their preferred mode. */
   modes?: Array<'click' | 'rectangle' | 'polygon' | 'lasso'>;
+  /** #364: tool-mode display. */
+  displayMode?: DisplayMode;
+  panelArrangement?: PanelArrangement;
+}
+
+/**
+ * Export widget (#110).  Renders as a small icon button in
+ * tool-display mode; clicking opens a popover with format +
+ * scope options that triggers a client-side download via the
+ * shared layer-export utility.  Binds to a Map widget so the
+ * popover sees the live target list + the bound map's loaded
+ * features.
+ *
+ * Why a dedicated widget rather than just relying on the
+ * attribute-table's Export menu (#108): the Export button is a
+ * first-class action authors put front-and-center on a
+ * deployment ("download the parcels we're looking at").  Hiding
+ * it three clicks deep in the attribute-table popover is fine
+ * for power users but misses the AGOL-parity moment where
+ * "Export" sits next to "Print" on the toolbar.  This widget
+ * gives authors that placement.
+ */
+export interface ExportWidgetConfig {
+  kind: 'export';
+  /** id of the map widget whose targets we export from. */
+  mapWidgetId: string;
+  /**
+   * Optional default target index (into the bound map's
+   * resolvedTargets).  When omitted, the popover prompts the user
+   * to pick on each open; when set, the popover defaults to that
+   * target and the user can still override.  Useful when the app
+   * has a single canonical "export this layer" surface.
+   */
+  defaultTargetIndex?: number;
+  /** Default output format.  Author override; user can change in
+   *  the popover.  Defaults to 'xlsx'. */
+  defaultFormat?: 'csv' | 'xlsx';
   /** #364: tool-mode display. */
   displayMode?: DisplayMode;
   panelArrangement?: PanelArrangement;

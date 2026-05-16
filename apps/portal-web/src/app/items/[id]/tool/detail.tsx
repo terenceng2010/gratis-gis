@@ -51,13 +51,22 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
 
   function switchKind(kind: ToolAction['kind']): void {
     if (kind === data.action.kind) return;
-    setData((d) => ({
-      ...d,
-      action:
-        kind === 'open-item'
-          ? { kind: 'open-item', targetItemId: '', newTab: false }
-          : { kind: 'open-url', url: '', newTab: true },
-    }));
+    setData((d) => {
+      let action: ToolAction;
+      if (kind === 'open-item') {
+        action = { kind: 'open-item', targetItemId: '', newTab: false };
+      } else if (kind === 'export-layer') {
+        action = {
+          kind: 'export-layer',
+          targetItemId: '',
+          layerKey: '',
+          format: 'xlsx',
+        };
+      } else {
+        action = { kind: 'open-url', url: '', newTab: true };
+      }
+      return { ...d, action };
+    });
   }
 
   async function save(): Promise<void> {
@@ -122,6 +131,18 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
           >
             Open item
           </button>
+          <button
+            type="button"
+            disabled={!canEdit}
+            onClick={() => switchKind('export-layer')}
+            className={`px-3 py-1 ${
+              data.action.kind === 'export-layer'
+                ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                : 'text-muted'
+            }`}
+          >
+            Export layer
+          </button>
         </div>
       </div>
 
@@ -153,7 +174,7 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
             Open in a new tab
           </label>
         </div>
-      ) : (
+      ) : data.action.kind === 'open-item' ? (
         <div className="space-y-3">
           <div>
             <label className={labelCls}>Target item id</label>
@@ -210,6 +231,77 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
             />
             Open in a new tab
           </label>
+        </div>
+      ) : (
+        // Export-layer action.  When the button bound to this tool
+        // is clicked, the runtime fetches the configured sublayer's
+        // features via the API and triggers a CSV / XLSX download.
+        // Item picker is paste-an-id today; a future revision can
+        // swap in a data_layer combobox.
+        <div className="space-y-3">
+          <div>
+            <label className={labelCls}>Data layer item id</label>
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={data.action.targetItemId}
+              onChange={(e) =>
+                patchAction({ targetItemId: e.target.value.trim() })
+              }
+              placeholder="00000000-0000-0000-0000-000000000000"
+              className={`${inputCls} font-mono`}
+            />
+            <p className="mt-1 text-[11px] text-muted">
+              The data_layer item id whose features to export.
+            </p>
+          </div>
+          <div>
+            <label className={labelCls}>Sublayer key</label>
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={data.action.layerKey}
+              onChange={(e) =>
+                patchAction({ layerKey: e.target.value.trim() })
+              }
+              placeholder="lyr_xxxxxxxx"
+              className={`${inputCls} font-mono`}
+            />
+            <p className="mt-1 text-[11px] text-muted">
+              The sublayer id inside the data layer (visible on the
+              data layer&apos;s detail page).  v3 layers are multi-
+              layer so you pick a specific sublayer here.
+            </p>
+          </div>
+          <div>
+            <label className={labelCls}>Format</label>
+            <div className="mt-1 inline-flex rounded-md border border-border bg-surface-2 p-0.5 text-xs">
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => patchAction({ format: 'xlsx' })}
+                className={`px-3 py-1 ${
+                  data.action.format === 'xlsx'
+                    ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                    : 'text-muted'
+                }`}
+              >
+                Excel (.xlsx)
+              </button>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => patchAction({ format: 'csv' })}
+                className={`px-3 py-1 ${
+                  data.action.format === 'csv'
+                    ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                    : 'text-muted'
+                }`}
+              >
+                CSV
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

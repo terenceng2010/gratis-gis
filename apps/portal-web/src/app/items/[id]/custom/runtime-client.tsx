@@ -21,6 +21,7 @@ import {
   ChevronUp,
   Clock,
   Crosshair as CrosshairIcon,
+  Download,
   Image as ImageIcon,
   Layers as LayersIcon,
   Lasso,
@@ -61,6 +62,7 @@ import type {
 } from '@gratis-gis/shared-types';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { customBasemapToData } from '@/lib/custom-basemap';
+import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
 import { BasemapPreview } from '@/components/basemap-preview';
 import type { SelectToolMode } from '../map/select-tool';
 import { AttributeTable } from '../map/attribute-table';
@@ -839,6 +841,7 @@ const TOOL_DISPLAY_KINDS: ReadonlySet<CustomWidgetKind> = new Set([
   'search',
   'print',
   'select',
+  'export',
   'basemap-gallery',
   'bookmark',
   'coordinates',
@@ -872,6 +875,7 @@ const KIND_TOOL_LABEL: Record<string, string> = {
   search: 'Search',
   print: 'Print',
   select: 'Select',
+  export: 'Export',
   'basemap-gallery': 'Basemaps',
   bookmark: 'Bookmarks',
   coordinates: 'Coordinates',
@@ -1463,6 +1467,8 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <PrintWidgetRender widget={widget} />;
     case 'select':
       return <SelectWidgetRender widget={widget} />;
+    case 'export':
+      return <ExportWidgetRender widget={widget} />;
     case 'basemap-gallery':
       return <BasemapGalleryWidgetRender widget={widget} />;
     case 'image':
@@ -2261,6 +2267,210 @@ function SelectWidgetRender({ widget }: { widget: CustomWidget }) {
   );
 }
 
+// ---- Export widget (#110) --------------------------------------------------
+
+/**
+ * Custom Web App export widget.  Renders as a small popover that
+ * picks (a) which of the bound map's target layers to export and
+ * (b) the format / scope.  Click "Export" -> the loaded GeoJSON
+ * features for that layer get sent through the shared
+ * layer-export helper.
+ *
+ * Layer features are sourced from the live MapLibre instance via
+ * `map.querySourceFeatures(...)` when available.  That's enough
+ * for any layer whose tiles are currently loaded into the
+ * visible+nearby area; what fits on screen + nearby tiles is what
+ * the user can sensibly export from a web app.  Bundle export
+ * (related tables + attachments + every-row-by-server-fetch) is
+ * a separate widget tracked as #109.
+ */
+function ExportWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'export') return null;
+  const cfg = widget.config;
+  const ctx = useContext(CustomMapsContext);
+  const boundMap = cfg.mapWidgetId ? ctx?.maps?.[cfg.mapWidgetId] ?? null : null;
+  const boundState = cfg.mapWidgetId
+    ? ctx?.states?.[cfg.mapWidgetId] ?? null
+    : null;
+  const resolved = ctx?.resolvedTargets ?? [];
+  const [targetIndex, setTargetIndex] = useState<number>(
+    cfg.defaultTargetIndex ?? 0,
+  );
+  const [format, setFormat] = useState<ExportFormat>(cfg.defaultFormat ?? 'xlsx');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function runExport(scope: 'all' | 'selection'): void {
+    setError(null);
+    const target = resolved[targetIndex];
+    if (!target || !boundMap || !boundState) {
+      setError('No bound map / target.');
+      return;
+    }
+    setBusy(true);
+    try {
+      // Pull features off the live MapLibre source.  For an MVT-
+      // backed v3 data_layer, querySourceFeatures returns whatever
+      // is currently loaded into the tile cache around the
+      // viewport.  This is the same set the LayerList / popups see,
+      // so the export matches what the user is looking at.
+      const sourceId = target.mapLayer.id;
+      const queried = boundMap.querySourceFeatures(sourceId, {
+        sourceLayer: target.mapLayer.id,
+      });
+      // De-dup by feature id (a single feature can land in multiple
+      // tiles when it spans tile boundaries).  MVT promoteId puts
+      // the canonical id in `id`; fall back to a stringified
+      // properties signature when missing.
+      const seen = new Set<string>();
+      const features: GeoJSON.Feature[] = [];
+      for (const f of queried) {
+        const key =
+          f.id !== undefined ? String(f.id) : JSON.stringify(f.properties);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        features.push(f);
+      }
+      let working = features;
+      if (scope === 'selection') {
+        const sel = boundState.selection[target.mapLayer.id];
+        if (!sel || sel.size === 0) {
+          setError('No features selected on the bound map.');
+          setBusy(false);
+          return;
+        }
+        working = features.filter(
+          (f) => f.id !== undefined && sel.has(f.id as number | string),
+        );
+      }
+      if (working.length === 0) {
+        setError(
+          scope === 'selection'
+            ? 'Selected features are not in the current viewport.'
+            : 'No features in the current viewport.',
+        );
+        setBusy(false);
+        return;
+      }
+      // MapLayer doesn't carry the field schema in resolvedTargets;
+      // that's fetched separately by the AttributeTable widget via
+      // /items/<id>/schema.  The exporter falls back to property-
+      // key union order when fields aren't passed, which is good
+      // enough for the v1 viewport-export workflow.  A future
+      // polish can plumb the layer schema through here so column
+      // labels match the layer designer's intent.
+      exportFeatures(
+        working.map((f) => ({
+          ...(f.id !== undefined ? { id: String(f.id) } : {}),
+          geometry: f.geometry,
+          properties: (f.properties ?? null) as Record<string, unknown> | null,
+        })),
+        format,
+        {
+          filename: sanitizeExportFilename(target.title),
+          includeGeometryWkt: format === 'xlsx',
+        },
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const noTargets = resolved.length === 0;
+  return (
+    <WidgetFrame icon={Download} title="Export">
+      <div className="flex flex-col gap-3 p-3 text-xs">
+        <label className="block">
+          <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">
+            Layer
+          </span>
+          <select
+            value={targetIndex}
+            disabled={noTargets}
+            onChange={(e) => setTargetIndex(Number(e.target.value))}
+            className="mt-1 w-full rounded-md border border-border bg-surface-0 px-2 py-1 text-sm"
+          >
+            {resolved.map((t, i) => (
+              <option key={`${t.dataLayerId}:${t.layerKey}:${i}`} value={i}>
+                {t.title}
+              </option>
+            ))}
+            {noTargets ? (
+              <option value={-1}>(no targets configured)</option>
+            ) : null}
+          </select>
+        </label>
+        <label className="block">
+          <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">
+            Format
+          </span>
+          <div className="mt-1 inline-flex rounded-md border border-border bg-surface-2 p-0.5">
+            <button
+              type="button"
+              onClick={() => setFormat('xlsx')}
+              className={`px-2 py-1 text-[11px] ${
+                format === 'xlsx'
+                  ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                  : 'text-muted'
+              }`}
+            >
+              Excel
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormat('csv')}
+              className={`px-2 py-1 text-[11px] ${
+                format === 'csv'
+                  ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                  : 'text-muted'
+              }`}
+            >
+              CSV
+            </button>
+          </div>
+        </label>
+        {error ? (
+          <p className="rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] text-rose-900">
+            {error}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            disabled={busy || noTargets}
+            onClick={() => runExport('all')}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-accent px-3 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <Download className="h-3 w-3" />
+            Export visible
+          </button>
+          <button
+            type="button"
+            disabled={busy || noTargets}
+            onClick={() => runExport('selection')}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-surface-1 px-3 text-[11px] font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            Export selection
+          </button>
+        </div>
+        <p className="text-[10px] text-muted">
+          Exports the features currently loaded for this layer (the
+          map viewport plus its surrounding tile cache).  For a
+          full-layer dump including related tables + attachments,
+          use the bundle export on the data layer&apos;s detail page.
+        </p>
+      </div>
+    </WidgetFrame>
+  );
+}
+
+function sanitizeExportFilename(raw: string): string {
+  const s = raw.trim().replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_');
+  return (s.slice(0, 60) || 'export').replace(/^_+|_+$/g, '');
+}
+
 // ---- AttributeTable widget -------------------------------------------------
 
 /**
@@ -3011,7 +3221,13 @@ function ToolButtonRender({
     data: {
       action?:
         | { kind: 'open-item'; targetItemId: string; newTab?: boolean; view?: string }
-        | { kind: 'open-url'; url: string; newTab?: boolean };
+        | { kind: 'open-url'; url: string; newTab?: boolean }
+        | {
+            kind: 'export-layer';
+            targetItemId: string;
+            layerKey: string;
+            format: 'csv' | 'xlsx';
+          };
     } | null;
   };
   const [tool, setTool] = useState<ToolItem | null>(null);
@@ -3066,6 +3282,52 @@ function ToolButtonRender({
       } else {
         window.location.assign(action.url);
       }
+      return;
+    }
+    if (action.kind === 'export-layer') {
+      // #110 export-layer tool action.  Fetch the bound layer's
+      // features over the API (NOT the live MapLibre source) so
+      // the export covers the whole layer, not just whatever
+      // tiles are currently in the user's viewport cache.  This
+      // is what differentiates the tool action from the Export
+      // widget: tools are "give me everything", widget is "give
+      // me what I'm looking at".
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/portal/items/${encodeURIComponent(action.targetItemId)}/layers/${encodeURIComponent(action.layerKey)}/features`,
+            { cache: 'no-store' },
+          );
+          if (!res.ok) {
+            console.warn('[tool:export-layer] HTTP', res.status);
+            return;
+          }
+          const body = (await res.json()) as
+            | { features?: Array<{ id?: string; geometry?: unknown; properties?: Record<string, unknown> | null }> }
+            | Array<{ id?: string; geometry?: unknown; properties?: Record<string, unknown> | null }>;
+          const rows = Array.isArray(body) ? body : body.features ?? [];
+          if (rows.length === 0) {
+            console.info('[tool:export-layer] no features');
+            return;
+          }
+          exportFeatures(
+            rows.map((f) => ({
+              ...(f.id !== undefined ? { id: String(f.id) } : {}),
+              geometry: f.geometry,
+              properties: (f.properties ?? null) as
+                | Record<string, unknown>
+                | null,
+            })),
+            action.format,
+            {
+              filename: sanitizeExportFilename(tool.title || 'export'),
+              includeGeometryWkt: action.format === 'xlsx',
+            },
+          );
+        } catch (err) {
+          console.warn('[tool:export-layer] failed', err);
+        }
+      })();
       return;
     }
   };
@@ -4631,6 +4893,11 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   search: SearchIcon,
   print: Printer,
   select: MousePointer2,
+  // #110 Export widget: download icon to match the attribute-
+  // table's Export menu and the data_layer detail page's Export
+  // dropdown.  Discoverable at a glance to anyone who's used Esri
+  // / VertiGIS where Export sits next to Print on the toolbar.
+  export: Download,
   'basemap-gallery': ImageIcon,
   // #361 page-element kinds. The icons mirror the designer's
   // PALETTE_TILES so a future WidgetFrame.kindIcon defaults stay

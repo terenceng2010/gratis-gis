@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Code as CodeIcon,
   Crosshair as CrosshairIcon,
+  Download,
   ExternalLink,
   Eye,
   Image as ImageIcon,
@@ -1271,6 +1272,13 @@ const PALETTE_TILES: Array<{
     label: 'Print',
     Icon: Printer,
     hint: 'Print the bound map',
+    category: 'map',
+  },
+  {
+    kind: 'export',
+    label: 'Export',
+    Icon: Download,
+    hint: 'Export visible features to CSV / Excel',
     category: 'map',
   },
   {
@@ -2939,6 +2947,8 @@ function widgetPlaceholderText(
       return 'Click to print';
     case 'select':
       return 'Click / box / polygon / lasso';
+    case 'export':
+      return 'Export visible features';
     case 'basemap-gallery':
       return 'Tiles of available basemaps';
     case 'image':
@@ -2981,6 +2991,7 @@ function summarizeWidget(w: CustomWidget): string {
     case 'search':
     case 'print':
     case 'select':
+    case 'export':
     case 'basemap-gallery':
       return w.config.mapWidgetId
         ? `→ ${w.config.mapWidgetId.slice(0, 6)}`
@@ -3489,6 +3500,7 @@ function WidgetConfigForm({
     case 'layer-list':
     case 'search':
     case 'select':
+    case 'export':
     case 'basemap-gallery':
       return (
         <MapBindingPicker
@@ -6131,6 +6143,7 @@ const WIDGET_KIND_LABEL: Record<CustomWidgetKind, string> = {
   search: 'Search',
   print: 'Print',
   select: 'Select',
+  export: 'Export',
   'basemap-gallery': 'Basemaps',
   bookmark: 'Bookmarks',
   coordinates: 'Coordinates',
@@ -6533,6 +6546,7 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
     case 'search':
     case 'print':
     case 'select':
+    case 'export':
     case 'basemap-gallery':
     case 'bookmark':
     case 'coordinates':
@@ -7187,6 +7201,19 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           mapWidgetId: '',
           displayMode: 'tool',
           panelArrangement: defaultPanelArrangement('select'),
+        },
+      };
+    case 'export':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'export',
+          mapWidgetId: '',
+          defaultFormat: 'xlsx',
+          displayMode: 'tool',
+          panelArrangement: defaultPanelArrangement('export'),
         },
       };
     case 'basemap-gallery':
