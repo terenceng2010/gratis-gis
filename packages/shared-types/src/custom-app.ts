@@ -693,14 +693,27 @@ export interface ButtonWidgetConfig {
   kind: 'button';
   /** Visible label. */
   label: string;
-  /** Click target. Either an external URL or a page id from the
-   *  app's pages array. The runtime narrows on `linkKind`. */
-  linkKind?: 'url' | 'page';
+  /**
+   * Click target.  Three kinds today:
+   *   - 'url'  -> external URL (open in tab or replace location)
+   *   - 'page' -> jump to a page within this app
+   *   - 'tool' -> run a referenced `tool` item (#90).  The tool's
+   *               own `action` declares what runs (open another
+   *               item, open a parameterized URL, etc.).  Tools
+   *               are reusable across apps; a button is just one
+   *               trigger surface for them.
+   * The runtime narrows on `linkKind`.
+   */
+  linkKind?: 'url' | 'page' | 'tool';
   /** External URL (when linkKind='url'). */
   url?: string;
   /** Page id (when linkKind='page'). Falls back to no-op if the
    *  page has been deleted since the button was configured. */
   pageId?: string;
+  /** Tool item id (when linkKind='tool').  The runtime fetches the
+   *  referenced tool on mount, falls back to a disabled button if
+   *  the tool was deleted or the user no longer has read access. */
+  toolId?: string;
   /** Visual variant. 'primary' is filled with the app's accent;
    *  'secondary' is outlined. */
   variant?: 'primary' | 'secondary';

@@ -137,6 +137,8 @@ import { OgcServiceEditor } from './ogc-service/editor';
 import { ServiceEditor } from './service/editor';
 import { ViewerDetail } from './viewer/detail';
 import { CustomAppDetail } from './custom/detail';
+import { ToolDetail } from './tool/detail';
+import type { ToolItemData } from '@gratis-gis/shared-types';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import { DataLayerProvenance } from './data-layer/provenance-panel';
 import { DataLayerSchema } from './data-layer/schema-panel';
@@ -711,6 +713,17 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
         <DerivedLayerDetail
           data={(item.data ?? {}) as DerivedLayerData}
         />
+      ) : item.type === 'tool' ? (
+        // #90: tool item detail page.  Minimal editor for the
+        // tool's stored action.  Lives in its own component so the
+        // detail page stays narrow.
+        <section className="mb-6">
+          <ToolDetail
+            itemId={item.id}
+            initial={(item.data ?? null) as ToolItemData | null}
+            canEdit={canManage}
+          />
+        </section>
       ) : item.type === 'pick_list' ? (
         <section className="mb-6">
           <PickListEditor

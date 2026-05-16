@@ -2937,7 +2937,8 @@ function ImageWidgetRender({ widget }: { widget: CustomWidget }) {
 function ButtonWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'button') return null;
   const ctx = useContext(CustomMapsContext);
-  const { label, variant, linkKind, url, pageId, openInNewTab } = widget.config;
+  const { label, variant, linkKind, url, pageId, toolId, openInNewTab } =
+    widget.config;
   const v = variant ?? 'primary';
   const className = `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
     v === 'primary'
@@ -2945,6 +2946,9 @@ function ButtonWidgetRender({ widget }: { widget: CustomWidget }) {
       : 'border border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
   }`;
   const text = label || 'Button';
+  if ((linkKind ?? 'url') === 'tool') {
+    return <ToolButtonRender toolId={toolId} text={text} className={className} />;
+  }
   if ((linkKind ?? 'url') === 'page') {
     // Page-link path. Resolves to setActivePageIdx via the runtime
     // context. Renders as a plain button so middle-click / right-
@@ -2980,6 +2984,116 @@ function ButtonWidgetRender({ widget }: { widget: CustomWidget }) {
       >
         {text}
       </a>
+    </div>
+  );
+}
+
+/**
+ * #90: Tool-button render path.  Fetches the bound `tool` item by
+ * id on mount, falls back to a disabled button if the tool was
+ * deleted (or the user no longer has read access).  On click, runs
+ * the tool's declared action.  Today's action surface is URL-
+ * shaped (open-item, open-url); future actions (run a derived-layer
+ * pipeline, trigger a print) plug into the same switch.
+ */
+function ToolButtonRender({
+  toolId,
+  text,
+  className,
+}: {
+  toolId: string | undefined;
+  text: string;
+  className: string;
+}) {
+  type ToolItem = {
+    id: string;
+    title: string;
+    data: {
+      action?:
+        | { kind: 'open-item'; targetItemId: string; newTab?: boolean; view?: string }
+        | { kind: 'open-url'; url: string; newTab?: boolean };
+    } | null;
+  };
+  const [tool, setTool] = useState<ToolItem | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ok' | 'missing'>(
+    toolId ? 'loading' : 'missing',
+  );
+  useEffect(() => {
+    if (!toolId) {
+      setStatus('missing');
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/portal/items/${toolId}`, {
+          cache: 'no-store',
+        });
+        if (!res.ok) {
+          if (!cancelled) setStatus('missing');
+          return;
+        }
+        const body = (await res.json()) as ToolItem;
+        if (cancelled) return;
+        setTool(body);
+        setStatus('ok');
+      } catch {
+        if (!cancelled) setStatus('missing');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [toolId]);
+
+  const runTool = () => {
+    const action = tool?.data?.action;
+    if (!action) return;
+    if (action.kind === 'open-item') {
+      const view = action.view ? `?view=${encodeURIComponent(action.view)}` : '';
+      const href = `/items/${action.targetItemId}${view}`;
+      if (action.newTab) {
+        window.open(href, '_blank', 'noopener,noreferrer');
+      } else {
+        window.location.assign(href);
+      }
+      return;
+    }
+    if (action.kind === 'open-url') {
+      if (!action.url) return;
+      if (action.newTab) {
+        window.open(action.url, '_blank', 'noopener,noreferrer');
+      } else {
+        window.location.assign(action.url);
+      }
+      return;
+    }
+  };
+
+  // Resolve the button label: prefer the explicit `text` set on
+  // the button widget (so the author can override the tool's name),
+  // fall back to the tool's title once we've loaded it.  Loading
+  // state keeps the existing text so the runtime doesn't flash a
+  // placeholder.
+  const visibleText =
+    text && text !== 'Button' ? text : tool?.title ?? text;
+  const disabled = status !== 'ok' || !tool?.data?.action;
+
+  return (
+    <div className="flex h-full w-full items-center justify-center p-2">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={runTool}
+        title={
+          status === 'missing'
+            ? 'Tool no longer available'
+            : tool?.title ?? 'Tool'
+        }
+        className={`${className} disabled:cursor-not-allowed disabled:opacity-50`}
+      >
+        {visibleText}
+      </button>
     </div>
   );
 }

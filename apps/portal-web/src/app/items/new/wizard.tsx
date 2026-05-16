@@ -33,6 +33,7 @@ import {
   Printer,
   Search,
   Sparkles,
+  Wand2,
   type LucideIcon,
 } from 'lucide-react';
 import type {
@@ -60,6 +61,7 @@ import {
   DEFAULT_PICK_LIST,
   DEFAULT_GEOCODING_SERVICE,
   DEFAULT_PRINT_TEMPLATE,
+  emptyToolData,
   DEFAULT_TILE_LAYER,
   DEFAULT_MAP,
   DEFAULT_FOLDER,
@@ -305,6 +307,17 @@ const TYPE_GROUPS: TypeGroup[] = [
         label: 'Print template',
         desc: 'Layout for the Print tool in a web app: paper size, title block, map frame, legend, scalebar, north arrow. Drag elements onto a paper-sized canvas, declare parameters the print form prompts for, save.',
         Icon: Printer,
+      },
+      {
+        // #90: tool items.  Reusable named action (open a URL,
+        // jump to another item) that a Custom Web App Button widget
+        // can bind to.  The same tool used across multiple apps
+        // keeps the recipe centralized -- update the URL once and
+        // every button pointing at it follows.
+        value: 'tool',
+        label: 'Tool',
+        desc: 'A reusable named action - "open this dashboard" or "go to this URL" - that you bind to a Button on a Custom Web App. One tool can be reused across many apps, so updating the destination once propagates everywhere.',
+        Icon: Wand2,
       },
     ],
   },
@@ -1211,6 +1224,12 @@ export function NewItemWizard({
       // list.  Author lands on the designer ready to drop
       // elements onto the page.
       data = DEFAULT_PRINT_TEMPLATE;
+    } else if (type === 'tool') {
+      // #90: seed an empty tool whose default action is "open URL"
+      // with an empty URL.  Saves cleanly (the runtime treats an
+      // empty URL as a no-op) and lands the author on the detail
+      // page to configure the action.
+      data = emptyToolData();
     } else if (type === 'tile_layer') {
       // #179: empty tile_layer. The file upload + metadata
       // extraction happen on the detail page after create,

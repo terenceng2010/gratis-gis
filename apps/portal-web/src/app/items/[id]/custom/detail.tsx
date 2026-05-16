@@ -3965,9 +3965,10 @@ function ButtonWidgetConfig({
   config: {
     kind: 'button';
     label: string;
-    linkKind?: 'url' | 'page';
+    linkKind?: 'url' | 'page' | 'tool';
     url?: string;
     pageId?: string;
+    toolId?: string;
     variant?: 'primary' | 'secondary';
     openInNewTab?: boolean;
   };
@@ -4007,6 +4008,7 @@ function ButtonWidgetConfig({
         >
           <option value="url">External URL</option>
           <option value="page">Page in this app</option>
+          <option value="tool">Run a tool</option>
         </select>
       </Field>
       {linkKind === 'url' ? (
@@ -4031,7 +4033,7 @@ function ButtonWidgetConfig({
             Open in a new tab
           </label>
         </>
-      ) : (
+      ) : linkKind === 'page' ? (
         <Field label="Page">
           <select
             value={config.pageId ?? ''}
@@ -4046,6 +4048,21 @@ function ButtonWidgetConfig({
               </option>
             ))}
           </select>
+        </Field>
+      ) : (
+        // #90: tool picker.  Reuses the generic item picker pattern
+        // (paste / pick the tool item id).  A future iteration will
+        // replace this with a real combobox over the user's
+        // accessible tool items.
+        <Field label="Tool">
+          <input
+            type="text"
+            value={config.toolId ?? ''}
+            disabled={!canEdit}
+            placeholder="tool item id"
+            onChange={(e) => onChangeConfig({ toolId: e.target.value.trim() })}
+            className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 font-mono text-xs focus:border-ink-1 focus:outline-none"
+          />
         </Field>
       )}
     </div>
