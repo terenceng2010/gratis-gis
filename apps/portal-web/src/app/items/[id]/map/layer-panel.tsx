@@ -45,7 +45,11 @@ import { PopupEditor } from './popup-editor';
 import { LabelsEditor } from './labels-editor';
 import { TemplateInput } from './template-input';
 import { makeEmptyGroupLayer, uniqueGroupTitle } from './group-factory';
-import { isTableLayer, type LayerMetadata } from './layer-metadata';
+import {
+  isTableLayer,
+  type GeometryFamily,
+  type LayerMetadata,
+} from './layer-metadata';
 import { LayerSwatch } from './layer-swatch';
 
 interface Props {
@@ -1119,6 +1123,15 @@ function LayerRow({
                       : {})}
                   />
                 </div>
+                <div className="mt-3 border-t border-border pt-3">
+                  <ScaledSymbologyEditor
+                    layer={layer}
+                    onPatch={onPatch}
+                    {...(metadata.geometryTypes
+                      ? { geometryTypes: metadata.geometryTypes }
+                      : {})}
+                  />
+                </div>
               </Section>
 
               <Section
@@ -1248,6 +1261,278 @@ function LayerRow({
       ) : null}
     </li>
   );
+}
+
+/**
+ * #114: Scaled-symbology editor.  Lives below the base StyleEditor.
+ * Each class carries its own MapLayerStyle + a zoom range; the
+ * runtime composes a step expression so the right look paints at
+ * the right zoom without forking the layer.
+ *
+ * Editor model is intentionally compact: list of classes, each
+ * with label / min / max / colors (fill, stroke, line, point).
+ * Authors who need more (icon swaps, widths, opacities) fall back
+ * to the base style; expanding the per-class editor surface is a
+ * future slice.
+ */
+function ScaledSymbologyEditor({
+  layer,
+  onPatch,
+  geometryTypes,
+}: {
+  layer: MapLayer;
+  onPatch: (patch: Partial<MapLayer>) => void;
+  geometryTypes?: Set<GeometryFamily>;
+}) {
+  const classes = layer.scaledSymbology ?? [];
+  function update(next: typeof classes): void {
+    onPatch({
+      scaledSymbology: next.length > 0 ? next : ([] as typeof classes),
+    });
+  }
+  function addClass(): void {
+    update([
+      ...classes,
+      {
+        // Default new class to "above this zoom".  Author refines.
+        minZoom: 14,
+        style: structuredClone(layer.style),
+        renderer: layer.renderer,
+        label: `Class ${classes.length + 1}`,
+      },
+    ]);
+  }
+  function patchClass(
+    idx: number,
+    patch: Partial<NonNullable<typeof classes>[number]>,
+  ): void {
+    const next = classes.map((c, i) =>
+      i === idx ? ({ ...c, ...patch } as typeof c) : c,
+    );
+    update(next);
+  }
+  function removeClass(idx: number): void {
+    update(classes.filter((_, i) => i !== idx));
+  }
+  const hasPolygon = !geometryTypes || geometryTypes.has('polygon');
+  const hasLine = !geometryTypes || geometryTypes.has('line');
+  const hasPoint = !geometryTypes || geometryTypes.has('point');
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted">
+          Scale classes
+          {classes.length > 0 ? (
+            <span className="ml-1 normal-case text-muted">
+              ({classes.length})
+            </span>
+          ) : null}
+        </h3>
+        <button
+          type="button"
+          onClick={addClass}
+          className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
+        >
+          + Add class
+        </button>
+      </div>
+      {classes.length === 0 ? (
+        <p className="text-[11px] text-muted">
+          Optional.  Add classes when you want this layer to look
+          different at different zoom levels (e.g. semi-transparent
+          fill at country scale, outline-only at parcel scale)
+          without forking the layer.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {classes.map((c, i) => {
+            const label = c.label ?? `Class ${i + 1}`;
+            return (
+              <li
+                key={i}
+                className="rounded-md border border-border bg-surface-1 p-2"
+              >
+                <div className="flex items-start gap-1">
+                  <input
+                    type="text"
+                    value={label}
+                    onChange={(e) => patchClass(i, { label: e.target.value })}
+                    className="flex-1 rounded border border-border bg-surface-0 px-1.5 py-0.5 text-[11px] focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeClass(i)}
+                    title="Remove class"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-surface-2"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  <label className="block">
+                    <span className="text-[10px] text-muted">Min zoom</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={24}
+                      step={1}
+                      value={c.minZoom ?? ''}
+                      placeholder="(any)"
+                      onChange={(e) => {
+                        const v = e.target.value.trim();
+                        const n = v === '' ? undefined : Number(v);
+                        const next = { ...c };
+                        if (n === undefined) delete next.minZoom;
+                        else next.minZoom = n;
+                        update(classes.map((x, j) => (j === i ? next : x)));
+                      }}
+                      className="mt-0.5 w-full rounded border border-border bg-surface-0 px-1.5 py-0.5 text-[11px] focus:border-accent focus:outline-none"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] text-muted">Max zoom</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={24}
+                      step={1}
+                      value={c.maxZoom ?? ''}
+                      placeholder="(any)"
+                      onChange={(e) => {
+                        const v = e.target.value.trim();
+                        const n = v === '' ? undefined : Number(v);
+                        const next = { ...c };
+                        if (n === undefined) delete next.maxZoom;
+                        else next.maxZoom = n;
+                        update(classes.map((x, j) => (j === i ? next : x)));
+                      }}
+                      className="mt-0.5 w-full rounded border border-border bg-surface-0 px-1.5 py-0.5 text-[11px] focus:border-accent focus:outline-none"
+                    />
+                  </label>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1">
+                  {hasPolygon ? (
+                    <>
+                      <ScaledColorRow
+                        label="Fill"
+                        value={c.style.polygon.fillColor}
+                        onChange={(v) =>
+                          patchClass(i, {
+                            style: {
+                              ...c.style,
+                              polygon: { ...c.style.polygon, fillColor: v },
+                            },
+                          })
+                        }
+                      />
+                      <ScaledColorRow
+                        label="Stroke"
+                        value={c.style.polygon.strokeColor}
+                        onChange={(v) =>
+                          patchClass(i, {
+                            style: {
+                              ...c.style,
+                              polygon: {
+                                ...c.style.polygon,
+                                strokeColor: v,
+                              },
+                            },
+                          })
+                        }
+                      />
+                    </>
+                  ) : null}
+                  {hasLine ? (
+                    <ScaledColorRow
+                      label="Line"
+                      value={c.style.line.color}
+                      onChange={(v) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            line: { ...c.style.line, color: v },
+                          },
+                        })
+                      }
+                    />
+                  ) : null}
+                  {hasPoint ? (
+                    <ScaledColorRow
+                      label="Point"
+                      value={c.style.point.color}
+                      onChange={(v) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            point: { ...c.style.point, color: v },
+                          },
+                        })
+                      }
+                    />
+                  ) : null}
+                </div>
+                <p className="mt-1.5 text-[10px] text-muted">
+                  Tip: use an <code>rgba()</code> color to vary
+                  transparency per class (the v1 scale-class plumbing
+                  passes COLOR properties through MapLibre step
+                  expressions; opacity / width follow in a later
+                  slice).
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ScaledColorRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-[11px] text-ink-1">
+      <span className="w-12 shrink-0 text-[10px] text-muted">{label}</span>
+      <input
+        type="color"
+        // The native color input only accepts #rrggbb.  Normalize
+        // rgba() / named values back to a plausible hex so the
+        // picker doesn't render blank.  Authors who want rgba can
+        // type into the text input next door.
+        value={normalizeToHex(value)}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-5 w-7 cursor-pointer rounded border border-border bg-surface-0"
+      />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 rounded border border-border bg-surface-0 px-1.5 py-0.5 font-mono text-[10px] focus:border-accent focus:outline-none"
+      />
+    </label>
+  );
+}
+
+function normalizeToHex(raw: string): string {
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw;
+  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
+  }
+  const rgb = raw.match(
+    /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/,
+  );
+  if (rgb) {
+    const toHex = (n: string) =>
+      Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0');
+    return `#${toHex(rgb[1] ?? '0')}${toHex(rgb[2] ?? '0')}${toHex(rgb[3] ?? '0')}`;
+  }
+  return '#000000';
 }
 
 function Section({

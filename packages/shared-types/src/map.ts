@@ -194,6 +194,28 @@ export interface MapLayer {
    * colors as-is.
    */
   renderer: MapLayerRenderer;
+  /**
+   * #114: optional symbology overrides scoped to zoom ranges so one
+   * layer can carry different looks at different scales without
+   * forcing a duplicate layer (the AGO frustration where you'd add
+   * "Parcels — overview" + "Parcels — detail" to a map and have to
+   * maintain popups / labels / filters on both).
+   *
+   * Each class has its own style + renderer; everything else
+   * (popup, filter, fields, search, sharing) stays singular on
+   * the parent MapLayer.  At runtime the canvas evaluates which
+   * class is active for the current zoom and applies that class's
+   * paint via MapLibre step expressions.  Ranges are inclusive at
+   * minZoom, exclusive at maxZoom; the first matching class wins.
+   * When no class matches, the layer falls back to the base
+   * `style` + `renderer` above.
+   *
+   * Today only `style` is respected at runtime; per-class renderer
+   * overrides for unique-value / class-breaks compositions are a
+   * follow-up since they require nesting attribute-driven expressions
+   * inside the zoom-step expression -- doable, just not v1.
+   */
+  scaledSymbology?: ScaledSymbologyClass[];
   popup: MapLayerPopup;
   interactions: MapLayerInteractions;
   labels: MapLayerLabels;
@@ -462,6 +484,34 @@ export type MapLayerSource =
  * uploaded SVG) slot in here.
  */
 export type PointSymbol = 'circle' | 'icon';
+
+/**
+ * #114: per-zoom-range symbology class.  Carries its own style +
+ * renderer; everything else on the parent MapLayer (popup, filter,
+ * fields, sharing) stays singular.  Authoring lives in the
+ * symbology panel as a list of classes; runtime in the map canvas
+ * compiles these into MapLibre step expressions over the `zoom`
+ * variable so transitions are pixel-perfect at the threshold.
+ */
+export interface ScaledSymbologyClass {
+  /** Inclusive lower zoom bound (0-24).  Omit / null for
+   *  "no lower bound" -- the class is active at zoom 0 unless a
+   *  later class with a higher minZoom takes over. */
+  minZoom?: number;
+  /** Exclusive upper zoom bound (0-24).  Omit / null for
+   *  "no upper bound". */
+  maxZoom?: number;
+  /** This class's own style.  Used to derive paint properties
+   *  when zoom is inside the class's range. */
+  style: MapLayerStyle;
+  /** Renderer override -- ignored at runtime today, present so
+   *  the data shape doesn't change when we plug in renderer-aware
+   *  zoom-stepping. */
+  renderer: MapLayerRenderer;
+  /** Optional label shown in the symbology editor list (e.g.
+   *  "Overview", "Detail").  Has no runtime effect. */
+  label?: string;
+}
 
 export interface MapLayerStyle {
   point: {
@@ -808,6 +858,101 @@ export function groupDepth(layer: MapLayer, layers: MapLayer[]): number {
     parentId = parent.groupId;
   }
   return depth;
+}
+
+/**
+ * #114: resolve a layer's effective MapLayerStyle at a specific
+ * zoom level.  Walks the layer's scaledSymbology array and picks
+ * the first class whose [minZoom, maxZoom) range contains the
+ * given zoom.  Falls back to the layer's base style when no class
+ * matches.  Used by the legend / LayerList swatch and by the
+ * symbology editor's preview so authors see what each class will
+ * actually look like.
+ *
+ * Class ranges:
+ *   - minZoom is inclusive, maxZoom is exclusive
+ *   - undefined minZoom means "0" (or "no lower bound")
+ *   - undefined maxZoom means "infinity" (or "no upper bound")
+ *   - overlapping classes have undefined behavior; the FIRST match
+ *     in the array wins.  v1 leaves it to the author to keep
+ *     ranges non-overlapping.
+ */
+export function effectiveStyleAtZoom(
+  layer: MapLayer,
+  zoom: number,
+): MapLayerStyle {
+  const classes = layer.scaledSymbology ?? [];
+  for (const c of classes) {
+    const min = c.minZoom ?? -Infinity;
+    const max = c.maxZoom ?? Infinity;
+    if (zoom >= min && zoom < max) return c.style;
+  }
+  return layer.style;
+}
+
+/**
+ * #114: build a MapLibre `step` expression over `zoom` that picks
+ * the right property value (color / number) from the active scaled
+ * symbology class at each zoom level.  Returns the scalar base
+ * value when the layer has no classes -- callers can drop this in
+ * place of `style.X.Y` and the existing code paths keep working.
+ *
+ * Generic over the pick result so it threads through both string
+ * (colors) and number (opacity, width, radius) properties without
+ * losing type safety at the call site.
+ *
+ * Class ranges are inclusive at minZoom, exclusive at maxZoom; see
+ * `effectiveStyleAtZoom` for the matching semantics.
+ *
+ * A gap between two non-adjacent classes returns to the base
+ * style's value, so authors can paint a "different look between
+ * z10 and z14" without affecting other zoom ranges.
+ */
+export function scaledStyleExpression<T extends string | number>(
+  layer: MapLayer,
+  pick: (style: MapLayerStyle) => T,
+): T | unknown[] {
+  const classes = layer.scaledSymbology ?? [];
+  if (classes.length === 0) return pick(layer.style);
+  const base = pick(layer.style);
+  // Build sorted (zoom, value) transitions.  For each class we
+  // emit (minZoom, classValue), and (maxZoom, base) UNLESS the
+  // next class starts at exactly maxZoom (which would make the
+  // intermediate "return to base" pointless).
+  const sorted = [...classes]
+    .map((c, i) => ({ i, c, start: c.minZoom ?? 0 }))
+    .sort((a, b) => a.start - b.start);
+  const transitions: Array<{ zoom: number; value: T }> = [];
+  for (let i = 0; i < sorted.length; i += 1) {
+    const { c } = sorted[i]!;
+    const start = c.minZoom ?? 0;
+    transitions.push({ zoom: start, value: pick(c.style) });
+    if (c.maxZoom !== undefined && c.maxZoom !== null) {
+      const next = sorted[i + 1]?.c;
+      const nextStart = next?.minZoom ?? -1;
+      if (nextStart !== c.maxZoom) {
+        transitions.push({ zoom: c.maxZoom, value: base });
+      }
+    }
+  }
+  if (transitions.length === 0) return base;
+  // MapLibre's step expression: ['step', input, default, stop1,
+  // val1, stop2, val2, ...].  `default` is the value BEFORE the
+  // first stop.  If the first transition is at zoom 0 we'd be
+  // duplicating it as both the default AND a stop -- just collapse
+  // by making the default the first transition's value and dropping
+  // the first stop.
+  let defaultValue: T = base;
+  let stops = transitions;
+  if (stops[0]!.zoom <= 0) {
+    defaultValue = stops[0]!.value;
+    stops = stops.slice(1);
+  }
+  const expr: unknown[] = ['step', ['zoom'], defaultValue];
+  for (const s of stops) {
+    expr.push(s.zoom, s.value);
+  }
+  return expr;
 }
 
 /**

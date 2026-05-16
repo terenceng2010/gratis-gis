@@ -22,6 +22,7 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   effectiveLayerScale,
+  scaledStyleExpression,
 } from '@gratis-gis/shared-types';
 import {
   customBasemapToStyle,
@@ -2240,10 +2241,38 @@ function syncOverlays(
     // Colors may be driven by an attribute (unique-value renderer). The
     // helper returns either a MapLibre match expression or the plain
     // hex we were using before.
-    const polyFill = rendererColor(layer, s.polygon.fillColor);
-    const polyStroke = rendererColor(layer, s.polygon.strokeColor);
-    const lineColor = rendererColor(layer, s.line.color);
-    const pointFill = rendererColor(layer, s.point.color);
+    //
+    // #114: pass each color through scaledStyleExpression so authors
+    // can carry per-zoom symbology classes without forking the layer.
+    // For 'simple' renderer this becomes the active class's color at
+    // each zoom step; for unique-value / class-breaks it becomes the
+    // default value (used when no category matches).
+    const polyFill = rendererColor(
+      layer,
+      scaledStyleExpression(layer, (st) => st.polygon.fillColor),
+    );
+    const polyStroke = rendererColor(
+      layer,
+      scaledStyleExpression(layer, (st) => st.polygon.strokeColor),
+    );
+    const lineColor = rendererColor(
+      layer,
+      scaledStyleExpression(layer, (st) => st.line.color),
+    );
+    const pointFill = rendererColor(
+      layer,
+      scaledStyleExpression(layer, (st) => st.point.color),
+    );
+
+    // v1 scope for #114: only COLOR properties respect scaled
+    // symbology.  Opacity / width / radius stay as scalars from the
+    // layer's base style because they're combined arithmetically
+    // with `op` and feature-state in `stateCase` -- swapping in a
+    // MapLibre expression there needs a small expression-composition
+    // refactor that's worth a separate slice.  Authors can still
+    // simulate "fill goes away at high zoom" today by using rgba()
+    // colors with alpha differences across classes, which exercises
+    // the fillColor path that IS scaled.
 
     // Build a state-aware "case" expression. `selected` beats `hover`
     // which beats the base value. Includes an optional hover branch
@@ -2690,7 +2719,13 @@ function combineFilter(
 // paint-property validator expects.
 function rendererColor(
   layer: MapLayer,
-  fallback: string,
+  // `fallback` widened (#114) so call sites can pass a zoom-scaled
+  // step expression instead of a flat hex.  MapLibre's match / step
+  // wrappers accept an expression for their default value too, so
+  // this composes naturally: when the layer has a unique-value
+  // renderer AND scaled classes, features whose attribute doesn't
+  // match any category fall back to the zoom-scaled value.
+  fallback: string | unknown[],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
   const r = layer.renderer;
