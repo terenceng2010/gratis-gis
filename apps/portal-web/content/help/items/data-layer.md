@@ -15,43 +15,43 @@ related:
   - bundle-export
 ---
 
-A **data layer** is the native item type for feature data.  It owns
+A **data layer** is the native item type for feature data. It owns
 one or more PostGIS tables and the schema that describes them.
 Maps reference data layers; data layers reference nothing.
 
 ## What's in a data layer
 
 - **One or more sublayers**, each backed by its own PostGIS table.
-  Sublayers are what get rendered on a map.
-- **A schema per sublayer** — field list with types, domains (coded
-  values, ranges), and required flags.
-- **Optional related sublayers** — non-spatial tables whose rows
-  reference a parent feature.  Used for one-to-many attribute data,
-  inspection histories, photo metadata, etc.
-- **Optional attachments** — files (typically photos) bound to a
-  specific feature.  Stored in MinIO, the metadata row in the
-  `feature_attachment` table.
+ Sublayers are what get rendered on a map.
+- **A schema per sublayer**. Field list with types, domains (coded
+ values, ranges), and required flags.
+- **Optional related sublayers**. Non-spatial tables whose rows
+ reference a parent feature. Used for one-to-many attribute data,
+ inspection histories, photo metadata, etc.
+- **Optional attachments**. Files (typically photos) bound to a
+ specific feature. Stored in MinIO, the metadata row in the
+ `feature_attachment` table.
 
 ## Importing data
 
 Three ways to get features into a data layer:
 
-- **Upload at create** — the new-item wizard offers a file upload
-  step (Shapefile zip, GeoJSON, GeoPackage, KML).
-- **Import into an existing sublayer** — the **Layer data** section
-  on the detail page has an Import button per sublayer.
-- **Submitted via a form** — a form item paired to this data layer
-  posts new rows when respondents submit.
+- **Upload at create**. The new-item wizard offers a file upload
+ step (Shapefile zip, GeoJSON, GeoPackage, KML).
+- **Import into an existing sublayer**. The **Layer data** section
+ on the detail page has an Import button per sublayer.
+- **Submitted via a form**. A form item paired to this data layer
+ posts new rows when respondents submit.
 
 ## Editing features
 
 Two surfaces:
 
 - **The feature browser** (a section on the detail page) lets you
-  view, add, edit, and delete rows attribute-only.
+ view, add, edit, and delete rows attribute-only.
 - **A map** that references this layer lets you edit geometry
-  graphically.  The data layer's own detail page can't do
-  geometry editing — there's no map canvas there.
+ graphically. The data layer's own detail page can't do
+ geometry editing. There's no map canvas there.
 
 ## Exporting
 
@@ -62,14 +62,14 @@ See **Bundle export**.
 ## Versions
 
 Data layers are versioned bitemporally: every edit becomes an
-observation in the engine's log.  This means:
+observation in the engine's log. This means:
 
-- **Undo works at every level** — single-row, batch, layer-wide.
-- **Time-travel queries** — show me this layer as of last Tuesday.
-- **Audit trail** — every observation records who changed what
-  and when.
+- **Undo works at every level**. Single-row, batch, layer-wide.
+- **Time-travel queries**. Show me this layer as of last Tuesday.
+- **Audit trail**. Every observation records who changed what
+ and when.
 
-The bitemporal engine is mostly invisible day-to-day.  Where you
+The bitemporal engine is mostly invisible day-to-day. Where you
 see it: the **As of** time slider in the map editor and the
 **History** column when you right-click a feature in the
 attribute table.

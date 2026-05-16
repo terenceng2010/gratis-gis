@@ -7,7 +7,7 @@ order: 0
 
 GratisGIS is an open-source self-hosted alternative to ArcGIS Online.
 This documentation is organized one concept per page: when you want to
-know how Buffer works, the Buffer page shows you how to Buffer — not
+know how Buffer works, the Buffer page shows you how to Buffer. Not
 how to dissolve, then centroid, then buffer.
 
 ## How to use this site
@@ -19,22 +19,22 @@ Every page has the same shape:
 
 - **Title and one-line summary** at the top.
 - **Prerequisites** callout if there's something you need to know first.
-- **The thing itself** — explained from a clean start, no assumed
-  surrounding workflow.
+- **The thing itself**. Explained from a clean start, no assumed
+ surrounding workflow.
 - **See also** at the bottom for related topics.
 
 ## What's here
 
 The catalog is organized into a handful of top-level areas:
 
-- **Getting started** — orientation for new users.
-- **Items** — one page per item type (Map, Data layer, Form, etc.).
-- **Map editing** — symbology, labels, filters, popups.
-- **Web Apps** — the Custom Web App designer, widgets, themes.
-- **Forms** — the form designer and XLSForm import.
-- **Print templates** — page layout and parameters.
-- **Analysis** — derived layers and each analysis step.
-- **Admin** — housekeeping, geocoders, backups.
+- **Getting started**. Orientation for new users.
+- **Items**. One page per item type (Map, Data layer, Form, etc.).
+- **Map editing**. Symbology, labels, filters, popups.
+- **Web Apps**. The Custom Web App designer, widgets, themes.
+- **Forms**. The form designer and XLSForm import.
+- **Print templates**. Page layout and parameters.
+- **Analysis**. Derived layers and each analysis step.
+- **Admin**. Housekeeping, geocoders, backups.
 
 ## Coming from ArcGIS Online?
 

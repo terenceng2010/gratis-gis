@@ -17,26 +17,26 @@ related:
   - apps-custom-designer
 ---
 
-The **Export widget** is the toolbar twin of the Print widget.  It
+The **Export widget** is the toolbar twin of the Print widget. It
 binds to a Map widget and offers a popover with format + scope
-controls.  Click Export → pick a format → the browser downloads.
+controls. Click Export → pick a format → the browser downloads.
 
 ## How to add one
 
 1. Open your Custom Web App in the builder.
 2. From the **Map** group in the left palette, drag **Export** onto
-   the canvas (it ships in tool-display mode by default).
+ the canvas (it ships in tool-display mode by default).
 3. Drop it into your Container (app-bar, dock panel, etc.) next to
-   Print.
+ Print.
 4. In the right rail, set **Map** to the Map widget this Export
-   should pull features from.
+ should pull features from.
 
 ## What it exports
 
 The widget pulls features from the bound map's live MapLibre source
-via `querySourceFeatures`.  That means **"visible features"
+via `querySourceFeatures`. That means **"visible features"
 means whatever tiles are currently loaded** around the user's
-viewport — the same set the popups and the layer list see.
+viewport. The same set the popups and the layer list see.
 
 For a guaranteed-complete dump of a layer, including features
 outside the current viewport, use the **Bundle export** from the
@@ -52,17 +52,17 @@ data layer's detail page or the attribute table.
 
 ## At runtime
 
-The widget renders as an icon button.  Clicking it opens a small
+The widget renders as an icon button. Clicking it opens a small
 popover with:
 
 - **Layer** dropdown (every target layer on the bound map).
 - **Format** toggle (Excel / CSV).
-- **Export visible** — every feature currently loaded.
-- **Export selection** — features the user has selected on the
-  bound map.
+- **Export visible**. Every feature currently loaded.
+- **Export selection**. Features the user has selected on the
+ bound map.
 
 XLSX exports include a `geometry_wkt` column so the user can
-round-trip the geometry into desktop GIS.  CSV stays text-only by
+round-trip the geometry into desktop GIS. CSV stays text-only by
 convention.
 
 ## When to use Bundle export instead
@@ -74,5 +74,5 @@ If the user needs:
 - Feature attachments (photos, etc.)
 
 ... use the Bundle export from the data layer's detail page or the
-attribute table's Export menu.  The Export widget is the quick
+attribute table's Export menu. The Export widget is the quick
 "give me what's on screen" tool.

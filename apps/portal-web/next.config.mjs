@@ -18,6 +18,14 @@ const nextConfig = {
   // includes packages/* deps, otherwise the build warns about multiple
   // lockfiles and may miss workspace package files at runtime.
   outputFileTracingRoot: new URL('../../', import.meta.url).pathname,
+  // #118 help docs.  The /help route reads .md files from
+  // content/help/ via fs at request time -- the tracer can't see
+  // them (no static import), so the standalone build leaves them
+  // out and prod renders an empty sidebar.  Force-include the
+  // tree.  Glob is rooted at the package, not the tracing root.
+  outputFileTracingIncludes: {
+    '/help/**/*': ['./content/help/**/*'],
+  },
 };
 
 export default nextConfig;

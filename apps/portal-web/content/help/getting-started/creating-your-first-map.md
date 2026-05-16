@@ -14,33 +14,33 @@ related:
 ---
 
 A **map** is an item that combines one or more layers with a
-viewport and a basemap.  Maps are how you compose data for human
+viewport and a basemap. Maps are how you compose data for human
 consumption; they're what web apps render and what print templates
 print.
 
 ## Steps
 
 1. From the items grid (the landing page after you sign in), click
-   **+ New item**.
+ **+ New item**.
 2. Pick **Map** from the wizard.
 3. Give the map a title, then click **Create**.
-4. You land on the map's detail page.  Click **Open builder**.
+4. You land on the map's detail page. Click **Open builder**.
 5. In the map builder, click **+ Add layer** in the top-left rail.
 6. Pick a data layer you have access to and click **Add**.
-7. The layer renders with default symbology.  Save with **⌘S** or
-   the Save button.
+7. The layer renders with default symbology. Save with **⌘S** or
+ the Save button.
 
-That's it.  You now have a map you can share, embed in a web app,
+That's it. You now have a map you can share, embed in a web app,
 or print.
 
 ## What you do next depends on the use
 
 - **Style the layer**: select it in the layer panel and use the
-  Style + Symbology controls.  See **Map editing → Symbology**.
+ Style + Symbology controls. See **Map editing → Symbology**.
 - **Constrain what users see**: add a filter on the layer
-  (**Filters** section).
+ (**Filters** section).
 - **Decide what happens on click**: configure popups (**Popups**
-  section).
+ section).
 - **Share it**: the **Sharing** section on the map's detail page.
 
 ## What the map item stores
@@ -51,8 +51,8 @@ The map item's `data` blob includes:
 - The default viewport (center, zoom, bearing, pitch).
 - The basemap binding.
 - Per-layer access overrides (separate from the underlying data
-  layer's own sharing).
+ layer's own sharing).
 
-It does *not* duplicate the features themselves — those live in the
-referenced data layer items.  A change in the underlying data
+It does *not* duplicate the features themselves. Those live in the
+referenced data layer items. A change in the underlying data
 layer shows up immediately on every map that references it.

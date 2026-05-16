@@ -83,7 +83,40 @@ export interface HelpDoc {
   headings: Array<{ depth: number; text: string; id: string }>;
 }
 
-const HELP_ROOT = path.join(process.cwd(), 'content', 'help');
+/**
+ * Resolve the content/help directory.  Two cases:
+ *   - Dev: `next dev` runs from apps/portal-web, so
+ *     <cwd>/content/help is correct.
+ *   - Prod standalone: the Docker runtime's cwd is /app and the
+ *     traced files live at /app/apps/portal-web/content/help (the
+ *     tracing root is the repo, the package is apps/portal-web).
+ * Try the local path first, fall back to the apps/portal-web
+ * subpath.  `existsSync` check keeps both branches working without
+ * a build-time mode switch.
+ */
+function resolveHelpRoot(): string {
+  const local = path.join(process.cwd(), 'content', 'help');
+  const standalone = path.join(
+    process.cwd(),
+    'apps',
+    'portal-web',
+    'content',
+    'help',
+  );
+  // existsSync is sync + cheap; runs once at module load.  We
+  // import statSync at top-of-file so the lookup doesn't sneak
+  // through to runtime.
+  try {
+    const fs = require('node:fs') as typeof import('node:fs');
+    if (fs.existsSync(local)) return local;
+    if (fs.existsSync(standalone)) return standalone;
+  } catch {
+    /* fall through */
+  }
+  return local;
+}
+
+const HELP_ROOT = resolveHelpRoot();
 
 // Configure marked with stable heading ids so in-page anchors
 // stay consistent across builds, and so we can extract the same

@@ -28,14 +28,13 @@ the spreadsheet but leaves you to manually match attachments by
 GlobalID).
 
 <!-- screenshot: bundle export modal with the scope toggle, include-related, include-attachments, and the attachment-prefix dropdown -->
-
 ## How to run one
 
 You can reach Bundle from two surfaces:
 
 - **Data layer detail page → Layer data → Browse → Export → Bundle**
 - **Attribute table → Export → Bundle** (only when the active
-  layer is sourced from a data layer)
+ layer is sourced from a data layer)
 
 Both surfaces open the same modal.
 
@@ -44,8 +43,8 @@ Both surfaces open the same modal.
 | Option | What it does |
 |---|---|
 | **Scope** | All features, or Selected features (when reachable from a context that has a selection, eg the attribute table). |
-| **Include related tables** | Drops a sheet into the workbook for each related sublayer.  Auto-hidden when the layer has no related tables. |
-| **Include attachments** | Pulls every attachment for every surviving feature into the `attachments/` folder.  Off if you only need the spreadsheet. |
+| **Include related tables** | Drops a sheet into the workbook for each related sublayer. Auto-hidden when the layer has no related tables. |
+| **Include attachments** | Pulls every attachment for every surviving feature into the `attachments/` folder. Off if you only need the spreadsheet. |
 | **Filename prefix** | Optional layer field whose value prefixes each attachment filename (matches the ArcGIS Pro export script convention). |
 | **Organize by field** | Optional second field that puts each attachment in a subfolder named by the field value. |
 
@@ -53,20 +52,20 @@ Both surfaces open the same modal.
 
 ```
 <layer name>.zip
-  <layer name>/
-    data.xlsx
-    attachments/
-      <prefix>_ATT<id>_<original>.jpg
-      ...
+ <layer name>/
+ data.xlsx
+ attachments/
+ <prefix>_ATT<id>_<original>.jpg
+ ...
 ```
 
 When **Organize by field** is set:
 
 ```
-    attachments/
-      <split-value>/
-        <prefix>_ATT<id>_<original>.jpg
-        ...
+ attachments/
+ <split-value>/
+ <prefix>_ATT<id>_<original>.jpg
+ ...
 ```
 
 ## Selection cascade
@@ -75,8 +74,8 @@ When you bundle with the **Selected features** scope:
 
 - The parent layer is filtered to the selected features.
 - Each related table is filtered to rows that reference a surviving
-  parent (heuristic match — the related row keeps if any of its
-  property values matches a surviving parent's id).
+ parent (heuristic match. The related row keeps if any of its
+ property values matches a surviving parent's id).
 - Each surviving feature's attachments are included.
 
 In effect, "give me a packet for these 12 parcels" hands back a
@@ -84,8 +83,8 @@ clean self-contained archive with just those 12 parcels' data.
 
 ## Limits
 
-The Bundle currently runs in the browser.  For a few thousand
+The Bundle currently runs in the browser. For a few thousand
 features with photos, that's instant; for a 50,000-feature layer
 with gigabytes of photos, you'll watch the modal say "Fetching
-attachments 23 / 412..." for a while.  A server-side streaming
+attachments 23 / 412..." for a while. A server-side streaming
 endpoint is on the roadmap for that case.
