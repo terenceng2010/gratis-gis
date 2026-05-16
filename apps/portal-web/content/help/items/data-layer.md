@@ -1,0 +1,75 @@
+---
+id: items-data-layer
+title: Data layer
+summary: An item that holds one or more PostGIS-backed feature tables.  The native equivalent of an Esri feature service.
+category: items
+order: 20
+complexity: basic
+tags:
+  - data-layer
+  - item-type
+  - features
+related:
+  - items-map
+  - adding-a-layer
+  - bundle-export
+---
+
+A **data layer** is the native item type for feature data.  It owns
+one or more PostGIS tables and the schema that describes them.
+Maps reference data layers; data layers reference nothing.
+
+## What's in a data layer
+
+- **One or more sublayers**, each backed by its own PostGIS table.
+  Sublayers are what get rendered on a map.
+- **A schema per sublayer** — field list with types, domains (coded
+  values, ranges), and required flags.
+- **Optional related sublayers** — non-spatial tables whose rows
+  reference a parent feature.  Used for one-to-many attribute data,
+  inspection histories, photo metadata, etc.
+- **Optional attachments** — files (typically photos) bound to a
+  specific feature.  Stored in MinIO, the metadata row in the
+  `feature_attachment` table.
+
+## Importing data
+
+Three ways to get features into a data layer:
+
+- **Upload at create** — the new-item wizard offers a file upload
+  step (Shapefile zip, GeoJSON, GeoPackage, KML).
+- **Import into an existing sublayer** — the **Layer data** section
+  on the detail page has an Import button per sublayer.
+- **Submitted via a form** — a form item paired to this data layer
+  posts new rows when respondents submit.
+
+## Editing features
+
+Two surfaces:
+
+- **The feature browser** (a section on the detail page) lets you
+  view, add, edit, and delete rows attribute-only.
+- **A map** that references this layer lets you edit geometry
+  graphically.  The data layer's own detail page can't do
+  geometry editing — there's no map canvas there.
+
+## Exporting
+
+The **Export** dropdown on the feature browser produces CSV, XLSX,
+or a full Bundle (XLSX + related tables + attachments) as a ZIP.
+See **Bundle export**.
+
+## Versions
+
+Data layers are versioned bitemporally: every edit becomes an
+observation in the engine's log.  This means:
+
+- **Undo works at every level** — single-row, batch, layer-wide.
+- **Time-travel queries** — show me this layer as of last Tuesday.
+- **Audit trail** — every observation records who changed what
+  and when.
+
+The bitemporal engine is mostly invisible day-to-day.  Where you
+see it: the **As of** time slider in the map editor and the
+**History** column when you right-click a feature in the
+attribute table.

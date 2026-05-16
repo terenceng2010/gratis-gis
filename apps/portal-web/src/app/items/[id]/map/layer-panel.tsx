@@ -1331,6 +1331,7 @@ function ScaledSymbologyEditor({
         <button
           type="button"
           onClick={addClass}
+          data-help="scaled-symbology-add-button"
           className="inline-flex h-6 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2"
         >
           + Add class
