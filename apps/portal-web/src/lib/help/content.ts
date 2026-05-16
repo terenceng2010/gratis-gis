@@ -329,9 +329,18 @@ export async function buildNav(): Promise<HelpNavNode> {
     const parts = cat ? cat.split('/').filter(Boolean) : [];
     let cursor = root;
     for (const part of parts) {
-      let next = cursor.children.find((c) => c.label === part && !c.slug);
+      // Compare against the pretty label since that's what we
+      // store on the node.  Earlier I compared against the raw
+      // `part` and pushed the pretty form, so the lookup never
+      // matched and a fresh category node spawned per doc --
+      // sidebar showed "Getting Started" three times with one
+      // child each.
+      const pretty = prettyLabel(part);
+      let next = cursor.children.find(
+        (c) => c.label === pretty && !c.slug,
+      );
       if (!next) {
-        next = { label: prettyLabel(part), children: [] };
+        next = { label: pretty, children: [] };
         cursor.children.push(next);
       }
       cursor = next;
