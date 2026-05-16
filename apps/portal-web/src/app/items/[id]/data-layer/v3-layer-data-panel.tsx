@@ -61,6 +61,7 @@ export function V3LayerDataPanel({ itemId, layers, canEdit }: Props) {
             key={layer.id}
             itemId={itemId}
             layer={layer}
+            allLayers={layers}
             canEdit={canEdit}
           />
         ))}
@@ -74,10 +75,14 @@ export function V3LayerDataPanel({ itemId, layers, canEdit }: Props) {
 interface RowProps {
   itemId: string;
   layer: DataLayerSublayer;
+  /** Full sibling layer list -- threaded down so the feature
+   *  browser's Export menu can offer a bundle that includes
+   *  related tables (#109). */
+  allLayers: DataLayerSublayer[];
   canEdit: boolean;
 }
 
-function LayerRow({ itemId, layer, canEdit }: RowProps) {
+function LayerRow({ itemId, layer, allLayers, canEdit }: RowProps) {
   const router = useRouter();
   // Busy carries the prominent upload-progress state. The previous
   // tiny inline spinner on the Import features button was easy to
@@ -270,6 +275,7 @@ function LayerRow({ itemId, layer, canEdit }: RowProps) {
         <V3FeatureBrowser
           itemId={itemId}
           layer={layer}
+          allLayers={allLayers}
           canEdit={canEdit}
           onRefreshCounts={() => router.refresh()}
         />

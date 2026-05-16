@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
+import { exportBundle } from '@/lib/bundle-export';
 import type {
   FeatureRecord,
   DataLayerSublayer,
@@ -47,6 +48,11 @@ import { useConfirm } from '@/components/dialog-provider';
 interface Props {
   itemId: string;
   layer: DataLayerSublayer;
+  /** Full sibling layer list -- enables the Export menu's bundle
+   *  option to include related tables.  Optional so the component
+   *  still works in isolation (the export menu just hides the
+   *  bundle option in that case). */
+  allLayers?: DataLayerSublayer[];
   canEdit: boolean;
   onRefreshCounts?: () => void;
 }
@@ -54,6 +60,7 @@ interface Props {
 export function V3FeatureBrowser({
   itemId,
   layer,
+  allLayers,
   canEdit,
   onRefreshCounts,
 }: Props) {
@@ -251,8 +258,10 @@ export function V3FeatureBrowser({
               follow-up that lands a server-side ZIP endpoint -- see
               docs/handoff/reference/bundle-export-notes.md. */}
           <ExportMenu
+            itemId={itemId}
             features={features}
             layer={layer}
+            {...(allLayers ? { allLayers } : {})}
             disabled={loading || features.length === 0}
           />
         </div>
@@ -469,15 +478,38 @@ export function V3FeatureBrowser({
  * follow-up that needs a server-side ZIP endpoint.
  */
 function ExportMenu({
+  itemId,
   features,
   layer,
+  allLayers,
   disabled,
 }: {
+  itemId: string;
   features: FeatureRecord[];
   layer: DataLayerSublayer;
+  allLayers?: DataLayerSublayer[];
   disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // Bundle export modal state.  Lives inside the menu so the menu
+  // can collapse while the modal stays up; "Export" -> Bundle
+  // opens the modal in a fresh state every time.
+  const [bundleOpen, setBundleOpen] = useState(false);
+  const [bundleIncludeRelated, setBundleIncludeRelated] = useState(true);
+  const [bundleIncludeAttachments, setBundleIncludeAttachments] = useState(true);
+  const [bundlePrefixField, setBundlePrefixField] = useState<string>('');
+  const [bundleSplitField, setBundleSplitField] = useState<string>('');
+  const [bundleRunning, setBundleRunning] = useState(false);
+  const [bundleProgress, setBundleProgress] = useState<string>('');
+  const [bundleError, setBundleError] = useState<string | null>(null);
+
+  // Related tables = sibling layers whose parentLayerId points at
+  // THIS layer.  Used to gate the "Include related" toggle so the
+  // checkbox doesn't appear when there's nothing to include.
+  const relatedLayerCount = (allLayers ?? []).filter(
+    (l) => l.parentLayerId === layer.id,
+  ).length;
+
   function run(format: ExportFormat): void {
     setOpen(false);
     if (features.length === 0) return;
@@ -503,6 +535,57 @@ function ExportMenu({
       },
     );
   }
+
+  async function runBundle(): Promise<void> {
+    setBundleError(null);
+    setBundleRunning(true);
+    setBundleProgress('Starting…');
+    try {
+      const result = await exportBundle({
+        itemId,
+        layerKey: layer.id,
+        filename: sanitizeFilename(layer.label || layer.name || 'layer'),
+        // Map shared-type's DataLayerSublayer down to the lighter
+        // BundleSublayer the helper expects.  Only the fields the
+        // bundle needs come through; this also defends against the
+        // helper accidentally relying on properties that aren't
+        // stable across the data_layer's lifetime.
+        layers: (allLayers ?? []).map((l) => ({
+          id: l.id,
+          label: l.label,
+          name: l.name,
+          fields: (l.fields ?? []).map((f) => ({
+            name: f.name,
+            ...(f.label && f.label !== f.name ? { label: f.label } : {}),
+          })),
+          ...(l.parentLayerId ? { parentLayerId: l.parentLayerId } : {}),
+        })),
+        includeRelatedTables: bundleIncludeRelated && relatedLayerCount > 0,
+        includeAttachments: bundleIncludeAttachments,
+        ...(bundlePrefixField
+          ? { attachmentPrefixField: bundlePrefixField }
+          : {}),
+        ...(bundleSplitField
+          ? { attachmentSplitField: bundleSplitField }
+          : {}),
+        onProgress: (msg) => setBundleProgress(msg),
+      });
+      setBundleProgress(
+        `Done -- ${result.layerCount} layer${result.layerCount === 1 ? '' : 's'} · ${result.featureCount} feature${result.featureCount === 1 ? '' : 's'} · ${result.attachmentCount} attachment${result.attachmentCount === 1 ? '' : 's'} · ${(result.bytes / 1024 / 1024).toFixed(1)} MB`,
+      );
+      // Close the modal after a short delay so the user sees the
+      // "Done" confirmation; their browser is in the middle of the
+      // download dialog at this point.
+      setTimeout(() => {
+        setBundleOpen(false);
+        setBundleRunning(false);
+      }, 1500);
+    } catch (err) {
+      setBundleError(err instanceof Error ? err.message : String(err));
+      setBundleRunning(false);
+    }
+  }
+
   return (
     <div className="relative">
       <button
@@ -521,15 +604,12 @@ function ExportMenu({
       </button>
       {open ? (
         <>
-          {/* Click-away catcher.  Pointer-events on the backdrop so
-              a click outside the menu collapses it.  Same pattern
-              other dropdowns in the portal use. */}
           <div
             className="fixed inset-0 z-30"
             onClick={() => setOpen(false)}
             aria-hidden
           />
-          <div className="absolute right-0 top-8 z-40 w-44 rounded-md border border-border bg-surface-0 py-1 text-xs shadow-lg">
+          <div className="absolute right-0 top-8 z-40 w-56 rounded-md border border-border bg-surface-0 py-1 text-xs shadow-lg">
             <button
               type="button"
               onClick={() => run('xlsx')}
@@ -544,9 +624,228 @@ function ExportMenu({
             >
               CSV
             </button>
+            <div className="my-1 border-t border-border" />
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setBundleOpen(true);
+              }}
+              className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+            >
+              Bundle (.zip) — Excel + related + attachments
+            </button>
           </div>
         </>
       ) : null}
+
+      {bundleOpen ? (
+        <BundleExportModal
+          layer={layer}
+          relatedLayerCount={relatedLayerCount}
+          includeRelated={bundleIncludeRelated}
+          setIncludeRelated={setBundleIncludeRelated}
+          includeAttachments={bundleIncludeAttachments}
+          setIncludeAttachments={setBundleIncludeAttachments}
+          prefixField={bundlePrefixField}
+          setPrefixField={setBundlePrefixField}
+          splitField={bundleSplitField}
+          setSplitField={setBundleSplitField}
+          running={bundleRunning}
+          progress={bundleProgress}
+          error={bundleError}
+          onCancel={() => {
+            if (bundleRunning) return;
+            setBundleOpen(false);
+          }}
+          onRun={() => void runBundle()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Bundle export options modal.  Two toggles + two optional field
+ * pickers + a progress line.  Stays simple by default; field
+ * pickers are surfaced only when there's a likely-useful field to
+ * pick (a string-ish attribute on the parent layer).
+ */
+function BundleExportModal({
+  layer,
+  relatedLayerCount,
+  includeRelated,
+  setIncludeRelated,
+  includeAttachments,
+  setIncludeAttachments,
+  prefixField,
+  setPrefixField,
+  splitField,
+  setSplitField,
+  running,
+  progress,
+  error,
+  onCancel,
+  onRun,
+}: {
+  layer: DataLayerSublayer;
+  relatedLayerCount: number;
+  includeRelated: boolean;
+  setIncludeRelated: (v: boolean) => void;
+  includeAttachments: boolean;
+  setIncludeAttachments: (v: boolean) => void;
+  prefixField: string;
+  setPrefixField: (v: string) => void;
+  splitField: string;
+  setSplitField: (v: string) => void;
+  running: boolean;
+  progress: string;
+  error: string | null;
+  onCancel: () => void;
+  onRun: () => void;
+}) {
+  // Pickable string-ish fields on the parent layer.  Used for the
+  // attachment-prefix and attachment-split dropdowns.  Numeric
+  // fields are allowed too since IDs are often numeric.
+  const pickableFields = (layer.fields ?? []).filter((f) => {
+    const t = (f as { type?: string }).type ?? 'text';
+    return t === 'text' || t === 'integer' || t === 'double' || t === 'bigint';
+  });
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={running ? undefined : onCancel}
+    >
+      <div
+        className="relative w-full max-w-md rounded-lg bg-surface-0 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="border-b border-border px-4 py-3">
+          <h3 className="text-sm font-semibold text-ink-0">Bundle export</h3>
+          <p className="mt-1 text-xs text-muted">
+            Pack {layer.label || layer.name} (and optionally its related
+            tables + feature attachments) into a single ZIP.
+          </p>
+        </header>
+        <div className="space-y-3 px-4 py-3 text-xs">
+          {relatedLayerCount > 0 ? (
+            <label className="flex items-start gap-2 text-ink-1">
+              <input
+                type="checkbox"
+                disabled={running}
+                checked={includeRelated}
+                onChange={(e) => setIncludeRelated(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Include {relatedLayerCount} related table
+                {relatedLayerCount === 1 ? '' : 's'} as sheet
+                {relatedLayerCount === 1 ? '' : 's'} in the same workbook.
+              </span>
+            </label>
+          ) : (
+            <p className="text-muted">
+              No related tables found on this layer.
+            </p>
+          )}
+          <label className="flex items-start gap-2 text-ink-1">
+            <input
+              type="checkbox"
+              disabled={running}
+              checked={includeAttachments}
+              onChange={(e) => setIncludeAttachments(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Include feature attachments under <code>attachments/</code>.
+              Off if you only need the spreadsheet.
+            </span>
+          </label>
+          {includeAttachments ? (
+            <>
+              <div>
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-muted">
+                  Attachment filename prefix (optional)
+                </label>
+                <select
+                  disabled={running}
+                  value={prefixField}
+                  onChange={(e) => setPrefixField(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-border bg-surface-0 px-2 py-1 text-sm"
+                >
+                  <option value="">(use feature ID)</option>
+                  {pickableFields.map((f) => (
+                    <option key={f.name} value={f.name}>
+                      {f.label || f.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-muted">
+                  When set, each attachment&apos;s filename starts with
+                  this field&apos;s value -- matches the convention
+                  used by the ArcGIS Pro export script.
+                </p>
+              </div>
+              <div>
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-muted">
+                  Organize attachments by field (optional)
+                </label>
+                <select
+                  disabled={running}
+                  value={splitField}
+                  onChange={(e) => setSplitField(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-border bg-surface-0 px-2 py-1 text-sm"
+                >
+                  <option value="">(single attachments folder)</option>
+                  {pickableFields.map((f) => (
+                    <option key={f.name} value={f.name}>
+                      {f.label || f.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-muted">
+                  Each attachment lands in a subfolder named for this
+                  field&apos;s value (eg <code>Site A/</code>).
+                </p>
+              </div>
+            </>
+          ) : null}
+        </div>
+        {progress || error ? (
+          <div
+            className={`mx-4 mb-3 rounded-md border px-3 py-2 text-[11px] ${
+              error
+                ? 'border-rose-300 bg-rose-50 text-rose-900'
+                : 'border-border bg-surface-2 text-ink-1'
+            }`}
+          >
+            {error ?? progress}
+          </div>
+        ) : null}
+        <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <button
+            type="button"
+            disabled={running}
+            onClick={onCancel}
+            className="inline-flex h-8 items-center rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            disabled={running}
+            onClick={onRun}
+            className="inline-flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {running ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Download className="h-3 w-3" />
+            )}
+            {running ? 'Building…' : 'Export bundle'}
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
