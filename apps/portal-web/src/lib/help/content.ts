@@ -161,6 +161,32 @@ function extractHeadings(
 }
 
 /**
+ * Explicit top-level category ordering.  Plain alphabetical put
+ * "Analysis" at the top and pushed "Getting Started" into the
+ * middle of the sidebar, which is a poor first impression.  This
+ * map fixes the reading order new users see; unknown top-levels
+ * fall back to alpha sort after these.
+ *
+ * Keyed by the *raw* category segment (before prettyLabel).
+ */
+const CATEGORY_ORDER: Record<string, number> = {
+  'getting-started': 10,
+  items: 20,
+  'map-editing': 30,
+  forms: 40,
+  'web-apps': 50,
+  'print-templates': 60,
+  analysis: 70,
+  admin: 80,
+  reference: 90,
+};
+
+function categoryRank(rawCategory: string): number {
+  const top = rawCategory.split('/')[0] ?? '';
+  return CATEGORY_ORDER[top] ?? 1000;
+}
+
+/**
  * Walk `content/help/` recursively, parse every `.md` / `.mdx`
  * file, and return a flat array of HelpDoc.  Called at build /
  * request time from Next.js server components.
@@ -168,11 +194,16 @@ function extractHeadings(
 export async function loadAllDocs(): Promise<HelpDoc[]> {
   const out: HelpDoc[] = [];
   await walk(HELP_ROOT, [], out);
-  // Sort: category alpha, then order asc, then title alpha.  The
-  // sidebar consumer can re-sort if it wants a different traversal.
+  // Sort: explicit category rank, then category alpha (for ties
+  // and unmapped categories), then order asc, then title alpha.
+  // buildNav iterates in this order, so the sidebar tree comes
+  // out in the right top-level order without re-sorting children.
   out.sort((a, b) => {
     const ca = a.frontmatter.category ?? '';
     const cb = b.frontmatter.category ?? '';
+    const ra = categoryRank(ca);
+    const rb = categoryRank(cb);
+    if (ra !== rb) return ra - rb;
     if (ca !== cb) return ca.localeCompare(cb);
     const oa = a.frontmatter.order ?? 100;
     const ob = b.frontmatter.order ?? 100;

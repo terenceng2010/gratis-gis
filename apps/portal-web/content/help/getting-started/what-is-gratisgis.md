@@ -1,7 +1,7 @@
 ---
 id: what-is-gratisgis
 title: What is GratisGIS
-summary: GratisGIS is a self-hosted open-source portal for publishing maps, datasets, forms, and apps — the same shape as ArcGIS Online but with no commercial licensing.
+summary: GratisGIS is a self-hosted open-source portal for publishing maps, datasets, forms, and apps. Same shape as ArcGIS Online, no commercial licensing.
 category: getting-started
 order: 10
 complexity: basic
@@ -39,9 +39,6 @@ ingests it into PostGIS, and you can:
 
 ## What it isn't
 
-- **A SaaS.** There's no `gratisgis.com` where you sign up and
- things appear. You stand up the stack on your own infrastructure
- using the included Docker Compose file.
 - **A re-skin of QGIS.** The desktop app isn't in scope; GratisGIS
  is a portal, the same way ArcGIS Online is.
 - **A drop-in clone.** We deliberately don't use Esri's vocabulary

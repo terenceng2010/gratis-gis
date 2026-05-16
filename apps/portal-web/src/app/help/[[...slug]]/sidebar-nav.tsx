@@ -53,41 +53,54 @@ function NavRow({
   const containsActive = containsSlug(node, activeSlug);
   const [open, setOpen] = useState<boolean>(containsActive || depth === 0);
   const isActive = isLeaf && node.slug === activeSlug;
-  const indent = depth * 12;
+  // Leaves are indented under their category; categories sit
+  // flush left so the section breaks read like a real outline.
+  const leafIndent = Math.max(0, depth - 1) * 10 + 12;
   if (isLeaf) {
     return (
       <li>
         <Link
           href={`/help/${node.slug}`}
-          className={`block rounded px-2 py-1 ${
+          className={`block border-l-2 py-1 pr-2 text-[12px] ${
             isActive
-              ? 'bg-accent/10 font-medium text-accent'
-              : 'text-ink-1 hover:bg-surface-2'
+              ? 'border-accent bg-accent/10 font-medium text-accent'
+              : 'border-transparent text-ink-1 hover:border-border hover:bg-surface-2'
           }`}
-          style={{ paddingLeft: `${8 + indent}px` }}
+          style={{ paddingLeft: `${leafIndent}px` }}
         >
           {node.label}
         </Link>
       </li>
     );
   }
+  // Top-level categories render as ALL-CAPS section headers (the
+  // outline look authors recognize from real docs sites).  Nested
+  // categories (depth >= 1) get a lighter treatment so the eye
+  // sees the hierarchy without confusing them with leaves.
+  const isTopCategory = depth === 0;
   return (
-    <li>
+    <li className={isTopCategory ? 'mt-3 first:mt-0' : 'mt-1'}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1 rounded px-2 py-1 text-left font-medium text-ink-0 hover:bg-surface-2"
-        style={{ paddingLeft: `${4 + indent}px` }}
+        className={
+          isTopCategory
+            ? 'flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wider text-muted hover:bg-surface-2'
+            : 'flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[11px] font-medium text-ink-0 hover:bg-surface-2'
+        }
+        style={{
+          paddingLeft: isTopCategory ? '6px' : `${Math.max(0, depth - 1) * 10 + 6}px`,
+        }}
       >
         {open ? (
-          <ChevronDown className="h-3 w-3 text-muted" />
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted" />
         ) : (
-          <ChevronRight className="h-3 w-3 text-muted" />
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted" />
         )}
         <span>{node.label}</span>
       </button>
       {open && node.children.length > 0 ? (
-        <ul className="space-y-0.5">
+        <ul className="mt-0.5">
           {node.children.map((c, i) => (
             <NavRow
               key={`${c.label}-${i}`}

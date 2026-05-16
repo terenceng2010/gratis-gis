@@ -177,12 +177,32 @@ function Landing({
       <p className="mb-6 text-sm text-muted">
         GratisGIS documentation.  Pick a topic from the sidebar or use the
         search box to find what you need.  Each page covers one concept
-        end-to-end -- no five-step workflows in your way when you just
+        end-to-end, no five-step workflows in your way when you just
         want to know how Buffer works.
       </p>
       {Array.from(byTop.entries())
         .filter(([k]) => k)
-        .sort(([a], [b]) => a.localeCompare(b))
+        .sort(([a], [b]) => {
+          // Mirror the sidebar's explicit category ranking so the
+          // landing page's section order matches what users see in
+          // the nav.  Keep this in sync with CATEGORY_ORDER in
+          // src/lib/help/content.ts.
+          const rank: Record<string, number> = {
+            'getting-started': 10,
+            items: 20,
+            'map-editing': 30,
+            forms: 40,
+            'web-apps': 50,
+            'print-templates': 60,
+            analysis: 70,
+            admin: 80,
+            reference: 90,
+          };
+          const ra = rank[a] ?? 1000;
+          const rb = rank[b] ?? 1000;
+          if (ra !== rb) return ra - rb;
+          return a.localeCompare(b);
+        })
         .map(([top, docs]) => (
           <section key={top} className="mb-6">
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted">

@@ -1,7 +1,7 @@
 ---
 id: help-landing
 title: Welcome to GratisGIS Help
-summary: Documentation for the open-source GratisGIS portal — find what you need, fast, with one concept per page.
+summary: Documentation for the open-source GratisGIS portal. Find what you need, fast, with one concept per page.
 order: 0
 ---
 
