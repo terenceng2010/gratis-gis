@@ -1,0 +1,249 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+/**
+ * Client-side layer export helpers (#107).
+ *
+ * Pure browser-side conversion of a feature collection into a
+ * downloadable CSV or XLSX file.  We deliberately stay client-side
+ * for v1: the features endpoint already streams up to 5k rows, and
+ * an in-browser transform avoids a new server endpoint AND lets the
+ * user trigger the download immediately from any page (data_layer
+ * detail, attribute table, custom-app attribute-table widget).
+ *
+ * Bundle export (related tables + attachments) is the bigger
+ * follow-up tracked alongside this -- see
+ * `docs/handoff/reference/bundle-export-notes.md`.  That one needs
+ * server-side ZIP streaming.
+ *
+ * Column order: we prefer the layer's declared schema field order
+ * when it's available; falling back to "first-seen" across the
+ * union of all row properties.  That keeps related/derived
+ * exports stable across runs.
+ *
+ * Geometry: stripped on CSV (text-only by convention) and dumped
+ * as WKT in an extra `geometry_wkt` column on XLSX so the user can
+ * round-trip into desktop GIS tools.  Bundle export will swap in
+ * proper geometry handling when it lands.
+ */
+
+import * as XLSX from 'xlsx';
+
+export interface ExportFeature {
+  id?: string;
+  geometry?: unknown;
+  properties?: Record<string, unknown> | null;
+}
+
+export interface ExportFieldHint {
+  /** Stable column id (also used as the row key in properties). */
+  name: string;
+  /** Optional friendlier header.  Falls back to `name`. */
+  label?: string;
+}
+
+export type ExportFormat = 'csv' | 'xlsx';
+
+interface ExportOptions {
+  /** Filename root without extension. */
+  filename: string;
+  /** Schema-declared field order; used when present so columns
+   *  match the layer designer's intent rather than property-iteration
+   *  order. */
+  fields?: ExportFieldHint[];
+  /** When true, include a geometry_wkt column derived from each
+   *  feature's GeoJSON geometry.  XLSX only -- CSV stays text-only
+   *  by default. */
+  includeGeometryWkt?: boolean;
+}
+
+/**
+ * Build a 2D row array (header row + data rows) from features.
+ * Used by both CSV and XLSX emitters so they agree on column order
+ * and value coercion.
+ */
+function buildRows(
+  features: ExportFeature[],
+  opts: ExportOptions,
+): { headers: string[]; data: (string | number | boolean | null)[][] } {
+  // Resolve column order.  Schema fields win when declared; otherwise
+  // we union property keys in first-seen order so the export is
+  // deterministic between runs.
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  if (opts.fields && opts.fields.length > 0) {
+    for (const f of opts.fields) {
+      if (seen.has(f.name)) continue;
+      headers.push(f.label?.trim() || f.name);
+      seen.add(f.name);
+    }
+  } else {
+    for (const feat of features) {
+      const props = feat.properties ?? {};
+      for (const k of Object.keys(props)) {
+        if (seen.has(k)) continue;
+        headers.push(k);
+        seen.add(k);
+      }
+    }
+  }
+  // Track the underlying property key order parallel to the headers
+  // so label != name still pulls the right value.
+  const propKeys: string[] = [];
+  if (opts.fields && opts.fields.length > 0) {
+    for (const f of opts.fields) propKeys.push(f.name);
+  } else {
+    propKeys.push(...headers);
+  }
+  if (opts.includeGeometryWkt) {
+    headers.push('geometry_wkt');
+    propKeys.push('__geometry_wkt');
+  }
+  const data: (string | number | boolean | null)[][] = [];
+  for (const feat of features) {
+    const row: (string | number | boolean | null)[] = [];
+    const props = feat.properties ?? {};
+    for (const k of propKeys) {
+      if (k === '__geometry_wkt') {
+        row.push(geometryToWkt(feat.geometry));
+        continue;
+      }
+      row.push(coerceCell(props[k]));
+    }
+    data.push(row);
+  }
+  return { headers, data };
+}
+
+/**
+ * Coerce a property value into a CSV/XLSX-friendly primitive.
+ * Booleans + numbers + strings pass through; null / undefined
+ * become empty string; everything else (arrays, objects) is
+ * JSON-stringified so the user sees the structure rather than
+ * "[object Object]".
+ */
+function coerceCell(v: unknown): string | number | boolean | null {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+    return v;
+  }
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/**
+ * Convert a GeoJSON-ish geometry to a minimal WKT string.  Covers
+ * the common types (Point, LineString, Polygon, plus the Multi*
+ * variants) and falls back to JSON for anything weirder so the
+ * column is never blank.  Imperfect but recognizable to QGIS /
+ * ArcGIS Pro / pgAdmin importers.
+ */
+function geometryToWkt(g: unknown): string {
+  if (!g || typeof g !== 'object') return '';
+  const geom = g as { type?: string; coordinates?: unknown };
+  if (!geom.type || !geom.coordinates) return '';
+  const c = geom.coordinates;
+  const pt = (p: number[]) => `${p[0]} ${p[1]}${p[2] !== undefined ? ' ' + p[2] : ''}`;
+  const ring = (r: number[][]) => `(${r.map(pt).join(', ')})`;
+  const polygon = (p: number[][][]) => `(${p.map(ring).join(', ')})`;
+  try {
+    switch (geom.type) {
+      case 'Point':
+        return `POINT(${pt(c as number[])})`;
+      case 'LineString':
+        return `LINESTRING(${(c as number[][]).map(pt).join(', ')})`;
+      case 'Polygon':
+        return `POLYGON${polygon(c as number[][][])}`;
+      case 'MultiPoint':
+        return `MULTIPOINT(${(c as number[][]).map(pt).join(', ')})`;
+      case 'MultiLineString':
+        return `MULTILINESTRING(${(c as number[][][])
+          .map((l) => `(${l.map(pt).join(', ')})`)
+          .join(', ')})`;
+      case 'MultiPolygon':
+        return `MULTIPOLYGON(${(c as number[][][][])
+          .map(polygon)
+          .join(', ')})`;
+      default:
+        return JSON.stringify(g);
+    }
+  } catch {
+    return JSON.stringify(g);
+  }
+}
+
+/** Trigger a browser download of a Blob with the given filename. */
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Slight delay before revoking the object URL: Safari needs the
+  // anchor to actually trigger the navigation before we tear down
+  // the blob backing.  60ms is overkill on Chrome/Firefox but
+  // harmless.
+  setTimeout(() => URL.revokeObjectURL(url), 60);
+}
+
+/** Quote a CSV cell.  Doubles internal quotes per RFC 4180. */
+function csvQuote(v: string | number | boolean | null): string {
+  const s = v === null ? '' : String(v);
+  if (s.length === 0) return '';
+  // Quote when the value contains a comma, quote, or newline.
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/** Build a CSV file from features and trigger a download. */
+export function exportFeaturesToCsv(
+  features: ExportFeature[],
+  opts: ExportOptions,
+): void {
+  const { headers, data } = buildRows(features, opts);
+  const lines: string[] = [];
+  lines.push(headers.map(csvQuote).join(','));
+  for (const row of data) {
+    lines.push(row.map(csvQuote).join(','));
+  }
+  // BOM so Excel correctly opens UTF-8 files.  Without it, accented
+  // characters and curly quotes come out garbled in Excel for Windows.
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {
+    type: 'text/csv;charset=utf-8',
+  });
+  downloadBlob(blob, `${opts.filename}.csv`);
+}
+
+/** Build an XLSX file from features and trigger a download. */
+export function exportFeaturesToXlsx(
+  features: ExportFeature[],
+  opts: ExportOptions,
+): void {
+  const { headers, data } = buildRows(features, opts);
+  const sheetData = [headers, ...data];
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+  const wb = XLSX.utils.book_new();
+  // Sheet names are limited to 31 chars by the XLSX spec.  Truncate
+  // gracefully so a 50-char layer name doesn't blow up the writer.
+  const sheetName = opts.filename.slice(0, 31) || 'Sheet1';
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const blob = new Blob([XLSX.write(wb, { type: 'array', bookType: 'xlsx' })], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  downloadBlob(blob, `${opts.filename}.xlsx`);
+}
+
+/** Dispatch to the right writer based on format. */
+export function exportFeatures(
+  features: ExportFeature[],
+  format: ExportFormat,
+  opts: ExportOptions,
+): void {
+  if (format === 'csv') exportFeaturesToCsv(features, opts);
+  else exportFeaturesToXlsx(features, opts);
+}

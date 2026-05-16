@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
+  Download,
   Loader2,
   Paperclip,
   Pencil,
@@ -14,6 +15,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
 import type {
   FeatureRecord,
   DataLayerSublayer,
@@ -242,6 +244,17 @@ export function V3FeatureBrowser({
             )}
             Refresh
           </button>
+          {/* #107: export current feature set to CSV / XLSX.  Uses
+              whatever's already loaded in `features` so there's no
+              extra round-trip; matches what the table is showing.
+              Bundle export (related tables + attachments) is a
+              follow-up that lands a server-side ZIP endpoint -- see
+              docs/handoff/reference/bundle-export-notes.md. */}
+          <ExportMenu
+            features={features}
+            layer={layer}
+            disabled={loading || features.length === 0}
+          />
         </div>
       </header>
 
@@ -436,6 +449,115 @@ export function V3FeatureBrowser({
       ) : null}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * #107: Export-this-layer dropdown.  Two formats today (CSV +
+ * XLSX), both built client-side from the already-loaded feature
+ * set.  Geometry rides along as a `geometry_wkt` column on XLSX so
+ * the user can round-trip into desktop GIS without losing shape;
+ * CSV stays text-only by convention.
+ *
+ * Why "what's loaded" instead of always re-fetching: the feature
+ * browser loads the whole layer on open (capped at whatever the
+ * features endpoint returns), so the table view IS the canonical
+ * dataset for this layer.  Exporting that exact set means "what
+ * you see is what you get" -- if the cap matters the table also
+ * shows it.  Bundle export (related tables + attachments) is the
+ * follow-up that needs a server-side ZIP endpoint.
+ */
+function ExportMenu({
+  features,
+  layer,
+  disabled,
+}: {
+  features: FeatureRecord[];
+  layer: DataLayerSublayer;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  function run(format: ExportFormat): void {
+    setOpen(false);
+    if (features.length === 0) return;
+    const filename = sanitizeFilename(layer.label || layer.name || 'layer');
+    exportFeatures(
+      features.map((f) => ({
+        id: f.id,
+        geometry: f.geometry,
+        properties: f.properties ?? null,
+      })),
+      format,
+      {
+        filename,
+        fields: (layer.fields ?? []).map((fld) => ({
+          name: fld.name,
+          ...(fld.label && fld.label !== fld.name ? { label: fld.label } : {}),
+        })),
+        // XLSX gets the WKT geometry column for desktop-GIS round-
+        // trip; CSV stays text-only (the most common downstream
+        // consumer, Excel for casual edits, doesn't know WKT and
+        // the column would just clutter the view).
+        includeGeometryWkt: format === 'xlsx',
+      },
+    );
+  }
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        className="inline-flex h-7 items-center gap-1 rounded border border-border bg-surface-1 px-2 text-[11px] font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+        title={
+          features.length === 0
+            ? 'No features to export'
+            : `Export ${features.length} feature(s)`
+        }
+      >
+        <Download className="h-3 w-3" />
+        Export
+      </button>
+      {open ? (
+        <>
+          {/* Click-away catcher.  Pointer-events on the backdrop so
+              a click outside the menu collapses it.  Same pattern
+              other dropdowns in the portal use. */}
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <div className="absolute right-0 top-8 z-40 w-44 rounded-md border border-border bg-surface-0 py-1 text-xs shadow-lg">
+            <button
+              type="button"
+              onClick={() => run('xlsx')}
+              className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+            >
+              Excel (.xlsx)
+            </button>
+            <button
+              type="button"
+              onClick={() => run('csv')}
+              className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+            >
+              CSV
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** Trim a label down to a safe filename root.  Keeps letters /
+ *  digits / underscores / hyphens / dots, replaces everything else
+ *  with `_`, and caps the length so we don't trip Windows path
+ *  limits with a 200-char layer name. */
+function sanitizeFilename(raw: string): string {
+  const s = raw.trim().replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_');
+  return (s.slice(0, 60) || 'layer').replace(/^_+|_+$/g, '');
 }
 
 // ---------------------------------------------------------------------------
