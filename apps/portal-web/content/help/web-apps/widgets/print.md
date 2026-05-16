@@ -5,6 +5,9 @@ summary: Generate a printable PDF (or PNG / JPEG) of the current map view, with 
 category: web-apps/widgets
 order: 30
 complexity: basic
+controls:
+  - id: widget-print-toggle
+    label: "Print tile in the widget palette"
 tags:
   - widget
   - print

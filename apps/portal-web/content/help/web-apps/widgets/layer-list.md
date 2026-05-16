@@ -5,6 +5,9 @@ summary: A panel that lists the map's layers with toggle-on / toggle-off, opacit
 category: web-apps/widgets
 order: 10
 complexity: basic
+controls:
+  - id: widget-layer-list-toggle
+    label: "Layers tile in the widget palette"
 tags:
   - widget
   - layer-list

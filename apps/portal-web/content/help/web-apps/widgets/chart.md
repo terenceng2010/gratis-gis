@@ -5,6 +5,9 @@ summary: Render a bar, line, or pie chart bound to a layer or derived layer. Upd
 category: web-apps/widgets
 order: 80
 complexity: intermediate
+controls:
+  - id: widget-chart-toggle
+    label: "Chart tile in the widget palette"
 tags:
   - widget
   - chart

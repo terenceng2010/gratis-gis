@@ -627,13 +627,18 @@ function ExportMenu({
             <div className="my-1 border-t border-border" />
             <button
               type="button"
+              // Bound to the Bundle-export help doc (#118).  Picking
+              // this control in the help drawer opens the "Bundle
+              // export" page covering what the .zip contains and
+              // when to use it vs. CSV / XLSX.
+              data-help="bundle-export-button"
               onClick={() => {
                 setOpen(false);
                 setBundleOpen(true);
               }}
               className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
             >
-              Bundle (.zip) — Excel + related + attachments
+              Bundle (.zip): Excel + related + attachments
             </button>
           </div>
         </>

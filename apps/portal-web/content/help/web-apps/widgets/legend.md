@@ -5,6 +5,9 @@ summary: Render the visible layers' symbology as a labeled list. The thing viewe
 category: web-apps/widgets
 order: 60
 complexity: basic
+controls:
+  - id: widget-legend-toggle
+    label: "Legend tile in the widget palette"
 tags:
   - widget
   - legend

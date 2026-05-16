@@ -5,6 +5,9 @@ summary: A search bar that finds locations (via a geocoder) and / or features (v
 category: web-apps/widgets
 order: 20
 complexity: basic
+controls:
+  - id: widget-search-toggle
+    label: "Search tile in the widget palette"
 tags:
   - widget
   - search

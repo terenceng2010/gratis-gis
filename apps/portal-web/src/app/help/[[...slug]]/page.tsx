@@ -194,9 +194,9 @@ function Landing({
             'map-editing': 30,
             forms: 40,
             'web-apps': 50,
-            'print-templates': 60,
-            analysis: 70,
-            admin: 80,
+            'print-templates': 55,
+            analysis: 60,
+            admin: 70,
             reference: 90,
           };
           const ra = rank[a] ?? 1000;

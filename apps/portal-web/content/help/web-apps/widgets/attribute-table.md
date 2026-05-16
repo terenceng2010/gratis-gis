@@ -5,6 +5,9 @@ summary: A bottom panel that shows feature rows in a sortable, filterable table 
 category: web-apps/widgets
 order: 40
 complexity: basic
+controls:
+  - id: widget-attribute-table-toggle
+    label: "Attribute Table tile in the widget palette"
 tags:
   - widget
   - attribute-table

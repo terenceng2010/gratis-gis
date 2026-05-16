@@ -1008,7 +1008,14 @@ export function SharingPanel({
   const currentOption = visibilityOptions.find((o) => o.value === access)!;
 
   return (
-    <div className="rounded-lg border border-border bg-surface-1 shadow-card">
+    <div
+      // data-help wires this region to the "Sharing an item" help doc
+      // (#118).  Pick-a-control mode in the help drawer reads the
+      // attribute and opens the matching page; the contextual help
+      // button on the item detail page reads it too.
+      data-help="sharing-panel"
+      className="rounded-lg border border-border bg-surface-1 shadow-card"
+    >
       {itemType === 'editor' &&
       depChainSnapshot &&
       matrixPrincipals.length > 0 ? (

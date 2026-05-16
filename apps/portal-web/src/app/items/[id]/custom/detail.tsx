@@ -1458,6 +1458,27 @@ function Palette({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+/**
+ * Maps a widget kind to the help-doc control id (`data-help` value)
+ * for that widget's palette tile.  When the user picks a palette
+ * tile in help-drawer pick-a-control mode, the matching widget doc
+ * opens.  Kinds not in this map render with no `data-help`.
+ *
+ * Keep the right-hand value in sync with the `controls:` block of
+ * the relevant doc under `content/help/web-apps/widgets/`.
+ */
+const WIDGET_HELP_BINDING: Partial<Record<CustomWidgetKind, string>> = {
+  'layer-list': 'widget-layer-list-toggle',
+  legend: 'widget-legend-toggle',
+  'basemap-gallery': 'widget-basemap-gallery-toggle',
+  print: 'widget-print-toggle',
+  export: 'widget-export-toggle',
+  splash: 'widget-splash-toggle',
+  search: 'widget-search-toggle',
+  'attribute-table': 'widget-attribute-table-toggle',
+  chart: 'widget-chart-toggle',
+};
+
 function PaletteTile({
   kind,
   label,
@@ -1471,9 +1492,14 @@ function PaletteTile({
   hint: string;
   canEdit: boolean;
 }) {
+  const helpId = WIDGET_HELP_BINDING[kind];
   return (
     <button
       type="button"
+      // data-help wires the tile to its widget doc so picking the
+      // tile in help-drawer pick-mode opens "Splash widget", etc.
+      // Tiles without a published doc render without the attribute.
+      {...(helpId ? { 'data-help': helpId } : {})}
       draggable={canEdit}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/x-widget-kind', kind);

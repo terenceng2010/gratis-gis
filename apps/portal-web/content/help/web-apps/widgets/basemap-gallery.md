@@ -5,6 +5,9 @@ summary: Let viewers switch the map's basemap from a curated list. Streets, imag
 category: web-apps/widgets
 order: 50
 complexity: basic
+controls:
+  - id: widget-basemap-gallery-toggle
+    label: "Basemaps tile in the widget palette"
 tags:
   - widget
   - basemap-gallery

@@ -676,6 +676,10 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
         <>
           <button
             type="button"
+            // Bound to the XLSForm-import help doc (#118).  Pick-a-
+            // control in the help drawer opens "Importing an XLSForm"
+            // when the user picks this button.
+            data-help="form-import-button"
             onClick={() => fileInputRef.current?.click()}
             title="Replace this form with one from a .gratisgis-form.json export OR a Survey123 / XLSForm .xlsx"
             className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-surface-1 px-2 text-xs font-medium text-ink-1 hover:bg-surface-2"
