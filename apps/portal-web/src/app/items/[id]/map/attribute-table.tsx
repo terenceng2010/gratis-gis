@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
+import { exportBundle } from '@/lib/bundle-export';
 import type {
   FeatureField,
   MapLayer,
@@ -1338,6 +1339,16 @@ export function AttributeTable({
               : null
           }
           layerTitle={activeLayer?.title ?? 'layer'}
+          dataLayerItemId={
+            activeLayer?.source.kind === 'data-layer'
+              ? activeLayer.source.itemId
+              : null
+          }
+          dataLayerLayerKey={
+            activeLayer?.source.kind === 'data-layer'
+              ? activeLayer.source.layerKey ?? null
+              : null
+          }
           activeSelection={activeSelection}
           featureKeyAt={featureKeyAt}
           disabled={activeFeatures.length === 0 || !activeLayer}
@@ -1770,6 +1781,8 @@ function AttrTableExportMenu({
   features,
   fields,
   layerTitle,
+  dataLayerItemId,
+  dataLayerLayerKey,
   activeSelection,
   featureKeyAt,
   disabled,
@@ -1777,12 +1790,114 @@ function AttrTableExportMenu({
   features: GeoJSON.Feature[];
   fields: FeatureField[] | null;
   layerTitle: string;
+  /** When the active layer is sourced from a v3 data_layer item,
+   *  these are populated and the Bundle option becomes available.
+   *  External / inline / ArcGIS-REST sources don't support bundles
+   *  (no portal-side schema, no attachments, no related tables).
+   *  Null in those cases. */
+  dataLayerItemId: string | null;
+  dataLayerLayerKey: string | null;
   activeSelection: Set<number | string>;
   featureKeyAt: (idx: number) => number | string;
   disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const hasSelection = activeSelection.size > 0;
+  const canBundle = !!(dataLayerItemId && dataLayerLayerKey);
+  const [bundleOpen, setBundleOpen] = useState(false);
+  const [bundleScope, setBundleScope] = useState<'all' | 'selection'>('all');
+  const [bundleIncludeRelated, setBundleIncludeRelated] = useState(true);
+  const [bundleIncludeAttachments, setBundleIncludeAttachments] = useState(true);
+  const [bundleRunning, setBundleRunning] = useState(false);
+  const [bundleProgress, setBundleProgress] = useState<string>('');
+  const [bundleError, setBundleError] = useState<string | null>(null);
+
+  async function runBundle(): Promise<void> {
+    if (!dataLayerItemId || !dataLayerLayerKey) return;
+    setBundleError(null);
+    setBundleRunning(true);
+    setBundleProgress('Loading layer schema…');
+    try {
+      // Fetch the data_layer item on-demand so the bundle helper
+      // can enumerate related tables.  AttributeTable doesn't keep
+      // the full data_layer schema in props -- its layers prop has
+      // MapLayer entries, not the parent item's sublayer list.
+      const itemRes = await fetch(
+        `/api/portal/items/${encodeURIComponent(dataLayerItemId)}`,
+        { cache: 'no-store' },
+      );
+      if (!itemRes.ok) {
+        throw new Error(`Could not load data_layer schema: ${itemRes.status}`);
+      }
+      const item = (await itemRes.json()) as {
+        data?: {
+          layers?: Array<{
+            id: string;
+            label?: string;
+            name?: string;
+            fields?: Array<{ name: string; label?: string }>;
+            parentLayerId?: string;
+          }>;
+        };
+      };
+      const allLayers = (item.data?.layers ?? []).map((l) => ({
+        id: l.id,
+        label: l.label ?? l.id,
+        name: l.name ?? l.id,
+        fields: (l.fields ?? []).map((f) => ({
+          name: f.name,
+          ...(f.label && f.label !== f.name ? { label: f.label } : {}),
+        })),
+        ...(l.parentLayerId ? { parentLayerId: l.parentLayerId } : {}),
+      }));
+
+      // Scope -> featureIdsAllowlist.  For 'all' we pass nothing.
+      // For 'selection' we collect the currently-selected feature
+      // global ids by walking activeSelection through featureKeyAt.
+      let allowlist: Set<string> | undefined;
+      if (bundleScope === 'selection') {
+        allowlist = new Set<string>();
+        for (let i = 0; i < features.length; i += 1) {
+          const key = featureKeyAt(i);
+          if (activeSelection.has(key)) {
+            const f = features[i];
+            const id = f?.id;
+            if (typeof id === 'string') allowlist.add(id);
+            else if (typeof id === 'number') allowlist.add(String(id));
+          }
+        }
+        if (allowlist.size === 0) {
+          throw new Error('No selected features to export.');
+        }
+      }
+
+      const filename = (layerTitle || 'layer')
+        .trim()
+        .replace(/[^\w.\- ]+/g, '_')
+        .replace(/\s+/g, '_')
+        .slice(0, 60) || 'layer';
+      const result = await exportBundle({
+        itemId: dataLayerItemId,
+        layerKey: dataLayerLayerKey,
+        filename,
+        layers: allLayers,
+        includeRelatedTables: bundleIncludeRelated,
+        includeAttachments: bundleIncludeAttachments,
+        ...(allowlist ? { featureIdsAllowlist: allowlist } : {}),
+        onProgress: (msg) => setBundleProgress(msg),
+      });
+      setBundleProgress(
+        `Done -- ${result.layerCount} layer${result.layerCount === 1 ? '' : 's'} · ${result.featureCount} feature${result.featureCount === 1 ? '' : 's'} · ${result.attachmentCount} attachment${result.attachmentCount === 1 ? '' : 's'} · ${(result.bytes / 1024 / 1024).toFixed(1)} MB`,
+      );
+      setTimeout(() => {
+        setBundleOpen(false);
+        setBundleRunning(false);
+      }, 1500);
+    } catch (err) {
+      setBundleError(err instanceof Error ? err.message : String(err));
+      setBundleRunning(false);
+    }
+  }
 
   function run(format: ExportFormat, onlySelection: boolean): void {
     setOpen(false);
@@ -1891,8 +2006,147 @@ function AttrTableExportMenu({
                 </button>
               </>
             ) : null}
+            {canBundle ? (
+              <>
+                <div className="my-1 border-t border-border" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    setBundleScope(hasSelection ? 'selection' : 'all');
+                    setBundleOpen(true);
+                  }}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-surface-2"
+                >
+                  Bundle (.zip) — Excel + related + attachments
+                </button>
+              </>
+            ) : null}
           </div>
         </>
+      ) : null}
+      {bundleOpen && canBundle ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={bundleRunning ? undefined : () => setBundleOpen(false)}
+        >
+          <div
+            className="relative w-full max-w-md rounded-lg bg-surface-0 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="border-b border-border px-4 py-3">
+              <h3 className="text-sm font-semibold text-ink-0">
+                Bundle export
+              </h3>
+              <p className="mt-1 text-xs text-muted">
+                Pack {layerTitle} (and optionally its related tables +
+                attachments) into a single ZIP.
+              </p>
+            </header>
+            <div className="space-y-3 px-4 py-3 text-xs">
+              <div>
+                <label className="block text-[10px] font-medium uppercase tracking-wide text-muted">
+                  Scope
+                </label>
+                <div className="mt-1 inline-flex rounded-md border border-border bg-surface-2 p-0.5">
+                  <button
+                    type="button"
+                    disabled={bundleRunning}
+                    onClick={() => setBundleScope('all')}
+                    className={`px-3 py-1 text-[11px] ${
+                      bundleScope === 'all'
+                        ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                        : 'text-muted'
+                    }`}
+                  >
+                    All ({features.length})
+                  </button>
+                  <button
+                    type="button"
+                    disabled={bundleRunning || !hasSelection}
+                    onClick={() => setBundleScope('selection')}
+                    title={
+                      hasSelection
+                        ? `Export only the ${activeSelection.size} selected feature(s)`
+                        : 'Select features in the table to use this scope'
+                    }
+                    className={`px-3 py-1 text-[11px] ${
+                      bundleScope === 'selection'
+                        ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                        : 'text-muted'
+                    } disabled:opacity-50`}
+                  >
+                    Selected ({activeSelection.size})
+                  </button>
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-ink-1">
+                <input
+                  type="checkbox"
+                  disabled={bundleRunning}
+                  checked={bundleIncludeRelated}
+                  onChange={(e) =>
+                    setBundleIncludeRelated(e.target.checked)
+                  }
+                  className="mt-0.5"
+                />
+                <span>
+                  Include related-table sheets in the workbook (rows that
+                  reference an exported parent feature ride along).
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-ink-1">
+                <input
+                  type="checkbox"
+                  disabled={bundleRunning}
+                  checked={bundleIncludeAttachments}
+                  onChange={(e) =>
+                    setBundleIncludeAttachments(e.target.checked)
+                  }
+                  className="mt-0.5"
+                />
+                <span>
+                  Include feature attachments under{' '}
+                  <code>attachments/</code>.
+                </span>
+              </label>
+            </div>
+            {bundleProgress || bundleError ? (
+              <div
+                className={`mx-4 mb-3 rounded-md border px-3 py-2 text-[11px] ${
+                  bundleError
+                    ? 'border-rose-300 bg-rose-50 text-rose-900'
+                    : 'border-border bg-surface-2 text-ink-1'
+                }`}
+              >
+                {bundleError ?? bundleProgress}
+              </div>
+            ) : null}
+            <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+              <button
+                type="button"
+                disabled={bundleRunning}
+                onClick={() => setBundleOpen(false)}
+                className="inline-flex h-8 items-center rounded-md border border-border bg-surface-1 px-3 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-50"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={bundleRunning}
+                onClick={() => void runBundle()}
+                className="inline-flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {bundleRunning ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Download className="h-3 w-3" />
+                )}
+                {bundleRunning ? 'Building…' : 'Export bundle'}
+              </button>
+            </footer>
+          </div>
+        </div>
       ) : null}
     </div>
   );

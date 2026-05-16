@@ -59,6 +59,18 @@ export interface BundleExportOptions {
    *  layers with photos; off by default for that reason. */
   includeAttachments: boolean;
   /**
+   * Optional pre-filter applied to the parent layer's features
+   * (related tables follow whatever rows reference a surviving
+   * parent via the FK column).  Use cases:
+   *   - 'selection'-style: pass `featureIdsAllowlist` with the
+   *     selected feature ids
+   *   - 'visible'-style: pass `bbox` and let the helper drop
+   *     features whose geometry doesn't intersect
+   * Omit both for "include every parent feature" (the default).
+   */
+  featureIdsAllowlist?: ReadonlySet<string>;
+  bbox?: [number, number, number, number];
+  /**
    * Optional attribute name whose value will prefix attachment
    * filenames.  When omitted, the global id is used.  Matches the
    * naming convention Matt's Pro tool uses so emails to clients
@@ -141,6 +153,52 @@ async function fetchAttachmentList(
   );
   if (!res.ok) return [];
   return (await res.json()) as AttachmentRow[];
+}
+
+/**
+ * Coarse bbox-intersect test for a GeoJSON geometry.  We compute
+ * the geometry's own bbox by walking coordinates, then check
+ * overlap with the supplied bbox.  Skips features whose geometry
+ * is missing / unparseable (they're treated as "out of scope" --
+ * a geometryless feature in a viewport-scoped export is the wrong
+ * answer either way).
+ */
+function geometryIntersectsBbox(
+  g: unknown,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): boolean {
+  if (!g || typeof g !== 'object') return false;
+  let gMinX = Infinity;
+  let gMinY = Infinity;
+  let gMaxX = -Infinity;
+  let gMaxY = -Infinity;
+  function visit(coords: unknown): void {
+    if (!coords || !Array.isArray(coords)) return;
+    if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+      const x = coords[0] as number;
+      const y = coords[1] as number;
+      if (x < gMinX) gMinX = x;
+      if (y < gMinY) gMinY = y;
+      if (x > gMaxX) gMaxX = x;
+      if (y > gMaxY) gMaxY = y;
+      return;
+    }
+    for (const child of coords) visit(child);
+  }
+  const geom = g as { coordinates?: unknown; geometries?: unknown };
+  if (Array.isArray(geom.geometries)) {
+    for (const inner of geom.geometries) {
+      const innerG = inner as { coordinates?: unknown };
+      if (innerG.coordinates) visit(innerG.coordinates);
+    }
+  } else if (geom.coordinates) {
+    visit(geom.coordinates);
+  }
+  if (gMinX === Infinity) return false;
+  return !(gMaxX < minX || gMinX > maxX || gMaxY < minY || gMinY > maxY);
 }
 
 /** Sanitize a string into a safe ZIP entry path segment. */
@@ -286,9 +344,55 @@ export async function exportBundle(opts: BundleExportOptions): Promise<{
   // streams sheet-at-a-time instead.
   const featuresByLayer = new Map<string, BundleFeature[]>();
   let totalFeatures = 0;
-  for (const layer of plan) {
+  // First-pass: fetch every layer's features, apply parent scope
+  // filter, build a "surviving parent id set" so related-table
+  // rows can be filtered to those that still reference a surviving
+  // parent.
+  const parentSurvivingIds = new Set<string>();
+  for (let i = 0; i < plan.length; i += 1) {
+    const layer = plan[i]!;
     progress(`Fetching ${layer.label || layer.id}…`);
-    const features = await fetchLayerFeatures(opts.itemId, layer.id);
+    let features = await fetchLayerFeatures(opts.itemId, layer.id);
+    // Parent-layer scope: applies only to the root layer (i===0).
+    // Related tables get their own filter pass below based on
+    // surviving parent ids -- that's the "selection cascade" the
+    // user actually wants when picking 12 parcels for a handoff
+    // bundle.
+    if (i === 0) {
+      if (opts.featureIdsAllowlist && opts.featureIdsAllowlist.size > 0) {
+        features = features.filter(
+          (f) => f.id !== undefined && opts.featureIdsAllowlist!.has(f.id),
+        );
+      }
+      if (opts.bbox) {
+        const [minX, minY, maxX, maxY] = opts.bbox;
+        features = features.filter((f) =>
+          geometryIntersectsBbox(f.geometry, minX, minY, maxX, maxY),
+        );
+      }
+      for (const f of features) {
+        if (f.id) parentSurvivingIds.add(f.id);
+      }
+    } else if (parentSurvivingIds.size > 0) {
+      // Related-table cascade: drop rows whose FK doesn't point at
+      // a surviving parent.  We don't know the exact FK column at
+      // this layer level (it's per-related-table config we don't
+      // surface in BundleSublayer today), so we use a heuristic:
+      // any property value that matches a surviving parent id.
+      // This is intentionally permissive -- a stale match keeps
+      // an extra related row rather than dropping a legitimate one.
+      // A future revision can plumb the explicit FK column name
+      // through BundleSublayer.
+      features = features.filter((f) => {
+        const props = f.properties ?? {};
+        for (const v of Object.values(props)) {
+          if (typeof v === 'string' && parentSurvivingIds.has(v)) {
+            return true;
+          }
+        }
+        return false;
+      });
+    }
     featuresByLayer.set(layer.id, features);
     totalFeatures += features.length;
   }
