@@ -6,6 +6,7 @@ import { ConfigModule } from '@nestjs/config';
 
 import { ImportJobsWorkerModule } from './import-jobs/import-jobs-worker.module.js';
 import { LeaderElectionModule } from './cron/leader-election.module.js';
+import { TileLayerWorkerModule } from './tile-layer/tile-layer-worker.module.js';
 
 /**
  * portal-worker entry point (#115 P8).
@@ -44,6 +45,11 @@ import { LeaderElectionModule } from './cron/leader-election.module.js';
     ConfigModule.forRoot({ isGlobal: true }),
     LeaderElectionModule,
     ImportJobsWorkerModule,
+    // Tile-layer pyramid worker (raster-upload follow-up).
+    // Polls cog-ready tile_layer items and builds a PMTiles
+    // raster pyramid from the COG via gdal2tiles.py + pmtiles
+    // convert.  See pyramid.worker.ts for the state machine.
+    TileLayerWorkerModule,
   ],
 })
 class WorkerAppModule {}

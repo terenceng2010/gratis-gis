@@ -56,6 +56,61 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [copied, setCopied] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  // Poll the item while the pyramid build is in flight.  States
+  // that should trigger refresh: 'cog-ready' (waiting for the
+  // worker to pick it up) and 'tiling' (job is running).
+  // Terminal states ('pmtiles-ready', 'tiling-failed') don't
+  // trigger polling.  Polling stops when the component unmounts
+  // OR when the state advances out of a transient value.
+  const transientState =
+    data.processingState === 'cog-ready' ||
+    data.processingState === 'tiling';
+  useEffect(() => {
+    if (!transientState) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/portal/items/${itemId}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as { item?: { data?: unknown } };
+        if (cancelled) return;
+        if (body.item?.data && isTileLayerData(body.item.data)) {
+          setData(body.item.data);
+        }
+      } catch {
+        /* network blips are fine; next tick will retry */
+      }
+    };
+    // Poll every 5s while transient; the worker's own loop is
+    // 10s so we'll sometimes refresh just after a state change.
+    const id = window.setInterval(() => void tick(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [itemId, transientState]);
+
+  async function retryPyramid() {
+    setRetrying(true);
+    try {
+      const res = await fetch(
+        `/api/portal/items/${itemId}/tile-layer/retry-pyramid`,
+        { method: 'POST', credentials: 'include' },
+      );
+      if (res.ok) {
+        const body = (await res.json()) as { data?: unknown };
+        if (body.data && isTileLayerData(body.data)) {
+          setData(body.data);
+        }
+      }
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   // Register the pmtiles and cog protocols with MapLibre once
   // per page load.  pmtiles serves PMTiles archives via range
@@ -344,6 +399,98 @@ export function TileLayerEditor({ itemId, initial, canEdit }: Props) {
         </div>
       </section>
 
+      {/* Pyramid build status (only present for raster-uploaded
+          items that go through the COG -> PMTiles bridge).      */}
+      {ready && data.processingState ? (
+        <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
+          <div className="border-b border-border bg-surface-2 px-4 py-3">
+            <h3 className="text-sm font-medium text-ink-0">
+              Tile pyramid status
+            </h3>
+            <p className="mt-0.5 text-xs text-muted">
+              Raster uploads serve immediately as a Cloud-Optimized
+              GeoTIFF.  A background worker bakes a PMTiles
+              pyramid for faster serving; until that's done the
+              map renders directly from the source COG.
+            </p>
+          </div>
+          <div className="space-y-2 p-4 text-sm">
+            {data.processingState === 'cog-ready' ? (
+              <div className="flex items-start gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-ink-1">
+                <span className="font-medium">Queued.</span>
+                <span className="text-muted">
+                  Pyramid build will start within the next minute.
+                  Map is currently served from the source COG.
+                </span>
+              </div>
+            ) : null}
+            {data.processingState === 'tiling' ? (
+              <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-ink-1">
+                <span className="font-medium text-blue-900">
+                  Building pyramid...
+                </span>
+                <span className="text-blue-900/70">
+                  This can take several minutes for large rasters.
+                  Map is currently served from the source COG; it
+                  will switch to PMTiles automatically when the
+                  build completes.
+                  {data.tilingStartedAt
+                    ? ` Started ${humanDate(data.tilingStartedAt)}.`
+                    : ''}
+                </span>
+              </div>
+            ) : null}
+            {data.processingState === 'pmtiles-ready' ? (
+              <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-ink-1">
+                <span className="font-medium text-emerald-900">
+                  Serving as PMTiles.
+                </span>
+                <span className="text-emerald-900/70">
+                  Pyramid build completed
+                  {data.tilingCompletedAt
+                    ? ` ${humanDate(data.tilingCompletedAt)}`
+                    : ''}
+                  .  Source COG kept as archival reference (
+                  {data.cogSizeBytes !== undefined
+                    ? humanSize(data.cogSizeBytes)
+                    : 'size unknown'}
+                  ).
+                </span>
+              </div>
+            ) : null}
+            {data.processingState === 'tiling-failed' ? (
+              <div className="space-y-2">
+                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-ink-1">
+                  <span className="font-medium text-amber-900">
+                    Pyramid build failed.
+                  </span>
+                  <span className="text-amber-900/70">
+                    Map is still being served from the source COG.
+                    Retry the build, or contact the admin if it
+                    keeps failing.
+                  </span>
+                </div>
+                {data.tilingError ? (
+                  <pre className="overflow-x-auto rounded border border-border bg-surface-2 p-2 text-[11px] text-muted">
+                    {data.tilingError}
+                  </pre>
+                ) : null}
+                {canEdit ? (
+                  <button
+                    type="button"
+                    onClick={() => void retryPyramid()}
+                    disabled={retrying}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium text-ink-1 hover:bg-surface-2 disabled:opacity-40"
+                  >
+                    {retrying ? 'Retrying...' : 'Retry pyramid build'}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       {/* Metadata card */}
       {ready ? (
         <section className="overflow-hidden rounded-lg border border-border bg-surface-1 shadow-card">
@@ -604,6 +751,20 @@ function originalFormatLabel(fmt: TileLayerOriginalFormat): string {
     case 'jp2':
       return 'JPEG 2000';
   }
+}
+
+/** Friendly relative-time renderer for tilingStartedAt /
+ *  tilingCompletedAt timestamps in the status block.  Falls back
+ *  to the raw ISO string when the value isn't a parseable date. */
+function humanDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const now = Date.now();
+  const diffSec = Math.round((now - d.getTime()) / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
+  return d.toLocaleString();
 }
 
 function humanSize(bytes: number): string {

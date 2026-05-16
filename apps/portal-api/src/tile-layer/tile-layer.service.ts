@@ -469,6 +469,56 @@ export class TileLayerService {
   }
 
   /**
+   * Retry a failed pyramid build.  Flips a tile_layer item from
+   * processingState='tiling-failed' back to 'cog-ready' so the
+   * pyramid worker re-claims it on the next poll tick.  Clears
+   * the previous tilingError.  Only the owner or an org admin
+   * can retry.
+   *
+   * No-op (but not an error) when the item is in any other
+   * state -- a UI that races a successful build against a retry
+   * click shouldn't crash.
+   */
+  async retryPyramid(user: AuthUser, itemId: string): Promise<TileLayerData> {
+    const item = await this.items.get(user, itemId);
+    if (item.type !== 'tile_layer') {
+      throw new BadRequestException(`Item ${itemId} is not a tile_layer.`);
+    }
+    if (!this.sharing.canAdmin(user, item)) {
+      throw new ForbiddenException(
+        'Only the owner or an org admin can retry the pyramid build.',
+      );
+    }
+    const data: unknown = item.data;
+    if (!isTileLayerData(data)) {
+      throw new BadRequestException('Tile layer has no upload yet.');
+    }
+    if (data.processingState !== 'tiling-failed') {
+      // Idempotent: just return the current state.
+      return data;
+    }
+    const patch: Partial<TileLayerData> = {
+      processingState: 'cog-ready',
+    };
+    await this.items.update(user, itemId, {
+      data: {
+        ...(data as unknown as Prisma.JsonObject),
+        ...(patch as unknown as Prisma.JsonObject),
+        // Explicit null so jsonb merge drops the previous error
+        // string (Prisma's update treats undefined as "skip"; the
+        // worker's clearTilingError path uses jsonb's '-' operator
+        // which we don't have here without a raw query).
+        tilingError: null,
+      } as Prisma.JsonObject,
+    });
+    // Strip tilingError from the returned shape too -- the field
+    // is optional on TileLayerData (exactOptionalPropertyTypes
+    // refuses an explicit undefined assignment).
+    const { tilingError: _stripped, ...rest } = data;
+    return { ...rest, ...patch };
+  }
+
+  /**
    * Drop the MinIO object backing this tile layer. Called by the
    * items service during purge. Best-effort: a missing key is
    * fine (the item may have been created without the upload ever

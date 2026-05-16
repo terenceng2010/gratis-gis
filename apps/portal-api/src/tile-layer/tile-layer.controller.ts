@@ -80,6 +80,21 @@ export class TileLayerController {
   }
 
   /**
+   * Retry a failed PMTiles pyramid build.  Flips the item back
+   * to processingState='cog-ready' so the pyramid worker re-
+   * claims it on the next poll tick.  Owner / admin gated inside
+   * the service.
+   */
+  @Post('items/:itemId/tile-layer/retry-pyramid')
+  async retryPyramid(
+    @CurrentUser() user: AuthUser,
+    @Param('itemId') itemId: string,
+  ) {
+    const data = await this.tileLayer.retryPyramid(user, itemId);
+    return { data };
+  }
+
+  /**
    * Range-request proxy. MapLibre's pmtiles plugin issues many
    * range requests as the user pans / zooms; this endpoint
    * forwards each one to the underlying MinIO public URL. We
