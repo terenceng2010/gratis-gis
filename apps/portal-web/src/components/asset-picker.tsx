@@ -71,7 +71,17 @@ interface Props {
 }
 
 const PRESIGN_ENDPOINT = '/api/portal/storage/presign-upload';
-const FILE_LIST_ENDPOINT = '/api/portal/items?type=file&lite=1';
+// `lite=1` strips `data` from the server response to save
+// bandwidth on the items grid.  We CANNOT use lite here: the
+// picker filters by `data.mimeType` to surface only images (or
+// whatever the caller asked for), and the only fallback when
+// mimeType is missing is matching the file extension against the
+// item title -- which works for `logo.png` but misses titles like
+// "Site logo" that the user typed in.  Without the data blob the
+// filter dropped every File item that didn't happen to have an
+// extension in its title, so the picker came up empty.  Asking
+// for the full payload keeps the picker honest.
+const FILE_LIST_ENDPOINT = '/api/portal/items?type=file';
 
 export function AssetPicker({
   value,
