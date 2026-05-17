@@ -50,6 +50,11 @@ ARG NEXT_PUBLIC_PROJECT_LANDING=
 ENV NEXT_PUBLIC_PROJECT_LANDING=$NEXT_PUBLIC_PROJECT_LANDING
 ARG NEXT_PUBLIC_GITHUB_REPO=
 ENV NEXT_PUBLIC_GITHUB_REPO=$NEXT_PUBLIC_GITHUB_REPO
+# #141: set to "1" on public-testing deployments so the landing
+# page renders the demo-credentials banner.  Defaults to empty so
+# per-tenant forks don't accidentally advertise tester accounts.
+ARG NEXT_PUBLIC_PUBLIC_TESTING=
+ENV NEXT_PUBLIC_PUBLIC_TESTING=$NEXT_PUBLIC_PUBLIC_TESTING
 
 RUN pnpm -C apps/portal-web build
 
