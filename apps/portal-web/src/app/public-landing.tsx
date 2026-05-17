@@ -93,15 +93,21 @@ export function PublicLanding({
   forceProjectSection,
   isAuthenticated,
 }: Props) {
-  const { org, items } = data;
-  // #75 was filtering this to hasRuntime-only items (so a card
-  // click never bounced to Keycloak), but that hid maps /
-  // data_layers / basemaps the author had explicitly shared
-  // public. Showing-but-broken-click is preferable to the user's
-  // expectation -- they shared it, they want to see it on the
-  // landing. The click-redirect issue stays tracked under #76;
-  // once anonymous detail surfaces ship for those types, the click
-  // path stops bouncing and we don't need the filter at all.
+  const { org, items: rawItems } = data;
+  // Filter to items that actually have an anonymous-accessible
+  // surface so a visitor never gets bounced to Keycloak from the
+  // landing page. Maps, raw data layers, basemaps etc. don't have
+  // an anonymous detail page yet (#76); promoting them on the
+  // landing creates a "click here for public content, oh wait
+  // please sign in" trap that real testers have hit and called out.
+  // Until #76 ships anon detail surfaces for those item types, hide
+  // them rather than advertising a broken click path. The item is
+  // still publicly accessible via the API for anyone who already
+  // has the id; this filter is a UX-on-the-landing decision, not a
+  // sharing decision.
+  const items = rawItems.filter((it) =>
+    hasRuntime(it as Parameters<typeof hasRuntime>[0]),
+  );
   const ctaHref = isAuthenticated ? '/items' : '/signin';
   const ctaLabel = isAuthenticated ? 'Open my items' : 'Sign in';
 
