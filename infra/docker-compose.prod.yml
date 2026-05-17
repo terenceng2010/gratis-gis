@@ -410,6 +410,12 @@ services:
         # explicitly export PROJECT_LANDING=0) to suppress it.
         NEXT_PUBLIC_PROJECT_LANDING: ${PROJECT_LANDING:-1}
         NEXT_PUBLIC_GITHUB_REPO: ${GITHUB_REPO:-palavido-dev/gratis-gis}
+        # #141: when set to "1", the landing page renders the
+        # public-testing banner (three documented test credentials +
+        # daily-reset notice).  Pairs with the gg-reset-demo.timer
+        # systemd unit on the host.  Defaults to "" so a per-tenant
+        # fork doesn't accidentally advertise demo accounts.
+        NEXT_PUBLIC_PUBLIC_TESTING: ${PUBLIC_TESTING:-}
     restart: unless-stopped
     depends_on:
       portal-api:
