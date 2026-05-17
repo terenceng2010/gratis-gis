@@ -148,10 +148,17 @@ drop_and_restore() {
   pg_container="$(dc ps -q postgres)"
   local in_container="/tmp/restore-$db.dump"
   docker cp "$dump" "${pg_container}:${in_container}"
+  # `< /dev/null` on the docker exec call is load-bearing.  Without
+  # it the wrapper hangs after pg_restore exits, blocking the rest
+  # of the script for several minutes per DB.  Observed:
+  # pg_restore completes inside the container, the inner workers
+  # all exit, but docker exec stays alive waiting on a stdin pipe
+  # that the script never wrote to.  Explicitly null'ing stdin
+  # gives the wrapper a clean EOF to return on.
   docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$pg_container" \
     pg_restore -U gratisgis -d "$db" --no-owner --role="$owner" \
-    --clean --if-exists --jobs=4 "$in_container"
-  docker exec "$pg_container" rm -f "$in_container" || true
+    --clean --if-exists --jobs=4 "$in_container" < /dev/null
+  docker exec "$pg_container" rm -f "$in_container" < /dev/null || true
 }
 
 echo "=== Stopping app services ==="
