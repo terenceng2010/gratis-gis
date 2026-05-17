@@ -38,7 +38,7 @@ import {
   ZOOM_MIN,
   groupDepth,
 } from '@gratis-gis/shared-types';
-import { StyleEditor } from './style-editor';
+import { Color, Slider, StyleEditor } from './style-editor';
 import { RendererEditor } from './renderer-editor';
 import { FilterEditor } from './filter-editor';
 import { PopupEditor } from './popup-editor';
@@ -1127,6 +1127,7 @@ function LayerRow({
                   <ScaledSymbologyEditor
                     layer={layer}
                     onPatch={onPatch}
+                    currentZoom={currentZoom}
                     {...(metadata.geometryTypes
                       ? { geometryTypes: metadata.geometryTypes }
                       : {})}
@@ -1278,10 +1279,12 @@ function LayerRow({
 function ScaledSymbologyEditor({
   layer,
   onPatch,
+  currentZoom,
   geometryTypes,
 }: {
   layer: MapLayer;
   onPatch: (patch: Partial<MapLayer>) => void;
+  currentZoom: number;
   geometryTypes?: Set<GeometryFamily>;
 }) {
   const classes = layer.scaledSymbology ?? [];
@@ -1345,13 +1348,13 @@ function ScaledSymbologyEditor({
           without forking the layer.
         </p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-3">
           {classes.map((c, i) => {
             const label = c.label ?? `Class ${i + 1}`;
             return (
               <li
                 key={i}
-                className="rounded-md border border-border bg-surface-1 p-2"
+                className="space-y-2 rounded-md border border-border bg-surface-1 p-2"
               >
                 <div className="flex items-start gap-1">
                   <input
@@ -1369,83 +1372,94 @@ function ScaledSymbologyEditor({
                     ×
                   </button>
                 </div>
-                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                  <label className="block">
-                    <span className="text-[10px] text-muted">Min zoom</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={24}
-                      step={1}
-                      value={c.minZoom ?? ''}
-                      placeholder="(any)"
-                      onChange={(e) => {
-                        const v = e.target.value.trim();
-                        const n = v === '' ? undefined : Number(v);
-                        const next = { ...c };
-                        if (n === undefined) delete next.minZoom;
-                        else next.minZoom = n;
-                        update(classes.map((x, j) => (j === i ? next : x)));
-                      }}
-                      className="mt-0.5 w-full rounded border border-border bg-surface-0 px-1.5 py-0.5 text-[11px] focus:border-accent focus:outline-none"
+                {/* Zoom range uses the same dual-handle slider as
+                    "Layer visible" / "Labels visible" above so the
+                    author works with one consistent control across
+                    every zoom-bounded surface. */}
+                <ZoomRange
+                  label="Visible at"
+                  minZoom={c.minZoom ?? null}
+                  maxZoom={c.maxZoom ?? null}
+                  currentZoom={currentZoom}
+                  onMin={(z) => {
+                    const next = { ...c };
+                    if (z === null) delete next.minZoom;
+                    else next.minZoom = z;
+                    update(classes.map((x, j) => (j === i ? next : x)));
+                  }}
+                  onMax={(z) => {
+                    const next = { ...c };
+                    if (z === null) delete next.maxZoom;
+                    else next.maxZoom = z;
+                    update(classes.map((x, j) => (j === i ? next : x)));
+                  }}
+                />
+                {/* Per-class symbology uses the SAME Color / Slider
+                    controls as the main StyleEditor above so fill /
+                    stroke / opacity / width pickers look identical
+                    inside and outside a scale class. */}
+                {hasPolygon ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Color
+                      label="Fill"
+                      value={c.style.polygon.fillColor}
+                      onChange={(v) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            polygon: { ...c.style.polygon, fillColor: v },
+                          },
+                        })
+                      }
                     />
-                  </label>
-                  <label className="block">
-                    <span className="text-[10px] text-muted">Max zoom</span>
-                    <input
-                      type="number"
+                    <Slider
+                      label="Fill opacity"
                       min={0}
-                      max={24}
-                      step={1}
-                      value={c.maxZoom ?? ''}
-                      placeholder="(any)"
-                      onChange={(e) => {
-                        const v = e.target.value.trim();
-                        const n = v === '' ? undefined : Number(v);
-                        const next = { ...c };
-                        if (n === undefined) delete next.maxZoom;
-                        else next.maxZoom = n;
-                        update(classes.map((x, j) => (j === i ? next : x)));
-                      }}
-                      className="mt-0.5 w-full rounded border border-border bg-surface-0 px-1.5 py-0.5 text-[11px] focus:border-accent focus:outline-none"
+                      max={1}
+                      step={0.05}
+                      value={c.style.polygon.fillOpacity}
+                      onChange={(n) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            polygon: { ...c.style.polygon, fillOpacity: n },
+                          },
+                        })
+                      }
                     />
-                  </label>
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1">
-                  {hasPolygon ? (
-                    <>
-                      <ScaledColorRow
-                        label="Fill"
-                        value={c.style.polygon.fillColor}
-                        onChange={(v) =>
-                          patchClass(i, {
-                            style: {
-                              ...c.style,
-                              polygon: { ...c.style.polygon, fillColor: v },
-                            },
-                          })
-                        }
-                      />
-                      <ScaledColorRow
-                        label="Stroke"
-                        value={c.style.polygon.strokeColor}
-                        onChange={(v) =>
-                          patchClass(i, {
-                            style: {
-                              ...c.style,
-                              polygon: {
-                                ...c.style.polygon,
-                                strokeColor: v,
-                              },
-                            },
-                          })
-                        }
-                      />
-                    </>
-                  ) : null}
-                  {hasLine ? (
-                    <ScaledColorRow
-                      label="Line"
+                    <Color
+                      label="Outline"
+                      value={c.style.polygon.strokeColor}
+                      onChange={(v) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            polygon: { ...c.style.polygon, strokeColor: v },
+                          },
+                        })
+                      }
+                    />
+                    <Slider
+                      label="Outline width"
+                      min={0}
+                      max={8}
+                      step={0.5}
+                      value={c.style.polygon.strokeWidth}
+                      onChange={(n) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            polygon: { ...c.style.polygon, strokeWidth: n },
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
+                {hasLine ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Color
+                      label="Color"
                       value={c.style.line.color}
                       onChange={(v) =>
                         patchClass(i, {
@@ -1456,10 +1470,27 @@ function ScaledSymbologyEditor({
                         })
                       }
                     />
-                  ) : null}
-                  {hasPoint ? (
-                    <ScaledColorRow
-                      label="Point"
+                    <Slider
+                      label="Width"
+                      min={0.5}
+                      max={12}
+                      step={0.5}
+                      value={c.style.line.width}
+                      onChange={(n) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            line: { ...c.style.line, width: n },
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
+                {hasPoint ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Color
+                      label="Fill"
                       value={c.style.point.color}
                       onChange={(v) =>
                         patchClass(i, {
@@ -1470,15 +1501,50 @@ function ScaledSymbologyEditor({
                         })
                       }
                     />
-                  ) : null}
-                </div>
-                <p className="mt-1.5 text-[10px] text-muted">
-                  Tip: use an <code>rgba()</code> color to vary
-                  transparency per class (the v1 scale-class plumbing
-                  passes COLOR properties through MapLibre step
-                  expressions; opacity / width follow in a later
-                  slice).
-                </p>
+                    <Slider
+                      label="Radius"
+                      min={2}
+                      max={24}
+                      step={1}
+                      value={c.style.point.radius}
+                      onChange={(n) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            point: { ...c.style.point, radius: n },
+                          },
+                        })
+                      }
+                    />
+                    <Color
+                      label="Outline"
+                      value={c.style.point.strokeColor}
+                      onChange={(v) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            point: { ...c.style.point, strokeColor: v },
+                          },
+                        })
+                      }
+                    />
+                    <Slider
+                      label="Outline width"
+                      min={0}
+                      max={6}
+                      step={0.5}
+                      value={c.style.point.strokeWidth}
+                      onChange={(n) =>
+                        patchClass(i, {
+                          style: {
+                            ...c.style,
+                            point: { ...c.style.point, strokeWidth: n },
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
               </li>
             );
           })}
@@ -1486,54 +1552,6 @@ function ScaledSymbologyEditor({
       )}
     </div>
   );
-}
-
-function ScaledColorRow({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <label className="flex items-center gap-1.5 text-[11px] text-ink-1">
-      <span className="w-12 shrink-0 text-[10px] text-muted">{label}</span>
-      <input
-        type="color"
-        // The native color input only accepts #rrggbb.  Normalize
-        // rgba() / named values back to a plausible hex so the
-        // picker doesn't render blank.  Authors who want rgba can
-        // type into the text input next door.
-        value={normalizeToHex(value)}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-5 w-7 cursor-pointer rounded border border-border bg-surface-0"
-      />
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="flex-1 rounded border border-border bg-surface-0 px-1.5 py-0.5 font-mono text-[10px] focus:border-accent focus:outline-none"
-      />
-    </label>
-  );
-}
-
-function normalizeToHex(raw: string): string {
-  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw;
-  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
-    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
-  }
-  const rgb = raw.match(
-    /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/,
-  );
-  if (rgb) {
-    const toHex = (n: string) =>
-      Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0');
-    return `#${toHex(rgb[1] ?? '0')}${toHex(rgb[2] ?? '0')}${toHex(rgb[3] ?? '0')}`;
-  }
-  return '#000000';
 }
 
 function Section({

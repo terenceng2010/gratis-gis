@@ -313,7 +313,15 @@ function IconPicker({
   );
 }
 
-function Color({
+/**
+ * Color picker + hex text input pair used throughout the
+ * symbology UI.  Exported so the scale-class editor (and any
+ * other per-layer styling surface) renders the same control as
+ * the main StyleEditor section above it.  Reusing this component
+ * keeps fill/stroke pickers visually consistent across the
+ * layer panel; do not fork a parallel control for new sections.
+ */
+export function Color({
   label,
   value,
   onChange,
@@ -343,7 +351,13 @@ function Color({
   );
 }
 
-function Slider({
+/**
+ * Range slider with a label + live value readout.  Exported
+ * alongside `Color` for the same reason: per-class opacity /
+ * width controls in the scale-class editor should look and feel
+ * identical to the main StyleEditor's sliders.
+ */
+export function Slider({
   label,
   min,
   max,
