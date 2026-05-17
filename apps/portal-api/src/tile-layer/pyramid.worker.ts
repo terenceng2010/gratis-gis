@@ -74,11 +74,17 @@ export class TileLayerPyramidWorker implements OnModuleInit {
     // process (container killed mid-build, oom, etc).  Flip them
     // back to 'cog-ready' so the next loop tick re-claims them.
     try {
+      // NOTE: Prisma model `Item` is mapped to the lowercase
+      // `item` table (see schema.prisma: `@@map("item")`).  Raw
+      // SQL must use the underlying table name; quoting "Item"
+      // makes Postgres look for a case-sensitive relation that
+      // doesn't exist and breaks the worker on boot.  Likewise,
+      // `data` is mapped to `data_json`.
       const result = await this.prisma.$executeRaw`
-        UPDATE "Item"
-        SET "data" = jsonb_set("data", '{processingState}', '"cog-ready"')
+        UPDATE "item"
+        SET "data_json" = jsonb_set("data_json", '{processingState}', '"cog-ready"')
         WHERE type = 'tile_layer'
-          AND "data"->>'processingState' = 'tiling'
+          AND "data_json"->>'processingState' = 'tiling'
       `;
       if (result > 0) {
         this.log.log(
@@ -134,23 +140,23 @@ export class TileLayerPyramidWorker implements OnModuleInit {
     >`
       WITH picked AS (
         SELECT id
-        FROM "Item"
+        FROM "item"
         WHERE type = 'tile_layer'
-          AND "data"->>'processingState' = 'cog-ready'
-          AND ("deletedAt" IS NULL)
-        ORDER BY ("data"->>'uploadedAt') ASC NULLS LAST
+          AND "data_json"->>'processingState' = 'cog-ready'
+          AND ("deleted_at" IS NULL)
+        ORDER BY ("data_json"->>'uploadedAt') ASC NULLS LAST
         LIMIT 1
         FOR UPDATE SKIP LOCKED
       )
-      UPDATE "Item" i
-      SET "data" = jsonb_set(
-        jsonb_set(i."data", '{processingState}', '"tiling"'),
+      UPDATE "item" i
+      SET "data_json" = jsonb_set(
+        jsonb_set(i."data_json", '{processingState}', '"tiling"'),
         '{tilingStartedAt}',
         to_jsonb(NOW()::text)
       )
       FROM picked
       WHERE i.id = picked.id
-      RETURNING i.id, i."data"
+      RETURNING i.id, i."data_json" AS data
     `;
     const row = rows[0];
     if (!row) return null;
@@ -279,9 +285,9 @@ export class TileLayerPyramidWorker implements OnModuleInit {
     // signature requirement; TileLayerData is a typed interface.
     const patchJson = patch as unknown as Prisma.JsonObject;
     await this.prisma.$executeRaw`
-      UPDATE "Item"
-      SET "data" = "data" || ${patchJson}::jsonb
-      WHERE id = ${itemId}
+      UPDATE "item"
+      SET "data_json" = "data_json" || ${patchJson}::jsonb
+      WHERE id = ${itemId}::uuid
     `;
   }
 
@@ -290,9 +296,9 @@ export class TileLayerPyramidWorker implements OnModuleInit {
    *  failed attempt doesn't linger. */
   private async clearTilingError(itemId: string): Promise<void> {
     await this.prisma.$executeRaw`
-      UPDATE "Item"
-      SET "data" = "data" - 'tilingError'
-      WHERE id = ${itemId}
+      UPDATE "item"
+      SET "data_json" = "data_json" - 'tilingError'
+      WHERE id = ${itemId}::uuid
     `;
   }
 
