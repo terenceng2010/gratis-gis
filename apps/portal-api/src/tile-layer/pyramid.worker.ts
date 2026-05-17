@@ -74,16 +74,20 @@ export class TileLayerPyramidWorker implements OnModuleInit {
     // process (container killed mid-build, oom, etc).  Flip them
     // back to 'cog-ready' so the next loop tick re-claims them.
     try {
-      // NOTE: Prisma model `Item` is mapped to the lowercase
-      // `item` table (see schema.prisma: `@@map("item")`).  Raw
-      // SQL must use the underlying table name; quoting "Item"
-      // makes Postgres look for a case-sensitive relation that
-      // doesn't exist and breaks the worker on boot.  Likewise,
-      // `data` is mapped to `data_json`.
+      // NOTE: Prisma maps the model + several fields + the enum
+      // value to different underlying SQL identifiers:
+      //   model Item            -> table "item"            (@@map)
+      //   field data            -> column "data_json"      (@map)
+      //   field deletedAt       -> column "deleted_at"     (@map)
+      //   enum ItemType.tile_layer -> 'tile-layer'         (@map)
+      // Raw SQL must reference the underlying names or Postgres
+      // rejects the query (relation "Item" does not exist, or
+      // invalid input value for enum "ItemType": 'tile_layer').
+      // The explicit `::"ItemType"` cast mirrors items.service.ts.
       const result = await this.prisma.$executeRaw`
         UPDATE "item"
         SET "data_json" = jsonb_set("data_json", '{processingState}', '"cog-ready"')
-        WHERE type = 'tile_layer'
+        WHERE type = 'tile-layer'::"ItemType"
           AND "data_json"->>'processingState' = 'tiling'
       `;
       if (result > 0) {
@@ -141,7 +145,7 @@ export class TileLayerPyramidWorker implements OnModuleInit {
       WITH picked AS (
         SELECT id
         FROM "item"
-        WHERE type = 'tile_layer'
+        WHERE type = 'tile-layer'::"ItemType"
           AND "data_json"->>'processingState' = 'cog-ready'
           AND ("deleted_at" IS NULL)
         ORDER BY ("data_json"->>'uploadedAt') ASC NULLS LAST
