@@ -20,12 +20,13 @@ WorkingDirectory=/opt/gratis-gis
 ExecStart=/opt/gratis-gis/infra/restore-golden.sh
 # A reset that hangs (docker exec stuck on a hung postgres backend,
 # tar wedged on a phantom file lock) shouldn't hold the timer hostage
-# forever.  Bumped from 5 min to 15 min once we measured the
-# real-world restore time on a 600+ MB Postgres dump: pg_restore +
-# minio untar both run serially and the dump alone takes ~3-4 min
-# under realistic disk load.  Past 15 min something is genuinely
-# wrong.
-TimeoutStartSec=900
+# forever.  Bumped to 45 min after measuring real-world restore time
+# end to end: GIN index rebuild on the 2.8M-row observation table
+# alone takes ~15 - 20 min on the single-CPU prod box, then keycloak
+# restore + minio untar + service restart add another 2-3 min.
+# 45 min leaves comfortable headroom; past that something is
+# genuinely wrong.
+TimeoutStartSec=2700
 # Don't auto-restart on failure: a failed reset leaves the stack in
 # a known-bad state and the next scheduled run would try again on
 # top of that. Better to leave the unit failed and surface it via
