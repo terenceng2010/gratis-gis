@@ -125,11 +125,33 @@ drop_and_restore() {
   dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
     psql -U gratisgis -d postgres -c "CREATE DATABASE \"$db\" OWNER \"$owner\";"
 
-  # Restore the dump. --no-owner + --role lets the restore re-grant
-  # objects to the correct owner regardless of who they were owned
-  # by at dump time.
-  cat "$dump" | dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-    pg_restore -U gratisgis -d "$db" --no-owner --role="$owner" --clean --if-exists
+  # Restore the dump.  Two non-obvious choices:
+  #
+  #   1. Copy the dump into the postgres container first, then run
+  #      pg_restore against the local file inside the container.
+  #      The naive `cat "$dump" | dc exec -T postgres pg_restore`
+  #      pipeline hangs after pg_restore exits because compose
+  #      wraps stdio in a way that waits indefinitely for both
+  #      sides to close cleanly.  `docker cp` + in-container path
+  #      sidesteps that entirely and is faster on a fat dump
+  #      (no pipe, no docker-stdio overhead).
+  #
+  #   2. `docker exec` straight against the container name, not
+  #      `docker compose exec`.  Same hang reason as (1); compose's
+  #      exec wrapper is the slow path.
+  #
+  # --no-owner + --role lets the restore re-grant objects to the
+  # correct owner regardless of who they were owned by at dump
+  # time.  --jobs=4 parallelizes index + constraint rebuild after
+  # the data load; harmless on a single-CPU box (jobs serialize).
+  local pg_container
+  pg_container="$(dc ps -q postgres)"
+  local in_container="/tmp/restore-$db.dump"
+  docker cp "$dump" "${pg_container}:${in_container}"
+  docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$pg_container" \
+    pg_restore -U gratisgis -d "$db" --no-owner --role="$owner" \
+    --clean --if-exists --jobs=4 "$in_container"
+  docker exec "$pg_container" rm -f "$in_container" || true
 }
 
 echo "=== Stopping app services ==="
