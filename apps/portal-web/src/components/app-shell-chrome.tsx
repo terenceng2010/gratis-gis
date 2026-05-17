@@ -3,7 +3,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   Archive,
   Bell,
@@ -12,11 +12,13 @@ import {
   Folder as FolderIcon,
   LayoutGrid,
   Map as MapIcon,
+  Menu as MenuIcon,
   Paintbrush,
   Shield,
   Sparkles,
   Trash2,
   Users,
+  X as CloseIcon,
 } from 'lucide-react';
 
 import { TopBarSearch } from './top-bar-search';
@@ -131,81 +133,21 @@ export function AppShellChrome({
   return (
     <div className="flex min-h-screen bg-surface-0 text-ink-0">
       {/* Sticky left rail so the nav stays in view while a long
-          items page scrolls underneath -- otherwise drag-and-drop
+          items page scrolls underneath.  Otherwise drag-and-drop
           to a folder breaks once the rail scrolls off-screen.
           `sticky top-0 self-start` plus `h-screen overflow-y-auto`
           on the inner column lets the nav grow taller than the
           viewport (admin rail with many entries) without breaking
-          the parent flexbox. */}
+          the parent flexbox.
+
+          Hidden below the md breakpoint; the mobile drawer below
+          renders the same content as a slide-in overlay. */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 self-start overflow-y-auto border-r border-border bg-surface-1 px-3 py-4 md:block">
         <Link href="/" className="flex items-center gap-2 px-2 py-2">
           <Compass className="h-6 w-6 text-accent" />
           <span className="text-base font-semibold tracking-tight">GratisGIS</span>
         </Link>
-        <nav className="mt-4 flex flex-col gap-0.5 text-sm">
-          <NavLink href="/" icon={<LayoutGrid className="h-4 w-4" />}>Overview</NavLink>
-          <NavLink href="/items" icon={<MapIcon className="h-4 w-4" />}>Items</NavLink>
-          <NavLink
-            href="/items?folders=open"
-            icon={<FolderIcon className="h-4 w-4" />}
-          >
-            Folders
-          </NavLink>
-          <NavLink href="/groups" icon={<Users className="h-4 w-4" />}>Groups</NavLink>
-          {/* The /field landing is intentionally hidden from the
-              desktop sidebar -- the route stays valid so a mobile
-              user who scans a deployment QR code or shares a direct
-              link still lands on it, but desktop users reach field
-              deployments more naturally through the items list +
-              the "Field" item-type filter. Don't reintroduce a top-
-              level entry here without a redesign. */}
-          <NavLink href="/recently-deleted" icon={<Trash2 className="h-4 w-4" />}>
-            Recently deleted
-          </NavLink>
-          {me?.orgRole === 'admin' ? (
-            <>
-              <p className="mt-4 px-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-                Admin
-              </p>
-              <NavLink
-                href="/admin/users"
-                icon={<Shield className="h-4 w-4" />}
-              >
-                Users
-              </NavLink>
-              <NavLink
-                href="/admin/branding"
-                icon={<Paintbrush className="h-4 w-4" />}
-              >
-                Landing page
-              </NavLink>
-              <NavLink
-                href="/admin/backup"
-                icon={<Archive className="h-4 w-4" />}
-              >
-                Backup
-              </NavLink>
-              <NavLink
-                href="/admin/housekeeping"
-                icon={<Sparkles className="h-4 w-4" />}
-              >
-                Housekeeping
-              </NavLink>
-              <NavLink
-                href="/admin/notifications"
-                icon={<Bell className="h-4 w-4" />}
-              >
-                Notifications
-              </NavLink>
-              <NavLink
-                href="/admin/field-queues"
-                icon={<ClipboardList className="h-4 w-4" />}
-              >
-                Field queues
-              </NavLink>
-            </>
-          ) : null}
-        </nav>
+        <NavList orgRole={me?.orgRole ?? null} />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -214,8 +156,9 @@ export function AppShellChrome({
             button when the app is launched from a home-screen PWA
             install (viewport-fit=cover puts the page under the
             status bar by design). */}
-        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-0/80 px-4 backdrop-blur pt-[env(safe-area-inset-top)] [height:calc(3.5rem+env(safe-area-inset-top))]">
-          <div className="flex flex-1 items-center gap-3">
+        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border bg-surface-0/80 px-3 backdrop-blur pt-[env(safe-area-inset-top)] [height:calc(3.5rem+env(safe-area-inset-top))]">
+          <div className="flex flex-1 items-center gap-2">
+            <MobileNavTrigger orgRole={me?.orgRole ?? null} />
             <TopBarSearch />
           </div>
           <div className="flex items-center gap-2">
@@ -250,18 +193,231 @@ export function AppShellChrome({
   );
 }
 
+/**
+ * The same nav links the desktop left rail uses, factored out so the
+ * mobile drawer and the desktop sidebar render identical entries.
+ * Clicking a link inside the drawer fires the optional `onNavigate`
+ * callback so the parent can close the drawer.
+ */
+function NavList({
+  orgRole,
+  onNavigate,
+}: {
+  orgRole: AppShellMe['orgRole'] | null;
+  /** Same typing as NavLink.onNavigate: explicit `| undefined`
+   *  so the desktop call site can omit it without tripping
+   *  exactOptionalPropertyTypes. */
+  onNavigate?: (() => void) | undefined;
+}) {
+  // Normalize to the explicit-or-undefined shape NavLink wants
+  // so we don't have to repeat the conditional spread at every
+  // call site below.
+  const cb = onNavigate;
+  return (
+    <nav className="mt-4 flex flex-col gap-0.5 text-sm">
+      <NavLink href="/" icon={<LayoutGrid className="h-4 w-4" />} onNavigate={cb}>
+        Overview
+      </NavLink>
+      <NavLink href="/items" icon={<MapIcon className="h-4 w-4" />} onNavigate={cb}>
+        Items
+      </NavLink>
+      <NavLink
+        href="/items?folders=open"
+        icon={<FolderIcon className="h-4 w-4" />}
+        onNavigate={cb}
+      >
+        Folders
+      </NavLink>
+      <NavLink href="/groups" icon={<Users className="h-4 w-4" />} onNavigate={cb}>
+        Groups
+      </NavLink>
+      {/* The /field landing is intentionally hidden from the
+          sidebar.  The route stays valid so a mobile user who
+          scans a deployment QR code or shares a direct link still
+          lands on it, but other users reach field deployments
+          more naturally through the items list + the "Field"
+          item-type filter.  Don't reintroduce a top-level entry
+          here without a redesign. */}
+      <NavLink
+        href="/recently-deleted"
+        icon={<Trash2 className="h-4 w-4" />}
+        onNavigate={cb}
+      >
+        Recently deleted
+      </NavLink>
+      {orgRole === 'admin' ? (
+        <>
+          <p className="mt-4 px-2 text-[10px] font-medium uppercase tracking-wide text-muted">
+            Admin
+          </p>
+          <NavLink
+            href="/admin/users"
+            icon={<Shield className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Users
+          </NavLink>
+          <NavLink
+            href="/admin/branding"
+            icon={<Paintbrush className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Landing page
+          </NavLink>
+          <NavLink
+            href="/admin/backup"
+            icon={<Archive className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Backup
+          </NavLink>
+          <NavLink
+            href="/admin/housekeeping"
+            icon={<Sparkles className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Housekeeping
+          </NavLink>
+          <NavLink
+            href="/admin/notifications"
+            icon={<Bell className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Notifications
+          </NavLink>
+          <NavLink
+            href="/admin/field-queues"
+            icon={<ClipboardList className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Field queues
+          </NavLink>
+        </>
+      ) : null}
+    </nav>
+  );
+}
+
+/**
+ * Mobile-only hamburger + slide-in drawer.  Visible below the md
+ * breakpoint (where the desktop left rail is hidden).  The drawer
+ * is a fixed-position overlay so it can render above the sticky
+ * header without fighting it for stacking context.
+ *
+ * Interactions:
+ *   - Click hamburger to open.
+ *   - Click backdrop, Esc key, or any link inside the drawer to
+ *     close.
+ *   - Page navigation also closes the drawer via usePathname change
+ *     (handled by an effect below).
+ */
+function MobileNavTrigger({
+  orgRole,
+}: {
+  orgRole: AppShellMe['orgRole'] | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Close on route change.  Navigating from inside the drawer fires
+  // onNavigate to set open=false, but a route change initiated
+  // elsewhere (back button, deep link) should also dismiss.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  // Close on Esc.  Standard accessibility convention for overlays.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  // Prevent body scroll while the drawer is open so the underlying
+  // page doesn't jitter when the user swipes inside the drawer.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Open navigation"
+        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2 md:hidden"
+      >
+        <MenuIcon className="h-5 w-5" />
+      </button>
+      {open ? (
+        <div
+          className="fixed inset-0 z-40 md:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation"
+        >
+          {/* Backdrop. Click to dismiss. */}
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setOpen(false)}
+          />
+          {/* Drawer panel.  Slide-in from the left. */}
+          <aside className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-r border-border bg-surface-1 px-3 py-4 shadow-xl">
+            <div className="flex items-center justify-between px-2 py-2">
+              <Link
+                href="/"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2"
+              >
+                <Compass className="h-6 w-6 text-accent" />
+                <span className="text-base font-semibold tracking-tight">
+                  GratisGIS
+                </span>
+              </Link>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Close navigation"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2"
+              >
+                <CloseIcon className="h-4 w-4" />
+              </button>
+            </div>
+            <NavList orgRole={orgRole} onNavigate={() => setOpen(false)} />
+          </aside>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function NavLink({
   href,
   icon,
   children,
+  onNavigate,
 }: {
   href: string;
   icon: ReactNode;
   children: ReactNode;
+  /** Called on click before navigation; used by the mobile drawer
+   *  to close itself when the user taps a link.  Typed with explicit
+   *  `| undefined` because the consuming Link rejects an undefined
+   *  onClick prop under exactOptionalPropertyTypes. */
+  onNavigate: (() => void) | undefined;
 }) {
   return (
     <Link
       href={href}
+      {...(onNavigate ? { onClick: onNavigate } : {})}
       className="flex items-center gap-2 rounded-md px-2 py-2 text-ink-1 transition-colors hover:bg-surface-2"
     >
       <span className="text-muted">{icon}</span>
