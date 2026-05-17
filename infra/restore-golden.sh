@@ -113,27 +113,27 @@ drop_and_restore() {
   # from forming during this; pg_terminate_backend kills any
   # already-open ones.
   dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-    psql -U postgres -d postgres -c "ALTER DATABASE \"$db\" CONNECTION LIMIT 0;" \
+    psql -U gratisgis -d postgres -c "ALTER DATABASE \"$db\" CONNECTION LIMIT 0;" \
     || true
   dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-    psql -U postgres -d postgres -c \
+    psql -U gratisgis -d postgres -c \
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db' AND pid <> pg_backend_pid();" \
     || true
 
   dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-    psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS \"$db\";"
+    psql -U gratisgis -d postgres -c "DROP DATABASE IF EXISTS \"$db\";"
   dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-    psql -U postgres -d postgres -c "CREATE DATABASE \"$db\" OWNER \"$owner\";"
+    psql -U gratisgis -d postgres -c "CREATE DATABASE \"$db\" OWNER \"$owner\";"
 
   # Restore the dump. --no-owner + --role lets the restore re-grant
   # objects to the correct owner regardless of who they were owned
   # by at dump time.
   cat "$dump" | dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-    pg_restore -U postgres -d "$db" --no-owner --role="$owner" --clean --if-exists
+    pg_restore -U gratisgis -d "$db" --no-owner --role="$owner" --clean --if-exists
 }
 
 echo "=== Stopping app services ==="
-dc stop portal-api-1 portal-api-2 portal-worker portal-web keycloak
+dc stop portal-api portal-worker portal-web keycloak
 
 echo "=== Restoring Postgres databases ==="
 drop_and_restore "$POSTGRES_DB_APP" "$POSTGRES_USER" "$GOLDEN_DIR/postgres-app.dump"
@@ -155,7 +155,7 @@ echo "=== Restarting app services ==="
 sleep 3
 dc start keycloak
 sleep 5  # Keycloak boot is slower than postgres / minio.
-dc start portal-web portal-worker portal-api-1 portal-api-2
+dc start portal-web portal-worker portal-api
 
 echo "=== Reset complete at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo ""

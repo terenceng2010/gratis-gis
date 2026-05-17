@@ -65,7 +65,7 @@ dc() {
 
 echo "=== Stopping app services for consistent snapshot ==="
 # Stop in dependency order; postgres stays up so we can pg_dump.
-dc stop portal-api-1 portal-api-2 portal-worker portal-web keycloak
+dc stop portal-api portal-worker portal-web keycloak
 
 echo "=== Dumping Postgres: $POSTGRES_DB_APP ==="
 dc exec -T postgres pg_dump \
@@ -102,7 +102,7 @@ echo "=== Restarting app services ==="
 dc start minio
 # Wait a beat for minio to be ready before app services start hitting it.
 sleep 3
-dc start keycloak portal-web portal-worker portal-api-1 portal-api-2
+dc start keycloak portal-web portal-worker portal-api
 
 echo "=== Snapshot complete ==="
 ls -lh "$GOLDEN_DIR"
