@@ -40,7 +40,13 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 export interface KeycloakClaims {
   sub: string;
   preferred_username: string;
-  email: string;
+  // Email is optional because Keycloak users created without the
+  // `email` profile attribute (or with the email scope unmapped)
+  // omit it from the token entirely. AuthSyncService synthesizes a
+  // local placeholder so the user upsert can never crash on a
+  // missing email, which would otherwise 500 every authed request
+  // from that account (#365).
+  email?: string;
   name: string;
   org?: string;
   org_role?: 'viewer' | 'contributor' | 'admin';

@@ -182,10 +182,21 @@ export class AuthSyncService {
     const writeLastSeen =
       now - lastWrite >= AuthSyncService.LAST_SEEN_THROTTLE_MS;
 
+    // #365: some Keycloak users (the public-preview demo accounts in
+    // particular) are provisioned without an email attribute and the
+    // token therefore has no `email` claim. The local `user.email`
+    // column is non-nullable, so passing through `undefined` would
+    // crash the upsert with PrismaClientValidationError on every
+    // authed request from that user. Synthesize a deterministic
+    // placeholder so the upsert always succeeds; if Keycloak later
+    // starts sending a real email the next request overwrites it.
+    const email =
+      claims.email ?? `${claims.preferred_username}@local.gratisgis`;
+
     const user = await this.prisma.user.upsert({
       where: { username: claims.preferred_username },
       update: {
-        email: claims.email,
+        email,
         fullName: claims.name,
         orgRole: normalisedRole,
         orgId: org.id,
@@ -202,7 +213,7 @@ export class AuthSyncService {
         id: claims.sub,
         orgId: org.id,
         username: claims.preferred_username,
-        email: claims.email,
+        email,
         fullName: claims.name,
         orgRole: normalisedRole,
         lastSeenAt: new Date(),
