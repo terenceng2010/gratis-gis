@@ -76,6 +76,30 @@ api() {
     "$@"
 }
 
+# Lock down the realm's user-profile config so end users cannot
+# edit the email field through the Account Console.  Without this,
+# a tester could sign in as tester-admin, add their own email, then
+# trigger Forgot Password to take ownership of the account until
+# the 04:00 UTC reset wipes it.  Idempotent: re-runs leave the
+# config in the same state.
+lock_email_profile() {
+  echo "=== Locking realm user-profile: email is admin-edit only ==="
+  api GET "/users/profile" > /tmp/gg-profile.json
+  python3 << 'PY' > /tmp/gg-profile-new.json
+import json
+p = json.load(open('/tmp/gg-profile.json'))
+for a in p.get('attributes', []):
+    if a.get('name') == 'email':
+        a['permissions'] = {'view': ['admin','user'], 'edit': ['admin']}
+        a.pop('required', None)
+print(json.dumps(p))
+PY
+  api PUT "/users/profile" -d @/tmp/gg-profile-new.json > /dev/null
+  echo "  done"
+}
+
+lock_email_profile
+
 # Resolve a username to its Keycloak user id, or "" if absent.
 user_id() {
   local username="$1"
@@ -94,6 +118,15 @@ upsert_user() {
   local existing
   existing="$(user_id "$username")"
 
+  # No email on the demo accounts on purpose: Keycloak's Forgot
+  # Password flow needs an email address to send a reset link, so
+  # leaving it empty means a curious tester clicking "Forgot
+  # password" on tester-admin gets a no-op instead of triggering
+  # a reset email that bounces back to our SMTP and could in
+  # principle be intercepted.  Paired with the realm user-profile
+  # config (email is admin-edit only), this also blocks a tester
+  # from adding their own email through the Account Console and
+  # then triggering a reset to themselves.
   local body
   body="$(python3 -c "
 import json
@@ -101,8 +134,7 @@ print(json.dumps({
   'username': '$username',
   'firstName': '$first',
   'lastName': '$last',
-  'email': '$username@example.test',
-  'emailVerified': True,
+  'emailVerified': False,
   'enabled': True,
   'attributes': {
     'org': ['${PORTAL_ORG_SLUG:-gratis-gis}'],
