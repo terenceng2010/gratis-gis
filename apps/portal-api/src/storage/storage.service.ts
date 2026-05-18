@@ -245,11 +245,13 @@ export class StorageService implements OnModuleInit {
       Key: key,
       ContentType: contentType,
     });
-    // Tight expiry: 60s is enough for a 5 MB thumbnail and short
-    // enough that a leaked URL is effectively harmless. Attachments
-    // and file items bump to 600s because a 100 MB upload over a
-    // slow office link takes longer than the 60s window covers.
-    const expiresIn = anyMime ? 600 : 60;
+    // Presigned-PUT expiry: tight by default so a leaked URL is
+    // short-lived.  60s suffices for a 5 MB thumbnail; 180s for
+    // attachments / file items so a 100 MB upload over a slow
+    // office link still completes; tile-layer caches legitimately
+    // run multi-GB on slow uplinks, so they get the longer 600s
+    // window.
+    const expiresIn = isTileLayer ? 600 : anyMime ? 180 : 60;
     const uploadUrl = await getSignedUrl(this.client, cmd, { expiresIn });
     const publicUrl = `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
     return {

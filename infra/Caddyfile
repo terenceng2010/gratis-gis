@@ -149,6 +149,16 @@ www.{$PORTAL_DOMAIN} {
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
         Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        # Permissions-Policy: deny access to APIs the portal doesn't
+        # use.  Geolocation is left "self" because the field PWA's
+        # map widget needs it.  Camera + microphone aren't used today;
+        # if we add in-app capture later they'll need to be added back.
+        Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), midi=(), magnetometer=(), accelerometer=(), gyroscope=()"
+        # Open same-origin-only window cross-references so popups
+        # opened from the portal don't share a browsing context with
+        # the opener.  Useful when a Map embeds an external service
+        # in an iframe and that service tries to call window.opener.
+        Cross-Origin-Opener-Policy same-origin
         -Server
     }
 }
