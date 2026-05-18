@@ -163,6 +163,35 @@ export const authOptions: NextAuthOptions = {
   // immediately redirects to Keycloak; saves the user a useless
   // "Sign in with Keycloak" click. See app/signin/page.tsx.
   pages: { signIn: '/signin' },
+  // Explicit cookie hardening.  NextAuth defaults to httpOnly +
+  // secure + sameSite=lax on HTTPS, which is fine, but the
+  // defaults are easy to silently lose on a future config change.
+  // Making them explicit pins the contract and lets the CSRF
+  // cookie use the stricter `__Host-` prefix + sameSite=strict.
+  cookies: {
+    sessionToken: {
+      name: '__Secure-next-auth.session-token',
+      options: {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        secure: true,
+      },
+    },
+    callbackUrl: {
+      name: '__Secure-next-auth.callback-url',
+      options: { sameSite: 'lax', path: '/', secure: true },
+    },
+    csrfToken: {
+      name: '__Host-next-auth.csrf-token',
+      options: {
+        httpOnly: true,
+        sameSite: 'strict',
+        path: '/',
+        secure: true,
+      },
+    },
+  },
 };
 
 export type SessionWithToken = import('next-auth').Session & {

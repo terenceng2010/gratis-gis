@@ -60,11 +60,26 @@ export default withAuth(
         // Viewer; same read-only public-share semantics as Viewer.
         // (The legacy /survey/run runtime was folded onto this route
         // when the survey item type was retired in #91.)
+        // UUID-shape required so the anon allowance is bounded to
+        // routes that can actually resolve to an item.  Without this,
+        // a `:id` like `..` or `something-else-with-a-slash` would
+        // pass the regex and the anon allowance would extend to
+        // arbitrary subpaths beneath /items/.  Defense in depth; the
+        // public.controller.ts UUID-shape gate is the load-bearing
+        // check, this one just narrows the matcher.
+        const uuid =
+          '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+        const viewerRe = new RegExp(
+          `^\\/items\\/${uuid}\\/viewer\\/run(?:\\/|$)`,
+          'i',
+        );
+        const responsesRe = new RegExp(
+          `^\\/items\\/${uuid}\\/responses(?:\\/|$)`,
+          'i',
+        );
         if (
-          /^\/items\/[^/]+\/viewer\/run(?:\/|$)/.test(
-            req.nextUrl.pathname,
-          ) ||
-          /^\/items\/[^/]+\/responses(?:\/|$)/.test(req.nextUrl.pathname)
+          viewerRe.test(req.nextUrl.pathname) ||
+          responsesRe.test(req.nextUrl.pathname)
         ) {
           return true;
         }
