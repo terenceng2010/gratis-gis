@@ -75,6 +75,13 @@ _tmp_*
 docs/marketing/
 scripts/
 
+# Internal security review documents.  These contain exploitable
+# vulnerability details and MUST NOT be committed.  The committable
+# disclosure surface is SECURITY.md (separate file).
+SECURITY-REVIEW-*.md
+SECURITY-FINDINGS-*.md
+outputs/security/
+
 # Commit-message scratch files. Various tools / editors / Claude
 # sessions write commit-message drafts to the repo root; they're
 # transient and should never land in history.
