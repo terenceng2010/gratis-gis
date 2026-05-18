@@ -68,6 +68,13 @@ docs/handoff/
 # Stray temp files left behind by some Windows tools (#42 followup)
 _tmp_*
 
+# Internal-only material that lives in this working tree but is
+# not for the public repo.  Marketing drafts (Reddit posts, outreach
+# copy) and the scripts/ folder (load-test rigs, one-off text-cleanup
+# utilities) are Matt's local workflow, not the published codebase.
+docs/marketing/
+scripts/
+
 # Commit-message scratch files. Various tools / editors / Claude
 # sessions write commit-message drafts to the repo root; they're
 # transient and should never land in history.
