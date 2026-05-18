@@ -1,0 +1,140 @@
+# Dependabot configuration for GratisGIS.
+#
+# Notes for review:
+# - pnpm support is via the npm ecosystem (Dependabot reads
+#   pnpm-lock.yaml since Aug 2024); no separate "pnpm" ecosystem key
+#   exists.
+# - Grouped updates keep PR volume reasonable: one PR per ecosystem
+#   per week instead of one PR per package.
+# - All PRs are assigned to palavido-dev so they don't sit unowned.
+# - Docker scanning lists each Dockerfile path explicitly because
+#   Dependabot doesn't recurse on its own.
+#
+# Things to confirm before merging:
+# - Reviewer handle palavido-dev is correct.
+# - Day of week for runs (currently monday).
+# - Whether you want major-version bumps grouped or split out (split
+#   here, since majors usually need manual review).
+
+version: 2
+
+updates:
+  # JS/TS dependencies (pnpm workspace at repo root)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+    reviewers:
+      - "palavido-dev"
+    assignees:
+      - "palavido-dev"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Major bumps get their own PR so they're easier to review.
+
+  # GitHub Actions workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    reviewers:
+      - "palavido-dev"
+    assignees:
+      - "palavido-dev"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Docker base images for portal-api
+  - package-ecosystem: "docker"
+    directory: "/apps/portal-api"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+    reviewers:
+      - "palavido-dev"
+    assignees:
+      - "palavido-dev"
+    commit-message:
+      prefix: "chore(docker)"
+    groups:
+      docker-api:
+        patterns:
+          - "*"
+
+  # Docker base images for portal-web
+  - package-ecosystem: "docker"
+    directory: "/apps/portal-web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+    reviewers:
+      - "palavido-dev"
+    assignees:
+      - "palavido-dev"
+    commit-message:
+      prefix: "chore(docker)"
+    groups:
+      docker-web:
+        patterns:
+          - "*"
+
+  # Docker base image for the custom postgres image under infra/
+  - package-ecosystem: "docker"
+    directory: "/infra/postgres"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "infra"
+    reviewers:
+      - "palavido-dev"
+    assignees:
+      - "palavido-dev"
+    commit-message:
+      prefix: "chore(infra)"
+    groups:
+      docker-infra:
+        patterns:
+          - "*"

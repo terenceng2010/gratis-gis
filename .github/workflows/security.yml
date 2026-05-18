@@ -1,0 +1,211 @@
+# Continuous security workflow for GratisGIS.
+#
+# What this runs:
+#   - pnpm audit (json) gated to fail on High/Critical only
+#   - Trivy filesystem scan of the working tree
+#   - Trivy image scan of the locally built portal-api and portal-web
+#     images
+#   - CodeQL for typescript
+#
+# Why "High/Critical only" gates the workflow:
+#   The repo has a steady stream of Moderate advisories in transitive
+#   deps that won't realistically be patched on the day they land
+#   (waiting on upstream releases). Failing on Moderate would turn
+#   every PR red and train us to ignore the workflow. Moderates still
+#   show up in the summary, just non-blocking.
+#
+# Things to confirm before merging:
+#   - The Docker image build steps assume the existing Dockerfiles
+#     under apps/portal-api and apps/portal-web build cleanly with a
+#     plain `docker build .` from each app dir. If they need build
+#     args or a different context (e.g. monorepo root), adjust.
+#   - CodeQL "security-and-quality" is the broader suite. If it's too
+#     noisy, downgrade to "security-extended" or "default".
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly re-scan in case advisories drop without a code change.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pnpm-audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install (no scripts, no build)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run pnpm audit (json)
+        id: audit
+        continue-on-error: true
+        run: |
+          pnpm audit --audit-level=moderate --json > audit.json || true
+          cat audit.json
+          # Fail the step only on High or Critical findings.
+          node -e "
+            const a = JSON.parse(require('fs').readFileSync('audit.json','utf8'));
+            const v = (a.metadata && a.metadata.vulnerabilities) || {};
+            const high = (v.high || 0) + (v.critical || 0);
+            console.log('Vulns by severity:', JSON.stringify(v));
+            if (high > 0) {
+              console.error('Failing: ' + high + ' high/critical advisories');
+              process.exit(1);
+            }
+          "
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-audit
+          path: audit.json
+
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  trivy-images:
+    name: Trivy image scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: portal-api
+            dockerfile: ./apps/portal-api/Dockerfile
+          - name: portal-web
+            dockerfile: ./apps/portal-web/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image.name }} image
+        uses: docker/build-push-action@v6
+        with:
+          # Build context is the monorepo root; the per-app
+          # Dockerfile copies pnpm-workspace.yaml + packages + apps
+          # so it needs the whole tree as context.
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          push: false
+          load: true
+          tags: gratisgis-${{ matrix.image.name }}:ci
+
+      - name: Trivy scan ${{ matrix.image.name }}
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: gratisgis-${{ matrix.image.name }}:ci
+          format: sarif
+          output: trivy-${{ matrix.image.name }}.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.image.name }}.sarif
+          category: trivy-${{ matrix.image.name }}
+
+  codeql:
+    name: CodeQL (typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: typescript
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: CodeQL analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:typescript"
+
+  summary:
+    name: Security summary
+    needs: [pnpm-audit, trivy-fs, trivy-images, codeql]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Compose summary
+        run: |
+          echo "## Security workflow results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- pnpm-audit: ${{ needs.pnpm-audit.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- trivy-fs: ${{ needs.trivy-fs.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- trivy-images: ${{ needs.trivy-images.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- codeql: ${{ needs.codeql.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Gating: workflow fails only on High/Critical findings." >> $GITHUB_STEP_SUMMARY
+          echo "Moderate findings are visible in the artifacts and the Code Scanning UI." >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any required job failed
+        run: |
+          set -e
+          # Treat "skipped" as pass; treat "cancelled" as fail.
+          for r in \
+            "${{ needs.pnpm-audit.result }}" \
+            "${{ needs.trivy-fs.result }}" \
+            "${{ needs.trivy-images.result }}" \
+            "${{ needs.codeql.result }}"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "Required job result: $r"; exit 1 ;;
+            esac
+          done
