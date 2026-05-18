@@ -30,6 +30,7 @@ import { EngineService } from './engine.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LensPolicyService } from '../policy/lens-policy.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import { validateGeoJson } from '../common/geometry-validation.js';
 
 /** Argument bag shared by every write helper. */
 interface WriteCommon {
@@ -440,6 +441,10 @@ export class DataLayerEngine {
   async listFeatures(
     args: ListFeaturesArgs,
   ): Promise<{ type: 'FeatureCollection'; features: DataLayerFeature[] }> {
+    // Bound user-supplied geometry size before it reaches PostGIS;
+    // throws GeometryTooLargeError (BadRequest at the controller).
+    validateGeoJson(args.geoLimit);
+    validateGeoJson(args.boundaryClip);
     const scope = this.scope(args.itemId, args.layerId);
     const asOf = args.asOf ?? new Date();
     const limit = args.limit ?? 100000;
@@ -642,6 +647,9 @@ export class DataLayerEngine {
     count: number;
     truncated: boolean;
   }> {
+    // Bound user-supplied geometry size before it reaches PostGIS.
+    validateGeoJson(args.geoLimit);
+    validateGeoJson(args.boundaryClip);
     const scope = this.scope(args.itemId, args.layerId);
     const limit = Math.min(Math.max(args.limit | 0, 1), 5000);
     const fetchN = limit + 1;
@@ -788,6 +796,9 @@ export class DataLayerEngine {
     boundaryClip?: GeoJsonGeometry;
   }): Promise<[number, number, number, number] | null> {
     if (args.entityIds.length === 0) return null;
+    // Bound user-supplied geometry size before it reaches PostGIS.
+    validateGeoJson(args.geoLimit);
+    validateGeoJson(args.boundaryClip);
     const scope = this.scope(args.itemId, args.layerId);
     // Same UUID coercion + cap as pageFeatures so the planner sees
     // a safe IN list.
@@ -913,6 +924,9 @@ export class DataLayerEngine {
     if (args.isTable === true) {
       return Buffer.alloc(0);
     }
+    // Bound user-supplied geometry size before it reaches PostGIS.
+    validateGeoJson(args.geoLimit);
+    validateGeoJson(args.boundaryClip);
 
     const scope = this.scope(args.itemId, args.layerId);
     const filters: Prisma.Sql[] = [];

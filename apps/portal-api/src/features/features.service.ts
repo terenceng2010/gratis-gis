@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { DerivedLayerCacheRefreshService } from '../derived-layers/cache-refresh.service.js';
+import { validateGeoJson } from '../common/geometry-validation.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -279,6 +280,12 @@ export class FeaturesService {
     user: AuthUser,
   ): Promise<number> {
     if (features.length === 0) return 0;
+    // Bound per-feature geometry size before it reaches PostGIS.
+    for (const f of features) {
+      if (f.geometry !== undefined && f.geometry !== null) {
+        validateGeoJson(f.geometry);
+      }
+    }
     const now = new Date();
     let inserted = 0;
 
@@ -427,6 +434,10 @@ export class FeaturesService {
       const newGeom = patch.geometry !== undefined
         ? patch.geometry
         : (old.geom ? JSON.parse(old.geom) : null);
+      // Bound user-supplied geometry size before it reaches PostGIS.
+      if (patch.geometry !== undefined && patch.geometry !== null) {
+        validateGeoJson(patch.geometry);
+      }
       const newProps = patch.properties !== undefined
         ? { ...(old.properties as Record<string, unknown>), ...patch.properties }
         : old.properties;
@@ -742,6 +753,10 @@ export class FeaturesService {
     }
     if (!/^[0-9a-f-]{36}$/i.test(parentGlobalId)) {
       throw new BadRequestException('Invalid parent feature id');
+    }
+    // Bound user-supplied geometry size before it reaches PostGIS.
+    if (input.geometry !== undefined && input.geometry !== null) {
+      validateGeoJson(input.geometry);
     }
     const tbl = toTableName(childItemId);
     const now = new Date().toISOString();
