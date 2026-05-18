@@ -2,6 +2,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Don't ship `x-powered-by: Next.js` on every response.  Pure
+  // information disclosure, no functional reason to advertise the
+  // framework + version to every visitor.
+  poweredByHeader: false,
   transpilePackages: ['@gratis-gis/ui', '@gratis-gis/shared-types'],
   experimental: {
     // Required because our shared packages export TS directly without a build step.

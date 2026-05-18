@@ -136,13 +136,20 @@ www.{$PORTAL_DOMAIN} {
 
     # Light security headers. CSP is intentionally absent; Next + Map
     # tile loads make a strict CSP a separate project.
+    #
+    # HSTS: Caddy does NOT automatically add Strict-Transport-Security
+    # in v2 despite a stale community-help thread that says it does;
+    # I checked the live response headers and it was absent.  Set it
+    # explicitly here with a long max-age + includeSubDomains so
+    # auth., storage., and www. inherit pinning, and `preload` so we
+    # can submit to hstspreload.org once the cert and DNS posture has
+    # been stable long enough.
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
-        # Strict-Transport-Security is added by Caddy automatically
-        # once HTTPS is up; leaving the explicit header off avoids a
-        # double-set warning.
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        -Server
     }
 }
 
@@ -194,6 +201,7 @@ www.{$PORTAL_DOMAIN} {
     header {
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
         # Don't set X-Frame-Options DENY on auth: the login screen
         # is sometimes embedded in an iframe during account-linking
         # flows. Keycloak sets its own conservative defaults.
@@ -213,8 +221,15 @@ www.{$PORTAL_DOMAIN} {
     # termination is here at Caddy.
     reverse_proxy minio:9000
 
-    # No X-Frame-Options or strict referrer policy here: MinIO
-    # serves binary blobs that get embedded in <img> tags from the
-    # portal, and overly strict headers can break that. The bucket
-    # policy is what gates which objects are publicly readable.
+    header {
+        X-Content-Type-Options nosniff
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        # No X-Frame-Options or strict referrer policy here: MinIO
+        # serves binary blobs that get embedded in <img> tags from the
+        # portal, and overly strict headers can break that. The bucket
+        # policy is what gates which objects are publicly readable.
+        # Mask the upstream server identity (-Server strips MinIO's
+        # "Server: MinIO" header on the way out).
+        -Server
+    }
 }
