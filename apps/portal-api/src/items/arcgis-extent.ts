@@ -15,6 +15,7 @@
  * services work without a separate auth path.
  */
 import type { CredentialPayload } from './credential.service.js';
+import { safeFetch } from '../common/net-guards.js';
 
 export interface ProbeOptions {
   /** Per-call timeout in ms; default 8000 to keep batch passes
@@ -134,7 +135,10 @@ async function fetchLayerExtent(
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   let res: globalThis.Response;
   try {
-    res = await fetch(url.toString(), {
+    // safeFetch refuses private / internal / unresolvable hosts and
+    // re-checks the resolved IP to defeat DNS rebinding.  The probe
+    // url comes from item.data.url (user-supplied at create time).
+    res = await safeFetch(url.toString(), {
       method: 'GET',
       headers,
       signal: ctl.signal,

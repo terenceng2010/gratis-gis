@@ -27,6 +27,10 @@ import {
   maskCredential,
 } from '../items/item-proxy.controller.js';
 import { isUuidShape } from './public.controller.js';
+import {
+  assertSafeOutboundUrl,
+  UnsafeOutboundUrlError,
+} from '../common/net-guards.js';
 
 /**
  * Anonymous twin of ItemProxyController for #307. Proxies upstream
@@ -136,6 +140,22 @@ export class PublicProxyController {
     const subPath = extractSubPath(req.url);
     const target = composeUpstreamUrl(itemUrl, subPath, credential);
     const headers = composeUpstreamHeaders(credential);
+
+    // SSRF guard.  The public-proxy path is anonymous, so anyone on
+    // the internet can hit it for any access='public' item.  If a
+    // (compromised or careless) admin marked an item public whose
+    // url points at an internal host, the entire internet could
+    // read internal responses through that item id.  Hard-refuse
+    // before fetching.
+    try {
+      await assertSafeOutboundUrl(target);
+    } catch (err) {
+      if (err instanceof UnsafeOutboundUrlError) {
+        res.status(400).json({ message: err.message });
+        return;
+      }
+      throw err;
+    }
 
     let upstream: Response | globalThis.Response;
     try {

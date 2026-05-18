@@ -24,6 +24,10 @@ import {
   type CredentialPayload,
 } from './credential.service.js';
 import { exchangeBasicForArcgisToken } from './arcgis-auth.js';
+import {
+  assertSafeOutboundUrl,
+  UnsafeOutboundUrlError,
+} from '../common/net-guards.js';
 
 /**
  * Inline service probe with optional ephemeral credential (#74).
@@ -36,12 +40,13 @@ import { exchangeBasicForArcgisToken } from './arcgis-auth.js';
  * payload shape against PUT /api/items/:id/credential after the
  * item has been created so the proxy keeps working.
  *
- * Authz: any logged-in user can probe. SSRF guards and audit
- * logging are intentionally minimal because this is the same blast
- * radius as `fetch()` from the user's browser; we just want the
- * credential to live on the server for the duration of the round
- * trip. If the platform later restricts outbound network access on
- * the API box, this endpoint inherits that.
+ * Authz: any logged-in user can probe.  Outbound fetches go
+ * through `assertSafeOutboundUrl`, which refuses private / loopback
+ * targets and DNS-rebinding tricks.  The earlier comment here said
+ * the blast radius was equivalent to `fetch()` from the user's
+ * browser; that's wrong because portal-api sits on the docker
+ * compose network alongside postgres, keycloak, minio, and the
+ * cloud-metadata endpoint, none of which the browser can reach.
  */
 
 class ProbeCredentialDto {
@@ -117,6 +122,19 @@ export class ServiceProbeController {
     // ArcGIS service roots only emit JSON when ?f=json is set;
     // bake it into the URL if the caller didn't already.
     const finalUrl = ensureJsonFormat(target);
+
+    // SSRF guard: refuse private / loopback / single-label hosts and
+    // re-check the resolved IP to defeat DNS rebinding.  Run on the
+    // pre-credential URL the user provided so the error message
+    // doesn't leak the credential.
+    try {
+      await assertSafeOutboundUrl(dto.url);
+    } catch (err) {
+      if (err instanceof UnsafeOutboundUrlError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
 
     let upstream: Response;
     try {

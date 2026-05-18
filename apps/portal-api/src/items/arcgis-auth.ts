@@ -36,6 +36,8 @@ const TOKEN_CACHE = new Map<string, { token: string; expires: number }>();
  * than 60s remaining are treated as expired so a slow downstream
  * call doesn't fail mid-flight.
  */
+import { safeFetch } from '../common/net-guards.js';
+
 export async function exchangeBasicForArcgisToken(args: {
   serviceUrl: string;
   username: string;
@@ -71,7 +73,10 @@ export async function exchangeBasicForArcgisToken(args: {
   });
   let res: Response;
   try {
-    res = await fetch(tokenUrl, {
+    // tokenUrl is derived from the user-provided serviceUrl via the
+    // /info?f=json discovery step; route through safeFetch so an
+    // attacker can't redirect token exchange to an internal host.
+    res = await safeFetch(tokenUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -137,7 +142,8 @@ async function discoverTokenEndpoint(
     const restRoot = segs.slice(0, restIdx + 1).join('/');
     const infoUrl = `${parsed.origin}/${restRoot}/info?f=json`;
     try {
-      const res = await fetch(infoUrl);
+      // infoUrl is derived from the user-provided serviceUrl.
+      const res = await safeFetch(infoUrl);
       if (res.ok) {
         const info = (await res.json()) as {
           authInfo?: { tokenServicesUrl?: unknown };

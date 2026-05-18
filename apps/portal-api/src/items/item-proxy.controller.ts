@@ -20,6 +20,10 @@ import {
 } from './credential.service.js';
 import { exchangeBasicForArcgisToken } from './arcgis-auth.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  assertSafeOutboundUrl,
+  UnsafeOutboundUrlError,
+} from '../common/net-guards.js';
 
 /**
  * Authenticated upstream proxy for secured external services (#36).
@@ -150,6 +154,19 @@ export class ItemProxyController {
     const subPath = extractSubPath(req.url);
     const target = composeUpstreamUrl(itemUrl, subPath, credential);
     const headers = composeUpstreamHeaders(credential);
+
+    // SSRF guard.  An item with a malicious data.url that pointed
+    // at an internal host would otherwise be a free SSRF reflector
+    // for any user with read access to that item.
+    try {
+      await assertSafeOutboundUrl(target);
+    } catch (err) {
+      if (err instanceof UnsafeOutboundUrlError) {
+        res.status(400).json({ message: err.message });
+        return;
+      }
+      throw err;
+    }
 
     let upstream: Response | globalThis.Response;
     try {
