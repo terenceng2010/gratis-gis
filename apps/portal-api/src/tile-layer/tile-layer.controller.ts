@@ -16,6 +16,7 @@ import type { Request, Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import { StorageService } from '../storage/storage.service.js';
 import { TileLayerService } from './tile-layer.service.js';
 
 /**
@@ -38,7 +39,10 @@ import { TileLayerService } from './tile-layer.service.js';
 @Controller()
 @UseGuards(JwtAuthGuard)
 export class TileLayerController {
-  constructor(private readonly tileLayer: TileLayerService) {}
+  constructor(
+    private readonly tileLayer: TileLayerService,
+    private readonly storage: StorageService,
+  ) {}
 
   @Post('items/:itemId/tile-layer/finalize')
   async finalize(
@@ -118,47 +122,35 @@ export class TileLayerController {
     @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
-    const storageUrl = await this.tileLayer.resolveStorageUrl(user, itemId);
-    const headers: Record<string, string> = {};
-    if (rangeHeader) headers['range'] = rangeHeader;
-    // Suppress the express body parser - we stream the raw bytes
-    // straight through.
-    const upstream = await fetch(storageUrl, { headers });
-    res.status(upstream.status);
-    const cr = upstream.headers.get('content-range');
-    if (cr) res.setHeader('Content-Range', cr);
-    const cl = upstream.headers.get('content-length');
-    if (cl) res.setHeader('Content-Length', cl);
-    const ct = upstream.headers.get('content-type');
-    if (ct) res.setHeader('Content-Type', ct);
-    const etag = upstream.headers.get('etag');
-    if (etag) res.setHeader('ETag', etag);
+    // After the bucket policy was tightened to deny anonymous GET
+    // on item-tile-layer/*, this proxy fetches via the SDK using
+    // portal-api's credentials instead of the public URL.  ACL
+    // check happens in `resolveStorageKey` (which calls items.get).
+    const storageKey = await this.tileLayer.resolveStorageKey(user, itemId);
+    const upstream = await this.storage.streamObject(storageKey, rangeHeader);
+    res.status(upstream.statusCode);
+    if (upstream.contentRange) res.setHeader('Content-Range', upstream.contentRange);
+    if (upstream.contentLength !== undefined) {
+      res.setHeader('Content-Length', String(upstream.contentLength));
+    }
+    if (upstream.contentType) res.setHeader('Content-Type', upstream.contentType);
+    if (upstream.etag) res.setHeader('ETag', upstream.etag);
     // Range support: advertise so MapLibre + browsers know to
     // request slices.
-    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Accept-Ranges', upstream.acceptRanges ?? 'bytes');
     // PMTiles content is immutable per upload (a new upload
     // produces a new storageKey + url), so we can let the
     // browser cache aggressively. ETag handles invalidation when
     // a tile layer's file is replaced.
     res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
 
-    if (!upstream.body) {
-      res.end();
-      return;
-    }
-    const reader = upstream.body.getReader();
-    // Manual stream-to-express copy; res.write returns false when
-    // the buffer is full and we should wait for drain. Avoids
-    // memory pressure on large tiles.
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!res.write(Buffer.from(value))) {
-          await new Promise<void>((resolve) => res.once('drain', resolve));
-        }
-      }
-      res.end();
+      upstream.body.pipe(res);
+      await new Promise<void>((resolve, reject) => {
+        upstream.body.on('end', resolve);
+        upstream.body.on('error', reject);
+        res.on('close', resolve);
+      });
     } catch (err) {
       // Client disconnected mid-stream is normal (panning kills
       // in-flight tile fetches). Log unexpected errors only.

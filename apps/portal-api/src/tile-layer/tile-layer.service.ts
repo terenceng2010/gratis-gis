@@ -370,6 +370,41 @@ export class TileLayerService {
   }
 
   /**
+   * Resolve the MinIO storage KEY for the active tile-layer file.
+   * Used by the range-proxy controller after the bucket policy was
+   * tightened to deny anonymous GET on `item-tile-layer/*`: the
+   * controller uses the key to fetch via the SDK with portal-api's
+   * credentials instead of hitting the public URL.  Performs the
+   * same ACL check as resolveStorageUrl.
+   */
+  async resolveStorageKey(user: AuthUser, itemId: string): Promise<string> {
+    const item = await this.items.get(user, itemId);
+    if (item.type !== 'tile_layer') {
+      throw new BadRequestException(`Item ${itemId} is not a tile_layer.`);
+    }
+    const data: unknown = item.data;
+    if (!isTileLayerData(data)) {
+      throw new NotFoundException(
+        'Tile layer has not been uploaded yet (or the upload finalize step did not run).',
+      );
+    }
+    // Prefer the active PMTiles key (set after the background pyramid
+    // build finishes); fall back to the COG key (used during the
+    // pre-pyramid window), and to the legacy `storageKey` for older
+    // rows that predate the hybrid serving model.
+    const d = data as unknown as Record<string, unknown>;
+    const key =
+      (typeof d.pmtilesStorageKey === 'string' && d.pmtilesStorageKey) ||
+      (typeof d.cogStorageKey === 'string' && d.cogStorageKey) ||
+      (typeof d.storageKey === 'string' && d.storageKey) ||
+      null;
+    if (!key) {
+      throw new NotFoundException('Tile layer storage key is missing.');
+    }
+    return key;
+  }
+
+  /**
    * Pre-upload space check.  The frontend calls this when the
    * user picks a file but before requesting a presigned URL.
    * Returns whether the upload + conversion + serving pipeline

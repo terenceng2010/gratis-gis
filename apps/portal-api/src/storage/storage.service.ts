@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   CreateBucketCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   ListObjectsV2Command,
   PutBucketCorsCommand,
@@ -165,7 +166,13 @@ export class StorageService implements OnModuleInit {
       }
     }
 
-    // Anonymous GET on every object. Thumbnails are public by design.
+    // Anonymous GET only on the prefixes that are public by design:
+    // thumbnails + avatars + hero images.  Private prefixes
+    // (feature-attachment, item-file, item-tile-layer) are NOT
+    // listed and therefore require AWS-signed reads via the SDK.
+    // Portal-api mediates those via /api/storage/private/* with a
+    // SharingService check.  Tile-layer range requests go through
+    // /api/portal/tile-layer/:id/file which also uses the SDK.
     await this.client.send(
       new PutBucketPolicyCommand({
         Bucket: this.bucket,
@@ -173,11 +180,16 @@ export class StorageService implements OnModuleInit {
           Version: '2012-10-17',
           Statement: [
             {
-              Sid: 'PublicReadGetObject',
+              Sid: 'PublicReadGetObjectOnPublicPrefixes',
               Effect: 'Allow',
               Principal: { AWS: ['*'] },
               Action: ['s3:GetObject'],
-              Resource: [`arn:aws:s3:::${this.bucket}/*`],
+              Resource: [
+                `arn:aws:s3:::${this.bucket}/item-thumb/*`,
+                `arn:aws:s3:::${this.bucket}/group-thumb/*`,
+                `arn:aws:s3:::${this.bucket}/user-avatar/*`,
+                `arn:aws:s3:::${this.bucket}/org-hero/*`,
+              ],
             },
           ],
         }),
@@ -253,7 +265,14 @@ export class StorageService implements OnModuleInit {
     // window.
     const expiresIn = isTileLayer ? 600 : anyMime ? 180 : 60;
     const uploadUrl = await getSignedUrl(this.client, cmd, { expiresIn });
-    const publicUrl = `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
+    // Private-kind objects are served back through the api with a
+    // sharing check (the bucket policy no longer permits anonymous
+    // GET on those prefixes).  Public-kind objects (thumbnails,
+    // avatars, hero) keep their direct MinIO URL so the browser
+    // doesn't pay an auth round-trip on every render.
+    const publicUrl = StorageService.isPrivateKind(kind)
+      ? this.apiUrlFor(kind, key)
+      : `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
     return {
       uploadUrl,
       publicUrl,
@@ -307,8 +326,102 @@ export class StorageService implements OnModuleInit {
       Body: createReadStream(localPath),
     });
     await this.client.send(cmd);
-    const publicUrl = `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
+    const publicUrl = StorageService.isPrivateKind(kind)
+      ? this.apiUrlFor(kind, key)
+      : `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
     return { key, publicUrl };
+  }
+
+  /**
+   * Compose the api-side URL that wraps a private-kind storage
+   * object.  The browser sends this URL through the portal-web BFF
+   * (which injects the Keycloak access token from the session
+   * cookie) and the BFF forwards to portal-api's
+   * `/api/storage/private/<kind>/<key>` route.  Portal-api validates
+   * sharing then streams the bytes via the SDK.
+   *
+   * The `/api/portal/<suffix>` shape is the BFF passthrough
+   * (apps/portal-web/src/app/api/portal/[...path]/route.ts);
+   * suffix routes 1:1 to portal-api's `/api/<suffix>` after the
+   * BFF strips the `portal/` segment.
+   *
+   * Returned as a relative path because the portal hostname
+   * differs across local dev, staging, and prod.  The browser
+   * resolves it against the current origin.
+   */
+  private apiUrlFor(kind: AssetKind, key: string): string {
+    // Strip the kind prefix off the key for the api-side URL since
+    // the route segment already implies it.  E.g.
+    // `feature-attachment/abc...` -> `/api/portal/storage/private/feature-attachment/abc...`.
+    const bareKey = key.startsWith(`${kind}/`) ? key.slice(kind.length + 1) : key;
+    return `/api/portal/storage/private/${kind}/${bareKey}`;
+  }
+
+  /**
+   * Asset kinds whose objects are NOT publicly readable from the
+   * bucket policy.  Callers must go through the api with a sharing
+   * check.  The corresponding public prefixes (`item-thumb`,
+   * `group-thumb`, `user-avatar`, `org-hero`) keep their direct
+   * MinIO URLs and are fetched without an auth round-trip.
+   */
+  static readonly PRIVATE_KINDS: ReadonlySet<AssetKind> = new Set<AssetKind>([
+    'feature-attachment',
+    'item-file',
+    'item-tile-layer',
+  ]);
+
+  /**
+   * True if the given asset kind requires a sharing check before
+   * read.  Callers in the upload path use this to decide whether
+   * to mint an API-mediated publicUrl or a direct MinIO URL.
+   */
+  static isPrivateKind(kind: AssetKind): boolean {
+    return StorageService.PRIVATE_KINDS.has(kind);
+  }
+
+  /**
+   * Stream an object back to the caller with optional Range header
+   * forwarding.  Uses the SDK + service credentials, so this keeps
+   * working after the bucket policy is tightened to deny anonymous
+   * GET on private prefixes.
+   *
+   * Returns the upstream response shape (status, headers, body).
+   * Caller is responsible for piping the body to the HTTP response
+   * and selecting which response headers to forward.
+   */
+  async streamObject(
+    key: string,
+    range?: string,
+  ): Promise<{
+    statusCode: number;
+    contentType: string | undefined;
+    contentLength: number | undefined;
+    contentRange: string | undefined;
+    etag: string | undefined;
+    acceptRanges: string | undefined;
+    body: NodeJS.ReadableStream;
+  }> {
+    const cmd = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ...(range ? { Range: range } : {}),
+    });
+    const res = await this.client.send(cmd);
+    // The SDK returns the body as a Node Readable when running on
+    // Node; cast accordingly.
+    const body = res.Body as NodeJS.ReadableStream;
+    return {
+      // SDK returns 200 for full responses, 206 for ranged.  We
+      // mirror that via the http status from the underlying http
+      // metadata.
+      statusCode: (res.$metadata.httpStatusCode ?? 200) as number,
+      contentType: res.ContentType,
+      contentLength: res.ContentLength,
+      contentRange: res.ContentRange,
+      etag: res.ETag,
+      acceptRanges: res.AcceptRanges,
+      body,
+    };
   }
 
   /** Delete an object by key. Idempotent. Used when a feature
