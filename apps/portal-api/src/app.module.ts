@@ -2,6 +2,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { HealthController } from './health.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -32,6 +33,22 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Global per-IP rate limit.  ThrottlerGuard runs after JwtAuthGuard
+    // (declared below); each route gets the default 300 requests / 60s
+    // bucket unless it overrides via @Throttle on the controller.  Public
+    // controllers (PublicModule, FeedbackModule, GeocodingModule) declare
+    // their own tighter limits per-route.  Memory-backed, per-process;
+    // portal-api currently runs 2 replicas behind Caddy, so the
+    // effective ceiling is 2x the declared value -- acceptable for a
+    // baseline limit.  Tighter at-the-edge limits will land via Caddy
+    // when the operator picks a rate-limit module to compile in.
+    ThrottlerModule.forRoot([
+      {
+        name: 'default',
+        ttl: 60_000,
+        limit: 300,
+      },
+    ]),
     PrismaModule,
     LeaderElectionModule,
     AuthModule,
@@ -58,6 +75,11 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
   ],
   controllers: [HealthController],
   providers: [
+    // Global per-IP rate limit, runs before the auth guard so an
+    // anonymous flood gets bounced without paying the cost of token
+    // validation.  APP_GUARDs run in declaration order, so list the
+    // throttler first.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     // Global auth guard; opt out per-route with @Public()
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],

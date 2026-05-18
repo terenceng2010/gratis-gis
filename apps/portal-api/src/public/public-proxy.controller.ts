@@ -10,6 +10,7 @@ import {
   Res,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 
 import { Public } from '../auth/public.decorator.js';
@@ -52,6 +53,12 @@ import {
  */
 @ApiTags('public', 'proxy')
 @Controller('public/items/:id/proxy')
+// Tight per-IP throttle: 30 GETs/minute from a single IP is more than
+// any legitimate viewer needs (the runtime issues a handful of fetches
+// per visited page).  Anything beyond that is enumeration / fan-out
+// against the upstream we proxy.  Burst protection at the edge would
+// be the ideal complement; this is the in-process equivalent.
+@Throttle({ default: { ttl: 60_000, limit: 30 } })
 export class PublicProxyController {
   private readonly log = new Logger(PublicProxyController.name);
 
