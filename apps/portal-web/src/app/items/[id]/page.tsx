@@ -152,8 +152,8 @@ import { AppThemeDetail } from './theme/theme-detail';
 import { PrintTemplateDetail } from './print-template/print-template-detail';
 
 interface Props {
-  params: { id: string };
-  searchParams?: { view?: string };
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ view?: string }>;
 }
 
 type ItemWithShares = Item & { shares: ItemShare[] };
@@ -177,7 +177,9 @@ const accessIcon = {
   public: <Globe2 className="h-3.5 w-3.5" />,
 };
 
-export default async function ItemDetailPage({ params, searchParams }: Props) {
+export default async function ItemDetailPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   // Builder vs metadata view gate. Default is the metadata page
   // (description, owner, tags, sharing, related items, version
   // history) which matches how other tool-style items handle
@@ -403,7 +405,6 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
         <ArrowLeft className="h-3.5 w-3.5" />
         Back to items
       </Link>
-
       {/* Compact header: single row with badge, title, chips, and
           actions. Description / owner / updated / tags collapse into
           a `<details>` disclosure below so they're one click away
@@ -521,7 +522,6 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
           </div>
         ) : null}
       </header>
-
       {/* Collapsed details: description + owner + updated + tags.
           Uses the native <details> element so it works without any
           client-side JS and stays accessible. Shown only when the
@@ -573,7 +573,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
       ) : (
         // No description/tags: still show the updated + owner line
         // so users have at least the audit trail visible.
-        <div className="mb-4 flex items-center gap-3 text-xs text-muted">
+        (<div className="mb-4 flex items-center gap-3 text-xs text-muted">
           <span className="inline-flex items-center gap-1">
             <Calendar className="h-3 w-3" />
             Updated {new Date(item.updatedAt).toLocaleString()}
@@ -587,9 +587,8 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
                 (item as unknown as { owner?: { username?: string } | null }).owner?.username ||
                 item.ownerId.slice(0, 8)}
           </span>
-        </div>
+        </div>)
       )}
-
       {item.type === 'map' && isBuilderView ? (
         <MapEditor
           itemId={item.id}
@@ -717,13 +716,13 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
         // #90: tool item detail page.  Minimal editor for the
         // tool's stored action.  Lives in its own component so the
         // detail page stays narrow.
-        <section className="mb-6">
+        (<section className="mb-6">
           <ToolDetail
             itemId={item.id}
             initial={(item.data ?? null) as ToolItemData | null}
             canEdit={canManage}
           />
-        </section>
+        </section>)
       ) : item.type === 'pick_list' ? (
         <section className="mb-6">
           <PickListEditor
@@ -1076,7 +1075,7 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
         // full real estate (paper canvas + element palette + props
         // panel won't fit comfortably inside the regular item-detail
         // chrome).
-        <section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
+        (<section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
           <div className="min-w-0">
             <p className="text-sm font-medium text-ink-0">Print template designer</p>
             <p className="mt-0.5 text-xs text-muted">
@@ -1092,20 +1091,18 @@ export default async function ItemDetailPage({ params, searchParams }: Props) {
               Open builder
             </Link>
           ) : null}
-        </section>
+        </section>)
       ) : (
         <section className="mb-6">
           <ComingSoon type={item.type} data={item.data} />
         </section>
       )}
-
       {/* Dependency panel runs above Sharing for everyone: knowing
           what else will break if you touch this item is the same
           shape of question whether you're the owner or a viewer. */}
       <section className="mb-8">
         <ItemDependencies itemId={item.id} />
       </section>
-
       {canManage ? (
         <section id="sharing" className="mb-8">
           <h2 className="mb-4 flex items-center gap-2 text-sm font-medium text-muted">

@@ -5,7 +5,7 @@ import { apiFetch } from '@/lib/api';
 import { RespondClient } from './respond-client';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 interface ItemPayload {
@@ -23,7 +23,8 @@ interface ItemPayload {
  * so the browser tab itself becomes the only place to see the
  * form's identity.
  */
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const params = await props.params;
   try {
     const item = await apiFetch<ItemPayload>(`/api/items/${params.id}`);
     return { title: item.title };
@@ -44,7 +45,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  * follow-up adds a public-link mode (anonymous tokens, share-by-
  * URL) for surveys you genuinely want to expose to the world.
  */
-export default async function FormRespondPage({ params }: Props) {
+export default async function FormRespondPage(props: Props) {
+  const params = await props.params;
   const item = await apiFetch<ItemPayload>(`/api/items/${params.id}`);
   if (item.type !== 'form') {
     return (

@@ -20,12 +20,13 @@ const KINDS: { value: Kind; label: string }[] = [
 ];
 
 interface Props {
-  searchParams: { kind?: string };
+  searchParams: Promise<{ kind?: string }>;
 }
 
 export const metadata = { title: 'Recently deleted' };
 
-export default async function RecentlyDeletedPage({ searchParams }: Props) {
+export default async function RecentlyDeletedPage(props: Props) {
+  const searchParams = await props.searchParams;
   // Normalize the query param to a known kind; unknown values fall back
   // to items so a stale bookmark never 500s.
   const kind: Kind =

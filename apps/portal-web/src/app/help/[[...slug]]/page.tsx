@@ -22,11 +22,12 @@ import { HelpSidebarNav } from './sidebar-nav';
  * so they can stay sticky / interactive without re-running the
  * server query on every keystroke.
  */
-export default async function HelpPage({
-  params,
-}: {
-  params: { slug?: string[] };
-}) {
+export default async function HelpPage(
+  props: {
+    params: Promise<{ slug?: string[] }>;
+  }
+) {
+  const params = await props.params;
   const nav = await buildNav();
   const all = await loadAllDocs();
   const indexLite = all.map((d) => ({

@@ -9,7 +9,7 @@ import { MembersPanel } from './members-panel';
 import { DeleteGroupButton } from './delete-button';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 const accessIcon = {
@@ -20,7 +20,8 @@ const accessIcon = {
 
 type MemberWithUser = GroupMember & { user: Pick<User, 'id' | 'username' | 'fullName'> };
 
-export default async function GroupDetailPage({ params }: Props) {
+export default async function GroupDetailPage(props: Props) {
+  const params = await props.params;
   let group: Group;
   let members: MemberWithUser[];
   try {

@@ -48,11 +48,8 @@ async function getIngestAgent(): Promise<unknown> {
 /** Match v3 per-layer ingest, v2 ingest, and the wizard probe path.
  *  Conservative: only widens for endpoints we know can take minutes. */
 function isLongRunningIngestPath(suffix: string): boolean {
-  return (
-    /^items\/[^/]+\/layers\/[^/]+\/import$/.test(suffix) ||
-    /^items\/[^/]+\/ingest$/.test(suffix) ||
-    suffix === 'ingest/probe'
-  );
+  return (/^items\/[^/]+\/layers\/[^/]+\/import$/.test(suffix) ||
+  /^items\/[^/]+\/ingest$/.test(suffix) || suffix === 'ingest/probe');
 }
 
 /**
@@ -281,18 +278,29 @@ async function forward(req: NextRequest, pathSegments: string[]) {
   });
 }
 
-export async function GET(req: NextRequest, ctx: { params: { path: string[] } }) {
-  return forward(req, ctx.params.path);
+// Next 15 changed Route Handler params from a sync object to a
+// Promise.  We await it on the way in; the rest of the file is
+// unchanged.  Sync-shape backward-compat is gone in 15+, so this
+// is mandatory for build, not a deprecation warning.
+type RouteCtx = { params: Promise<{ path: string[] }> };
+
+export async function GET(req: NextRequest, ctx: RouteCtx) {
+  const { path } = await ctx.params;
+  return forward(req, path);
 }
-export async function POST(req: NextRequest, ctx: { params: { path: string[] } }) {
-  return forward(req, ctx.params.path);
+export async function POST(req: NextRequest, ctx: RouteCtx) {
+  const { path } = await ctx.params;
+  return forward(req, path);
 }
-export async function PUT(req: NextRequest, ctx: { params: { path: string[] } }) {
-  return forward(req, ctx.params.path);
+export async function PUT(req: NextRequest, ctx: RouteCtx) {
+  const { path } = await ctx.params;
+  return forward(req, path);
 }
-export async function PATCH(req: NextRequest, ctx: { params: { path: string[] } }) {
-  return forward(req, ctx.params.path);
+export async function PATCH(req: NextRequest, ctx: RouteCtx) {
+  const { path } = await ctx.params;
+  return forward(req, path);
 }
-export async function DELETE(req: NextRequest, ctx: { params: { path: string[] } }) {
-  return forward(req, ctx.params.path);
+export async function DELETE(req: NextRequest, ctx: RouteCtx) {
+  const { path } = await ctx.params;
+  return forward(req, path);
 }

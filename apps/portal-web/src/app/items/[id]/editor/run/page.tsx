@@ -21,7 +21,7 @@ import { buildEditorMapData, type ResolvedTarget } from '../build-map-data';
 import { EditorRuntime } from '../editor-runtime';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -85,7 +85,8 @@ function basemapItemToCustomBasemap(
  * for now; per-share edit grants for non-owners flow in alongside
  * the actual editing tools in slice 3b-2.
  */
-export default async function EditorRuntimePage({ params }: Props) {
+export default async function EditorRuntimePage(props: Props) {
+  const params = await props.params;
   // Loaded as Item<unknown> because the editor data may be at the
   // top level (legacy type='editor') or nested inside WebAppData
   // under data.config.editor (migrated type='web_app' rows after

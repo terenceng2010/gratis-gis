@@ -14,7 +14,7 @@ import { apiFetch } from '@/lib/api';
 import { FieldRuntime, type EditableLayer } from './field-runtime';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -87,7 +87,8 @@ function basemapItemToCustomBasemap(
  * with an explicit binding fetch the bound form item lazily on
  * first tap so we don't pay the cost for unused bindings.
  */
-export default async function FieldRuntimePage({ params }: Props) {
+export default async function FieldRuntimePage(props: Props) {
+  const params = await props.params;
   let dcItem: Item<DataCollectionData>;
   let me: { id: string; orgRole: string };
   try {

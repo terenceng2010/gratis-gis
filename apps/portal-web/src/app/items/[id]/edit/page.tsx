@@ -7,12 +7,13 @@ import { apiFetch } from '@/lib/api';
 import { ItemForm } from '../../item-form';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export const metadata = { title: 'Edit item' };
 
-export default async function EditItemPage({ params }: Props) {
+export default async function EditItemPage(props: Props) {
+  const params = await props.params;
   let item: Item;
   try {
     item = await apiFetch<Item>(`/api/items/${params.id}`);

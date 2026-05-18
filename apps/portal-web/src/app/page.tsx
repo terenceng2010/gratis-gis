@@ -4,11 +4,12 @@ import type { ItemType } from '@gratis-gis/shared-types';
 import { authOptions } from '@/lib/auth';
 import { PublicLanding } from './public-landing';
 
-export default async function HomePage({
-  searchParams,
-}: {
-  searchParams?: { preview?: string };
-}) {
+export default async function HomePage(
+  props: {
+    searchParams?: Promise<{ preview?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
   const session = await getServerSession(authOptions);
 
   // #274: / always shows the public landing now, including for

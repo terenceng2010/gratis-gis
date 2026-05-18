@@ -25,7 +25,7 @@ import {
 import { EditorRuntime } from '../../editor/editor-runtime';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -139,7 +139,8 @@ function viewerToEditor(viewer: ViewerData): EditorData {
  * not-found-or-not-allowed). canEdit is forced to false here for the
  * runtime; per-share grants flow through the API.
  */
-export default async function ViewerRuntimePage({ params }: Props) {
+export default async function ViewerRuntimePage(props: Props) {
+  const params = await props.params;
   // #307: viewer/run is in the middleware allowlist, so anonymous
   // visitors can land here. Branch the fetch path: signed-in users
   // get full per-share visibility via /api/items/:id; anonymous

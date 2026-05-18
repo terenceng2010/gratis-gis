@@ -7,12 +7,13 @@ import { apiFetch } from '@/lib/api';
 import { GroupForm } from '../../group-form';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export const metadata = { title: 'Edit group' };
 
-export default async function EditGroupPage({ params }: Props) {
+export default async function EditGroupPage(props: Props) {
+  const params = await props.params;
   let group: Group;
   try {
     group = await apiFetch<Group>(`/api/groups/${params.id}`);

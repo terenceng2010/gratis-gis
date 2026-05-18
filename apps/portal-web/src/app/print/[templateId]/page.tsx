@@ -12,10 +12,11 @@ import { PrintRenderClient } from './print-render-client';
  * A dedicated route also gives the user a stable URL they can keep
  * open / re-print without round-tripping through the web app.
  */
-export default function PrintRenderPage({
-  params,
-}: {
-  params: { templateId: string };
-}) {
+export default async function PrintRenderPage(
+  props: {
+    params: Promise<{ templateId: string }>;
+  }
+) {
+  const params = await props.params;
   return <PrintRenderClient templateId={params.templateId} />;
 }

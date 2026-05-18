@@ -23,7 +23,7 @@ import {
 import { EditorRuntime } from '../../[id]/editor/editor-runtime';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -119,7 +119,8 @@ interface FormShape {
  * canEdit is forced false regardless of the caller's permissions
  * on the form.
  */
-export default async function FormResponsesPage({ params }: Props) {
+export default async function FormResponsesPage(props: Props) {
+  const params = await props.params;
   const isAnonymous = !(await hasSession());
   const fetchItem = <T,>(path: string): Promise<T> =>
     isAnonymous

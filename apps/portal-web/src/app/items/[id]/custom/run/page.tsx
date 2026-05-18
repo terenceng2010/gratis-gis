@@ -34,7 +34,7 @@ import { apiFetch, hasSession, publicApiFetch } from '@/lib/api';
 import { CustomRuntimeClient } from '../runtime-client';
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -43,7 +43,8 @@ interface Props {
  * page's metadata pattern (#345). Falls back to GratisGIS if the
  * lookup fails.
  */
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const params = await props.params;
   try {
     const isAnonymous = !(await hasSession());
     const item = isAnonymous
@@ -111,7 +112,8 @@ function basemapItemToCustomBasemap(
  * component does the actual widget rendering against bound map
  * state (CustomRuntimeClient).
  */
-export default async function CustomAppRuntimePage({ params }: Props) {
+export default async function CustomAppRuntimePage(props: Props) {
+  const params = await props.params;
   const isAnonymous = !(await hasSession());
   const fetchItem = <T,>(path: string): Promise<T> =>
     isAnonymous
