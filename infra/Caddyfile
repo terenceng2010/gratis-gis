@@ -149,29 +149,36 @@ www.{$PORTAL_DOMAIN} {
 {$AUTH_DOMAIN} {
     encode gzip zstd
 
-    # Lock the Keycloak master-realm admin surface to the LAN /
-    # SSH-tunnel side.  The master realm has root admin rights
-    # over every other realm on this server, so the admin console
-    # and the interactive master login flow do not belong on the
-    # public internet.  Locking these paths leaves the gratis-gis
-    # realm fully reachable: the portal still uses
-    # /realms/gratis-gis/* for end-user auth, and our own scripts
-    # (seed-test-users.sh, the email-lock helper) still POST to
-    # /realms/master/protocol/openid-connect/token to mint admin
-    # tokens via client credentials, because that path is
-    # deliberately left through.
+    # Lock the Keycloak admin surface to the LAN / SSH-tunnel side.
+    # Three groups of paths are blocked at the edge:
     #
-    # If you ever need the master admin console while these blocks
-    # are live, reach Keycloak directly:
+    # 1. Master-realm admin console + interactive login surfaces.
+    #    The master realm has root admin rights over every other
+    #    realm on this server.
+    # 2. The whole Admin REST API at /admin/realms/* and related
+    #    introspection endpoints (/admin/serverinfo, /metrics).
+    #    portal-api speaks to Keycloak over the docker network as
+    #    keycloak:8080, so nothing the application needs goes
+    #    through Caddy to /admin/*.
+    # 3. The master-realm interactive login flow.  Our own scripts
+    #    (seed-test-users.sh, the email-lock helper) keep working
+    #    because they POST to /realms/master/protocol/openid-connect/token,
+    #    which is deliberately left through.
+    #
+    # The gratis-gis realm stays fully reachable for end-user auth
+    # via /realms/gratis-gis/*.
+    #
+    # If you ever need the admin console / Admin REST surface while
+    # these blocks are live, reach Keycloak directly:
     #   ssh -L 8081:localhost:8081 gratis  # forward the host port
     #   open http://localhost:8081/admin/  # or run kcadm.sh inside the container
-    @masterAdmin path /admin/master /admin/master/*
+    @adminApi path /admin /admin/* /metrics
     @masterLoginUi path /realms/master/account /realms/master/account/* \
                         /realms/master/login-actions /realms/master/login-actions/* \
                         /realms/master/protocol/openid-connect/auth \
                         /realms/master/protocol/openid-connect/registrations \
                         /realms/master/.well-known/openid-configuration
-    handle @masterAdmin {
+    handle @adminApi {
         respond 404
     }
     handle @masterLoginUi {
