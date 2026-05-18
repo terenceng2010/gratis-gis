@@ -13,6 +13,14 @@
   "accessTokenLifespan": 300,
   "ssoSessionIdleTimeout": 3600,
   "ssoSessionMaxLifespan": 36000,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 8,
+  "waitIncrementSeconds": 60,
+  "minimumQuickLoginWaitSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "quickLoginCheckMilliSeconds": 1000,
   "attributes": {
     "frontendUrl": "${AUTH_URL}"
   },
@@ -170,7 +178,13 @@
       "enabled": true,
       "serviceAccountClientId": "portal-api-admin",
       "clientRoles": {
-        "realm-management": ["realm-admin"]
+        "realm-management": [
+          "manage-realm",
+          "manage-users",
+          "query-users",
+          "view-users",
+          "view-clients"
+        ]
       }
     }
   ]
