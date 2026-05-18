@@ -149,6 +149,35 @@ www.{$PORTAL_DOMAIN} {
 {$AUTH_DOMAIN} {
     encode gzip zstd
 
+    # Lock the Keycloak master-realm admin surface to the LAN /
+    # SSH-tunnel side.  The master realm has root admin rights
+    # over every other realm on this server, so the admin console
+    # and the interactive master login flow do not belong on the
+    # public internet.  Locking these paths leaves the gratis-gis
+    # realm fully reachable: the portal still uses
+    # /realms/gratis-gis/* for end-user auth, and our own scripts
+    # (seed-test-users.sh, the email-lock helper) still POST to
+    # /realms/master/protocol/openid-connect/token to mint admin
+    # tokens via client credentials, because that path is
+    # deliberately left through.
+    #
+    # If you ever need the master admin console while these blocks
+    # are live, reach Keycloak directly:
+    #   ssh -L 8081:localhost:8081 gratis  # forward the host port
+    #   open http://localhost:8081/admin/  # or run kcadm.sh inside the container
+    @masterAdmin path /admin/master /admin/master/*
+    @masterLoginUi path /realms/master/account /realms/master/account/* \
+                        /realms/master/login-actions /realms/master/login-actions/* \
+                        /realms/master/protocol/openid-connect/auth \
+                        /realms/master/protocol/openid-connect/registrations \
+                        /realms/master/.well-known/openid-configuration
+    handle @masterAdmin {
+        respond 404
+    }
+    handle @masterLoginUi {
+        respond 404
+    }
+
     reverse_proxy keycloak:8080 {
         # Keycloak (with --proxy-headers=xforwarded) trusts the
         # X-Forwarded-* headers Caddy sets by default, so no extra
