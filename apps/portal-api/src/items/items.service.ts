@@ -1336,6 +1336,45 @@ export class ItemsService {
     if (!this.sharing.canEdit(user, item, shares)) {
       throw new ForbiddenException('You do not have edit permission on this item');
     }
+
+    // Form-paired data_layer access invariant.  A form's "submissions"
+    // data_layer (tagged `form-paired`) mirrors every submission row
+    // including any PII the form collects.  If the paired layer's
+    // access is allowed to drift looser than the parent form's, an
+    // attacker who can read the form-pickle (or simply guesses the
+    // layer id) can read every submission anonymously via the
+    // public-features endpoint.  Refuse access widening on a paired
+    // layer when the parent form is at a stricter tier.  The owner
+    // can still widen the form first, then the layer; the inverse
+    // (widen the layer alone) is what gets blocked.
+    if (
+      input.access !== undefined &&
+      item.type === 'data_layer' &&
+      (item.tags ?? []).includes('form-paired')
+    ) {
+      const parentForm = await this.prisma.item.findFirst({
+        where: {
+          orgId: item.orgId,
+          type: 'form',
+          deletedAt: null,
+          data: { path: ['linkedLayerId'], equals: id },
+        },
+        select: { id: true, access: true, title: true },
+      });
+      if (parentForm) {
+        const rank = (a: 'public' | 'org' | 'private'): number =>
+          a === 'public' ? 2 : a === 'org' ? 1 : 0;
+        const next = rank(input.access as 'public' | 'org' | 'private');
+        const parent = rank(parentForm.access as 'public' | 'org' | 'private');
+        if (next > parent) {
+          throw new ForbiddenException(
+            `Cannot set the paired submissions layer to '${input.access}' ` +
+              `while the parent form '${parentForm.title}' is '${parentForm.access}'. ` +
+              `Widen the form's access first, then the submissions layer.`,
+          );
+        }
+      }
+    }
     // Cycle detection for folder updates. If this update changes the
     // folder's childItemIds, walk every child's reachable graph and
     // fail the save if any descendant points back at this folder. See
