@@ -272,6 +272,14 @@ services:
       # fetch root. The api code reads this via process.env.KEYCLOAK_URL
       # in src/auth/jwt.strategy.ts.
       KEYCLOAK_URL: https://${AUTH_DOMAIN:-auth.gratisgis.org}
+      # KEYCLOAK_INTERNAL_URL is the docker-network address portal-api
+      # uses for server-to-server admin REST calls (KeycloakAdminService).
+      # The public KEYCLOAK_URL has `/admin/*` blocked at the Caddy
+      # edge for defense in depth; we route admin REST through the
+      # internal hostname to bypass that block since the request never
+      # leaves the docker network.  Issuer + JWKS lookups stay on the
+      # public URL because the JWT iss claim is the public hostname.
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gratis-gis}
       # Service-account credentials for the api's admin operations
       # (user reconcile, password reset, role mutation). Matches the
@@ -363,6 +371,7 @@ services:
       ENABLE_CRONS: "false"
       DATABASE_URL: postgresql://${POSTGRES_USER:-gratisgis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gratisgis}
       KEYCLOAK_URL: https://${AUTH_DOMAIN:-auth.gratisgis.org}
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gratis-gis}
       KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-portal-api-admin}
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET:?KEYCLOAK_ADMIN_CLIENT_SECRET must be set in .env.prod}

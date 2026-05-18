@@ -175,12 +175,30 @@ export class KeycloakAdminService implements OnApplicationBootstrap {
     }
   }
 
-  /** Base URL of the Keycloak server (no trailing slash). */
+  /**
+   * Base URL of the Keycloak server for server-to-server admin REST
+   * calls and the client-credentials token mint.
+   *
+   * Prefers `KEYCLOAK_INTERNAL_URL` (eg `http://keycloak:8080` inside
+   * the docker compose network) so admin REST traffic bypasses the
+   * Caddy edge.  In prod the public hostname (KEYCLOAK_URL) has
+   * `/admin/*` blocked at Caddy to keep the realm admin surface off
+   * the public internet; portal-api's own admin calls would otherwise
+   * 404 against that block, even though they run inside the docker
+   * network.  Falls back to KEYCLOAK_URL when no internal URL is set
+   * (single-host dev, or any deploy where the public URL is also
+   * internally reachable).
+   *
+   * Issuer + JWKS lookups in jwt.strategy.ts still use KEYCLOAK_URL
+   * because the JWT `iss` claim is the public hostname; that path is
+   * not gated by the Caddy admin block.
+   */
   private get keycloakUrl(): string {
-    return (process.env.KEYCLOAK_URL ?? 'http://localhost:8080').replace(
-      /\/$/,
-      '',
-    );
+    const url =
+      process.env.KEYCLOAK_INTERNAL_URL ??
+      process.env.KEYCLOAK_URL ??
+      'http://localhost:8080';
+    return url.replace(/\/$/, '');
   }
 
   /** Realm we operate against. */
