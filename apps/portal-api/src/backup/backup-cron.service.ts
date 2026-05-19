@@ -2,7 +2,7 @@
 import {
   Injectable,
   Logger,
-  OnModuleInit,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
@@ -20,9 +20,19 @@ import { LeaderElectionService } from '../cron/leader-election.service.js';
  * Mode === 'off' means no job at all: we deregister whatever's
  * running and don't register a replacement. Flipping back to 'daily'
  * (or whatever) from the admin form re-registers from scratch.
+ *
+ * Why onApplicationBootstrap and not onModuleInit (#366): the
+ * leader lock is acquired asynchronously inside
+ * LeaderElectionService.onModuleInit, and Nest does not strictly
+ * serialize onModuleInit hooks across modules. We previously raced
+ * the leader-lock query on some boots and silently skipped cron
+ * registration on the eventual leader. onApplicationBootstrap fires
+ * after every module's onModuleInit chain has resolved, so
+ * leader.shouldRun() has its final value. Mirrors the fix in
+ * HousekeepingCronService and KeycloakAdminService.
  */
 @Injectable()
-export class BackupCronService implements OnModuleInit {
+export class BackupCronService implements OnApplicationBootstrap {
   private readonly log = new Logger(BackupCronService.name);
   private static readonly JOB_NAME = 'backup-scheduled';
 
@@ -32,7 +42,7 @@ export class BackupCronService implements OnModuleInit {
     private readonly leader: LeaderElectionService,
   ) {}
 
-  async onModuleInit() {
+  async onApplicationBootstrap() {
     // Multi-replica safety: only the leader registers the cron.
     // Backups write to the shared portal-api-backups volume, but the
     // pg_dump process itself is a heavyweight operation we never

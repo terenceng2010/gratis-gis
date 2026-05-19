@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
 
@@ -20,9 +20,21 @@ import { LeaderElectionService } from '../cron/leader-election.service.js';
  * do: scheduleMode != 'off' AND at least one of auto-trash /
  * auto-disable is enabled. This avoids spinning a cron just to do
  * nothing every night.
+ *
+ * Why onApplicationBootstrap and not onModuleInit (#366): the
+ * leader lock is acquired asynchronously inside
+ * LeaderElectionService.onModuleInit, and Nest does not strictly
+ * serialize onModuleInit hooks across modules even when the import
+ * graph looks like it should. Gating from onModuleInit raced the
+ * leader-lock query and silently skipped cron registration on the
+ * eventual leader, leaving housekeeping un-scheduled until the
+ * next deploy. onApplicationBootstrap fires only after every
+ * module's onModuleInit chain has resolved, so leader.shouldRun()
+ * has its final value. Same fix shipped in
+ * KeycloakAdminService for the same reason.
  */
 @Injectable()
-export class HousekeepingCronService implements OnModuleInit {
+export class HousekeepingCronService implements OnApplicationBootstrap {
   private readonly log = new Logger(HousekeepingCronService.name);
   private static readonly JOB_NAME = 'housekeeping-scheduled';
 
@@ -32,7 +44,7 @@ export class HousekeepingCronService implements OnModuleInit {
     private readonly leader: LeaderElectionService,
   ) {}
 
-  async onModuleInit() {
+  async onApplicationBootstrap() {
     // Multi-replica safety: only the leader registers and runs the
     // cron. Followers skip registration entirely so the dynamic
     // SchedulerRegistry cron doesn't fire on every replica. We
