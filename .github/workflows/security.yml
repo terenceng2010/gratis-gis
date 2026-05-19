@@ -101,6 +101,12 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          # Without this, the action builds SARIF with ALL severities
+          # (so Code Scanning can show the full picture) AND uses that
+          # all-severity result for exit-code. The job then fails on
+          # any MEDIUM finding even though our intent is HIGH/CRITICAL.
+          # Limit SARIF to the severity filter so the exit-code lines up.
+          limit-severities-for-sarif: "true"
 
       - name: Upload SARIF to code scanning
         if: always()
@@ -148,6 +154,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          limit-severities-for-sarif: "true"
 
       - name: Upload SARIF to code scanning
         if: always()
