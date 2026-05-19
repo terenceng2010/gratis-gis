@@ -128,6 +128,51 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "qgis-plugin",
+      "name": "GratisGIS QGIS Plugin",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "gratisgis-qgis://auth-callback",
+        "http://127.0.0.1:*/*"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "org_role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "org_role",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "org_role",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "roles": {
