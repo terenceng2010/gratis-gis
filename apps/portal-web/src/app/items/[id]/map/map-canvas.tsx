@@ -2264,15 +2264,34 @@ function syncOverlays(
       scaledStyleExpression(layer, (st) => st.point.color),
     );
 
-    // v1 scope for #114: only COLOR properties respect scaled
-    // symbology.  Opacity / width / radius stay as scalars from the
-    // layer's base style because they're combined arithmetically
-    // with `op` and feature-state in `stateCase` -- swapping in a
-    // MapLibre expression there needs a small expression-composition
-    // refactor that's worth a separate slice.  Authors can still
-    // simulate "fill goes away at high zoom" today by using rgba()
-    // colors with alpha differences across classes, which exercises
-    // the fillColor path that IS scaled.
+    // #114 follow-up: opacity / width are now also scaled.  Without
+    // this, a class slider that changes opacity or stroke width has
+    // no visible effect (the rendering kept reading from the base
+    // style scalar) which reads as "the slider does nothing" or
+    // "outlines disappear when I add a class".  Wrapping the
+    // arithmetic with `op` and feature-state boosts in MapLibre
+    // expression form composes naturally with the scaled step
+    // expression each property already understands.  Point radius
+    // still stays scalar because the zoom-curve interpolation
+    // (zoomScaleState) would need a separate composition pass to
+    // multiply the scaled-class value by the curve coefficient at
+    // each stop; tracked as a follow-up.
+    const polyFillOpacity = scaledStyleExpression(
+      layer,
+      (st) => st.polygon.fillOpacity,
+    );
+    const polyStrokeWidth = scaledStyleExpression(
+      layer,
+      (st) => st.polygon.strokeWidth,
+    );
+    const lineWidth = scaledStyleExpression(layer, (st) => st.line.width);
+
+    // Tiny helpers so the paint dictionary stays readable.  When the
+    // input is a scalar (no scaled classes), MapLibre folds these
+    // arithmetic expressions at parse time -- no runtime cost.
+    const mul = (a: unknown, b: unknown): unknown => ['*', a, b];
+    const add = (a: unknown, b: unknown): unknown => ['+', a, b];
+    const min1 = (a: unknown): unknown => ['min', 1, a];
 
     // Build a state-aware "case" expression. `selected` beats `hover`
     // which beats the base value. Includes an optional hover branch
@@ -2350,9 +2369,9 @@ function syncOverlays(
       paint: {
         'fill-color': polyFill,
         'fill-opacity': stateCase(
-          s.polygon.fillOpacity * op,
-          Math.min(1, s.polygon.fillOpacity + 0.4) * op,
-          Math.min(1, s.polygon.fillOpacity + 0.25) * op,
+          mul(polyFillOpacity, op),
+          mul(min1(add(polyFillOpacity, 0.4)), op),
+          mul(min1(add(polyFillOpacity, 0.25)), op),
         ) as unknown as number,
       },
     });
@@ -2375,9 +2394,9 @@ function syncOverlays(
           polyStroke,
         ) as unknown as string,
         'line-width': stateCase(
-          s.polygon.strokeWidth,
-          s.polygon.strokeWidth + 2,
-          s.polygon.strokeWidth + 1,
+          polyStrokeWidth,
+          add(polyStrokeWidth, 2),
+          add(polyStrokeWidth, 1),
         ) as unknown as number,
         'line-opacity': op,
       },
@@ -2399,9 +2418,9 @@ function syncOverlays(
           lineColor,
         ) as unknown as string,
         'line-width': stateCase(
-          s.line.width,
-          s.line.width + 2,
-          s.line.width + 1,
+          lineWidth,
+          add(lineWidth, 2),
+          add(lineWidth, 1),
         ) as unknown as number,
         'line-opacity': op,
       },
