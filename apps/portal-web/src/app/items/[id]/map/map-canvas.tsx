@@ -2240,58 +2240,105 @@ function syncOverlays(
 
     // Colors may be driven by an attribute (unique-value renderer). The
     // helper returns either a MapLibre match expression or the plain
-    // hex we were using before.
+    // hex we were using before. For polyStroke / lineColor / pointFill
+    // the call sites below build the zoom-step on the outside via
+    // scaledStepCase, so we only need the un-scaled rendererColor for
+    // properties that DON'T sit inside a stateCase (`fill-color`,
+    // `circle-color`, `icon-color`).
     //
-    // #114: pass each color through scaledStyleExpression so authors
-    // can carry per-zoom symbology classes without forking the layer.
-    // For 'simple' renderer this becomes the active class's color at
-    // each zoom step; for unique-value / class-breaks it becomes the
-    // default value (used when no category matches).
+    // #114: fill-color and the point colors compose the zoom step via
+    // scaledStyleExpression because they're never wrapped in another
+    // expression that would duplicate the step (no stateCase here).
     const polyFill = rendererColor(
       layer,
       scaledStyleExpression(layer, (st) => st.polygon.fillColor),
-    );
-    const polyStroke = rendererColor(
-      layer,
-      scaledStyleExpression(layer, (st) => st.polygon.strokeColor),
-    );
-    const lineColor = rendererColor(
-      layer,
-      scaledStyleExpression(layer, (st) => st.line.color),
     );
     const pointFill = rendererColor(
       layer,
       scaledStyleExpression(layer, (st) => st.point.color),
     );
 
-    // #114 follow-up: opacity / width are now also scaled.  Without
-    // this, a class slider that changes opacity or stroke width has
-    // no visible effect (the rendering kept reading from the base
-    // style scalar) which reads as "the slider does nothing" or
-    // "outlines disappear when I add a class".  Wrapping the
-    // arithmetic with `op` and feature-state boosts in MapLibre
-    // expression form composes naturally with the scaled step
-    // expression each property already understands.  Point radius
-    // still stays scalar because the zoom-curve interpolation
-    // (zoomScaleState) would need a separate composition pass to
-    // multiply the scaled-class value by the curve coefficient at
-    // each stop; tracked as a follow-up.
-    const polyFillOpacity = scaledStyleExpression(
-      layer,
-      (st) => st.polygon.fillOpacity,
-    );
-    const polyStrokeWidth = scaledStyleExpression(
-      layer,
-      (st) => st.polygon.strokeWidth,
-    );
-    const lineWidth = scaledStyleExpression(layer, (st) => st.line.width);
+    // #114 follow-up: opacity / width are now scaled too. Single-
+    // class sliders for those values had no visible effect before
+    // because the canvas was reading from layer.style scalars.
+    //
+    // MapLibre constraint we have to respect: a single paint
+    // expression may contain only ONE zoom-based subexpression
+    // (`step` or `interpolate` on `['zoom']`). The naive shape --
+    // wrap a `step(zoom)` in a `case(selected, ...)` that repeats
+    // the step in multiple branches -- fails validation with
+    // "Only one zoom-based 'step' or 'interpolate' subexpression
+    // may be used in an expression" and the whole paint layer
+    // never registers, which presents as "outlines just vanish"
+    // when scaled classes are added to a hover-highlighting layer.
+    //
+    // The fix is to hoist the zoom-step to the OUTSIDE: one
+    // top-level `step` whose branches each carry a `case` over
+    // feature-state. The case only references literals (the
+    // per-class value plus SEL_ACCENT), so the whole expression
+    // has exactly one zoom-step.
+    //
+    // Point radius and point.strokeWidth stay scalar for now --
+    // they ride a separate zoom-curve interpolation
+    // (zoomScaleState) that needs its own composition pass.
 
-    // Tiny helpers so the paint dictionary stays readable.  When the
-    // input is a scalar (no scaled classes), MapLibre folds these
-    // arithmetic expressions at parse time -- no runtime cost.
+    // Tiny helpers for arithmetic-in-expression form. When the
+    // operands are scalars, MapLibre folds these at parse time
+    // -- no runtime cost.
     const mul = (a: unknown, b: unknown): unknown => ['*', a, b];
     const add = (a: unknown, b: unknown): unknown => ['+', a, b];
     const min1 = (a: unknown): unknown => ['min', 1, a];
+
+    /**
+     * Build an outer-step-of-cases expression. `buildPerClass`
+     * receives the resolved style for each scaled symbology class
+     * (or the layer's base style when no classes are present) and
+     * returns the value for THAT zoom band. The resulting top-level
+     * shape is `['step', ['zoom'], <case@band0>, zoomA, <case@band1>, ...]`
+     * which keeps the zoom-step on the outside and lets each case
+     * contain only literals from the resolved per-class style.
+     *
+     * Without scaled classes, returns the buildPerClass output for
+     * the layer's base style directly (no step wrap needed).
+     */
+    function scaledStepCase(
+      buildPerClass: (st: import('@gratis-gis/shared-types').MapLayerStyle) => unknown,
+    ): unknown {
+      const classes = layer.scaledSymbology ?? [];
+      if (classes.length === 0) return buildPerClass(layer.style);
+      // Same sort + transition logic as scaledStyleExpression, but
+      // applied to the buildPerClass output instead of a single
+      // picked value.
+      const sorted = [...classes]
+        .map((c, i) => ({ i, c, start: c.minZoom ?? 0 }))
+        .sort((a, b) => a.start - b.start);
+      const transitions: Array<{ zoom: number; value: unknown }> = [];
+      for (let i = 0; i < sorted.length; i += 1) {
+        const entry = sorted[i];
+        if (!entry) continue;
+        const c = entry.c;
+        transitions.push({ zoom: c.minZoom ?? 0, value: buildPerClass(c.style) });
+        if (c.maxZoom !== undefined && c.maxZoom !== null) {
+          const nextEntry = sorted[i + 1];
+          const nextStart = nextEntry?.c.minZoom ?? -1;
+          if (nextStart !== c.maxZoom) {
+            transitions.push({ zoom: c.maxZoom, value: buildPerClass(layer.style) });
+          }
+        }
+      }
+      if (transitions.length === 0) return buildPerClass(layer.style);
+      let defaultValue: unknown = buildPerClass(layer.style);
+      let stops = transitions;
+      if (stops[0]!.zoom <= 0) {
+        defaultValue = stops[0]!.value;
+        stops = stops.slice(1);
+      }
+      const expr: unknown[] = ['step', ['zoom'], defaultValue];
+      for (const s of stops) {
+        expr.push(s.zoom, s.value);
+      }
+      return expr;
+    }
 
     // Build a state-aware "case" expression. `selected` beats `hover`
     // which beats the base value. Includes an optional hover branch
@@ -2368,10 +2415,12 @@ function syncOverlays(
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
         'fill-color': polyFill,
-        'fill-opacity': stateCase(
-          mul(polyFillOpacity, op),
-          mul(min1(add(polyFillOpacity, 0.4)), op),
-          mul(min1(add(polyFillOpacity, 0.25)), op),
+        'fill-opacity': scaledStepCase((st) =>
+          stateCase(
+            mul(st.polygon.fillOpacity, op),
+            mul(min1(add(st.polygon.fillOpacity, 0.4)), op),
+            mul(min1(add(st.polygon.fillOpacity, 0.25)), op),
+          ),
         ) as unknown as number,
       },
     });
@@ -2388,23 +2437,23 @@ function syncOverlays(
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
-        // `to-color` wrapper: MapLibre 4.x's case-expression type
-        // inference fails when one branch is a string literal and the
-        // other is a `step` expression returning color strings (which
-        // is what polyStroke becomes the moment a scale class is
-        // added). The case unifies to "string" instead of "color",
-        // line-color silently rejects, and the entire outline drops.
-        // Coercing the case's output to color makes the property
-        // happy. Same trick for the LineString and circle-stroke
-        // layers below.
-        'line-color': [
-          'to-color',
-          stateCase(polyStroke, SEL_ACCENT, polyStroke),
-        ] as unknown as string,
-        'line-width': stateCase(
-          polyStrokeWidth,
-          add(polyStrokeWidth, 2),
-          add(polyStrokeWidth, 1),
+        // scaledStepCase puts the case inside each zoom-step branch
+        // so the expression has exactly one zoom-step (see helper
+        // docstring up top). The per-class case references only
+        // literals from the resolved style + SEL_ACCENT.
+        'line-color': scaledStepCase((st) =>
+          stateCase(
+            rendererColor(layer, st.polygon.strokeColor),
+            SEL_ACCENT,
+            rendererColor(layer, st.polygon.strokeColor),
+          ),
+        ) as unknown as string,
+        'line-width': scaledStepCase((st) =>
+          stateCase(
+            st.polygon.strokeWidth,
+            add(st.polygon.strokeWidth, 2),
+            add(st.polygon.strokeWidth, 1),
+          ),
         ) as unknown as number,
         'line-opacity': op,
       },
@@ -2420,14 +2469,19 @@ function syncOverlays(
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'LineString'], layer.filter),
       paint: {
-        'line-color': [
-          'to-color',
-          stateCase(lineColor, SEL_ACCENT, lineColor),
-        ] as unknown as string,
-        'line-width': stateCase(
-          lineWidth,
-          add(lineWidth, 2),
-          add(lineWidth, 1),
+        'line-color': scaledStepCase((st) =>
+          stateCase(
+            rendererColor(layer, st.line.color),
+            SEL_ACCENT,
+            rendererColor(layer, st.line.color),
+          ),
+        ) as unknown as string,
+        'line-width': scaledStepCase((st) =>
+          stateCase(
+            st.line.width,
+            add(st.line.width, 2),
+            add(st.line.width, 1),
+          ),
         ) as unknown as number,
         'line-opacity': op,
       },
@@ -2526,10 +2580,11 @@ function syncOverlays(
             s.point.radius + 3,
             s.point.radius + 2,
           ) as unknown as number,
-          'circle-stroke-color': [
-            'to-color',
-            stateCase(s.point.strokeColor, SEL_ACCENT, s.point.strokeColor),
-          ] as unknown as string,
+          'circle-stroke-color': stateCase(
+            s.point.strokeColor,
+            SEL_ACCENT,
+            s.point.strokeColor,
+          ) as unknown as string,
           'circle-stroke-width': stateCase(
             s.point.strokeWidth,
             s.point.strokeWidth + 2,
