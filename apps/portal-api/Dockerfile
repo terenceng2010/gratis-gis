@@ -14,7 +14,20 @@
 FROM node:20-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable
+# Three things in one RUN to keep the layer count tight:
+#  1. corepack enable: we use pnpm via corepack, never npm.
+#  2. Remove the bundled npm CLI. The node:*-bookworm-slim image ships
+#     npm with its own bundled cross-spawn / glob / minimatch / tar
+#     under /usr/local/lib/node_modules/npm/node_modules, and those
+#     vendored copies lag the upstream patched versions by months.
+#     Trivy reports CVEs against those bundled deps. We don't use npm,
+#     so deleting it removes ~25 noisy HIGH findings outright. corepack
+#     stays so pnpm still works.
+#  3. apt-get upgrade picks up base-image OS patches (libcap, systemd,
+#     etc.) without waiting for a fresh node:* image rebuild.
+RUN corepack enable \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    && apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 WORKDIR /repo

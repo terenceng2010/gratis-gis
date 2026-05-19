@@ -11,7 +11,12 @@
 FROM node:20-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable
+# See apps/portal-api/Dockerfile for the rationale on this block:
+# corepack enable + delete bundled npm CLI + apt-get upgrade. Keeps
+# Trivy noise down and picks up base OS patches.
+RUN corepack enable \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    && apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 WORKDIR /repo
