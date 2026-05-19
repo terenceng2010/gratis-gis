@@ -2388,11 +2388,19 @@ function syncOverlays(
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
       paint: {
-        'line-color': stateCase(
-          polyStroke,
-          SEL_ACCENT,
-          polyStroke,
-        ) as unknown as string,
+        // `to-color` wrapper: MapLibre 4.x's case-expression type
+        // inference fails when one branch is a string literal and the
+        // other is a `step` expression returning color strings (which
+        // is what polyStroke becomes the moment a scale class is
+        // added). The case unifies to "string" instead of "color",
+        // line-color silently rejects, and the entire outline drops.
+        // Coercing the case's output to color makes the property
+        // happy. Same trick for the LineString and circle-stroke
+        // layers below.
+        'line-color': [
+          'to-color',
+          stateCase(polyStroke, SEL_ACCENT, polyStroke),
+        ] as unknown as string,
         'line-width': stateCase(
           polyStrokeWidth,
           add(polyStrokeWidth, 2),
@@ -2412,11 +2420,10 @@ function syncOverlays(
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'LineString'], layer.filter),
       paint: {
-        'line-color': stateCase(
-          lineColor,
-          SEL_ACCENT,
-          lineColor,
-        ) as unknown as string,
+        'line-color': [
+          'to-color',
+          stateCase(lineColor, SEL_ACCENT, lineColor),
+        ] as unknown as string,
         'line-width': stateCase(
           lineWidth,
           add(lineWidth, 2),
@@ -2519,11 +2526,10 @@ function syncOverlays(
             s.point.radius + 3,
             s.point.radius + 2,
           ) as unknown as number,
-          'circle-stroke-color': stateCase(
-            s.point.strokeColor,
-            SEL_ACCENT,
-            s.point.strokeColor,
-          ) as unknown as string,
+          'circle-stroke-color': [
+            'to-color',
+            stateCase(s.point.strokeColor, SEL_ACCENT, s.point.strokeColor),
+          ] as unknown as string,
           'circle-stroke-width': stateCase(
             s.point.strokeWidth,
             s.point.strokeWidth + 2,
