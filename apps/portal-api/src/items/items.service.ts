@@ -42,22 +42,7 @@ function degreesFromKm(km: number): number {
  * updatedAt; renames bump updatedAt, browsers refetch.  Rows that
  * already carry an uploaded thumbnailUrl pass through untouched.
  */
-function synthesizeThumbnailUrl<
-  T extends {
-    id: string;
-    updatedAt: Date;
-    thumbnailUrl: string | null;
-    thumbnailDesign?: Prisma.JsonValue | null;
-  },
->(row: T): T {
-  if (row.thumbnailUrl) return row;
-  if (!row.thumbnailDesign) return row;
-  const v = row.updatedAt.getTime();
-  return {
-    ...row,
-    thumbnailUrl: `/api/portal/items/${row.id}/thumbnail.svg?v=${v}`,
-  };
-}
+import { synthesizeThumbnailUrl } from './thumbnail-url.js';
 import {
   extractDependencies,
   normalizeArcgisUrl,

@@ -15,6 +15,7 @@ import type { Request, Response } from 'express';
 import { Public } from '../auth/public.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { DataLayerFeaturesService } from '../data-layer/features.service.js';
+import { synthesizeThumbnailUrl } from '../items/thumbnail-url.js';
 
 /**
  * Unauthenticated surface area for the portal. Anything here is
@@ -203,7 +204,14 @@ export class PublicController {
       },
     });
     if (!item) throw new NotFoundException('Item not found');
-    return item;
+    // Items with a thumbnailDesign (no static upload) get the
+    // synthesized /api/portal/items/:id/thumbnail.svg URL so the
+    // anon catalog renders the designer-baked thumbnail the same
+    // way the authed item-detail page does. Without this, a
+    // public web-app whose thumbnail was authored in the designer
+    // came back with thumbnailUrl=null and the landing card fell
+    // through to the generic type-icon tile.
+    return synthesizeThumbnailUrl(item);
   }
 
   /**
@@ -386,7 +394,7 @@ export class PublicController {
    * an admin didn't mean to publish.
    */
   private async publicItemsFor(orgId: string, featuredIds: string[]) {
-    const all = await this.prisma.item.findMany({
+    const rows = await this.prisma.item.findMany({
       where: {
         orgId,
         access: 'public',
@@ -398,6 +406,12 @@ export class PublicController {
         description: true,
         type: true,
         thumbnailUrl: true,
+        // Designer-baked thumbnail JSON. Rows without a static
+        // thumbnailUrl run through synthesizeThumbnailUrl below
+        // to get the /thumbnail.svg cache-busted URL so the
+        // landing tile shows the same baked card the authed
+        // items list shows.
+        thumbnailDesign: true,
         updatedAt: true,
         tags: true,
         // Include the data payload so the landing tile can route a
@@ -412,6 +426,7 @@ export class PublicController {
       },
       orderBy: { updatedAt: 'desc' },
     });
+    const all = rows.map((r) => synthesizeThumbnailUrl(r));
     if (featuredIds.length === 0) return all;
 
     // Featured = strict filter (matches AGOL's "featured group" UX):
