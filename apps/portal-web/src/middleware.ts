@@ -60,6 +60,14 @@ export default withAuth(
         // Viewer; same read-only public-share semantics as Viewer.
         // (The legacy /survey/run runtime was folded onto this route
         // when the survey item type was retired in #91.)
+        //
+        // /items/:id/custom/run is the Custom Web App runtime
+        // (#261 / #341). It uses publicApiFetch under
+        // !hasSession() so anonymous access against a public-shared
+        // app already does the right thing on the page side; this
+        // matcher entry just stops the middleware from short-
+        // circuiting it to /signin.
+        //
         // UUID-shape required so the anon allowance is bounded to
         // routes that can actually resolve to an item.  Without this,
         // a `:id` like `..` or `something-else-with-a-slash` would
@@ -77,9 +85,14 @@ export default withAuth(
           `^\\/items\\/${uuid}\\/responses(?:\\/|$)`,
           'i',
         );
+        const customRe = new RegExp(
+          `^\\/items\\/${uuid}\\/custom\\/run(?:\\/|$)`,
+          'i',
+        );
         if (
           viewerRe.test(req.nextUrl.pathname) ||
-          responsesRe.test(req.nextUrl.pathname)
+          responsesRe.test(req.nextUrl.pathname) ||
+          customRe.test(req.nextUrl.pathname)
         ) {
           return true;
         }
