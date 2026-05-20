@@ -2231,7 +2231,19 @@ function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
       }
 
       const url = `/print/${selected.id}?${params.toString()}`;
-      const opened = window.open(url, '_blank', 'noopener,noreferrer');
+      // IMPORTANT: opening the print tab WITHOUT 'noopener' is
+      // deliberate. The HTML spec says a top-level browsing context
+      // created with `noopener` gets its own session storage holder
+      // disconnected from the opener's, so the snapshot token we
+      // just stashed via sessionStorage.setItem above wouldn't be
+      // readable from the new tab. With noopener, the print page
+      // always rendered "Map preview unavailable (no snapshot
+      // captured)" regardless of whether the snapshot succeeded --
+      // shipped in #106 but never actually worked end-to-end.
+      // The print page is same-origin (/print/<templateId>) and
+      // doesn't navigate its opener anywhere, so the usual
+      // tabnabbing concern that motivates noopener doesn't apply.
+      const opened = window.open(url, '_blank');
       if (!opened) {
         throw new Error(
           'Could not open the print preview window.  Allow popups for this site and try again.',
