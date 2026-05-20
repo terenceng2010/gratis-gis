@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { HealthController } from './health.controller.js';
+import { PortalInfoController } from './portal-info.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { UsersModule } from './users/users.module.js';
@@ -73,7 +74,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     EngineModule,
     PolicyModule,
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, PortalInfoController],
   providers: [
     // Global per-IP rate limit, runs before the auth guard so an
     // anonymous flood gets bounced without paying the cost of token
