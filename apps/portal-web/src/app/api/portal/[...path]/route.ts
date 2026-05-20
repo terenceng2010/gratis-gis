@@ -54,16 +54,28 @@ function isLongRunningIngestPath(suffix: string): boolean {
 
 /**
  * Anonymous-fallback rewrites for #307. When the caller has no
- * session, GETs to a small allowlist of paths get rewritten to
- * the equivalent /api/public route and forwarded without an auth
- * header. portal-api enforces access='public' on the public
- * surface, so anonymous calls to these paths are safe; everything
- * else still 401s.
+ * session, GETs to a small allowlist of paths get forwarded
+ * without an auth header. portal-api enforces access='public' on
+ * each underlying endpoint, so anonymous calls to these paths are
+ * safe; everything else still 401s.
+ *
+ * Two flavors:
+ *   - Rewrite to `/api/public/...`: portal-api has a separate
+ *     read-only public controller for that surface
+ *     (items, layers/geojson, layers/features, items/:id/proxy).
+ *   - Pass through unchanged: portal-api's controller is marked
+ *     `@Public()` and branches on whether `@CurrentUser()` is
+ *     null. The storage endpoint at `storage/private/:kind/:key`
+ *     works this way (see storage.controller.ts getPrivateAsset).
+ *     Returning the suffix unchanged signals "allowed anonymous,
+ *     no rewrite needed."
  *
  * Allowlist:
- *   - items/:id                        -> public/items/:id
- *   - items/:id/layers/:layer/geojson  -> public/items/:id/layers/:layer/geojson
- *   - items/:id/layers/:layer/features -> public/items/:id/layers/:layer/features
+ *   - items/:id                          -> public/items/:id
+ *   - items/:id/layers/:layer/geojson    -> public/items/:id/layers/:layer/geojson
+ *   - items/:id/layers/:layer/features   -> public/items/:id/layers/:layer/features
+ *   - items/:id/proxy/...                -> public/items/:id/proxy/...
+ *   - storage/private/:kind/:key         -> storage/private/:kind/:key (passthrough)
  *
  * Anything else (item lists, dependents lookups, write verbs)
  * stays auth-gated. Lists are deliberately not in the allowlist
@@ -87,6 +99,25 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   // the server. See public-proxy.controller.ts.
   if (/^items\/[^/]+\/proxy(\/.*)?$/.test(suffix)) {
     return `public/${suffix}`;
+  }
+  // Anonymous file-item / attachment fetch. A publicly-shared
+  // web-app embedding a logo or a file-item points its <img src>
+  // at /api/portal/storage/private/<kind>/<key>. portal-api's
+  // storage controller is @Public() and falls back to an
+  // access='public' check on the parent item when no Bearer
+  // token is present. The BFF was still 401-ing those requests
+  // before this allowlist entry landed, which is why the WV
+  // Parcel Viewer logo kept "going missing" after every
+  // backend-only fix (9e3f624 + df663fd patched portal-api but
+  // not the BFF). Passthrough: the portal-api route is the same
+  // for anon and authed; no /public/storage/ controller exists
+  // because we don't need one.
+  if (
+    /^storage\/private\/(item-file|item-tile-layer|feature-attachment)\/[A-Za-z0-9._-]+$/.test(
+      suffix,
+    )
+  ) {
+    return suffix;
   }
   return null;
 }
