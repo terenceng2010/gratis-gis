@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ItemType } from '@prisma/client';
-import { isEditorItem, readEditorData } from '@gratis-gis/shared-types';
+import {
+  isCustomAppItem,
+  isEditorItem,
+  readCustomAppData,
+  readEditorData,
+} from '@gratis-gis/shared-types';
 
 /**
  * Walks an item's data payload and returns the references it holds to
@@ -173,6 +178,52 @@ export function extractDependencies(
           const dl = t?.dataLayerId;
           if (typeof dl === 'string' && dl.length > 0) itemIds.add(dl);
         }
+      }
+    }
+  }
+
+  if (isCustomAppItem(item)) {
+    // A Custom Web App item (#261) references:
+    //   - data.config.custom.mapId
+    //       -> app-level default map every Map widget inherits from
+    //          when it has no per-widget override.
+    //   - data.config.custom.pages[].widgets[].config.mapId
+    //       -> per-Map-widget override map. A widget that picks its
+    //          own map than the app default still inherits the app's
+    //          target data_layers, so we collect both.
+    //   - data.config.custom.targets[].dataLayerId
+    //       -> each ViewerTarget the app's widgets can bind to
+    //          (AttributeTable, Chart, Legend filter target,
+    //          Map-widget feature layer). Shape is shared with
+    //          ViewerData via ViewerTarget so the dep walk is
+    //          structurally identical to the viewer / editor cases.
+    //
+    // Without this branch, a publicly-shared custom app shows zero
+    // dependencies to the cascade-on-public walker (#310), so the
+    // user gets no warning that their public app embeds private
+    // maps + private data_layers -- the anonymous-render symptom
+    // we hit on the WV Parcel Viewer.
+    const app = readCustomAppData(item);
+    if (app) {
+      if (typeof app.mapId === 'string' && app.mapId.length > 0) {
+        itemIds.add(app.mapId);
+      }
+      const pages = Array.isArray(app.pages) ? app.pages : [];
+      for (const p of pages) {
+        const widgets = Array.isArray(p?.widgets) ? p.widgets : [];
+        for (const w of widgets) {
+          if (w?.kind !== 'map') continue;
+          const cfg = w.config as { kind?: string; mapId?: unknown } | undefined;
+          if (!cfg || cfg.kind !== 'map') continue;
+          if (typeof cfg.mapId === 'string' && cfg.mapId.length > 0) {
+            itemIds.add(cfg.mapId);
+          }
+        }
+      }
+      const targets = Array.isArray(app.targets) ? app.targets : [];
+      for (const t of targets) {
+        const dl = t?.dataLayerId;
+        if (typeof dl === 'string' && dl.length > 0) itemIds.add(dl);
       }
     }
   }

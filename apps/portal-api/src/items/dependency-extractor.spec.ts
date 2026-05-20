@@ -45,3 +45,101 @@ describe('extractDependencies for derived_layer', () => {
     expect(result).toEqual({ itemIds: [], urls: [] });
   });
 });
+
+describe('extractDependencies for custom web_app', () => {
+  // Custom Web App items live as type='web_app' with
+  // data.template='custom'. The dep walk must reach the app-level
+  // mapId, every per-Map-widget mapId override, and every target's
+  // dataLayerId so the cascade-on-public dialog (#310) doesn't
+  // silently dismiss when the author makes a custom app public
+  // that embeds private maps / private data_layers (the WV Parcel
+  // Viewer symptom).
+  const buildCustom = (custom: Record<string, unknown>) => ({
+    type: 'web_app' as const,
+    data: {
+      template: 'custom',
+      config: { template: 'custom', custom },
+    },
+  });
+
+  it('emits the app-level mapId and every target dataLayerId', () => {
+    const result = extractDependencies(
+      buildCustom({
+        version: 3,
+        mapId: 'mmmmmmmm-mmmm-mmmm-mmmm-mmmmmmmmmmmm',
+        targets: [
+          {
+            dataLayerId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+            layerKey: 'layer-1',
+          },
+          {
+            dataLayerId: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+            layerKey: 'layer-2',
+          },
+        ],
+        pages: [],
+      }),
+    );
+    expect([...result.itemIds].sort()).toEqual([
+      'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+      'mmmmmmmm-mmmm-mmmm-mmmm-mmmmmmmmmmmm',
+    ]);
+    expect(result.urls).toEqual([]);
+  });
+
+  it('emits per-Map-widget mapId overrides across pages', () => {
+    const result = extractDependencies(
+      buildCustom({
+        version: 3,
+        targets: [],
+        pages: [
+          {
+            id: 'home',
+            title: 'Home',
+            widgets: [
+              {
+                id: 'w1',
+                kind: 'map',
+                config: {
+                  kind: 'map',
+                  mapId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                },
+              },
+              {
+                id: 'w2',
+                kind: 'text',
+                config: { kind: 'text', markdown: '' },
+              },
+            ],
+          },
+          {
+            id: 'second',
+            title: 'Second',
+            widgets: [
+              {
+                id: 'w3',
+                kind: 'map',
+                config: {
+                  kind: 'map',
+                  mapId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect([...result.itemIds].sort()).toEqual([
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    ]);
+  });
+
+  it('returns no edges for an empty custom app', () => {
+    const result = extractDependencies(
+      buildCustom({ version: 3, targets: [], pages: [] }),
+    );
+    expect(result).toEqual({ itemIds: [], urls: [] });
+  });
+});
