@@ -1435,6 +1435,34 @@ export class ItemsService {
       nextData = merged as Prisma.InputJsonValue;
     }
 
+    // Round-trip footgun normalizer: any bare-MinIO URL pointing at
+    // a private-prefix object (`item-file`, `item-tile-layer`,
+    // `feature-attachment`) inside data_json gets rewritten to the
+    // api-mediated download path on save.  Migration
+    // `20260518230000_rewrite_storage_urls_to_api` (+ its nested
+    // follow-up) did this once at the bucket-split rollover, but
+    // any client whose React state was loaded BEFORE the migration
+    // could post the bare URL back on save and re-poison the row
+    // (the asset-picker, the file detail page, anything embedding
+    // a denormalized storageUrl snapshot).  Re-applying the same
+    // text-level regex here as a presave step makes the API the
+    // authority, so no client cache can drift the value back.
+    //
+    // Public prefixes (`item-thumb`, `group-thumb`, `user-avatar`,
+    // `org-hero`) are explicitly NOT matched: they keep their
+    // direct MinIO URL because the bucket policy still allows
+    // anonymous GET on those.
+    if (nextData !== undefined) {
+      const asText = JSON.stringify(nextData);
+      const rewritten = asText.replace(
+        /"https?:\/\/[^/"]+\/[^/"]+\/(item-file|item-tile-layer|feature-attachment)\/([0-9a-f-]+)"/g,
+        '"/api/portal/storage/private/$1/$2"',
+      );
+      if (rewritten !== asText) {
+        nextData = JSON.parse(rewritten) as Prisma.InputJsonValue;
+      }
+    }
+
     // Recompute the cached extent when the data blob changes; leave
     // it untouched on metadata-only edits so we don't churn the
     // index for no reason.

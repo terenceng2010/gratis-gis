@@ -17,6 +17,7 @@ import { IsEnum, IsString, MaxLength } from 'class-validator';
 import type { Request, Response } from 'express';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { Public } from '../auth/public.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ItemsService } from '../items/items.service.js';
@@ -107,9 +108,16 @@ export class StorageController {
    * forwarded so attachment-viewer apps that ask for `bytes=0-` keep
    * working.
    */
+  @Public()
   @Get('private/:kind/:key')
   async getPrivateAsset(
-    @CurrentUser() user: AuthUser,
+    // `user` is nullable here because the endpoint is @Public(). An
+    // anonymous browser request hitting an <img src> for a file-item
+    // referenced by a publicly-shared web-app needs to succeed; the
+    // BFF doesn't add a Bearer token on those requests. When user is
+    // null we fall back to the access='public' fast path; when user
+    // is present we use the standard sharing check.
+    @CurrentUser() user: AuthUser | null,
     @Param('kind') kindParam: string,
     @Param('key') key: string,
     @Headers('range') rangeHeader: string | undefined,
@@ -144,13 +152,24 @@ export class StorageController {
       if (!att) throw new NotFoundException('Attachment not found');
       filename = att.fileName || key;
       safeMime = att.mime || 'application/octet-stream';
-      // ACL: read on the parent data_layer item.
-      const item = await this.items.get(user, att.itemId);
-      const shares = await this.prisma.itemShare.findMany({
-        where: { itemId: att.itemId },
-      });
-      if (!this.sharing.canRead(user, item, shares)) {
-        throw new ForbiddenException('Cannot read this attachment');
+      // ACL: read on the parent data_layer item. Anonymous callers
+      // are only allowed if the parent is access='public'.
+      if (user) {
+        const item = await this.items.get(user, att.itemId);
+        const shares = await this.prisma.itemShare.findMany({
+          where: { itemId: att.itemId },
+        });
+        if (!this.sharing.canRead(user, item, shares)) {
+          throw new ForbiddenException('Cannot read this attachment');
+        }
+      } else {
+        const parent = await this.prisma.item.findFirst({
+          where: { id: att.itemId, access: 'public', deletedAt: null },
+          select: { id: true },
+        });
+        if (!parent) {
+          throw new ForbiddenException('Cannot read this attachment');
+        }
       }
     } else if (kind === 'item-file' || kind === 'item-tile-layer') {
       // Walk the Item table to find the row that points at this key.
@@ -167,7 +186,7 @@ export class StorageController {
           ],
           deletedAt: null,
         },
-        select: { id: true, type: true, data: true },
+        select: { id: true, type: true, data: true, access: true },
       });
       if (!item) throw new NotFoundException('File not found');
       // Pull mime + filename when present in item.data.
@@ -180,12 +199,17 @@ export class StorageController {
         (typeof data.mime === 'string' && data.mime) ||
         (typeof data.contentType === 'string' && data.contentType) ||
         'application/octet-stream';
-      // ACL: read on the item via the standard guard.
-      const itemFull = await this.items.get(user, item.id);
-      const shares = await this.prisma.itemShare.findMany({
-        where: { itemId: item.id },
-      });
-      if (!this.sharing.canRead(user, itemFull, shares)) {
+      if (user) {
+        // ACL: read on the item via the standard guard.
+        const itemFull = await this.items.get(user, item.id);
+        const shares = await this.prisma.itemShare.findMany({
+          where: { itemId: item.id },
+        });
+        if (!this.sharing.canRead(user, itemFull, shares)) {
+          throw new ForbiddenException('Cannot read this file');
+        }
+      } else if (item.access !== 'public') {
+        // Anonymous: only public-shared items resolve.
         throw new ForbiddenException('Cannot read this file');
       }
     }
