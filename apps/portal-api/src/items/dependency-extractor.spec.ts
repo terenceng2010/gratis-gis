@@ -205,6 +205,77 @@ describe('extractDependencies for custom web_app', () => {
     expect(result).toEqual({ itemIds: [], urls: [] });
   });
 
+  it('emits themePresetId only when it looks like a UUID', () => {
+    // UUID-shape -> portal-item ref, must be in the dep graph.
+    const uuidResult = extractDependencies(
+      buildCustom({
+        version: 3,
+        themePresetId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        targets: [],
+        pages: [],
+      }),
+    );
+    expect(uuidResult.itemIds).toEqual([
+      'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    ]);
+
+    // Starter-kind string -> in-process registry lookup, NOT an item.
+    // Pass-through unchanged on emit.
+    const starterResult = extractDependencies(
+      buildCustom({
+        version: 3,
+        themePresetId: 'forest',
+        targets: [],
+        pages: [],
+      }),
+    );
+    expect(starterResult.itemIds).toEqual([]);
+  });
+
+  it('emits print templateIds for Print widgets at any nesting depth', () => {
+    const result = extractDependencies(
+      buildCustom({
+        version: 3,
+        targets: [],
+        pages: [
+          {
+            id: 'home',
+            title: 'Home',
+            widgets: [
+              {
+                id: 'topbar',
+                kind: 'container',
+                config: {
+                  kind: 'container',
+                  position: 'sticky-top',
+                  layout: 'row',
+                  widgets: [
+                    {
+                      id: 'print-w',
+                      kind: 'print',
+                      config: {
+                        kind: 'print',
+                        mapWidgetId: 'm1',
+                        templateIds: [
+                          '11111111-1111-1111-1111-111111111111',
+                          '22222222-2222-2222-2222-222222222222',
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect([...result.itemIds].sort()).toEqual([
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+    ]);
+  });
+
   it('skips legacy image widgets with only bare url', () => {
     // Legacy widgets pre-AssetRef have `url` but no `asset`. The
     // extractor can't recover an itemId from a URL synchronously,

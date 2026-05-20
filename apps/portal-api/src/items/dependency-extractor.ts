@@ -220,42 +220,25 @@ export function extractDependencies(
       if (typeof app.mapId === 'string' && app.mapId.length > 0) {
         itemIds.add(app.mapId);
       }
+      // App-level theme reference. themePresetId is a discriminated
+      // string: either a built-in starter kind ('default' / 'slate' /
+      // 'forest' / 'aurora' / 'paper') OR a UUID pointing at a theme
+      // item the org saved. Only the UUID form is a portal-item ref;
+      // starter kinds live in code (THEME_STARTERS) and aren't items.
+      // Test for a UUID shape rather than enumerating starter names
+      // so new starters added later don't accidentally show up as
+      // missing deps.
+      if (typeof app.themePresetId === 'string' && UUID_RE.test(app.themePresetId)) {
+        itemIds.add(app.themePresetId);
+      }
       const pages = Array.isArray(app.pages) ? app.pages : [];
       for (const p of pages) {
         const widgets = Array.isArray(p?.widgets) ? p.widgets : [];
-        for (const w of widgets) {
-          if (!w || typeof w !== 'object') continue;
-          const cfg = w.config as
-            | {
-                kind?: string;
-                mapId?: unknown;
-                asset?: { kind?: unknown; itemId?: unknown };
-              }
-            | undefined;
-          if (!cfg || typeof cfg !== 'object') continue;
-          // Per-Map-widget override map.
-          if (cfg.kind === 'map') {
-            if (typeof cfg.mapId === 'string' && cfg.mapId.length > 0) {
-              itemIds.add(cfg.mapId);
-            }
-          }
-          // Asset-picker refs on any widget that exposes an AssetRef
-          // (today: image; future: any widget whose config has an
-          // `asset: AssetRef` field). The discriminant
-          // `asset.kind === 'file-item'` separates portal-item refs
-          // from `kind === 'external-url'` (untracked) and from a
-          // missing `asset` (legacy widget on bare `url`, untracked).
-          const asset = cfg.asset;
-          if (
-            asset &&
-            typeof asset === 'object' &&
-            asset.kind === 'file-item' &&
-            typeof asset.itemId === 'string' &&
-            asset.itemId.length > 0
-          ) {
-            itemIds.add(asset.itemId);
-          }
-        }
+        // Walk widgets, including container children (Print etc.
+        // commonly live inside a top-bar Container, not directly on
+        // the page). Recursive walk covers arbitrarily-nested
+        // containers + tabs.
+        walkCustomWidgets(widgets, itemIds);
       }
       const targets = Array.isArray(app.targets) ? app.targets : [];
       for (const t of targets) {
@@ -378,6 +361,82 @@ export function extractDependencies(
   // Hook points for other types: extend as those item types come online.
 
   return { itemIds: Array.from(itemIds), urls: Array.from(urls) };
+}
+
+/**
+ * UUID-shape sniffer for fields that hold "either a starter kind
+ * name OR an item id". themePresetId is the immediate case: 'forest'
+ * is a starter, 'bc5a6e38-...' is a theme item ref. Only the latter
+ * should land in the dependency graph.
+ */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Recursively collect dependency ids from a CustomAppData widget
+ * tree. Walks page-level widgets AND children of Container / Tabs
+ * widgets so widgets nested inside a top-bar container (the common
+ * shape for Print, Search, Basemaps etc.) are still reached.
+ *
+ * Today's coverage:
+ *   - kind === 'map'    -> config.mapId (per-widget map override)
+ *   - kind === 'print'  -> config.templateIds[] (print_template refs)
+ *   - any kind          -> config.asset.itemId when asset.kind ===
+ *                          'file-item' (AssetRef on Image and any
+ *                          future widget that exposes an AssetRef
+ *                          field).
+ *
+ * Mutates the passed Set rather than returning a new collection so
+ * the caller can keep the same dedupe scope across all branches.
+ */
+function walkCustomWidgets(widgets: readonly unknown[], out: Set<string>): void {
+  for (const raw of widgets) {
+    if (!raw || typeof raw !== 'object') continue;
+    const w = raw as { config?: unknown };
+    const cfg = w.config as
+      | {
+          kind?: string;
+          mapId?: unknown;
+          templateIds?: unknown;
+          asset?: { kind?: unknown; itemId?: unknown };
+          widgets?: Array<Record<string, unknown>>;
+          tabs?: Array<{ widgets?: Array<Record<string, unknown>> }>;
+        }
+      | undefined;
+    if (!cfg || typeof cfg !== 'object') continue;
+
+    // Per-Map-widget override map.
+    if (cfg.kind === 'map' && typeof cfg.mapId === 'string' && cfg.mapId.length > 0) {
+      out.add(cfg.mapId);
+    }
+    // Print widget's allowlist of print_template items.
+    if (cfg.kind === 'print' && Array.isArray(cfg.templateIds)) {
+      for (const id of cfg.templateIds) {
+        if (typeof id === 'string' && id.length > 0) out.add(id);
+      }
+    }
+    // Asset-picker file-item refs (image widgets and any future
+    // widget that adopts AssetRef on its config). The discriminant
+    // separates portal-item refs from external-url + legacy bare-url
+    // shapes that don't map to items.
+    const asset = cfg.asset;
+    if (
+      asset &&
+      typeof asset === 'object' &&
+      asset.kind === 'file-item' &&
+      typeof asset.itemId === 'string' &&
+      asset.itemId.length > 0
+    ) {
+      out.add(asset.itemId);
+    }
+    // Recurse into containers and tabs so nested widgets are found.
+    if (Array.isArray(cfg.widgets)) walkCustomWidgets(cfg.widgets, out);
+    if (Array.isArray(cfg.tabs)) {
+      for (const t of cfg.tabs) {
+        if (t && Array.isArray(t.widgets)) walkCustomWidgets(t.widgets, out);
+      }
+    }
+  }
 }
 
 /**

@@ -575,39 +575,34 @@ export function CustomRuntimeClient({
             </button>
           </div>
         ) : null}
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
-          <div className="flex min-w-0 items-center gap-3">
-            {/* "Back to items" only renders for users who can manage
-                the item. Anonymous public-share visitors and
-                authenticated non-owners don't have a relevant items
-                list to return to, and AGOL's shared viewer link
-                opens in a new tab without back-nav. Mirrors the
-                EditorRuntime header gate pattern. */}
-            {canManage ? (
-              <>
-                <Link
-                  href="/items"
-                  className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  Back to items
-                </Link>
-                <span className="text-muted">/</span>
-              </>
-            ) : null}
-            <span className="truncate text-base font-semibold text-ink-0">
-              {itemTitle}
-            </span>
-          </div>
-          {canManage ? (
+        {/* Manage chrome (Back / title / Configure). Renders only for
+            users who can manage the item; anonymous and non-owner
+            viewers see no chrome bar at all so the app's own
+            designed header (top container with logo / title / tools)
+            isn't competing with a duplicate runtime title strip. */}
+        {canManage ? (
+          <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
+            <div className="flex min-w-0 items-center gap-3">
+              <Link
+                href="/items"
+                className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back to items
+              </Link>
+              <span className="text-muted">/</span>
+              <span className="truncate text-base font-semibold text-ink-0">
+                {itemTitle}
+              </span>
+            </div>
             <Link
               href={`/items/${itemId}?view=configure`}
               className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-1 hover:bg-surface-2"
             >
               Configure
             </Link>
-          ) : null}
-        </header>
+          </header>
+        ) : null}
 
         {/* Page tabs (#342). Hidden when the app has only one page so
             single-page apps stay chrome-free. */}
