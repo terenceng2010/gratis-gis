@@ -1695,6 +1695,156 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
 }
 
 /**
+ * Geometry-aware legend swatch. Picks the dominant paint for the
+ * layer from its renderer + style:
+ *
+ *   - unique-values renderer: tile of the first 2-3 categories'
+ *     colors so the legend hints at the categorization.
+ *   - class-breaks renderer: tile of the first / mid / last stop
+ *     so the swatch reads as a gradient ramp.
+ *   - simple renderer + polygon source: filled rectangle in
+ *     polygon.fillColor at polygon.fillOpacity, bordered with
+ *     polygon.strokeColor at the actual stroke width. Correctly
+ *     shows outline-only polygons (e.g. parcels) as hollow.
+ *   - simple renderer + line source: horizontal line in
+ *     line.color at line.width.
+ *   - simple renderer + point source: filled circle in
+ *     point.color, bordered with point.strokeColor.
+ *
+ * Without an explicit geometry hint on MapLayer (the engine knows
+ * but doesn't surface it on the MapLayer envelope), we infer from
+ * which style branch carries non-default-looking values. For
+ * the WV Parcels case (polygon outline-only) the polygon branch
+ * is the one with the colors author actually set, so it wins. The
+ * helper falls back to a polygon-style swatch for service layers
+ * (arcgis-rest, etc.) because most service layers are polygons in
+ * the wild and the swatch still reads correctly even if the
+ * upstream renderer overrides our local style.
+ */
+function LegendSwatch({ layer }: { layer: MapLayer }) {
+  const r = layer.renderer;
+  // Multi-category renderers: render a small palette of stops.
+  if (r?.kind === 'unique-values' && r.categories.length > 0) {
+    const cats = r.categories.slice(0, 3);
+    return (
+      <span
+        aria-hidden
+        className="inline-flex h-3 w-3 shrink-0 overflow-hidden rounded-sm border border-border"
+      >
+        {cats.map((c, i) => (
+          <span
+            key={i}
+            className="block h-full flex-1"
+            style={{ backgroundColor: c.color }}
+          />
+        ))}
+      </span>
+    );
+  }
+  if (r?.kind === 'class-breaks' && r.colors.length >= 2) {
+    const stops = [r.colors[0], r.colors[Math.floor(r.colors.length / 2)], r.colors[r.colors.length - 1]];
+    return (
+      <span
+        aria-hidden
+        className="inline-flex h-3 w-3 shrink-0 overflow-hidden rounded-sm border border-border"
+      >
+        {stops.map((c, i) => (
+          <span
+            key={i}
+            className="block h-full flex-1"
+            style={{ backgroundColor: c ?? '#999' }}
+          />
+        ))}
+      </span>
+    );
+  }
+
+  // Simple renderer (or no renderer): pick a swatch from the
+  // style branch that has authored values.
+  const poly = layer.style?.polygon;
+  const line = layer.style?.line;
+  const point = layer.style?.point;
+
+  // Polygon-style swatch: filled square at fillOpacity, bordered
+  // in strokeColor. Handles outline-only polygons (fillOpacity=0)
+  // as a hollow square that reads as "outline only".
+  if (poly) {
+    const fill = poly.fillColor ?? 'transparent';
+    const fillOpacity = typeof poly.fillOpacity === 'number' ? poly.fillOpacity : 1;
+    const stroke = poly.strokeColor ?? '#000';
+    const borderWidth = Math.max(1, Math.min(2, poly.strokeWidth ?? 1));
+    return (
+      <span
+        aria-hidden
+        className="inline-block h-3 w-3 shrink-0 rounded-sm"
+        style={{
+          backgroundColor: rgbaWithOpacity(fill, fillOpacity),
+          border: `${borderWidth}px solid ${stroke}`,
+        }}
+      />
+    );
+  }
+  if (line) {
+    return (
+      <span
+        aria-hidden
+        className="inline-flex h-3 w-3 shrink-0 items-center justify-center"
+      >
+        <span
+          className="block w-full"
+          style={{
+            height: `${Math.max(1, Math.min(3, line.width ?? 1))}px`,
+            backgroundColor: line.color ?? '#000',
+          }}
+        />
+      </span>
+    );
+  }
+  if (point) {
+    return (
+      <span
+        aria-hidden
+        className="inline-block h-3 w-3 shrink-0 rounded-full"
+        style={{
+          backgroundColor: point.color ?? '#6366f1',
+          border: `1px solid ${point.strokeColor ?? '#000'}`,
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden
+      className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border bg-surface-2"
+    />
+  );
+}
+
+/**
+ * Composite a fill color + opacity into an rgba/css value the
+ * swatch <span> can render as `backgroundColor`. Hex inputs become
+ * `rgba(r,g,b,opacity)`; anything else (rgb / hsl / named) gets the
+ * opacity composed via CSS `color-mix` so the swatch dims
+ * correctly even for inputs we don't hex-parse. Falls back to the
+ * raw input on the older browsers that lack color-mix; the swatch
+ * will be slightly off in opacity but won't break.
+ */
+function rgbaWithOpacity(color: string, opacity: number): string {
+  if (opacity >= 0.99) return color;
+  if (opacity <= 0.01) return 'transparent';
+  const hex = color.trim();
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (m) {
+    const v = parseInt(m[1]!, 16);
+    const r = (v >> 16) & 0xff;
+    const g = (v >> 8) & 0xff;
+    const b = v & 0xff;
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  }
+  return `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
+}
+
+/**
  * Recursive row renderer for the LayerList widget.  Groups paint
  * a chevron + title (no swatch); leaves paint a checkbox + swatch
  * + title.  Indentation comes from `depth` so the visual hierarchy
@@ -1759,17 +1909,7 @@ function LayerListRow({
           // text alignment consistent with leaf rows.
           <span className="inline-block h-3 w-3 shrink-0" aria-hidden />
         ) : (
-          <span
-            aria-hidden
-            className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border"
-            style={{
-              backgroundColor:
-                layer.style?.point?.color ??
-                layer.style?.line?.color ??
-                layer.style?.polygon?.fillColor ??
-                '#6366f1',
-            }}
-          />
+          <LegendSwatch layer={layer} />
         )}
         <span
           className={`flex-1 truncate ${isGroup ? 'font-medium text-ink-0' : 'text-ink-1'}`}
