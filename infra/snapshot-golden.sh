@@ -102,7 +102,14 @@ docker exec \
   -e ADMIN_USERNAME="$ADMIN_USERNAME" \
   "$PORTAL_API_CONTAINER" \
   node /tmp/cleanup-non-admin.mjs
-docker exec "$PORTAL_API_CONTAINER" rm -f /tmp/cleanup-non-admin.mjs
+# Cleanup the staged script. `docker cp` plants the file as root,
+# but the container's default user is `app` (uid 999), so a plain
+# `docker exec ... rm` fails with EPERM. Use -u 0 to remove as root.
+# `|| true` belt-and-suspenders in case the container is somehow
+# already gone -- a leftover /tmp file is harmless, an aborted
+# snapshot isn't.
+docker exec -u 0 "$PORTAL_API_CONTAINER" \
+  rm -f /tmp/cleanup-non-admin.mjs || true
 
 echo "=== Stopping app services for consistent snapshot ==="
 # Stop in dependency order; postgres stays up so we can pg_dump.
