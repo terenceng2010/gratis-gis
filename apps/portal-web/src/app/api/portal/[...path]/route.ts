@@ -74,6 +74,8 @@ function isLongRunningIngestPath(suffix: string): boolean {
  *   - items/:id                          -> public/items/:id
  *   - items/:id/layers/:layer/geojson    -> public/items/:id/layers/:layer/geojson
  *   - items/:id/layers/:layer/features   -> public/items/:id/layers/:layer/features
+ *   - items/:id/layers/:layer/tile/:z/:x/:y.mvt
+ *                                        -> public/items/:id/layers/:layer/tile/:z/:x/:y.mvt
  *   - items/:id/proxy/...                -> public/items/:id/proxy/...
  *   - storage/private/:kind/:key         -> storage/private/:kind/:key (passthrough)
  *
@@ -88,6 +90,23 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
     return `public/${suffix}`;
   }
   if (/^items\/[^/]+\/layers\/[^/]+\/(geojson|features)$/.test(suffix)) {
+    return `public/${suffix}`;
+  }
+  // MVT tile path for v3 data_layer items. The custom + viewer
+  // runtimes build their MapLibre source URLs against the portal's
+  // native /tile/:z/:x/:y.mvt shape (they don't know about OGC
+  // Tiles), so an anon viewer of a publicly-shared app fetches
+  // tiles here. portal-api mirrors the auth'd route as
+  // /api/public/items/:id/layers/:layerId/tile/:z/:x/:y.mvt gated
+  // on access='public'. Symptom this fixes: WV Parcels (1.4M
+  // polygons) failed to draw for anon visitors -- the runtime
+  // requested tiles at z=11 and got 401 at the BFF, never reaching
+  // portal-api. The county boundaries + flood services rendered
+  // fine in the same view because they use the items/:id/proxy/
+  // path (already in the allowlist below).
+  if (
+    /^items\/[^/]+\/layers\/[^/]+\/tile\/\d+\/\d+\/\d+\.mvt$/.test(suffix)
+  ) {
     return `public/${suffix}`;
   }
   // Anonymous service-proxy passthrough: a public viewer that

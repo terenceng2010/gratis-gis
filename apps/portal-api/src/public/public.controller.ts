@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  BadRequestException,
   Controller,
   Get,
   NotFoundException,
   Param,
   Query,
   Req,
+  Res,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import { Public } from '../auth/public.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -290,6 +292,82 @@ export class PublicController {
   }
 
   /**
+   * Anonymous MVT tile for a layer of a public data_layer item.
+   * Mirrors the auth'd /api/items/:id/layers/:layerId/tile/:z/:x/:y
+   * .mvt endpoint but gated to `access='public'`.
+   *
+   * Why this is needed alongside the OGC Tiles endpoint at
+   * /api/public/ogc/collections/:id/tiles/WebMercatorQuad/...:
+   * the Custom Web App runtime builds its source URLs from the
+   * portal's native path (it doesn't know the OGC URL shape), so
+   * an anonymous viewer of a public app fetches tiles at the
+   * portal path and would 401 at the BFF without this. Both
+   * endpoints route through the same DataLayerFeaturesService.
+   * mvtTile call -- the OGC controller adds the OGC envelope; this
+   * one adds the portal's URL shape.
+   */
+  @Public()
+  @Get('items/:id/layers/:layerId/tile/:z/:x/:y.mvt')
+  async layerTile(
+    @Res() res: Response,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Param('z') zStr: string,
+    @Param('x') xStr: string,
+    @Param('y') yStr: string,
+  ) {
+    if (!isUuidShape(itemId)) {
+      throw new NotFoundException('Item not found');
+    }
+    const item = await this.prisma.item.findFirst({
+      where: {
+        id: itemId,
+        type: 'data_layer',
+        access: 'public',
+        deletedAt: null,
+      },
+      select: { id: true, data: true },
+    });
+    if (!item) throw new NotFoundException('Item not found');
+
+    // Confirm the layer exists in the item's v3 schema; this also
+    // lets us project the field set into the tile so labels +
+    // popups + filters have feature properties at render time
+    // (matches the auth'd tile's #147 behavior).
+    const layer = pickV3Layer(item.data, layerId);
+    if (!layer) throw new NotFoundException('Layer not found');
+
+    const z = Number(zStr);
+    const x = Number(xStr);
+    const y = Number(yStr);
+    if (
+      !Number.isInteger(z) ||
+      !Number.isInteger(x) ||
+      !Number.isInteger(y) ||
+      z < 0 ||
+      z > 24 ||
+      x < 0 ||
+      y < 0
+    ) {
+      throw new BadRequestException('Invalid tile coordinates.');
+    }
+
+    const opts: {
+      fields?: Array<{ name: string; type?: string }>;
+      isTable?: boolean;
+    } = {};
+    if (layer.fields.length > 0) opts.fields = layer.fields;
+    if (layer.geometryType === null) opts.isTable = true;
+
+    const buf = await this.v3.mvtTile(itemId, layerId, z, x, y, opts);
+    res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile');
+    // Public tiles can sit in shared caches; same posture as the
+    // OGC tile endpoint (5-min public window).
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.end(buf);
+  }
+
+  /**
    * Resolve the org for single-tenant portals where the query param
    * is unnecessary. Orders by createdAt so the original seed wins;
    * additional orgs (if any) can still be reached by explicit slug.
@@ -366,4 +444,49 @@ export function isUuidShape(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     id,
   );
+}
+
+interface V3LayerInfo {
+  geometryType: string | null;
+  fields: Array<{ name: string; type?: string }>;
+}
+
+/**
+ * Resolve a layer key inside a v3 data_layer item's `data` blob.
+ * Returns the layer's geometry type + field schema so the tile
+ * controller can decide table-mode + project the right fields
+ * into the MVT. Returns null when the layer doesn't exist or the
+ * item isn't v3 -- callers should 404.
+ */
+function pickV3Layer(data: unknown, layerId: string): V3LayerInfo | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as {
+    version?: number;
+    layers?: Array<{
+      id?: unknown;
+      geometryType?: unknown;
+      fields?: Array<{ name?: unknown; type?: unknown }>;
+    }>;
+  };
+  if (d.version !== 3 || !Array.isArray(d.layers)) return null;
+  const match = d.layers.find((l) => l?.id === layerId);
+  if (!match) return null;
+  const geometryType =
+    typeof match.geometryType === 'string' ? match.geometryType : null;
+  const fields: Array<{ name: string; type?: string }> = [];
+  if (Array.isArray(match.fields)) {
+    for (const f of match.fields) {
+      if (
+        f &&
+        typeof f.name === 'string' &&
+        f.name.length > 0
+      ) {
+        fields.push({
+          name: f.name,
+          ...(typeof f.type === 'string' ? { type: f.type } : {}),
+        });
+      }
+    }
+  }
+  return { geometryType, fields };
 }
