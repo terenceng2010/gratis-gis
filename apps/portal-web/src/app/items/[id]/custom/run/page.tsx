@@ -238,6 +238,23 @@ export default async function CustomAppRuntimePage(props: Props) {
   // Fetch the org's basemaps (for MapCanvas's basemap library +
   // BasemapGallery), every needed map item, and every theme item
   // (for the themePresetId resolution below) in parallel.
+  //
+  // Anon list-query caveat: the BFF's anonymous-allowlist
+  // (publicRewriteForAnonymousGet) covers /api/items/:id but NOT
+  // /api/items?type=... list queries -- those 401 for anon visitors
+  // of a public-shared app. The basemap + theme list queries both
+  // .catch(() => []) so the page still renders, but the result is a
+  // theme fallback to the default tokens and an empty basemap
+  // gallery for anonymous viewers, which is wrong for a publicly
+  // shared app that intentionally picks a theme.
+  //
+  // For the theme case we patch the gap below by fetching the
+  // configured theme item directly by id (which IS in the anon
+  // allowlist). For basemaps we still rely on the list path; anon
+  // viewers see the map's own basemap rendered fine, they just
+  // can't pop the BasemapGallery to swap. Promoting basemap
+  // visibility for anon is a separate decision (we'd need an
+  // explicit "include in public list" gate per basemap).
   const [basemapItems, themeItems, ...mapItems] = await Promise.all([
     fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
@@ -251,6 +268,30 @@ export default async function CustomAppRuntimePage(props: Props) {
       fetchItem<Item<MapData>>(`/api/items/${id}`).catch(() => null),
     ),
   ]);
+
+  // Anon-safe per-id theme fetch. When the app's themePresetId is a
+  // UUID (a saved theme item ref, as opposed to a built-in starter
+  // kind like 'forest') AND the list query came back empty (anon's
+  // 401 -> caught -> []), fetch that specific theme item directly.
+  // The per-id path goes through the public/items/:id rewrite for
+  // anonymous callers, so a publicly-shared app whose theme item is
+  // also public renders with the right tokens instead of falling
+  // back to the default theme.
+  //
+  // Idempotent for the authed case: if the list already returned
+  // the theme item, this is a no-op pre-check.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (
+    typeof app.themePresetId === 'string' &&
+    UUID_RE.test(app.themePresetId) &&
+    !themeItems.some((t) => t.id === app.themePresetId)
+  ) {
+    const direct = await fetchItem<
+      Item<ThemeItemData> & { seedKind?: string | null }
+    >(`/api/items/${app.themePresetId}`).catch(() => null);
+    if (direct) themeItems.push(direct);
+  }
 
   const mapDataById = new Map<string, MapData>();
   for (const it of mapItems) {

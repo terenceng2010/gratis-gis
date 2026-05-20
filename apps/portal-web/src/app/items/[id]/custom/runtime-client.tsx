@@ -2072,24 +2072,59 @@ function PrintWidgetRender({ widget }: { widget: CustomWidget }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          '/api/portal/items?type=print_template',
-          { cache: 'no-store' },
-        );
-        if (!res.ok) {
-          setTemplates([]);
-          return;
-        }
-        // The items list endpoint returns an array directly (not a
-        // wrapped { items: [...] } envelope).  Parsing it as a
-        // wrapped object was why the dropdown showed empty even
-        // when 5+ templates were seeded.
-        const rows = (await res.json()) as Array<{
+        // Two fetch paths:
+        //
+        //   1. Per-id fetch when the Print widget has an explicit
+        //      templateIds allowlist. /api/portal/items/:id is in
+        //      the BFF's anonymous-allowlist, so anon viewers of a
+        //      public app can resolve each configured template that
+        //      itself is access='public'. The previous shape (list
+        //      query) 401'd at the BFF for anon, so the WV Parcel
+        //      Viewer's Print tool showed no templates and silently
+        //      fell back to the browser print dialog.
+        //
+        //   2. List fetch when no allowlist is configured. Used by
+        //      authors / org members who want the dropdown to show
+        //      everything they can read. Still 401s for anon, but
+        //      an unconfigured Print widget on a public app isn't a
+        //      sensible shape -- author should configure the
+        //      allowlist if they want anon support.
+        const rows: Array<{
           id: string;
           title: string;
           description: string | null;
           data: PrintTemplateData;
-        }>;
+        }> = [];
+        if (configuredIds.length > 0) {
+          const settled = await Promise.allSettled(
+            configuredIds.map((id) =>
+              fetch(`/api/portal/items/${id}`, { cache: 'no-store' }).then(
+                async (r) => {
+                  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                  return r.json();
+                },
+              ),
+            ),
+          );
+          for (const s of settled) {
+            if (s.status === 'fulfilled' && s.value) rows.push(s.value);
+          }
+        } else {
+          const res = await fetch(
+            '/api/portal/items?type=print_template',
+            { cache: 'no-store' },
+          );
+          if (!res.ok) {
+            setTemplates([]);
+            return;
+          }
+          // The items list endpoint returns an array directly (not a
+          // wrapped { items: [...] } envelope).  Parsing it as a
+          // wrapped object was why the dropdown showed empty even
+          // when 5+ templates were seeded.
+          const arr = (await res.json()) as typeof rows;
+          rows.push(...arr);
+        }
         if (cancelled) return;
         let tt: TemplateSummary[] = rows.map((it) => ({
           id: it.id,
