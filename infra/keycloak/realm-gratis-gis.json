@@ -207,7 +207,8 @@
         }
       ],
       "realmRoles": [
-        "admin"
+        "admin",
+        "offline_access"
       ],
       "attributes": {
         "org": [
@@ -233,7 +234,8 @@
         }
       ],
       "realmRoles": [
-        "contributor"
+        "contributor",
+        "offline_access"
       ],
       "attributes": {
         "org": [
@@ -259,7 +261,8 @@
         }
       ],
       "realmRoles": [
-        "viewer"
+        "viewer",
+        "offline_access"
       ],
       "attributes": {
         "org": [
