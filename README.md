@@ -52,6 +52,11 @@ third party's cloud.
   portal's own layer URLs (`GET /items/:id/web-map.json`); whether ArcGIS
   Pro / AGO / QGIS consume it natively depends on the importing tool's
   strictness and is worth testing in your environment.
+  Beyond the AGO bridge, the project treats OGC API conformance
+  (Features, Tiles, Styles, Records, etc.) as a guiding goal: anywhere a
+  new surface can be shaped to match an OGC API standard at low extra cost,
+  the OGC shape wins so QGIS, GDAL, OpenLayers, and other standards-aware
+  tooling can consume the portal without bespoke connectors.
 - **No proprietary file formats.** Your data lives in a documented
   Postgres + PostGIS schema with no opaque binary blobs. If GratisGIS
   disappears tomorrow, your data is still queryable with `psql` and

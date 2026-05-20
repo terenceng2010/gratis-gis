@@ -207,6 +207,49 @@ scope; the "tool" item type covers reusable computation inside the
 portal. External clients access the engine read-only data API via
 personal access tokens.
 
+## Phase 8.5: OGC API breadth 🟦 not started
+
+Goal: widen the OGC API surface so QGIS, GDAL/ogr2ogr, OpenLayers,
+MapTiler, leafmap, and other standards-aware tooling can consume the
+portal without bespoke connectors. Today the only OGC API surface
+shipped is a minimal Features (Part 1: Core + GeoJSON) at
+`/api/public/ogc/*` plus legacy CSW 2.0.2 for metadata harvest.
+
+Treat OGC API conformance as an underlying driver: anywhere a new
+public surface can be shaped to match an OGC API standard at low
+extra cost, the OGC shape wins. This also collapses scope on the
+companion `gratis-gis-qgis` plugin -- every OGC API endpoint we
+ship is a custom plugin code path we don't need to write or
+maintain.
+
+- [ ] **OGC API - Tiles (Part 1).** Wrap the existing PMTiles /
+      MVT tile serving in the standard tileset / collection /
+      tileMatrixSet endpoints. Highest leverage of the bunch:
+      drops every OGC API client onto our basemaps and vector
+      tiles drag-and-drop. Probably 2-3 days.
+- [ ] **OGC API - Features polish.** Advertise more conformance
+      classes (OpenAPI 3.0, CRS, Filter, Sortby), ship an OpenAPI
+      document at `/api/public/ogc/api`, surface multi-layer
+      data\_layer items as separate collections via the
+      `<itemId>__<layerKey>` scheme, support CQL2 filter
+      expressions. ~1-2 days.
+- [ ] **OGC API - Styles.** Serve MapLibre style JSON per layer
+      under the standard `/styles` endpoints so third-party
+      renderers can fetch our symbology directly. ~1 day given
+      the StyleEditor already produces JSON-serializable styles.
+- [ ] **OGC API - Records.** Replace or supplement the legacy
+      CSW + DCAT catalog with the modern standard. Mostly a
+      shape-translation of the existing catalog feed. Medium
+      effort.
+- [ ] **OGC API - Maps (deferred).** Lower priority once Tiles
+      ships; revisit if anyone asks for server-rendered map
+      images.
+- [ ] **OGC API - Processes / Coverages / EDR (out of scope
+      for v1).** Too specialized + heavyweight for the current
+      audience. Revisit only if a concrete consumer surfaces.
+
+---
+
 ## Phase 8: Hardening
 
 - [x] **`pg_partman` monthly partitioning of the `observation` table.**
