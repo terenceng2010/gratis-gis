@@ -106,6 +106,47 @@ Beyond what traditional geoprocessing model builders offer:
 - Versioning (every save is a new revision; diff between revisions)
 - Templates (pick from a gallery to start)
 
+## Prior art worth lifting
+
+A few open source GIS tools have ideas to crib when the tool surface
+fills out.
+
+**SAGA GIS** (ships alongside QGIS in the standard OSGeo4W install).
+
+- Tool library taxonomy. SAGA groups hundreds of geoprocessing tools
+  into domain libraries: Terrain Analysis, Imagery, Grid, Shapes,
+  Spatial and Geostatistics, Climate & Weather, Simulation,
+  Projection, Import/Export, Visualization. Users find things by
+  domain rather than navigating Esri-style verb buckets ("Analysis /
+  Conversion / Data Management") that tell them nothing. Once our
+  node catalog grows past the initial 20 to 30 nodes, reorganize
+  categories by domain rather than verb.
+- Tool Chains. SAGA has a first class XML format for composing
+  tools into pipelines with typed inputs, typed outputs, and
+  parameter wiring. It is text, version-controllable, and replayable
+  headless via saga_cmd. Our graph JSON serves the same role; SAGA's
+  schema is worth studying when we extend ours with control flow or
+  reusable sub-graphs.
+- QGIS Processing provider. SAGA exposes itself as a Processing
+  provider inside QGIS, so every SAGA tool appears in the Processing
+  toolbox callable on QGIS layers. The companion gratis-gis-qgis
+  plugin should ship a Processing provider that does the same for
+  portal-hosted tools. That is a Phase 3+ item on the plugin side,
+  but worth keeping in view: any tool we publish in the portal
+  becomes runnable inside QGIS for free.
+- Terrain analysis depth. SAGA's hydrology, geomorphometry, channel
+  network, and visibility algorithms are best in class in open
+  source. Rather than reimplement them natively in the node runner,
+  wrap them. A `saga_cmd` node kind that shells out to the installed
+  SAGA binary is a viable third runner alongside SQL pushdown and
+  the Node worker. The same wrapping approach applies to
+  whitebox-tools, the GDAL CLI, and PDAL.
+
+Not worth borrowing from SAGA: the desktop-first UX patterns, the
+dense panel layout, the cryptic library name "Garden", or the C++
+implementation. GratisGIS stays portal-resident and TypeScript /
+Python.
+
 ## Scope & phasing
 
 Phase 7 delivers:
