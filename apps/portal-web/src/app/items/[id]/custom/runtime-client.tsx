@@ -309,6 +309,15 @@ interface Props {
    * the built-in starter resolver in that case.
    */
   themeTokens?: AppThemeTokens['tokens'];
+  /**
+   * Whether the calling user can manage (own / admin) this app.
+   * Computed server-side from /api/users/me + item.ownerId; false
+   * for anonymous visitors. Gates the "Back to items" + "Configure"
+   * header chrome so a publicly-shared app stays chrome-free for
+   * the visitors it was built for. Mirrors the EditorRuntime
+   * `canEdit` gate pattern from the viewer runtime.
+   */
+  canManage?: boolean;
 }
 
 export function CustomRuntimeClient({
@@ -320,6 +329,7 @@ export function CustomRuntimeClient({
   widgetMapData,
   resolvedTargets,
   themeTokens,
+  canManage = false,
 }: Props) {
   // Multi-page support (#342). Track which page is showing; render
   // only that page's widgets, but seed map state from EVERY page so
@@ -567,24 +577,36 @@ export function CustomRuntimeClient({
         ) : null}
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-surface-1 px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">
-            <Link
-              href="/items"
-              className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to items
-            </Link>
-            <span className="text-muted">/</span>
+            {/* "Back to items" only renders for users who can manage
+                the item. Anonymous public-share visitors and
+                authenticated non-owners don't have a relevant items
+                list to return to, and AGOL's shared viewer link
+                opens in a new tab without back-nav. Mirrors the
+                EditorRuntime header gate pattern. */}
+            {canManage ? (
+              <>
+                <Link
+                  href="/items"
+                  className="inline-flex items-center gap-1 text-xs text-muted hover:text-ink-0"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back to items
+                </Link>
+                <span className="text-muted">/</span>
+              </>
+            ) : null}
             <span className="truncate text-base font-semibold text-ink-0">
               {itemTitle}
             </span>
           </div>
-          <Link
-            href={`/items/${itemId}?view=configure`}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-1 hover:bg-surface-2"
-          >
-            Configure
-          </Link>
+          {canManage ? (
+            <Link
+              href={`/items/${itemId}?view=configure`}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-1 px-2 py-1 text-xs font-medium text-ink-1 hover:bg-surface-2"
+            >
+              Configure
+            </Link>
+          ) : null}
         </header>
 
         {/* Page tabs (#342). Hidden when the app has only one page so

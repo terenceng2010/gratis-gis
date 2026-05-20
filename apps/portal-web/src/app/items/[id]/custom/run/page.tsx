@@ -133,6 +133,31 @@ export default async function CustomAppRuntimePage(props: Props) {
   }
   if (!isCustomAppItem(item)) notFound();
 
+  // Owner / org-admin gate. Anonymous visitors never see the in-app
+  // "Back to items" or "Configure" chrome (they have no items list,
+  // and no business reaching the designer). Authenticated viewers
+  // who happen across a public-shared app also stay chrome-free
+  // unless they own the item or are an org admin in its org.
+  // Mirrors the canManage check on the item detail page.
+  let canManage = false;
+  if (!isAnonymous) {
+    try {
+      const me = await apiFetch<{
+        id: string;
+        orgId: string;
+        orgRole: string;
+      }>('/api/users/me');
+      canManage =
+        me.id === (item as Item<unknown>).ownerId || me.orgRole === 'admin';
+    } catch {
+      // /me failed (transient or expired token): default-closed. The
+      // user can still see the app; they just won't see the manage
+      // chrome. They can navigate to /items themselves if they need
+      // it.
+      canManage = false;
+    }
+  }
+
   // #357: migrate v1 (12-col / 48px-row) apps to v2 (24-col / 24px-
   // row) on load so the runtime sees v2 coordinates. Idempotent for
   // already-v2 apps; the migrator no-ops when version === 2.
@@ -294,6 +319,7 @@ export default async function CustomAppRuntimePage(props: Props) {
       widgetMapData={widgetMapData}
       resolvedTargets={resolvedTargets}
       themeTokens={themeTokens}
+      canManage={canManage}
     />
   );
 }
