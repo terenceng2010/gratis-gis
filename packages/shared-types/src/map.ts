@@ -948,6 +948,15 @@ export function scaledStyleExpression<T extends string | number>(
     defaultValue = stops[0]!.value;
     stops = stops.slice(1);
   }
+  // No stops left after the collapse -- the single class covers the
+  // entire zoom range. Returning `['step', ['zoom'], defaultValue]`
+  // here would be a zero-stop step expression, which MapLibre rejects
+  // ("step has no stops"). The whole paint property silently fails
+  // to register and the geometry vanishes -- the WV Parcels symptom
+  // where adding one any-to-any class made the fill disappear.
+  // Return the resolved value directly so callers see the same shape
+  // they'd get with zero classes.
+  if (stops.length === 0) return defaultValue;
   const expr: unknown[] = ['step', ['zoom'], defaultValue];
   for (const s of stops) {
     expr.push(s.zoom, s.value);

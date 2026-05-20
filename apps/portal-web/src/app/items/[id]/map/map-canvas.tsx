@@ -2333,6 +2333,12 @@ function syncOverlays(
         defaultValue = stops[0]!.value;
         stops = stops.slice(1);
       }
+      // Mirror the scaledStyleExpression fix in shared-types: a step
+      // expression with zero stops fails MapLibre validation and
+      // silently drops the whole paint property, presenting as the
+      // class's polygons rendering with no fill / line. Return the
+      // resolved value directly when there are no stops left.
+      if (stops.length === 0) return defaultValue;
       const expr: unknown[] = ['step', ['zoom'], defaultValue];
       for (const s of stops) {
         expr.push(s.zoom, s.value);
