@@ -34,8 +34,9 @@ set -euo pipefail
 
 GOLDEN_DIR="/var/lib/gratis-gis-golden"
 COMPOSE_PROJECT="gratis-gis-prod"
-COMPOSE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-compose.prod.yml"
-ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.env.prod"
+INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$INFRA_DIR/docker-compose.prod.yml"
+ENV_FILE="$INFRA_DIR/.env.prod"
 
 if [[ $EUID -ne 0 ]]; then
   echo "FATAL: snapshot-golden.sh must run as root (needs docker volume access)." >&2
@@ -55,6 +56,7 @@ set +a
 POSTGRES_USER="${POSTGRES_USER:-gratisgis}"
 POSTGRES_DB_APP="${POSTGRES_DB:-gratisgis}"
 KEYCLOAK_DB_NAME="${KEYCLOAK_DB_NAME:-keycloak}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 
 mkdir -p "$GOLDEN_DIR"
 chmod 700 "$GOLDEN_DIR"
@@ -62,6 +64,45 @@ chmod 700 "$GOLDEN_DIR"
 dc() {
   docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
+
+# Pre-snapshot cleanup. The public demo accounts (tester-admin /
+# tester-contributor / tester-viewer) sit behind the gratisgis.org
+# landing banner so anyone can sign in as them; whatever they
+# create between snapshots would otherwise get baked into the
+# golden state and survive every nightly reset forever. Purge any
+# item not owned by the bootstrap admin before pg_dump captures
+# the DB.
+#
+# Runs via the portal-api container so item teardown routes through
+# the normal ItemsService.purge path (drops per-layer feature
+# tables, removes MinIO blobs, cleans observation partitions).
+# SQL-only deletion would leave those as orphans in the MinIO
+# tarball and bloat every future snapshot by 50-100MB of dead
+# bytes.
+#
+# Failure mode: if the admin token can't be obtained (Keycloak
+# down, INITIAL_USER_PASSWORD rotated without updating .env.prod)
+# the script fails closed and aborts the snapshot. Without the
+# admin id we can't tell who NOT to purge, and silently snapshotting
+# a polluted DB is worse than refusing to snapshot at all.
+if [[ -z "${INITIAL_USER_PASSWORD:-}" ]]; then
+  echo "FATAL: INITIAL_USER_PASSWORD missing from .env.prod -- can't sign in as bootstrap admin to run pre-snapshot cleanup." >&2
+  exit 1
+fi
+echo "=== Pre-snapshot purge of non-admin items ==="
+PORTAL_API_CONTAINER="$(dc ps -q portal-api 2>/dev/null | head -n 1)"
+if [[ -z "$PORTAL_API_CONTAINER" ]]; then
+  echo "FATAL: portal-api container not running; cannot purge non-admin items before snapshot." >&2
+  exit 1
+fi
+docker cp "$INFRA_DIR/cleanup-non-admin.mjs" \
+  "${PORTAL_API_CONTAINER}:/tmp/cleanup-non-admin.mjs"
+docker exec \
+  -e ADMIN_PWD="$INITIAL_USER_PASSWORD" \
+  -e ADMIN_USERNAME="$ADMIN_USERNAME" \
+  "$PORTAL_API_CONTAINER" \
+  node /tmp/cleanup-non-admin.mjs
+docker exec "$PORTAL_API_CONTAINER" rm -f /tmp/cleanup-non-admin.mjs
 
 echo "=== Stopping app services for consistent snapshot ==="
 # Stop in dependency order; postgres stays up so we can pg_dump.
