@@ -18,11 +18,14 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsInt,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import type { ItemAccess, ItemType, Prisma, PrincipalType, SharePermission } from '@prisma/client';
@@ -140,9 +143,16 @@ class DerivedLayerPreviewDto {
   @IsArray() pipeline!: Array<Record<string, unknown>>;
   // Zero-indexed step ordinal.  `upTo` is clamped to the pipeline
   // length so an out-of-range value just previews the full pipeline.
-  upTo!: number;
+  // Optional from the wire: the controller defaults to
+  // `pipeline.length - 1` (the final step) when the client omits it.
+  // The global ValidationPipe runs with forbidNonWhitelisted=true, so
+  // any property reaching this DTO needs a real validator decorator
+  // or the request 400s; pre-fix this DTO declared upTo / limit with
+  // no decorators and any client that POST'd them got
+  // "property upTo should not exist, property limit should not exist."
+  @IsOptional() @IsInt() @Min(0) upTo?: number;
   // Optional cap on sample size (server hard-caps to 50).
-  limit?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(50) limit?: number;
   // #86: optional bitemporal "as of" timestamp.  The source CTE
   // filters observations to those valid at this moment, so the
   // wizard's Preview button can show what the recipe would have
