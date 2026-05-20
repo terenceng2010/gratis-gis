@@ -68,6 +68,12 @@ export class OgcLandingController {
           type: 'application/json',
           title: 'Styles',
         },
+        {
+          href: `${root}/tileMatrixSets`,
+          rel: 'http://www.opengis.net/def/rel/ogc/1.0/tiling-schemes',
+          type: 'application/json',
+          title: 'TileMatrixSets',
+        },
       ],
     };
   }
@@ -98,6 +104,13 @@ export class OgcLandingController {
         // OGC API - Styles Part 1
         'http://www.opengis.net/spec/ogcapi-styles-1/1.0/conf/core',
         'http://www.opengis.net/spec/ogcapi-styles-1/1.0/conf/mapbox-styles',
+        // OGC API - Tiles Part 1
+        'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/core',
+        'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tileset',
+        'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/tilesets-list',
+        'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/dataset-tilesets',
+        'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/geodata-tilesets',
+        'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/mvt',
       ],
     };
   }
@@ -338,6 +351,106 @@ export class OgcLandingController {
             responses: {
               '200': { description: 'Style metadata document' },
               '404': { description: 'Style not found' },
+            },
+          },
+        },
+        '/tileMatrixSets': {
+          get: {
+            summary: 'List of supported TileMatrixSets',
+            tags: ['Tiles'],
+            responses: { '200': { description: 'TileMatrixSets list' } },
+          },
+        },
+        '/tileMatrixSets/{tmsId}': {
+          get: {
+            summary: 'TileMatrixSet definition',
+            tags: ['Tiles'],
+            parameters: [
+              {
+                name: 'tmsId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string', enum: ['WebMercatorQuad'] },
+              },
+            ],
+            responses: {
+              '200': { description: 'TileMatrixSet document' },
+              '404': { description: 'TileMatrixSet not found' },
+            },
+          },
+        },
+        '/collections/{collectionId}/tiles/{tmsId}': {
+          get: {
+            summary: 'Tileset metadata for a collection',
+            tags: ['Tiles'],
+            parameters: [
+              {
+                name: 'collectionId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+              {
+                name: 'tmsId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string', enum: ['WebMercatorQuad'] },
+              },
+            ],
+            responses: {
+              '200': { description: 'Tileset metadata document' },
+              '404': { description: 'Tileset not found' },
+            },
+          },
+        },
+        '/collections/{collectionId}/tiles/{tmsId}/{tileMatrix}/{tileRow}/{tileCol}': {
+          get: {
+            summary: 'Vector tile (MVT)',
+            tags: ['Tiles'],
+            parameters: [
+              {
+                name: 'collectionId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+              {
+                name: 'tmsId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string', enum: ['WebMercatorQuad'] },
+              },
+              {
+                name: 'tileMatrix',
+                in: 'path',
+                required: true,
+                schema: { type: 'integer', minimum: 0, maximum: 24 },
+                description: 'Zoom level.',
+              },
+              {
+                name: 'tileRow',
+                in: 'path',
+                required: true,
+                schema: { type: 'integer', minimum: 0 },
+                description: 'Y (row) coordinate.',
+              },
+              {
+                name: 'tileCol',
+                in: 'path',
+                required: true,
+                schema: { type: 'integer', minimum: 0 },
+                description: 'X (column) coordinate.',
+              },
+            ],
+            responses: {
+              '200': {
+                description: 'Mapbox Vector Tile bytes',
+                content: {
+                  'application/vnd.mapbox-vector-tile': {},
+                },
+              },
+              '404': { description: 'Tileset not found' },
+              '400': { description: 'Invalid tile coordinates' },
             },
           },
         },

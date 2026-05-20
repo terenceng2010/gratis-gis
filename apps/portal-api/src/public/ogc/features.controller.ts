@@ -382,6 +382,23 @@ function collectionDoc(
     links: [
       { href: self, rel: 'self', type: 'application/json' },
       { href: `${self}/items`, rel: 'items', type: 'application/geo+json' },
+      // OGC API - Tiles cross-link: clients walking the collection
+      // graph reach the tileset metadata from here. Same collection
+      // id; tmsId is fixed at WebMercatorQuad for v1.
+      {
+        href: `${self}/tiles/WebMercatorQuad`,
+        rel: 'http://www.opengis.net/def/rel/ogc/1.0/tilesets-vector',
+        type: 'application/json',
+        title: 'Vector tileset (WebMercatorQuad)',
+      },
+      // OGC API - Styles cross-link: a curated default MapLibre
+      // style is available at the same id.
+      {
+        href: `${base}/api/public/ogc/styles/${row.collectionId}`,
+        rel: 'http://www.opengis.net/def/rel/ogc/1.0/styles',
+        type: 'application/vnd.mapbox.style+json',
+        title: 'Default MapLibre style',
+      },
     ],
   };
 }
