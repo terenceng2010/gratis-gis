@@ -77,6 +77,7 @@ function isLongRunningIngestPath(suffix: string): boolean {
  *   - items/:id/layers/:layer/tile/:z/:x/:y.mvt
  *                                        -> public/items/:id/layers/:layer/tile/:z/:x/:y.mvt
  *   - items/:id/proxy/...                -> public/items/:id/proxy/...
+ *   - items/:id/thumbnail.svg            -> items/:id/thumbnail.svg (passthrough)
  *   - storage/private/:kind/:key         -> storage/private/:kind/:key (passthrough)
  *
  * Anything else (item lists, dependents lookups, write verbs)
@@ -108,6 +109,17 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
     /^items\/[^/]+\/layers\/[^/]+\/tile\/\d+\/\d+\/\d+\.mvt$/.test(suffix)
   ) {
     return `public/${suffix}`;
+  }
+  // Designer-baked thumbnail SVG. Public landing tiles + anon
+  // catalog cards point their <img src> at this endpoint via
+  // synthesizeThumbnailUrl. portal-api's thumbnail route is now
+  // @Public() and branches on @CurrentUser() (full ACL when
+  // signed in, access='public' fast path when anon), so the BFF
+  // forwards the suffix unchanged rather than rewriting to
+  // /public/items/.../thumbnail.svg. Same passthrough pattern as
+  // the storage entry below.
+  if (/^items\/[^/]+\/thumbnail\.svg$/.test(suffix)) {
+    return suffix;
   }
   // Anonymous service-proxy passthrough: a public viewer that
   // references an external service (ArcGIS / WMS / WFS / WMTS)

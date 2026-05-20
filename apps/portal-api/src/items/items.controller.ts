@@ -6,6 +6,7 @@ import {
   Delete,
   Get,
   Headers,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -40,7 +41,16 @@ import {
 import { Logger } from '@nestjs/common';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { Public } from '../auth/public.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+
+/**
+ * Shared UUID-shape gate. Used on anon paths to bail before
+ * hitting Prisma so the parser's "invalid uuid" error message
+ * doesn't leak through a NotFoundException body.
+ */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import type { CreateItemInput, UpdateItemInput } from './items.service.js';
 import { ItemsService } from './items.service.js';
 import { DataSnapshotService } from './data-snapshot.service.js';
@@ -359,23 +369,42 @@ export class ItemsController {
    * the new title immediately with no re-bake.  Falls back to the
    * type-default design when the row predates the design blob.
    *
-   * Returns 404 (via items.get) for callers that can't read the
-   * underlying item, so private items don't leak existence
-   * through their thumbnail URL.
+   * Public access posture: the endpoint is @Public() so the
+   * public landing tile + anon catalog can fetch baked
+   * thumbnails for items they're allowed to see. Authed callers
+   * route through the standard items.get (full ACL); anon callers
+   * fall back to an access='public' fast path so private items
+   * still don't leak existence through their thumbnail URL.
    *
    * Cache-Control is short-lived but allows revalidation: the
    * caller supplies a `?v=<updatedAt-ms>` query param when
-   * generating the URL (see synthesizeThumbnailUrl in
-   * items.service.ts) which is enough to bust the cache on
-   * rename without needing strong ETags.
+   * generating the URL (see synthesizeThumbnailUrl) which is
+   * enough to bust the cache on rename without needing strong
+   * ETags.
    */
+  @Public()
   @Get(':id/thumbnail.svg')
   async thumbnailSvg(
-    @CurrentUser() user: AuthUser,
+    @CurrentUser() user: AuthUser | null,
     @Param('id') id: string,
     @Res({ passthrough: false }) res: Response,
   ): Promise<void> {
-    const item = await this.items.get(user, id);
+    let item: Awaited<ReturnType<ItemsService['get']>>;
+    if (user) {
+      item = await this.items.get(user, id);
+    } else {
+      // Anon fast path. Only public items render; everything else
+      // 404s. UUID-shape gate so a stray non-UUID path doesn't
+      // hit Prisma's parser error path and leak the message.
+      if (!UUID_RE.test(id)) {
+        throw new NotFoundException('Item not found');
+      }
+      const row = await this.prisma.item.findFirst({
+        where: { id, access: 'public', deletedAt: null },
+      });
+      if (!row) throw new NotFoundException('Item not found');
+      item = row as Awaited<ReturnType<ItemsService['get']>>;
+    }
     const design =
       (item.thumbnailDesign as ThumbnailDesign | null | undefined) ??
       defaultThumbnailDesign(item.type);
