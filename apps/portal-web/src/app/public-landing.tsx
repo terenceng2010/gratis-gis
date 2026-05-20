@@ -273,7 +273,7 @@ function ProjectAboutSection() {
           <FeatureTile
             icon={Globe}
             title="Standards-friendly + ArcGIS-friendly"
-            body="OGC API Features, CSW / ISO 19115 catalogs, Schema.org JSON-LD, WMS / WFS service item types, plus Esri WebMap JSON export so portal maps open natively in ArcGIS Pro, AGO, QGIS, and kepler.gl."
+            body="OGC API Features, Tiles, Styles, and Records; CSW 2.0.2 catalog; Schema.org JSON-LD; WMS / WFS service references; plus Esri WebMap JSON export so portal maps open natively in ArcGIS Pro, AGO, QGIS, and kepler.gl."
           />
           <FeatureTile
             icon={Wrench}
