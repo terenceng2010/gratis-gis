@@ -6,6 +6,7 @@ import { OgcLandingController } from './ogc/landing.controller.js';
 import { OgcFeaturesController } from './ogc/features.controller.js';
 import { OgcStylesController } from './ogc/styles.controller.js';
 import { OgcTilesController } from './ogc/tiles.controller.js';
+import { OgcRecordsController } from './ogc/records.controller.js';
 import { OgcProblemJsonFilter } from './ogc/problem-json.filter.js';
 import { PublicCswController } from './public-csw.controller.js';
 import { PublicProxyController } from './public-proxy.controller.js';
@@ -34,6 +35,7 @@ import { ItemsModule } from '../items/items.module.js';
     OgcFeaturesController,
     OgcStylesController,
     OgcTilesController,
+    OgcRecordsController,
     PublicCswController,
     PublicProxyController,
   ],

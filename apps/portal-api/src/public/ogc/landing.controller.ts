@@ -74,6 +74,12 @@ export class OgcLandingController {
           type: 'application/json',
           title: 'TileMatrixSets',
         },
+        {
+          href: `${root}/records`,
+          rel: 'http://www.opengis.net/def/rel/ogc/1.0/records',
+          type: 'application/json',
+          title: 'Catalog records',
+        },
       ],
     };
   }
@@ -111,6 +117,10 @@ export class OgcLandingController {
         'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/dataset-tilesets',
         'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/geodata-tilesets',
         'http://www.opengis.net/spec/ogcapi-tiles-1/1.0/conf/mvt',
+        // OGC API - Records Part 1
+        'http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/core',
+        'http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/json',
+        'http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/sorting',
       ],
     };
   }
@@ -451,6 +461,63 @@ export class OgcLandingController {
               },
               '404': { description: 'Tileset not found' },
               '400': { description: 'Invalid tile coordinates' },
+            },
+          },
+        },
+        '/records': {
+          get: {
+            summary: 'Catalog records (paged)',
+            tags: ['Records'],
+            parameters: [
+              {
+                name: 'limit',
+                in: 'query',
+                schema: { type: 'integer', minimum: 1, maximum: 1000, default: 100 },
+              },
+              {
+                name: 'offset',
+                in: 'query',
+                schema: { type: 'integer', minimum: 0, default: 0 },
+              },
+              {
+                name: 'q',
+                in: 'query',
+                schema: { type: 'string' },
+                description: 'Free-text search over title / description / tags.',
+              },
+              {
+                name: 'type',
+                in: 'query',
+                schema: { type: 'string' },
+                description: 'Filter by item type (data_layer, map, ...).',
+              },
+              {
+                name: 'sortby',
+                in: 'query',
+                schema: { type: 'string' },
+                description:
+                  'Whitelisted keys: createdAt, updatedAt, title, type. ' +
+                  'Optional `-` prefix for descending.',
+              },
+            ],
+            responses: { '200': { description: 'Records collection' } },
+          },
+        },
+        '/records/{recordId}': {
+          get: {
+            summary: 'One catalog record',
+            tags: ['Records'],
+            parameters: [
+              {
+                name: 'recordId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+            ],
+            responses: {
+              '200': { description: 'Catalog record' },
+              '404': { description: 'Record not found' },
             },
           },
         },
