@@ -4,6 +4,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { PublicController } from './public.controller.js';
 import { OgcLandingController } from './ogc/landing.controller.js';
 import { OgcFeaturesController } from './ogc/features.controller.js';
+import { OgcStylesController } from './ogc/styles.controller.js';
 import { OgcProblemJsonFilter } from './ogc/problem-json.filter.js';
 import { PublicCswController } from './public-csw.controller.js';
 import { PublicProxyController } from './public-proxy.controller.js';
@@ -30,6 +31,7 @@ import { ItemsModule } from '../items/items.module.js';
     PublicController,
     OgcLandingController,
     OgcFeaturesController,
+    OgcStylesController,
     PublicCswController,
     PublicProxyController,
   ],

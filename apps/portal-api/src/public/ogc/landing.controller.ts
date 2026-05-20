@@ -62,6 +62,12 @@ export class OgcLandingController {
           type: 'application/json',
           title: 'Feature collections',
         },
+        {
+          href: `${root}/styles`,
+          rel: 'http://www.opengis.net/def/rel/ogc/1.0/styles',
+          type: 'application/json',
+          title: 'Styles',
+        },
       ],
     };
   }
@@ -89,6 +95,9 @@ export class OgcLandingController {
         // for the bounded interpretation: we don't reproject beyond
         // axis-order swap in v1.
         'http://www.opengis.net/spec/ogcapi-features-2/1.0/conf/crs',
+        // OGC API - Styles Part 1
+        'http://www.opengis.net/spec/ogcapi-styles-1/1.0/conf/core',
+        'http://www.opengis.net/spec/ogcapi-styles-1/1.0/conf/mapbox-styles',
       ],
     };
   }
@@ -277,6 +286,58 @@ export class OgcLandingController {
             responses: {
               '200': { description: 'GeoJSON Feature' },
               '404': { description: 'Feature or collection not found' },
+            },
+          },
+        },
+        '/styles': {
+          get: {
+            summary: 'List of styles',
+            tags: ['Styles'],
+            responses: { '200': { description: 'Styles list' } },
+          },
+        },
+        '/styles/{styleId}': {
+          get: {
+            summary: 'MapLibre style document',
+            tags: ['Styles'],
+            parameters: [
+              {
+                name: 'styleId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+                description:
+                  'Same id space as collections: bare UUID for ' +
+                  'single-layer items, `<itemId>__<layerKey>` for ' +
+                  'multi-layer items.',
+              },
+            ],
+            responses: {
+              '200': {
+                description: 'MapLibre / Mapbox GL style JSON',
+                content: {
+                  'application/vnd.mapbox.style+json': {},
+                },
+              },
+              '404': { description: 'Style not found' },
+            },
+          },
+        },
+        '/styles/{styleId}/metadata': {
+          get: {
+            summary: 'Style metadata',
+            tags: ['Styles'],
+            parameters: [
+              {
+                name: 'styleId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+            ],
+            responses: {
+              '200': { description: 'Style metadata document' },
+              '404': { description: 'Style not found' },
             },
           },
         },
