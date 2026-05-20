@@ -129,6 +129,42 @@ function toolPanel(anchor: 'top-right' | 'bottom-center' | 'top-center') {
 }
 
 /**
+ * Cluster a row-container's tool widgets to the right edge of the
+ * 192-col canvas.
+ *
+ * Background: spreadContainerChildren (custom-app.ts) sees children
+ * sitting at the (1, 1, 1, 1) placeholder and distributes them
+ * evenly across the container's primary axis. That gave starter
+ * templates a stretched-out toolbar with awkward gaps between every
+ * tool button -- the opposite of what most map-app authors expect.
+ *
+ * AGO ships toolbars on the right; matching that pattern by default
+ * is the right call (and the WV Parcel Viewer's own ad-hoc layout
+ * already moved tools there manually). Spacing is 5 cols apart with
+ * the rightmost tool at col 187, leaving ~5 cols of right margin so
+ * the icon + label don't crash into the chrome edge.
+ *
+ * Returns the same widgets array with each child's `layout.col`
+ * patched. The spread pass sees a non-1 col and leaves the layout
+ * alone, so the cluster sticks.
+ */
+function rightCluster(widgets: CustomWidget[]): CustomWidget[] {
+  const RIGHTMOST_COL = 187;
+  const STEP = 5;
+  const n = widgets.length;
+  return widgets.map((w, i) => ({
+    ...w,
+    layout: {
+      ...w.layout,
+      col: RIGHTMOST_COL - (n - 1 - i) * STEP,
+      row: 1,
+      colSpan: 1,
+      rowSpan: 1,
+    },
+  }));
+}
+
+/**
  * Sidebar Explorer template.  A working layout for parcel viewers,
  * asset inventories, and "browse a map by toggling layers" apps:
  *
@@ -196,7 +232,7 @@ function parcelViewerSeed(): CustomAppData {
       position: 'sticky-top',
       layout: 'row',
       variant: 'elevated',
-      widgets: [search, basemap, attrTable, print],
+      widgets: rightCluster([search, basemap, attrTable, print]),
     },
   };
   const leftDock: CustomWidget = {
@@ -278,7 +314,7 @@ function publicInfoMapSeed(): CustomAppData {
       position: 'sticky-top',
       layout: 'row',
       variant: 'glass',
-      widgets: [search, layerList, basemap],
+      widgets: rightCluster([search, layerList, basemap]),
     },
   };
   const map: CustomWidget = {
@@ -356,7 +392,7 @@ function fieldInspectionSeed(): CustomAppData {
       position: 'sticky-top',
       layout: 'row',
       variant: 'elevated',
-      widgets: [search, myLocation, attrTable],
+      widgets: rightCluster([search, myLocation, attrTable]),
     },
   };
   const drawer: CustomWidget = {
@@ -454,7 +490,7 @@ function editorWorkspaceSeed(): CustomAppData {
       position: 'sticky-top',
       layout: 'row',
       variant: 'elevated',
-      widgets: [search, select, basemap, attrTable],
+      widgets: rightCluster([search, select, basemap, attrTable]),
     },
   };
   const leftDock: CustomWidget = {
@@ -536,7 +572,7 @@ function viewerReadonlySeed(): CustomAppData {
       position: 'sticky-top',
       layout: 'row',
       variant: 'elevated',
-      widgets: [search, basemap, print],
+      widgets: rightCluster([search, basemap, print]),
     },
   };
   const leftDock: CustomWidget = {
