@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { Controller, Get, Req } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
+
+import { Public } from '../../auth/public.decorator.js';
+import { absoluteBase } from './url.js';
+
+/**
+ * Landing + conformance + OpenAPI endpoints for the OGC API surface.
+ *
+ * Lives separately from the per-class controllers because the OGC
+ * spec wants ONE landing document that links to every class shipped
+ * (Features, Tiles, Styles, Records), and ONE conformance list that
+ * declares every class's URIs. Adding a class means appending a link
+ * here, not rewriting the whole document. See
+ * `docs/ogc-api-strategy.md` for the cross-cutting contract.
+ */
+@ApiTags('public', 'ogc')
+@Controller('public/ogc')
+export class OgcLandingController {
+  /**
+   * Landing page. OGC API Common Part 1 §6 mandates a root JSON
+   * document with `title`, `description`, and a `links` array
+   * pointing at the conformance + OpenAPI documents plus every
+   * implemented class's entry endpoint.
+   */
+  @Public()
+  @Get('/')
+  landing(@Req() req: Request) {
+    const base = absoluteBase(req);
+    const root = `${base}/api/public/ogc`;
+    return {
+      title: 'GratisGIS OGC API',
+      description:
+        'OGC API endpoints exposing the publicly-shared data ' +
+        'layers, styles, tilesets, and catalog records hosted by ' +
+        'this GratisGIS instance. All endpoints are anonymous-' +
+        'reachable and limited to items with access=public.',
+      links: [
+        {
+          href: `${root}/`,
+          rel: 'self',
+          type: 'application/json',
+          title: 'This document',
+        },
+        {
+          href: `${root}/conformance`,
+          rel: 'http://www.opengis.net/def/rel/ogc/1.0/conformance',
+          type: 'application/json',
+          title: 'Conformance classes',
+        },
+        {
+          href: `${root}/api`,
+          rel: 'service-desc',
+          type: 'application/vnd.oai.openapi+json;version=3.0',
+          title: 'OpenAPI 3.0 description',
+        },
+        {
+          href: `${root}/collections`,
+          rel: 'data',
+          type: 'application/json',
+          title: 'Feature collections',
+        },
+      ],
+    };
+  }
+
+  /**
+   * Conformance declaration. Each class shipped APPENDS its URIs
+   * here rather than rewriting; this keeps the conformance list
+   * authoritative as new classes land. See ROADMAP §8.5.
+   */
+  @Public()
+  @Get('conformance')
+  conformance() {
+    return {
+      conformsTo: [
+        // OGC API - Common Part 1
+        'http://www.opengis.net/spec/ogcapi-common-1/1.0/conf/core',
+        'http://www.opengis.net/spec/ogcapi-common-1/1.0/conf/landing-page',
+        'http://www.opengis.net/spec/ogcapi-common-1/1.0/conf/json',
+        // OGC API - Features Part 1
+        'http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core',
+        'http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson',
+        'http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30',
+        // OGC API - Features Part 2 (CRS by reference, axis-order
+        // swap between CRS84 and EPSG:4326). See ogc-api-strategy
+        // for the bounded interpretation: we don't reproject beyond
+        // axis-order swap in v1.
+        'http://www.opengis.net/spec/ogcapi-features-2/1.0/conf/crs',
+      ],
+    };
+  }
+
+  /**
+   * OpenAPI 3.0 document. Hand-rolled instead of generated via
+   * @nestjs/swagger because the OGC API document has specific
+   * shape requirements (parameter naming conventions, security
+   * scheme exclusions, conformance-class cross-references) that
+   * Nest's generator wouldn't produce verbatim. Keep this in sync
+   * with the controller surface as endpoints are added.
+   */
+  @Public()
+  @Get('api')
+  openApi(@Req() req: Request) {
+    const base = absoluteBase(req);
+    const root = `${base}/api/public/ogc`;
+    return {
+      openapi: '3.0.3',
+      info: {
+        title: 'GratisGIS OGC API',
+        description:
+          'Public OGC API surface for this GratisGIS instance. ' +
+          'Exposes data_layer items shared at access=public as ' +
+          'OGC API Features collections; future classes (Tiles, ' +
+          'Styles, Records) layer on top.',
+        version: '1.0.0',
+        license: {
+          name: 'AGPL-3.0-or-later',
+          url: 'https://www.gnu.org/licenses/agpl-3.0.html',
+        },
+      },
+      servers: [{ url: root }],
+      paths: {
+        '/': {
+          get: {
+            summary: 'Landing page',
+            tags: ['Capabilities'],
+            responses: { '200': { description: 'Landing document' } },
+          },
+        },
+        '/conformance': {
+          get: {
+            summary: 'Conformance declaration',
+            tags: ['Capabilities'],
+            responses: { '200': { description: 'Conformance list' } },
+          },
+        },
+        '/api': {
+          get: {
+            summary: 'OpenAPI 3.0 document',
+            tags: ['Capabilities'],
+            responses: { '200': { description: 'This document' } },
+          },
+        },
+        '/collections': {
+          get: {
+            summary: 'List of feature collections',
+            tags: ['Features'],
+            responses: { '200': { description: 'Collections list' } },
+          },
+        },
+        '/collections/{collectionId}': {
+          get: {
+            summary: 'Collection metadata',
+            tags: ['Features'],
+            parameters: [
+              {
+                name: 'collectionId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+                description:
+                  'Either an item UUID (single-layer items) or ' +
+                  '`<itemId>__<layerKey>` (multi-layer items).',
+              },
+            ],
+            responses: {
+              '200': { description: 'Collection document' },
+              '404': { description: 'Collection not found' },
+            },
+          },
+        },
+        '/collections/{collectionId}/items': {
+          get: {
+            summary: 'Feature collection (GeoJSON)',
+            tags: ['Features'],
+            parameters: [
+              {
+                name: 'collectionId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+              {
+                name: 'limit',
+                in: 'query',
+                schema: { type: 'integer', minimum: 1, maximum: 10000, default: 100 },
+              },
+              {
+                name: 'offset',
+                in: 'query',
+                schema: { type: 'integer', minimum: 0, default: 0 },
+              },
+              {
+                name: 'bbox',
+                in: 'query',
+                schema: { type: 'string' },
+                description:
+                  'Comma-separated `minLon,minLat,maxLon,maxLat` ' +
+                  'when bbox-crs is CRS84 (default).',
+              },
+              {
+                name: 'bbox-crs',
+                in: 'query',
+                schema: {
+                  type: 'string',
+                  enum: [
+                    'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
+                    'http://www.opengis.net/def/crs/EPSG/0/4326',
+                  ],
+                  default: 'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
+                },
+              },
+              {
+                name: 'crs',
+                in: 'query',
+                schema: {
+                  type: 'string',
+                  enum: [
+                    'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
+                    'http://www.opengis.net/def/crs/EPSG/0/4326',
+                  ],
+                  default: 'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
+                },
+                description:
+                  'Output CRS. EPSG:4326 swaps coordinate axes ' +
+                  'to lat/lon order; CRS84 keeps lon/lat.',
+              },
+              {
+                name: 'sortby',
+                in: 'query',
+                schema: { type: 'string' },
+                description:
+                  'Property name to sort by; prefix with `-` for ' +
+                  'descending. Multiple keys via comma-separated ' +
+                  'list.',
+              },
+            ],
+            responses: {
+              '200': { description: 'GeoJSON FeatureCollection' },
+              '404': { description: 'Collection not found' },
+            },
+          },
+        },
+        '/collections/{collectionId}/items/{featureId}': {
+          get: {
+            summary: 'Single feature by id',
+            tags: ['Features'],
+            parameters: [
+              {
+                name: 'collectionId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+              {
+                name: 'featureId',
+                in: 'path',
+                required: true,
+                schema: { type: 'string' },
+              },
+              {
+                name: 'crs',
+                in: 'query',
+                schema: {
+                  type: 'string',
+                  enum: [
+                    'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
+                    'http://www.opengis.net/def/crs/EPSG/0/4326',
+                  ],
+                  default: 'http://www.opengis.net/def/crs/OGC/1.3/CRS84',
+                },
+              },
+            ],
+            responses: {
+              '200': { description: 'GeoJSON Feature' },
+              '404': { description: 'Feature or collection not found' },
+            },
+          },
+        },
+      },
+    };
+  }
+}
