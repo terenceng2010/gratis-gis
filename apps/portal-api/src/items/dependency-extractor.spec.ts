@@ -142,4 +142,97 @@ describe('extractDependencies for custom web_app', () => {
     );
     expect(result).toEqual({ itemIds: [], urls: [] });
   });
+
+  it('emits file-item asset refs from image widgets', () => {
+    const result = extractDependencies(
+      buildCustom({
+        version: 3,
+        targets: [],
+        pages: [
+          {
+            id: 'home',
+            title: 'Home',
+            widgets: [
+              {
+                id: 'w1',
+                kind: 'image',
+                config: {
+                  kind: 'image',
+                  asset: {
+                    kind: 'file-item',
+                    itemId: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+                    cachedUrl:
+                      '/api/portal/storage/private/item-file/some-key',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result.itemIds).toEqual([
+      'ffffffff-ffff-ffff-ffff-ffffffffffff',
+    ]);
+  });
+
+  it('skips external-url asset refs', () => {
+    const result = extractDependencies(
+      buildCustom({
+        version: 3,
+        targets: [],
+        pages: [
+          {
+            id: 'home',
+            title: 'Home',
+            widgets: [
+              {
+                id: 'w1',
+                kind: 'image',
+                config: {
+                  kind: 'image',
+                  asset: {
+                    kind: 'external-url',
+                    url: 'https://cdn.example.com/logo.png',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result).toEqual({ itemIds: [], urls: [] });
+  });
+
+  it('skips legacy image widgets with only bare url', () => {
+    // Legacy widgets pre-AssetRef have `url` but no `asset`. The
+    // extractor can't recover an itemId from a URL synchronously,
+    // so these are intentionally not crawled. Surfaced as a separate
+    // future task: a one-off migration that backfills AssetRef from
+    // any URL pointing at /api/portal/storage/private/item-file/...
+    const result = extractDependencies(
+      buildCustom({
+        version: 3,
+        targets: [],
+        pages: [
+          {
+            id: 'home',
+            title: 'Home',
+            widgets: [
+              {
+                id: 'w1',
+                kind: 'image',
+                config: {
+                  kind: 'image',
+                  url: '/api/portal/storage/private/item-file/some-key',
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(result).toEqual({ itemIds: [], urls: [] });
+  });
 });

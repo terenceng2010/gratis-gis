@@ -197,6 +197,18 @@ export function extractDependencies(
     //          Map-widget feature layer). Shape is shared with
     //          ViewerData via ViewerTarget so the dep walk is
     //          structurally identical to the viewer / editor cases.
+    //   - data.config.custom.pages[].widgets[].config.asset.itemId
+    //       -> Image / asset-picker references baked into widget
+    //          configs (AssetRef with kind='file-item'). Without
+    //          this, a custom app embedding a private file-item
+    //          (e.g. the WV Parcel Viewer's logo) cascade-walks
+    //          through mapId/targets and misses the file-item that
+    //          renders the broken-image icon for anon viewers.
+    //          External-URL asset refs and the legacy bare-`url`
+    //          field are intentionally NOT crawled: external URLs
+    //          don't map to portal items, and bare URLs would
+    //          require an async lookup the extractor (sync,
+    //          in-memory) cannot do.
     //
     // Without this branch, a publicly-shared custom app shows zero
     // dependencies to the cascade-on-public walker (#310), so the
@@ -212,11 +224,36 @@ export function extractDependencies(
       for (const p of pages) {
         const widgets = Array.isArray(p?.widgets) ? p.widgets : [];
         for (const w of widgets) {
-          if (w?.kind !== 'map') continue;
-          const cfg = w.config as { kind?: string; mapId?: unknown } | undefined;
-          if (!cfg || cfg.kind !== 'map') continue;
-          if (typeof cfg.mapId === 'string' && cfg.mapId.length > 0) {
-            itemIds.add(cfg.mapId);
+          if (!w || typeof w !== 'object') continue;
+          const cfg = w.config as
+            | {
+                kind?: string;
+                mapId?: unknown;
+                asset?: { kind?: unknown; itemId?: unknown };
+              }
+            | undefined;
+          if (!cfg || typeof cfg !== 'object') continue;
+          // Per-Map-widget override map.
+          if (cfg.kind === 'map') {
+            if (typeof cfg.mapId === 'string' && cfg.mapId.length > 0) {
+              itemIds.add(cfg.mapId);
+            }
+          }
+          // Asset-picker refs on any widget that exposes an AssetRef
+          // (today: image; future: any widget whose config has an
+          // `asset: AssetRef` field). The discriminant
+          // `asset.kind === 'file-item'` separates portal-item refs
+          // from `kind === 'external-url'` (untracked) and from a
+          // missing `asset` (legacy widget on bare `url`, untracked).
+          const asset = cfg.asset;
+          if (
+            asset &&
+            typeof asset === 'object' &&
+            asset.kind === 'file-item' &&
+            typeof asset.itemId === 'string' &&
+            asset.itemId.length > 0
+          ) {
+            itemIds.add(asset.itemId);
           }
         }
       }
