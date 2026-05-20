@@ -538,15 +538,24 @@ function ItemCard({ item }: { item: LandingData['items'][number] }) {
       >
         {item.thumbnailUrl ? (
           // Hosted thumbnail path: MinIO-backed, origin-safe.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.thumbnailUrl}
-            alt=""
-            className="h-32 w-full object-cover"
-          />
+          // 3:2 aspect matches the designer-baked SVG viewBox + the
+          // shared ItemCard in packages/ui so the title band at the
+          // bottom of a baked thumbnail isn't cropped off when the
+          // card narrows. Previously this used `h-32 w-full
+          // object-cover`, which forced a 128px height and cropped
+          // the bottom of the image (where the title band sits) on
+          // anything wider than ~190px.
+          <div className="aspect-[3/2] w-full overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={item.thumbnailUrl}
+              alt=""
+              className="h-full w-full object-cover"
+            />
+          </div>
         ) : (
           <div
-            className={`flex h-32 w-full items-center justify-center ${tile}`}
+            className={`flex aspect-[3/2] w-full items-center justify-center ${tile}`}
           >
             <Icon className="h-10 w-10" />
           </div>
