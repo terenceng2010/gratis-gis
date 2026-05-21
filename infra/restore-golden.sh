@@ -186,5 +186,99 @@ dc start keycloak
 sleep 5  # Keycloak boot is slower than postgres / minio.
 dc start portal-web portal-worker portal-api
 
+# -----------------------------------------------------------
+# Post-restore Keycloak reconciliation.
+#
+# The restored Keycloak DB is a point-in-time snapshot. Anything
+# added to the realm AFTER the snapshot was taken (a new OIDC
+# client, a role grant on the tester users) gets wiped on restore.
+# Re-running the same idempotent kcadm reconciliation deploy.sh
+# uses keeps the realm in the desired shape every night.
+#
+# Today this guarantees:
+#   1. The qgis-plugin OIDC client exists (PKCE, redirect URIs,
+#      org / org_role protocol mappers).
+#   2. Every restored realm user holds offline_access, so the
+#      QGIS plugin's PKCE flow doesn't 400 with "Offline tokens
+#      not allowed for the user or client" on first sign-in.
+#
+# Fail open: a kcadm hiccup logs WARN but doesn't abort restore.
+# -----------------------------------------------------------
+
+KEYCLOAK_CONTAINER="${KEYCLOAK_CONTAINER:-gratis-gis-prod-keycloak}"
+
+echo "=== Reconciling Keycloak realm (qgis-plugin client + offline_access) ==="
+
+# Wait up to 60s for Keycloak's admin endpoint to be responsive
+# after the restart above.
+kc_wait() {
+  local i
+  for i in $(seq 1 30); do
+    if docker exec "$KEYCLOAK_CONTAINER" \
+        /opt/keycloak/bin/kcadm.sh config credentials \
+          --server http://localhost:8080 \
+          --realm master \
+          --user "$KEYCLOAK_ADMIN" \
+          --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+if ! kc_wait; then
+  echo "WARN: Keycloak admin endpoint never came up post-restore; skipping reconciliation." >&2
+else
+  KC() { docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh "$@"; }
+
+  # --- qgis-plugin client ---
+  if KC get clients -r gratis-gis -q clientId=qgis-plugin --fields id \
+      2>/dev/null | grep -q '"id"'; then
+    echo "qgis-plugin client already present; skipping create."
+  else
+    echo "Creating qgis-plugin client from realm template..."
+    # Pull the block from the rendered realm template the deploy
+    # path materialized. If that file is missing (a restore on a
+    # host that never ran deploy.sh) fall back to the in-repo JSON.
+    SRC_REALM="/opt/gratis-gis/infra/keycloak/import/realm-gratis-gis.json"
+    if [[ ! -f "$SRC_REALM" ]]; then
+      SRC_REALM="/opt/gratis-gis/infra/keycloak/realm-gratis-gis.json"
+    fi
+    python3 -c "
+import json, sys
+realm = json.load(open('$SRC_REALM'))
+client = next(
+    (c for c in realm.get('clients', []) if c.get('clientId') == 'qgis-plugin'),
+    None,
+)
+if client is None:
+    sys.exit('realm template is missing the qgis-plugin client')
+json.dump(client, sys.stdout)
+" > /tmp/gg-qgis-plugin.json
+    docker cp /tmp/gg-qgis-plugin.json \
+      "$KEYCLOAK_CONTAINER:/tmp/gg-qgis-plugin.json"
+    if KC create clients -r gratis-gis -f /tmp/gg-qgis-plugin.json; then
+      echo "  qgis-plugin client created."
+    else
+      echo "WARN: qgis-plugin client create failed; check kcadm output above." >&2
+    fi
+    rm -f /tmp/gg-qgis-plugin.json
+  fi
+
+  # --- offline_access for every restored realm user ---
+  echo "Granting offline_access to every realm user..."
+  KC get users -r gratis-gis --fields username --offset 0 --limit 200 \
+      2>/dev/null \
+    | python3 -c "import sys,json; [print(u['username']) for u in json.load(sys.stdin)]" \
+    | while read -r username; do
+        if [[ -z "$username" ]]; then continue; fi
+        KC add-roles -r gratis-gis --uusername "$username" \
+            --rolename offline_access >/dev/null 2>&1 \
+          && echo "  + $username" \
+          || echo "  = $username (already had role)"
+      done
+fi
+
 echo "=== Reset complete at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo ""
