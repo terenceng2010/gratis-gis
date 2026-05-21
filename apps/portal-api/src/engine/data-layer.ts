@@ -1107,6 +1107,19 @@ export class DataLayerEngine {
           AND valid_to IS NULL
           AND geom IS NOT NULL
           AND geom && ST_Transform(ST_TileEnvelope(${args.z}::integer, ${args.x}::integer, ${args.y}::integer), 4326)
+          -- Sanity-filter out geometries whose bbox spans more
+          -- than a degree (~100 km) in either dimension. Real
+          -- parcels, buildings, hydrography polygons, etc. don't
+          -- span across a state -- features that do are almost
+          -- always import errors (corrupt polygon, accidental
+          -- multi-tract entity, sentinel/test geometry).
+          -- Rendering them flat-shaded turns into a cross-state
+          -- triangle that swamps the layer at low zoom. The check
+          -- uses simple XMin/XMax math (no PostGIS function call
+          -- per row) so it's effectively free on the index-scan
+          -- hot path.
+          AND (ST_XMax(geom) - ST_XMin(geom)) < 1.0
+          AND (ST_YMax(geom) - ST_YMin(geom)) < 1.0
           ${filterExtras}
         LIMIT ${MAX_FEATURES_PER_TILE}
       ),
