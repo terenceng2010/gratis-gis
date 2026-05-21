@@ -97,6 +97,112 @@ echo "=== Bringing up stack ==="
 echo "=== Status ==="
 "${COMPOSE[@]}" ps
 
+# -----------------------------------------------------------
+# Idempotent post-deploy Keycloak reconciliation.
+#
+# The realm JSON's --import-realm pass is a no-op once the realm
+# exists, which means anything added to the realm template AFTER the
+# first deploy (e.g. a new OIDC client, a new default-role grant)
+# never lands on the live realm. Re-importing would require deleting
+# the realm and losing all users + sessions, so we use kcadm.sh
+# instead to reconcile a small, fixed set of expectations.
+#
+# Today this block ensures:
+#   1. The qgis-plugin OIDC client exists with its PKCE + redirect
+#      settings + org / org_role protocol mappers.
+#   2. Every existing realm user holds the `offline_access` role,
+#      so the QGIS plugin's refresh-token flow doesn't 400 on its
+#      first sign-in.
+#
+# Both steps are idempotent: re-running deploy.sh is a no-op when
+# everything is already in the desired state. Any failure here is a
+# warning, not a hard exit, so a transient kcadm hiccup doesn't
+# undo a successful container deploy.
+# -----------------------------------------------------------
+
+KEYCLOAK_CONTAINER="${KEYCLOAK_CONTAINER:-gratis-gis-prod-keycloak}"
+
+echo
+echo "=== Reconciling Keycloak realm (qgis-plugin client + offline_access) ==="
+
+# Wait up to 60s for Keycloak's admin endpoint to be responsive.
+# Fresh containers take a few seconds; an already-running container
+# returns immediately.
+kc_wait() {
+  local i
+  for i in $(seq 1 30); do
+    if docker exec "$KEYCLOAK_CONTAINER" \
+        /opt/keycloak/bin/kcadm.sh config credentials \
+          --server http://localhost:8080 \
+          --realm master \
+          --user "$KEYCLOAK_ADMIN" \
+          --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+if ! kc_wait; then
+  echo "WARN: Keycloak admin endpoint never came up; skipping reconciliation." >&2
+  echo "      Re-run deploy.sh once Keycloak is healthy to apply." >&2
+else
+  KC() { docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh "$@"; }
+
+  # --- qgis-plugin client ---
+  if KC get clients -r gratis-gis -q clientId=qgis-plugin --fields id \
+      2>/dev/null | grep -q '"id"'; then
+    echo "qgis-plugin client already present; skipping create."
+  else
+    echo "Creating qgis-plugin client from realm import JSON..."
+    # Pull the qgis-plugin block out of the rendered realm JSON and
+    # feed it directly to kcadm. The block already has all the right
+    # fields (publicClient, PKCE S256, redirect URIs, org / org_role
+    # protocol mappers) so create-from-file matches the template.
+    python3 -c '
+import json, sys
+realm = json.load(open("infra/keycloak/import/realm-gratis-gis.json"))
+client = next(
+    (c for c in realm.get("clients", []) if c.get("clientId") == "qgis-plugin"),
+    None,
+)
+if client is None:
+    sys.exit("realm template is missing the qgis-plugin client")
+json.dump(client, sys.stdout)
+' > /tmp/gg-qgis-plugin.json
+    docker cp /tmp/gg-qgis-plugin.json \
+      "$KEYCLOAK_CONTAINER:/tmp/gg-qgis-plugin.json"
+    if KC create clients -r gratis-gis -f /tmp/gg-qgis-plugin.json; then
+      echo "  qgis-plugin client created."
+    else
+      echo "WARN: qgis-plugin client create failed; check kcadm output above." >&2
+    fi
+    rm -f /tmp/gg-qgis-plugin.json
+  fi
+
+  # --- offline_access for every realm user ---
+  # The QGIS plugin asks for the offline_access scope so its
+  # refresh-token survives QGIS restarts. Keycloak gates that on
+  # the user holding the offline_access realm role; without it the
+  # PKCE code exchange returns "Offline tokens not allowed for the
+  # user or client". Grant to everyone; add-roles is idempotent.
+  echo "Granting offline_access to every realm user..."
+  KC get users -r gratis-gis --fields username --offset 0 --limit 200 \
+      2>/dev/null \
+    | python3 -c "import sys,json; [print(u['username']) for u in json.load(sys.stdin)]" \
+    | while read -r username; do
+        if [[ -z "$username" ]]; then continue; fi
+        # add-roles errors when the user already has the role; the
+        # `|| true` swallows that so the loop stays idempotent.
+        KC add-roles -r gratis-gis --uusername "$username" \
+            --rolename offline_access >/dev/null 2>&1 \
+          && echo "  + $username" \
+          || echo "  = $username (already had role)"
+      done
+  echo "Offline-access reconciliation done."
+fi
+
 echo
 echo "=== Tail of recent logs (last 30 lines per service) ==="
 "${COMPOSE[@]}" logs --tail=30
