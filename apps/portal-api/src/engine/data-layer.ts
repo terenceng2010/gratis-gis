@@ -1049,29 +1049,72 @@ export class DataLayerEngine {
     // surviving geometry into the tile's local coordinate space
     // (4096-unit grid, with the 64-unit buffer that MapLibre needs
     // to avoid seams at tile edges).
+    //
+    // Two-stage query for fast low-zoom tiles on huge layers
+    // (e.g. WV Parcels: 1.4M polygons that all land in a single
+    // z=4 tile):
+    //
+    //   1. `bbox_obs` is a *separate* CTE that ONLY does the
+    //      bbox + scope filter, with a hard LIMIT (5000 here).
+    //      Splitting it out lets Postgres pick the GIST geom
+    //      index instead of the entity-ordered btree (which it
+    //      would otherwise choose to satisfy the DISTINCT ON
+    //      ORDER BY clause downstream). The LIMIT means low-zoom
+    //      tiles return a sampled 5000 features instead of
+    //      stalling for minutes on the full set; small viewports
+    //      that contain <=5000 features are unaffected.
+    //
+    //   2. `currents` then deduplicates `bbox_obs` by entity
+    //      (DISTINCT ON keeping the latest observation). Cheap
+    //      because `bbox_obs` is already capped at 5000 rows.
+    //
+    //   3. `tile_features` runs ST_SimplifyPreserveTopology
+    //      *before* ST_Transform + ST_AsMVTGeom so the expensive
+    //      reprojection + clip happens on simpler geometries.
+    //      Tolerance = meters-per-pixel at this zoom; vertices
+    //      finer than that collapse, and ST_AsMVTGeom drops the
+    //      ones that quantize to a single point.
+    //
+    //   4. `visible_features` filters out null geoms (geometries
+    //      that ST_AsMVTGeom couldn't represent at this zoom)
+    //      so ST_AsMVT doesn't emit empty feature stubs.
     interface TileRow {
       mvt: Buffer;
     }
+    // cellSize: meters-per-pixel at the equator at this zoom for
+    // the standard 256-pixel WebMercatorQuad tile.
+    const cellSize = 156543.0339280410 / Math.pow(2, args.z);
+    // Cap features per tile. 5000 is a sweet spot: enough for a
+    // dense rural county to come through whole at z=12; small
+    // enough that a state-wide z=6 tile completes well inside the
+    // 30s statement_timeout and downstream MVT serialization stays
+    // bounded. Layers that are sparse enough to fit in fewer rows
+    // are unaffected -- this is a worst-case ceiling, not a floor.
+    const MAX_FEATURES_PER_TILE = 5000;
     const rows = await this.prisma.$queryRaw<TileRow[]>`
-      WITH currents AS (
-        SELECT DISTINCT ON (entity)
-          entity,
-          geom,
-          kind
-          ${currentsAttrs}
+      WITH bbox_obs AS (
+        SELECT entity, geom, kind, valid_from, tx_time${currentsAttrs}
         FROM observation
         WHERE scope = ${scope}
           AND valid_to IS NULL
           AND geom IS NOT NULL
           AND geom && ST_Transform(ST_TileEnvelope(${args.z}::integer, ${args.x}::integer, ${args.y}::integer), 4326)
           ${filterExtras}
+        LIMIT ${MAX_FEATURES_PER_TILE}
+      ),
+      currents AS (
+        SELECT DISTINCT ON (entity) entity, geom, kind${currentsAttrs}
+        FROM bbox_obs
         ORDER BY entity, valid_from DESC, tx_time DESC
       ),
       tile_features AS (
         SELECT
           entity::text AS _global_id,
           ST_AsMVTGeom(
-            ST_Transform(geom, 3857),
+            ST_SimplifyPreserveTopology(
+              ST_Transform(geom, 3857),
+              ${cellSize}::float8
+            ),
             ST_TileEnvelope(${args.z}::integer, ${args.x}::integer, ${args.y}::integer),
             4096,
             64,
@@ -1080,10 +1123,13 @@ export class DataLayerEngine {
           ${fieldProjection}
         FROM currents
         WHERE kind <> 'delete'
+      ),
+      visible_features AS (
+        SELECT * FROM tile_features WHERE geom IS NOT NULL
       )
       SELECT
-        COALESCE(ST_AsMVT(tile_features, 'features', 4096, 'geom'), '\\x'::bytea) AS mvt
-      FROM tile_features
+        COALESCE(ST_AsMVT(visible_features, 'features', 4096, 'geom'), '\\x'::bytea) AS mvt
+      FROM visible_features
     `;
     const buf = rows[0]?.mvt;
     return buf instanceof Buffer ? buf : Buffer.alloc(0);
