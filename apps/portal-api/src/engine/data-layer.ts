@@ -555,7 +555,17 @@ export class DataLayerEngine {
     const usesCandidateCte = candidateFilters.length > 0;
     const canPushCandidateLimit =
       usesCandidateCte && currentFilters.length === 0;
-    const innerLimit = Math.max(limit * 2, 100);
+    // Inner LIMIT must be >= the outer LIMIT to satisfy the user's
+    // request, plus a small buffer so the kind='delete' filter in the
+    // outer SELECT doesn't leave us short. The previous floor of 100
+    // tanked the QGIS OAPIF schema probe: QGIS opens a layer by
+    // hitting `/items?limit=1`, the engine then dragged in 100
+    // current-state polygons (avg 114 KB of ST_AsGeoJSON each on the
+    // WV Parcels layer = 11 MB shipped from Postgres for a 2 KB
+    // response), and the trip took ~9s. A small additive buffer
+    // (10 extra rows) absorbs typical tombstone churn without
+    // ballooning small probes.
+    const innerLimit = limit + 10;
     const candidateLimit = canPushCandidateLimit
       ? Prisma.sql`ORDER BY entity LIMIT ${innerLimit}`
       : Prisma.empty;
