@@ -528,24 +528,26 @@ export class DataLayerEngine {
     // scope before any LIMIT applied, blowing past the 30s
     // statement_timeout for a /items?limit=1 request.
     //
-    // When the request has no narrowing filters that live inside
-    // `currents` (bbox, geoLimit, boundaryClip, parentFkFilter),
-    // candidate_entities IS the final result set, so we can push
-    // the limit there and bound the work cheaply. With those
-    // filters present, candidates must be inspected post-bbox so
-    // we can't truncate upstream without silently dropping
-    // matching features; in that case we fall back to the
-    // unbounded CTE and rely on bbox shrinking the working set
-    // (which it usually does dramatically -- typical OGC clients
-    // pan a viewport that covers a small fraction of the layer).
+    // ALWAYS limit the `currents` CTE -- it's referenced twice
+    // (by creates + the outer SELECT) so Postgres materializes
+    // the full DISTINCT ON otherwise, which scans every entity
+    // in the scope before the outer LIMIT takes effect. LIMITing
+    // here means we get the first N entities by entity-UUID
+    // order matching the filters; with bbox present that's a
+    // sample of bbox-matching entities (the OAPIF `next` link
+    // paginates from there).
+    //
+    // ONLY push limit into `candidate_entities` when there are no
+    // narrowing filters in `currents` (bbox, geoLimit,
+    // boundaryClip, parentFkFilter). With those filters present,
+    // candidates must be inspected post-filter, so truncating
+    // upstream would silently drop matching features.
     const canPushCandidateLimit = currentFilters.length === 0;
     const innerLimit = Math.max(limit * 2, 100);
     const candidateLimit = canPushCandidateLimit
       ? Prisma.sql`ORDER BY entity LIMIT ${innerLimit}`
       : Prisma.empty;
-    const currentsLimit = canPushCandidateLimit
-      ? Prisma.sql`LIMIT ${innerLimit}`
-      : Prisma.empty;
+    const currentsLimit = Prisma.sql`LIMIT ${innerLimit}`;
     const rows = await this.prisma.$queryRaw<FeatureRow[]>`
       WITH candidate_entities AS (
         SELECT entity
