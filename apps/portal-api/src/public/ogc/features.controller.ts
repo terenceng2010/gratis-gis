@@ -102,7 +102,24 @@ export class OgcFeaturesController {
     const crs = parseCrs(crsParam);
     const bboxCrs = parseCrs(bboxCrsParam);
 
-    const opts: { bbox?: [number, number, number, number] } = {};
+    // Pre-2026-05-21: this handler called listFeatures with no limit
+    // and sliced features.slice(offset, offset+limit) in JS. On a
+    // 1.4M-row layer that meant the engine pulled every row + every
+    // CTE-joined creates row before JS pagination, which on prod
+    // tripped Postgres' statement_timeout and returned a 500 for
+    // every items request (including limit=1). Push the limit down
+    // into the engine's LIMIT clause. We over-fetch by `offset` so
+    // the JS slice still gives correct pagination -- offset push-
+    // down at the engine level is a follow-up; until then this caps
+    // worst-case fetch at (offset + limit), which is bounded by the
+    // controller's limit clamp (10 000) plus whatever the caller
+    // offset is.
+    const opts: {
+      bbox?: [number, number, number, number];
+      limit?: number;
+    } = {
+      limit: offset + limit,
+    };
     if (bboxParam) {
       opts.bbox = parseBbox(bboxParam, bboxCrs);
     }
@@ -119,6 +136,12 @@ export class OgcFeaturesController {
       features = applySortby(features, sortbyParam);
     }
 
+    // numberMatched is unknowable without a count-only query (which
+    // would cost as much as the slow full-fetch we just avoided).
+    // Per OGC API Features Part 1 7.18.2, numberMatched is OPTIONAL;
+    // when omitted, clients fall back to relying on `next` link
+    // presence to keep paging. We surface what we know (the size of
+    // the slice we returned) as numberReturned and skip the field.
     const total = features.length;
     let slice = features.slice(offset, offset + limit);
     if (crs === 'epsg-4326') {

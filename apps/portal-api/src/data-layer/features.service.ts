@@ -112,6 +112,14 @@ export class DataLayerFeaturesService {
        *  full attrs by id; without it the popup would force the
        *  layer to return every feature. */
       entity?: string;
+      /** SQL-level row cap, threaded straight into the engine's
+       *  LIMIT clause. The OGC API Features controller passes the
+       *  query's `limit` here so a 1.4M-row layer doesn't load
+       *  every row before the JS pagination slice. Defaults at the
+       *  engine to 100 000 to match the historical map-render path
+       *  that pre-dates server-side pagination; new callers that
+       *  paginate should always supply this. */
+      limit?: number;
     } = {},
   ): Promise<{ type: 'FeatureCollection'; features: DataLayerFeatureOut[] }> {
     const result = await this.dataLayer.listFeatures({
@@ -133,6 +141,7 @@ export class DataLayerFeaturesService {
         : {}),
       ...(opts.isTable === true ? { isTable: true } : {}),
       ...(opts.entity !== undefined ? { entity: opts.entity } : {}),
+      ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
     });
     return result;
   }
