@@ -1081,9 +1081,19 @@ export class DataLayerEngine {
     interface TileRow {
       mvt: Buffer;
     }
-    // cellSize: meters-per-pixel at the equator at this zoom for
-    // the standard 256-pixel WebMercatorQuad tile.
-    const cellSize = 156543.0339280410 / Math.pow(2, args.z);
+    // Simplification tolerance: 1/16 of the tile's meters-per-pixel.
+    // The full meters-per-pixel value collapses small features
+    // smaller than that into degenerate geometries; with
+    // ST_Simplify those become EMPTY and get dropped, but at low
+    // zoom over a dense layer (WV Parcels at z=6) the threshold
+    // is so coarse that *every* feature drops out, leaving the
+    // tile blank. /16 keeps the simplification at roughly 1 MVT
+    // grid unit (4096-unit tile divided by 256 display pixels =
+    // 16 sub-pixels per display pixel), which thins coincident
+    // vertices without obliterating real polygon shapes. Sub-MVT
+    // -unit features still collapse to EMPTY and drop out, as
+    // they should at that zoom.
+    const cellSize = 156543.0339280410 / Math.pow(2, args.z) / 16;
     // Cap features per tile. 5000 is a sweet spot: enough for a
     // dense rural county to come through whole at z=12; small
     // enough that a state-wide z=6 tile completes well inside the
@@ -1111,7 +1121,20 @@ export class DataLayerEngine {
         SELECT
           entity::text AS _global_id,
           ST_AsMVTGeom(
-            ST_SimplifyPreserveTopology(
+            -- ST_Simplify (NOT SimplifyPreserveTopology): when the
+            -- tolerance exceeds a feature's max dimension the
+            -- topology-preserving variant collapses the feature to
+            -- a degenerate triangle (since it refuses to drop
+            -- vertices below the 3-vertex minimum). At z=6 the
+            -- tolerance is ~2.4 km, so on the WV Parcels layer
+            -- (most parcels < 200 m on a side) every small parcel
+            -- rendered as a long thin triangle stretching across
+            -- the state. ST_Simplify instead returns EMPTY for
+            -- over-simplified geometries, which ST_AsMVTGeom drops.
+            -- Net effect: sub-pixel features disappear (correct
+            -- cartographic behaviour at low zoom) instead of
+            -- becoming artifacts.
+            ST_Simplify(
               ST_Transform(geom, 3857),
               ${cellSize}::float8
             ),
