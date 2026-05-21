@@ -521,6 +521,31 @@ export class DataLayerEngine {
         ? Prisma.join(currentFilters, ' ')
         : Prisma.empty;
 
+    // Per EXPLAIN ANALYZE on a 1.4M-row scope (2026-05-21): the
+    // outer LIMIT alone wasn't enough -- Postgres materializes the
+    // `currents` CTE (referenced twice: by creates + the outer
+    // SELECT) so it computed DISTINCT ON over every entity in the
+    // scope before any LIMIT applied, blowing past the 30s
+    // statement_timeout for a /items?limit=1 request.
+    //
+    // When the request has no narrowing filters that live inside
+    // `currents` (bbox, geoLimit, boundaryClip, parentFkFilter),
+    // candidate_entities IS the final result set, so we can push
+    // the limit there and bound the work cheaply. With those
+    // filters present, candidates must be inspected post-bbox so
+    // we can't truncate upstream without silently dropping
+    // matching features; in that case we fall back to the
+    // unbounded CTE and rely on bbox shrinking the working set
+    // (which it usually does dramatically -- typical OGC clients
+    // pan a viewport that covers a small fraction of the layer).
+    const canPushCandidateLimit = currentFilters.length === 0;
+    const innerLimit = Math.max(limit * 2, 100);
+    const candidateLimit = canPushCandidateLimit
+      ? Prisma.sql`ORDER BY entity LIMIT ${innerLimit}`
+      : Prisma.empty;
+    const currentsLimit = canPushCandidateLimit
+      ? Prisma.sql`LIMIT ${innerLimit}`
+      : Prisma.empty;
     const rows = await this.prisma.$queryRaw<FeatureRow[]>`
       WITH candidate_entities AS (
         SELECT entity
@@ -528,6 +553,7 @@ export class DataLayerEngine {
         WHERE scope = ${scope}
           AND kind = 'create'
           ${candidateExtras}
+        ${candidateLimit}
       ),
       currents AS (
         SELECT DISTINCT ON (entity)
@@ -544,6 +570,7 @@ export class DataLayerEngine {
           AND entity IN (SELECT entity FROM candidate_entities)
           ${currentExtras}
         ORDER BY entity, valid_from DESC, tx_time DESC
+        ${currentsLimit}
       ),
       creates AS (
         SELECT entity,
