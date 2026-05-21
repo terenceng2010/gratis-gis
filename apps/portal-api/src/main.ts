@@ -1,9 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module.js';
+
+// Process-level safety net (#117). Node >= 16 exits the process on an
+// uncaughtException OR an unhandledRejection by default; in prod that
+// has manifested as both portal-api replicas crash-looping when a
+// guard / strategy throws synchronously outside the normal Nest
+// exception filter. Log + continue so a single bad request can never
+// take the whole worker down. This intentionally does NOT call
+// process.exit: Nest's exception filter already handles request-scope
+// errors, and anything that escapes to here is already past the point
+// where the response could be salvaged for THAT request, but the
+// process state is still recoverable for everyone else.
+const processLogger = new Logger('Process');
+process.on('unhandledRejection', (reason) => {
+  const detail =
+    reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  processLogger.error(`Unhandled promise rejection (kept worker alive): ${detail}`);
+});
+process.on('uncaughtException', (err) => {
+  processLogger.error(
+    `Uncaught exception (kept worker alive): ${err.stack ?? err.message}`,
+  );
+});
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {

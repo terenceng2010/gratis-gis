@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
   ExecutionContext,
+  HttpException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -29,11 +31,13 @@ import { IS_PUBLIC_KEY } from './public.decorator.js';
  */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
+  private readonly logger = new Logger(JwtAuthGuard.name);
+
   constructor(private readonly reflector: Reflector) {
     super();
   }
 
-  override canActivate(ctx: ExecutionContext) {
+  override async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       ctx.getHandler(),
       ctx.getClass(),
@@ -51,7 +55,33 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         req.headers.authorization.toLowerCase().startsWith('bearer ');
       if (!hasBearer) return true;
     }
-    return super.canActivate(ctx);
+    // Wrap super.canActivate() so that the fully-synchronous failure
+    // chain inside passport-jwt cannot crash the Node worker (#117).
+    //
+    // When passport-jwt's strategy.authenticate fails synchronously
+    // (missing token, signature mismatch, hot JWKS cache), the call
+    // chain strategy.fail -> passport.allFailed -> @nestjs/passport
+    // inner callback -> our handleRequest runs in a single sync stack.
+    // The throw at the top of that stack was escaping @nestjs/passport's
+    // createPassportContext try/catch (Promise rejection went unhandled)
+    // and surfacing as an uncaughtException that killed the worker.
+    // Both prod replicas were crash-looping every 15-30 minutes.
+    //
+    // Awaiting inside an explicit try/catch attaches a rejection handler
+    // in our own scope, so any error becomes a normal Nest HttpException
+    // that the global exception filter turns into a 401 / 403 response.
+    try {
+      const result = await super.canActivate(ctx);
+      return Boolean(result);
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      this.logger.warn(
+        `JWT auth chain threw a non-HttpException; rethrowing as 401: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      throw new UnauthorizedException();
+    }
   }
 
   /**
@@ -80,9 +110,15 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       if (err || !user) return null as TUser;
       return user;
     }
-    // Private route: existing strict behavior.
+    // Private route: existing strict behavior. Always throw an
+    // HttpException so the canActivate try/catch above can pass it
+    // straight through to Nest's exception filter. (Before #117 we
+    // could throw a raw Error here; that path is preserved by the
+    // canActivate fallback, but normalising to HttpException keeps
+    // the response shape predictable.)
     if (err || !user) {
-      throw err instanceof Error ? err : new UnauthorizedException();
+      if (err instanceof HttpException) throw err;
+      throw new UnauthorizedException();
     }
     return user;
   }
