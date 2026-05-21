@@ -522,41 +522,60 @@ export class DataLayerEngine {
         : Prisma.empty;
 
     // Per EXPLAIN ANALYZE on a 1.4M-row scope (2026-05-21): the
-    // outer LIMIT alone wasn't enough -- Postgres materializes the
-    // `currents` CTE (referenced twice: by creates + the outer
-    // SELECT) so it computed DISTINCT ON over every entity in the
-    // scope before any LIMIT applied, blowing past the 30s
-    // statement_timeout for a /items?limit=1 request.
+    // outer LIMIT alone wasn't enough. With the `entity IN
+    // candidate_entities` semi-join, Postgres hash-aggregated
+    // all 1.4M scope-entities into a driver set and nested-loop
+    // bbox-checked every one, blowing past the 30s timeout for
+    // even a county-sized bbox.
     //
-    // ALWAYS limit the `currents` CTE -- it's referenced twice
+    // Two-shape strategy:
+    //
+    //  - When there are NO candidate filters (ownRowsOnly /
+    //    entity= unset, the common /items?bbox= path), the
+    //    semi-join against candidate_entities is doing nothing
+    //    useful -- every entity in scope has a `create`
+    //    observation by construction (an entity exists iff it
+    //    was created). Drop the candidate_entities CTE and the
+    //    IN check; let `currents` drive itself off the bbox/scope
+    //    GIST index. EXPLAIN ANALYZE on a 41k-row bbox subset
+    //    finishes in ~800ms this way vs >30s with the IN.
+    //
+    //  - When candidate filters ARE present (ownRowsOnly,
+    //    entity=), they semantically must be applied to the
+    //    `create` row, not the current state (someone else can
+    //    edit an entity I created, leaving its current author
+    //    different from its creator). Keep candidate_entities
+    //    and the IN; the entity sets here are small (a single
+    //    user's items, or a single entity), so the slow path is
+    //    fine.
+    //
+    // ALSO always limit `currents` -- it's referenced twice
     // (by creates + the outer SELECT) so Postgres materializes
-    // the full DISTINCT ON otherwise, which scans every entity
-    // in the scope before the outer LIMIT takes effect. LIMITing
-    // here means we get the first N entities by entity-UUID
-    // order matching the filters; with bbox present that's a
-    // sample of bbox-matching entities (the OAPIF `next` link
-    // paginates from there).
-    //
-    // ONLY push limit into `candidate_entities` when there are no
-    // narrowing filters in `currents` (bbox, geoLimit,
-    // boundaryClip, parentFkFilter). With those filters present,
-    // candidates must be inspected post-filter, so truncating
-    // upstream would silently drop matching features.
-    const canPushCandidateLimit = currentFilters.length === 0;
+    // the full DISTINCT ON otherwise.
+    const usesCandidateCte = candidateFilters.length > 0;
+    const canPushCandidateLimit =
+      usesCandidateCte && currentFilters.length === 0;
     const innerLimit = Math.max(limit * 2, 100);
     const candidateLimit = canPushCandidateLimit
       ? Prisma.sql`ORDER BY entity LIMIT ${innerLimit}`
       : Prisma.empty;
     const currentsLimit = Prisma.sql`LIMIT ${innerLimit}`;
+    const candidateCte = usesCandidateCte
+      ? Prisma.sql`
+        candidate_entities AS (
+          SELECT entity
+          FROM observation
+          WHERE scope = ${scope}
+            AND kind = 'create'
+            ${candidateExtras}
+          ${candidateLimit}
+        ),`
+      : Prisma.empty;
+    const currentsCandidateFilter = usesCandidateCte
+      ? Prisma.sql`AND entity IN (SELECT entity FROM candidate_entities)`
+      : Prisma.empty;
     const rows = await this.prisma.$queryRaw<FeatureRow[]>`
-      WITH candidate_entities AS (
-        SELECT entity
-        FROM observation
-        WHERE scope = ${scope}
-          AND kind = 'create'
-          ${candidateExtras}
-        ${candidateLimit}
-      ),
+      WITH ${candidateCte}
       currents AS (
         SELECT DISTINCT ON (entity)
           id AS observation_id,
@@ -569,7 +588,7 @@ export class DataLayerEngine {
         FROM observation
         WHERE scope = ${scope}
           AND valid_from <= ${asOf}
-          AND entity IN (SELECT entity FROM candidate_entities)
+          ${currentsCandidateFilter}
           ${currentExtras}
         ORDER BY entity, valid_from DESC, tx_time DESC
         ${currentsLimit}
