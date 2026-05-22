@@ -25,3 +25,16 @@ export const SHARING_BASE_STORAGE_KEY = 'gratisgis.ago-oauth-sharing-base';
 /** Whatever URL shape the user originally typed; shown in the
  *  "Connected to ArcGIS Online" panel after sign-in. */
 export const ORG_URL_STORAGE_KEY = 'gratisgis.ago-oauth-org-url';
+
+/**
+ * Name of the BroadcastChannel the OAuth callback page uses to
+ * deliver the captured token to the opener. Same-origin only:
+ * BroadcastChannel inherently scopes to the origin, and the
+ * opener verifies the state token before trusting the payload
+ * anyway.
+ *
+ * BroadcastChannel survives the cross-origin navigation through
+ * AGO that severs window.opener under modern COOP defaults
+ * (especially in Edge / Chrome).
+ */
+export const TOKEN_CHANNEL_NAME = 'gratisgis.ago-oauth-token-channel';

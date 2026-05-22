@@ -2,7 +2,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { STATE_STORAGE_KEY } from '../oauth-storage-keys';
+import { STATE_STORAGE_KEY, TOKEN_CHANNEL_NAME } from '../oauth-storage-keys';
 
 /**
  * AGO OAuth callback page. Runs inside a small popup window the
@@ -11,14 +11,22 @@ import { STATE_STORAGE_KEY } from '../oauth-storage-keys';
  * not the query string -- the server-side framework never sees
  * it. This client-only page reads it, validates the state token
  * matches the one the opener tucked into the popup's
- * sessionStorage, posts the token back to the opener via
- * window.opener.postMessage, and closes itself.
+ * sessionStorage, posts the token to a BroadcastChannel the
+ * opener is subscribed to, and closes itself.
+ *
+ * Why BroadcastChannel instead of window.opener.postMessage:
+ *  - The popup navigates gratisgis -> AGO (cross-origin) -> back
+ *    to gratisgis. Browsers (especially Edge / Chrome with strict
+ *    COOP) sever window.opener on that hop, leaving the popup
+ *    with no reference to talk back to the opener even on a
+ *    successful sign-in.
+ *  - BroadcastChannel is same-origin-only (security boundary
+ *    intact), works regardless of opener relationships, and is
+ *    available in every modern browser.
  *
  * Why a separate page instead of inline state on the importer:
  *  - The popup model isolates the auth round trip from the
- *    importer dialog's React state, so a stray browser-side
- *    extension that munges the URL fragment can't poison the
- *    importer page.
+ *    importer dialog's React state.
  *  - AGO's allowed redirect URIs are registered ahead of time;
  *    keeping the callback at a stable URL means re-registering
  *    is a one-time chore, not a per-deploy concern.
@@ -63,28 +71,50 @@ export default function AgoOauthCallback() {
         );
         return;
       }
-      // Hand the token to the opener via postMessage and close.
-      if (!window.opener || window.opener.closed) {
+      // Hand the token to the opener via BroadcastChannel. The
+      // opener subscribed to TOKEN_CHANNEL_NAME before opening
+      // this popup; the channel is same-origin so cross-origin
+      // navigation doesn't sever it the way window.opener does.
+      const payload = {
+        type: 'gratisgis:ago-oauth-token' as const,
+        token,
+        state,
+        expiresIn,
+        // Echoing receivedAt lets the opener expire the token from
+        // its in-memory store at the right wall-clock moment
+        // instead of trusting expires_in relative to popup-load.
+        receivedAt: Date.now(),
+      };
+      let delivered = false;
+      try {
+        const ch = new BroadcastChannel(TOKEN_CHANNEL_NAME);
+        ch.postMessage(payload);
+        ch.close();
+        delivered = true;
+      } catch {
+        // BroadcastChannel unsupported (very old browser); fall
+        // through to the window.opener fallback below.
+      }
+      // Fallback: try window.opener.postMessage too, in case the
+      // browser DID preserve the opener relationship. Belt and
+      // suspenders, since either channel reaching the opener
+      // succeeds.
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(payload, window.location.origin);
+          delivered = true;
+        }
+      } catch {
+        /* opener gone; BroadcastChannel was our path */
+      }
+      if (!delivered) {
         finishFail(
-          'Opener window is gone. Close this popup and start the ' +
-            'sign-in again from the importer page.',
+          'Could not deliver the access token back to the importer ' +
+            'page. Close this window and try sign-in again from the ' +
+            'importer page in the original tab.',
         );
         return;
       }
-      window.opener.postMessage(
-        {
-          type: 'gratisgis:ago-oauth-token',
-          token,
-          state,
-          expiresIn,
-          // Echoing the receivedAt timestamp lets the opener
-          // expire the token from its in-memory store at the
-          // right wall-clock moment instead of trusting an
-          // expires_in value relative to popup-load time.
-          receivedAt: Date.now(),
-        },
-        window.location.origin,
-      );
       // Clean up the state token so a second popup can't reuse
       // it. The opener already has the token.
       window.sessionStorage.removeItem(STATE_STORAGE_KEY);

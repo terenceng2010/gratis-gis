@@ -17,6 +17,7 @@ import {
   ORG_URL_STORAGE_KEY,
   SHARING_BASE_STORAGE_KEY,
   STATE_STORAGE_KEY,
+  TOKEN_CHANNEL_NAME,
 } from './oauth-storage-keys';
 
 interface AgoConnection {
@@ -128,25 +129,37 @@ export function FromAgoView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // OAuth popup token handoff.
+  // OAuth popup token handoff via BroadcastChannel.
+  //
+  // The previous shape used window.opener.postMessage; that
+  // breaks under modern COOP on the cross-origin hop through AGO
+  // (window.opener becomes null in the popup after the redirect
+  // returns). BroadcastChannel is same-origin-only by spec, so
+  // security stays intact, and it survives the cross-origin
+  // navigation that severs opener.
+  //
+  // A window.addEventListener('message') fallback is kept for the
+  // happy path where opener does survive (some browsers) -- both
+  // paths produce the same effect so a duplicate delivery is a
+  // no-op.
   useEffect(() => {
-    function onMessage(event: MessageEvent<unknown>) {
-      if (event.origin !== window.location.origin) return;
-      const data = event.data as
-        | {
-            type?: string;
-            token?: string;
-            state?: string;
-            expiresIn?: number;
-            receivedAt?: number;
-          }
-        | null;
+    function handlePayload(data: {
+      type?: string;
+      token?: string;
+      state?: string;
+      expiresIn?: number;
+      receivedAt?: number;
+    } | null) {
       if (!data || data.type !== 'gratisgis:ago-oauth-token') return;
       if (!data.token) {
         setError('OAuth popup returned no token.');
         setBusy(null);
         return;
       }
+      // Idempotency: a popup that fires both the BroadcastChannel
+      // and the postMessage paths should not double-set state. If
+      // we already have a session, ignore the second delivery.
+      if (session) return;
       const sharingRestBase =
         window.sessionStorage.getItem(SHARING_BASE_STORAGE_KEY) ?? '';
       const displayName =
@@ -166,9 +179,38 @@ export function FromAgoView() {
       }
       popupRef.current = null;
     }
+
+    // Primary path: BroadcastChannel. Same-origin only.
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel(TOKEN_CHANNEL_NAME);
+      channel.addEventListener(
+        'message',
+        (event: MessageEvent<unknown>) => {
+          handlePayload(
+            event.data as Parameters<typeof handlePayload>[0],
+          );
+        },
+      );
+    } catch {
+      // Ancient browser without BroadcastChannel; the
+      // postMessage fallback below still gets a chance.
+    }
+
+    // Fallback path: window.opener.postMessage. Only delivers
+    // when COOP didn't sever the opener relationship (still true
+    // on same-origin popups in many browsers).
+    function onMessage(event: MessageEvent<unknown>) {
+      if (event.origin !== window.location.origin) return;
+      handlePayload(event.data as Parameters<typeof handlePayload>[0]);
+    }
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
+
+    return () => {
+      window.removeEventListener('message', onMessage);
+      channel?.close();
+    };
+  }, [session]);
 
   async function signIn() {
     if (!selectedId) {
