@@ -12,6 +12,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   Res,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -24,7 +25,13 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+
+import {
+  TileCacheOverloadError,
+  matchesIfNoneMatch,
+  tileOverloadRetryAfterSeconds,
+} from '../engine/tile-cache.service.js';
 
 import type { ItemShare } from '@prisma/client';
 import {
@@ -213,6 +220,7 @@ export class DataLayerFeaturesController {
    */
   @Get('tile/:z/:x/:y.mvt')
   async tile(
+    @Req() req: Request,
     @Res() res: Response,
     @CurrentUser() user: AuthUser,
     @Param('id') itemId: string,
@@ -270,16 +278,43 @@ export class DataLayerFeaturesController {
           ...(typeof f.type === 'string' ? { type: f.type } : {}),
         }));
     }
-    const buf = await this.v3.mvtTile(itemId, layerId, z, x, y, opts);
+    let mvt: Buffer;
+    let etag: string;
+    try {
+      ({ mvt, etag } = await this.v3.mvtTile(itemId, layerId, z, x, y, opts));
+    } catch (e) {
+      if (e instanceof TileCacheOverloadError) {
+        // Concurrency cap saturated. 503 with Retry-After
+        // tells the client to back off briefly rather than
+        // retry-immediately + amplify the storm.
+        res.setHeader('Retry-After', String(tileOverloadRetryAfterSeconds()));
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(503).end();
+        return;
+      }
+      throw e;
+    }
+    // If-None-Match revalidation: the client cached this tile and
+    // is asking whether the server's copy still matches. Equal
+    // ETag -> 304 Not Modified with no body, lets the client reuse
+    // its cached buffer with no transfer.
+    if (matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      res.status(304).end();
+      return;
+    }
     res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile');
+    res.setHeader('ETag', etag);
     // Per-tile responses are pure functions of (scope, z, x, y) and
     // the layer's current state. Browser-side caching on a short TTL
     // keeps panning back-and-forth fast without us paying the round-
     // trip every time. The "current state" updates on every write,
     // so we don't want stale tiles for long: a minute is the right
-    // balance for an authoring tool.
+    // balance for an authoring tool. The ETag above lets the
+    // browser revalidate cheaply when the TTL elapses.
     res.setHeader('Cache-Control', 'private, max-age=60');
-    res.end(buf);
+    res.end(mvt);
   }
 
   /**

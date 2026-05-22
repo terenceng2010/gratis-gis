@@ -1,0 +1,474 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { createHash } from 'node:crypto';
+
+import { Injectable } from '@nestjs/common';
+
+/**
+ * In-process LRU cache for MVT tile buffers.
+ *
+ * The mvtTile path is a hot read: a single map view can fan out
+ * to 20-50 tile requests, multiple anonymous clients hit the
+ * same popular tiles within seconds of each other, and crawlers
+ * (memory: `project_gratisgis_ogc_tiles_pool_storm_2026_05_21`)
+ * can drown the Prisma pool by computing the same tile dozens
+ * of times in a hot minute. Cache is the first line of defense.
+ *
+ * Design notes:
+ *
+ *   - Bounded by BOTH byte count and entry count. Polygon-heavy
+ *     county-scale tiles are megabytes; sparse county tiles are
+ *     hundreds of bytes. Without a byte cap, a few fat tiles
+ *     evict thousands of cheap ones. Without an entry cap a
+ *     pathological run of empty tiles fills the table.
+ *
+ *   - TTL-based staleness. Cached entries expire after the TTL
+ *     (60 s by default, matching the existing
+ *     `Cache-Control: max-age=60` on the authed route and a
+ *     fraction of the 300 s public route). On TTL miss the
+ *     entry is dropped and the next request recomputes.
+ *
+ *   - No cross-replica coordination. This is an in-process cache.
+ *     Two replicas may each compute the same tile once before
+ *     either fills its cache. That's acceptable for v1; phase 4
+ *     (persistent MinIO-backed cache) addresses cross-replica
+ *     sharing properly.
+ *
+ *   - ETag generation belongs here: the cache key determines
+ *     content identity, so the cache is the right place to mint
+ *     a stable ETag. Controllers pass back `If-None-Match`,
+ *     this service decides 304 vs 200.
+ */
+@Injectable()
+export class TileCacheService {
+  /** Defaults sized for a 1 GB-RSS portal-api container. 200 MB
+   *  cache is enough headroom for thousands of small tiles and
+   *  hundreds of the worst-case 1-2 MB tiles without crowding
+   *  the rest of the process. Override via env on memory-tight
+   *  deployments. */
+  private readonly maxBytes: number;
+  private readonly maxEntries: number;
+  private readonly ttlMs: number;
+
+  /** Hard ceiling on the number of distinct compute operations
+   *  that can be in flight at the same time. Different from the
+   *  in-flight de-dup map's size: this counts the LEADERS only
+   *  (computes actually issuing a Postgres query). The de-dup
+   *  saves us from N callers all running the same query; this
+   *  cap saves us from N hot tiles each running ONE query and
+   *  collectively draining the Prisma pool.
+   *
+   *  Pool size on prod is currently 9 per replica (memory:
+   *  `project_gratisgis_ogc_tiles_pool_storm_2026_05_21`). 8
+   *  leaves room for non-tile traffic. */
+  private readonly maxConcurrentComputes: number;
+
+  /** Map insertion order is LRU order in V8: we delete + re-set
+   *  on hit to move the entry to the most-recently-used end. */
+  private readonly entries = new Map<string, CacheEntry>();
+  private currentBytes = 0;
+
+  /** In-flight computes keyed by cache key. When a tile request
+   *  arrives while the same key is being computed for another
+   *  caller, both await the same Promise instead of issuing two
+   *  Postgres queries. Cleared in `finally` so a failed compute
+   *  doesn't poison the slot. See `coalesce()` for details. */
+  private readonly inFlight = new Map<string, Promise<CacheHit>>();
+
+  /** Lightweight counters surfaced through getStats() for the
+   *  perf-dashboard workstream when it lands. */
+  private hits = 0;
+  private misses = 0;
+  private evictions = 0;
+  private coalesced = 0;
+  private rejectedOverload = 0;
+  private activeComputes = 0;
+
+  constructor() {
+    this.maxBytes = parseIntEnv('TILE_CACHE_MAX_BYTES', 200 * 1024 * 1024);
+    this.maxEntries = parseIntEnv('TILE_CACHE_MAX_ENTRIES', 50_000);
+    this.ttlMs = parseIntEnv('TILE_CACHE_TTL_MS', 60_000);
+    this.maxConcurrentComputes = parseIntEnv(
+      'TILE_CACHE_MAX_CONCURRENT',
+      8,
+    );
+  }
+
+  /**
+   * Look up a cached tile. Returns null on miss, expiry, or
+   * empty key. Promotes the entry to MRU on hit.
+   */
+  get(key: string): CacheHit | null {
+    const entry = this.entries.get(key);
+    if (entry === undefined) {
+      this.misses += 1;
+      return null;
+    }
+    if (entry.expiresAt < Date.now()) {
+      this.entries.delete(key);
+      this.currentBytes -= entry.buf.length;
+      this.misses += 1;
+      return null;
+    }
+    // Promote: delete + re-set moves the entry to the most-recent
+    // end of the map's insertion order.
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    this.hits += 1;
+    return { buf: entry.buf, etag: entry.etag };
+  }
+
+  /**
+   * Store a tile in the cache. Replaces any prior entry for the
+   * same key and adjusts the byte counter. Evicts oldest entries
+   * until both byte and count budgets are satisfied.
+   *
+   * Returns the ETag for the stored entry so the caller can set
+   * the response header from the same value.
+   */
+  set(key: string, buf: Buffer): string {
+    const prior = this.entries.get(key);
+    if (prior !== undefined) {
+      this.currentBytes -= prior.buf.length;
+      this.entries.delete(key);
+    }
+    const etag = computeEtag(key, buf);
+    this.entries.set(key, {
+      buf,
+      etag,
+      expiresAt: Date.now() + this.ttlMs,
+    });
+    this.currentBytes += buf.length;
+
+    // Evict from the LRU end (Map iterator order = insertion
+    // order = LRU when we move-to-end on hit).
+    while (
+      (this.currentBytes > this.maxBytes ||
+        this.entries.size > this.maxEntries) &&
+      this.entries.size > 0
+    ) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = this.entries.get(oldestKey);
+      if (oldest === undefined) break;
+      this.currentBytes -= oldest.buf.length;
+      this.entries.delete(oldestKey);
+      this.evictions += 1;
+    }
+
+    return etag;
+  }
+
+  /**
+   * Cache-aware single-flight wrapper. Three states:
+   *
+   *   - HIT: stored entry is fresh -> return it directly, no
+   *     compute, no Postgres traffic.
+   *   - JOINING: another caller is currently computing this
+   *     key -> await their Promise instead of starting a second
+   *     compute. This is the load-shedding move that stops the
+   *     pool-storm pattern (memory:
+   *     `project_gratisgis_ogc_tiles_pool_storm_2026_05_21`).
+   *   - MISS: nobody has it -> we run `compute`, store the
+   *     result, and return.
+   *
+   * The compute callback is responsible for the actual work
+   * (PostGIS query, ST_AsMVT, byte assembly). This wrapper
+   * orchestrates the cache + de-dup around it.
+   *
+   * If `compute` throws, the in-flight slot is cleared so the
+   * NEXT caller can retry rather than awaiting a dead Promise.
+   */
+  async getOrCompute(
+    key: string,
+    compute: () => Promise<Buffer>,
+  ): Promise<CacheHit> {
+    // Phase 1: cache hit.
+    const cached = this.get(key);
+    if (cached !== null) return cached;
+
+    // Phase 2: in-flight. Someone else is already computing
+    // this key; join their promise.
+    const pending = this.inFlight.get(key);
+    if (pending !== undefined) {
+      this.coalesced += 1;
+      return pending;
+    }
+
+    // Phase 3: we're the leader. Cap the number of concurrent
+    // leaders so we don't drain the Prisma pool when many
+    // DIFFERENT tiles arrive at once (the in-flight map already
+    // handles the same-tile case). Excess returns a typed
+    // overload error so the controller can map it to 503 with
+    // Retry-After.
+    if (this.activeComputes >= this.maxConcurrentComputes) {
+      this.rejectedOverload += 1;
+      throw new TileCacheOverloadError(
+        this.activeComputes,
+        this.maxConcurrentComputes,
+      );
+    }
+
+    // Register the in-flight slot before awaiting so concurrent
+    // callers see it.
+    this.activeComputes += 1;
+    const promise: Promise<CacheHit> = (async () => {
+      try {
+        const buf = await compute();
+        const etag = this.set(key, buf);
+        return { buf, etag };
+      } finally {
+        this.activeComputes -= 1;
+        this.inFlight.delete(key);
+      }
+    })();
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+
+  /**
+   * Drop every entry whose key starts with `prefix`. The mvtTile
+   * builder composes keys as `<scope>|<z>/<x>/<y>|<optsHash>` so
+   * passing `<scope>|` invalidates every cached tile for a
+   * particular data_layer sublayer at once. Use after a write
+   * lands and the next reader should see fresh state.
+   */
+  invalidatePrefix(prefix: string): number {
+    let dropped = 0;
+    for (const key of this.entries.keys()) {
+      if (key.startsWith(prefix)) {
+        const entry = this.entries.get(key);
+        if (entry !== undefined) {
+          this.currentBytes -= entry.buf.length;
+        }
+        this.entries.delete(key);
+        dropped += 1;
+      }
+    }
+    return dropped;
+  }
+
+  /**
+   * Drop the entire cache. Useful for tests and ops-driven
+   * cache reset. Cheap; the references go to the GC.
+   */
+  clear(): void {
+    this.entries.clear();
+    this.currentBytes = 0;
+  }
+
+  /**
+   * Snapshot of cache vitals, hooked into the perf dashboard
+   * workstream when it lands. Cheap; safe to call frequently.
+   */
+  getStats(): TileCacheStats {
+    return {
+      entries: this.entries.size,
+      bytes: this.currentBytes,
+      maxBytes: this.maxBytes,
+      maxEntries: this.maxEntries,
+      ttlMs: this.ttlMs,
+      hits: this.hits,
+      misses: this.misses,
+      evictions: this.evictions,
+      coalesced: this.coalesced,
+      rejectedOverload: this.rejectedOverload,
+      inFlight: this.inFlight.size,
+      activeComputes: this.activeComputes,
+      maxConcurrentComputes: this.maxConcurrentComputes,
+      hitRate:
+        this.hits + this.misses > 0
+          ? this.hits / (this.hits + this.misses)
+          : 0,
+    };
+  }
+}
+
+/**
+ * Compose the cache key for a tile. Centralized so cache reads
+ * and writes use exactly the same shape and a future revision
+ * (multi-CRS tile matrices, different MVT extents) has one
+ * place to grow.
+ */
+export function tileCacheKey(args: {
+  scope: string;
+  z: number;
+  x: number;
+  y: number;
+  optsFingerprint: string;
+}): string {
+  return `${args.scope}|${args.z}/${args.x}/${args.y}|${args.optsFingerprint}`;
+}
+
+/**
+ * Compute a stable fingerprint over the per-tile options that
+ * change output bytes (fields list, geoLimit, boundaryClip,
+ * isTable). Used as part of the cache key so a request with
+ * different options stores under a separate slot.
+ */
+export function optsFingerprint(opts: {
+  fields?: ReadonlyArray<{ name: string; type?: string }>;
+  geoLimit?: unknown;
+  boundaryClip?: unknown;
+  isTable?: boolean;
+}): string {
+  // Sort fields by name so caller order doesn't fragment the
+  // cache. The portal always emits field arrays in schema order
+  // today, but a renderer that reshuffles them shouldn't lose
+  // the cache hit.
+  const fields = (opts.fields ?? [])
+    .map((f) => `${f.name}:${f.type ?? ''}`)
+    .sort()
+    .join(',');
+  const geoLimit = opts.geoLimit ? stableJson(opts.geoLimit) : '';
+  const boundaryClip = opts.boundaryClip ? stableJson(opts.boundaryClip) : '';
+  const isTable = opts.isTable ? '1' : '';
+  // Short-circuit the all-empty case so the cache key for a
+  // bare /items/.../tile request stays human-readable in logs.
+  if (fields === '' && geoLimit === '' && boundaryClip === '' && isTable === '') {
+    return '';
+  }
+  const raw = `${fields}|${geoLimit}|${boundaryClip}|${isTable}`;
+  return createHash('sha1').update(raw).digest('base64url').slice(0, 16);
+}
+
+interface CacheEntry {
+  buf: Buffer;
+  etag: string;
+  expiresAt: number;
+}
+
+export interface CacheHit {
+  buf: Buffer;
+  etag: string;
+}
+
+/**
+ * Thrown by `TileCacheService.getOrCompute()` when the
+ * concurrency cap is exceeded. Controllers should catch this
+ * specifically and map to HTTP 503 with a `Retry-After` header,
+ * not 500. Carries the active/cap counts so the response or
+ * log line can explain the reject.
+ */
+export class TileCacheOverloadError extends Error {
+  constructor(
+    readonly active: number,
+    readonly cap: number,
+  ) {
+    super(
+      `Tile cache at capacity: ${active}/${cap} concurrent computes`,
+    );
+    this.name = 'TileCacheOverloadError';
+  }
+}
+
+export interface TileCacheStats {
+  entries: number;
+  bytes: number;
+  maxBytes: number;
+  maxEntries: number;
+  ttlMs: number;
+  hits: number;
+  misses: number;
+  evictions: number;
+  /** Times a concurrent request awaited another caller's
+   *  in-flight compute instead of starting its own. The bigger
+   *  this gets relative to `misses`, the more work the cache
+   *  is saving by de-duplicating tile-storm traffic. */
+  coalesced: number;
+  /** Times getOrCompute() rejected a new compute because the
+   *  concurrency cap was at saturation. Maps to HTTP 503s
+   *  emitted to clients. */
+  rejectedOverload: number;
+  /** Current number of in-flight compute slots. */
+  inFlight: number;
+  /** Number of leaders actively running a compute (subset of
+   *  inFlight that aren't coalesced followers). */
+  activeComputes: number;
+  /** Configured concurrency ceiling. */
+  maxConcurrentComputes: number;
+  hitRate: number;
+}
+
+/**
+ * Strong ETag form: `"<sha1-16>"`. Derived from the cache key +
+ * a short hash of the buffer so two tiles that happen to share a
+ * key (shouldn't, but defensive) still produce different ETags.
+ */
+function computeEtag(key: string, buf: Buffer): string {
+  const hash = createHash('sha1');
+  hash.update(key);
+  hash.update(buf);
+  return `"${hash.digest('base64url').slice(0, 16)}"`;
+}
+
+/**
+ * JSON.stringify isn't stable across key orderings; round-trip
+ * through sorted keys so `{a:1,b:2}` and `{b:2,a:1}` produce the
+ * same fingerprint.
+ */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map((v) => stableJson(v)).join(',') + ']';
+  }
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  const parts = keys.map((k) => {
+    const v = (value as Record<string, unknown>)[k];
+    return JSON.stringify(k) + ':' + stableJson(v);
+  });
+  return '{' + parts.join(',') + '}';
+}
+
+/**
+ * Format a `Retry-After` value (seconds) appropriate for an
+ * overload reject. Short fixed value: we just want the client
+ * to back off momentarily; the next request will likely hit a
+ * freed compute slot. Centralized so all three tile controllers
+ * agree on the value.
+ */
+export function tileOverloadRetryAfterSeconds(): number {
+  return 2;
+}
+
+/**
+ * RFC 7232 `If-None-Match` matcher. Returns true iff the request
+ * header's list of ETag candidates contains either the server's
+ * ETag or the wildcard ``*``. Tolerant of weak ETag prefixes
+ * (``W/``) and the surrounding quoting that some HTTP libraries
+ * strip when round-tripping.
+ *
+ * Pulled out of the cache class so every tile controller can use
+ * the same matcher without re-implementing the parser.
+ */
+export function matchesIfNoneMatch(
+  requestHeader: string | string[] | undefined,
+  currentEtag: string,
+): boolean {
+  if (!requestHeader || !currentEtag) return false;
+  const raw = Array.isArray(requestHeader)
+    ? requestHeader.join(',')
+    : requestHeader;
+  const candidates = raw.split(',').map((s) => s.trim());
+  const normalized = normalizeEtag(currentEtag);
+  for (const c of candidates) {
+    if (c === '*') return true;
+    if (normalizeEtag(c) === normalized) return true;
+  }
+  return false;
+}
+
+function normalizeEtag(etag: string): string {
+  let v = etag.trim();
+  if (v.startsWith('W/')) v = v.slice(2);
+  if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+  return v;
+}
+
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}

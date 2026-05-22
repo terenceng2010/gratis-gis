@@ -15,6 +15,11 @@ import type { Request, Response } from 'express';
 import { Public } from '../auth/public.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { DataLayerFeaturesService } from '../data-layer/features.service.js';
+import {
+  TileCacheOverloadError,
+  matchesIfNoneMatch,
+  tileOverloadRetryAfterSeconds,
+} from '../engine/tile-cache.service.js';
 import { synthesizeThumbnailUrl } from '../items/thumbnail-url.js';
 
 /**
@@ -317,6 +322,7 @@ export class PublicController {
   @Public()
   @Get('items/:id/layers/:layerId/tile/:z/:x/:y.mvt')
   async layerTile(
+    @Req() req: Request,
     @Res() res: Response,
     @Param('id') itemId: string,
     @Param('layerId') layerId: string,
@@ -367,12 +373,31 @@ export class PublicController {
     if (layer.fields.length > 0) opts.fields = layer.fields;
     if (layer.geometryType === null) opts.isTable = true;
 
-    const buf = await this.v3.mvtTile(itemId, layerId, z, x, y, opts);
+    let mvt: Buffer;
+    let etag: string;
+    try {
+      ({ mvt, etag } = await this.v3.mvtTile(itemId, layerId, z, x, y, opts));
+    } catch (e) {
+      if (e instanceof TileCacheOverloadError) {
+        res.setHeader('Retry-After', String(tileOverloadRetryAfterSeconds()));
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(503).end();
+        return;
+      }
+      throw e;
+    }
+    if (matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.status(304).end();
+      return;
+    }
     res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile');
+    res.setHeader('ETag', etag);
     // Public tiles can sit in shared caches; same posture as the
     // OGC tile endpoint (5-min public window).
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.end(buf);
+    res.end(mvt);
   }
 
   /**

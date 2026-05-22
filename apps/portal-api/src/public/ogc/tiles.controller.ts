@@ -14,6 +14,11 @@ import type { Request, Response } from 'express';
 import { Public } from '../../auth/public.decorator.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { DataLayerFeaturesService } from '../../data-layer/features.service.js';
+import {
+  TileCacheOverloadError,
+  matchesIfNoneMatch,
+  tileOverloadRetryAfterSeconds,
+} from '../../engine/tile-cache.service.js';
 import { absoluteBase } from './url.js';
 import { parseCollectionId, formatCollectionId } from './collection-id.js';
 
@@ -179,6 +184,7 @@ export class OgcTilesController {
     'collections/:collectionId/tiles/:tmsId/:tileMatrix/:tileRow/:tileCol',
   )
   async tile(
+    @Req() req: Request,
     @Res() res: Response,
     @Param('collectionId') collectionId: string,
     @Param('tmsId') tmsId: string,
@@ -209,13 +215,41 @@ export class OgcTilesController {
       );
     }
 
-    const buf = await this.v3.mvtTile(row.itemId, row.layerId, z, x, y, {
-      ...(row.fieldSchema.length > 0
-        ? { fields: row.fieldSchema.map((f) => ({ name: f.name, type: f.type })) }
-        : {}),
-    });
-
+    let mvt: Buffer;
+    let etag: string;
+    try {
+      ({ mvt, etag } = await this.v3.mvtTile(
+        row.itemId,
+        row.layerId,
+        z,
+        x,
+        y,
+        {
+          ...(row.fieldSchema.length > 0
+            ? { fields: row.fieldSchema.map((f) => ({ name: f.name, type: f.type })) }
+            : {}),
+        },
+      ));
+    } catch (e) {
+      if (e instanceof TileCacheOverloadError) {
+        res.setHeader('Retry-After', String(tileOverloadRetryAfterSeconds()));
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(503).end();
+        return;
+      }
+      throw e;
+    }
+    // If-None-Match revalidation -- a downstream caching client
+    // (QGIS, an aggregator) can ask "still the same tile?" and we
+    // answer with 304 + no body, saving the transfer.
+    if (matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.status(304).end();
+      return;
+    }
     res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile');
+    res.setHeader('ETag', etag);
     // Public tiles are pure functions of (collection, z, x, y) +
     // the layer's current state. The internal /tile/.mvt route uses
     // a 60s private cache window; we use a longer 5-minute public
@@ -223,7 +257,7 @@ export class OgcTilesController {
     // caching client (QGIS, an aggregator) where the cache hit
     // matters more than write-recency for anonymous data.
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.end(buf);
+    res.end(mvt);
   }
 
   // -----------------------------------------------------------

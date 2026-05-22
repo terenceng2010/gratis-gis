@@ -16,6 +16,7 @@ import { ItemBboxRefreshService } from '../items/item-bbox-refresh.service.js';
 import {
   DataLayerEngine,
   type CreateFeatureArgs,
+  type TileResult,
 } from '../engine/data-layer.js';
 
 /**
@@ -326,7 +327,7 @@ export class DataLayerFeaturesService {
        */
       fields?: Array<{ name: string; type?: string }>;
     } = {},
-  ): Promise<Buffer> {
+  ): Promise<TileResult> {
     return this.dataLayer.mvtTile({
       itemId,
       layerId,

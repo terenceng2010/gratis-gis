@@ -29,6 +29,11 @@ import {
 import { EngineService } from './engine.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LensPolicyService } from '../policy/lens-policy.service.js';
+import {
+  TileCacheService,
+  optsFingerprint,
+  tileCacheKey,
+} from './tile-cache.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { validateGeoJson } from '../common/geometry-validation.js';
 
@@ -170,6 +175,17 @@ export interface DataLayerFeature {
   };
 }
 
+/**
+ * Tile output: the MVT bytes + a content-derived ETag. The cache
+ * mints the ETag during set(); cached returns echo whatever ETag
+ * was stored. Controllers turn the ETag into the `ETag` response
+ * header and handle `If-None-Match` -> 304.
+ */
+export interface TileResult {
+  mvt: Buffer;
+  etag: string;
+}
+
 const DEFAULT_SOURCE: SourceRef = { kind: 'data_layer:write' };
 
 /**
@@ -241,6 +257,7 @@ export class DataLayerEngine {
     private readonly engine: EngineService,
     private readonly prisma: PrismaService,
     private readonly lensPolicy: LensPolicyService,
+    private readonly tileCache: TileCacheService,
   ) {}
 
   scope(itemId: string, layerId: string): string {
@@ -978,15 +995,56 @@ export class DataLayerEngine {
      * regex prevents SQL identifier injection).
      */
     fields?: Array<{ name: string; type?: string }>;
-  }): Promise<Buffer> {
+  }): Promise<TileResult> {
     if (args.isTable === true) {
-      return Buffer.alloc(0);
+      // Empty MVT is stable (always Buffer.alloc(0)); compute the
+      // ETag from a fixed token so the empty-tile case still
+      // round-trips 304 correctly when a client revalidates.
+      return { mvt: Buffer.alloc(0), etag: '"empty-table"' };
     }
     // Bound user-supplied geometry size before it reaches PostGIS.
     validateGeoJson(args.geoLimit);
     validateGeoJson(args.boundaryClip);
 
     const scope = this.scope(args.itemId, args.layerId);
+
+    // Single-flight cache: hit -> return stored buffer + ETag;
+    // someone else computing this key -> await their Promise;
+    // otherwise compute fresh, store, return. Keying on
+    // (scope, z/x/y, opts fingerprint) so requests with
+    // different per-tile options (different field projections,
+    // distinct geoLimit, etc.) get separate slots and don't
+    // collide.
+    const cacheKey = tileCacheKey({
+      scope,
+      z: args.z,
+      x: args.x,
+      y: args.y,
+      optsFingerprint: optsFingerprint(args),
+    });
+    const result = await this.tileCache.getOrCompute(cacheKey, () =>
+      this.computeMvtTileBytes(args, scope),
+    );
+    return { mvt: result.buf, etag: result.etag };
+  }
+
+  /**
+   * The Postgres-side work of building an MVT tile. Split out
+   * from mvtTile() so it can be invoked through TileCacheService
+   * .getOrCompute() and share single-flight semantics with
+   * concurrent callers asking for the same (scope, z, x, y).
+   */
+  private async computeMvtTileBytes(
+    args: {
+      z: number;
+      x: number;
+      y: number;
+      geoLimit?: GeoJsonGeometry;
+      boundaryClip?: GeoJsonGeometry;
+      fields?: Array<{ name: string; type?: string }>;
+    },
+    scope: string,
+  ): Promise<Buffer> {
     const filters: Prisma.Sql[] = [];
 
     if (args.geoLimit !== undefined) {
@@ -1149,8 +1207,8 @@ export class DataLayerEngine {
         COALESCE(ST_AsMVT(visible_features, 'features', 4096, 'geom'), '\\x'::bytea) AS mvt
       FROM visible_features
     `;
-    const buf = rows[0]?.mvt;
-    return buf instanceof Buffer ? buf : Buffer.alloc(0);
+    const raw = rows[0]?.mvt;
+    return raw instanceof Buffer ? raw : Buffer.alloc(0);
   }
 
   /**
