@@ -106,6 +106,18 @@ export function FromAgoView() {
   const [busy, setBusy] = useState<'auth' | 'preview' | 'run' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const popupRef = useRef<Window | null>(null);
+  // Per-item opt-out: AGO ids the operator has unchecked in the
+  // preview. Defaults to empty -> every classifier-importable row
+  // imports. Skipped (classifier-unsupported) rows aren't toggleable;
+  // they're already willImport=false on the dry-run row.
+  const [excludedAgoIds, setExcludedAgoIds] = useState<Set<string>>(
+    new Set(),
+  );
+  // Reset the exclusion set whenever a fresh preview lands so a
+  // re-preview doesn't carry over stale opt-outs.
+  useEffect(() => {
+    setExcludedAgoIds(new Set());
+  }, [preview]);
 
   // Load the connections list once on mount.
   useEffect(() => {
@@ -351,13 +363,25 @@ export function FromAgoView() {
     setBusy('run');
     setError(null);
     try {
+      // Apply the operator's per-item opt-outs by clearing
+      // willImport on each excluded row. The backend already
+      // honours willImport=false, so this is a pure client-side
+      // mutation of the report we're about to send.
+      const effective: DryRunReport = {
+        ...preview,
+        items: preview.items.map((row) =>
+          excludedAgoIds.has(row.agoId)
+            ? { ...row, willImport: false }
+            : row,
+        ),
+      };
       const resp = await fetch('/api/portal/admin/import-ago/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           portalUrl: session.sharingRestBase,
           token: session.token,
-          report: preview,
+          report: effective,
         }),
       });
       if (!resp.ok) {
@@ -371,6 +395,43 @@ export function FromAgoView() {
     } finally {
       setBusy(null);
     }
+  }
+
+  /** True when the row is something the operator can toggle.
+   *  Classifier-unsupported rows (Dashboard, Form, StoryMap, etc.)
+   *  are not toggleable because there's no path to import them
+   *  even if the operator opts in. */
+  function isToggleable(row: DryRunItem): boolean {
+    return Boolean(row.willImport && row.targetType);
+  }
+
+  function toggleRow(agoId: string) {
+    setExcludedAgoIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(agoId)) next.delete(agoId);
+      else next.add(agoId);
+      return next;
+    });
+  }
+
+  function selectAllImportable() {
+    setExcludedAgoIds(new Set());
+  }
+
+  function deselectAllImportable() {
+    if (!preview) return;
+    const all = new Set<string>();
+    for (const row of preview.items) {
+      if (isToggleable(row)) all.add(row.agoId);
+    }
+    setExcludedAgoIds(all);
+  }
+
+  /** Effective "will import" row check after applying the
+   *  operator's opt-outs. */
+  function willActuallyImport(row: DryRunItem): boolean {
+    if (!isToggleable(row)) return false;
+    return !excludedAgoIds.has(row.agoId);
   }
 
   return (
@@ -414,12 +475,15 @@ export function FromAgoView() {
           <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
             <Counter
               label="Will import"
-              value={preview.counts.itemsToImport}
+              value={preview.items.filter((r) => willActuallyImport(r)).length}
               tone="ok"
             />
             <Counter
               label="Will skip"
-              value={preview.counts.itemsToSkip}
+              value={
+                preview.items.length -
+                preview.items.filter((r) => willActuallyImport(r)).length
+              }
               tone="warn"
             />
             <Counter
@@ -445,14 +509,38 @@ export function FromAgoView() {
               ))}
             </ul>
           )}
-          <details className="mt-4">
-            <summary className="cursor-pointer text-xs text-muted hover:text-ink-0">
-              Per-item detail
-            </summary>
-            <div className="mt-2 max-h-72 overflow-y-auto rounded border border-border bg-surface-0">
+          <div className="mt-5">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-ink-0">
+                Per-item detail
+              </h3>
+              <div className="flex items-center gap-1.5 text-xs">
+                <button
+                  type="button"
+                  onClick={selectAllImportable}
+                  className="rounded-md border border-border bg-surface-0 px-2 py-1 font-medium hover:bg-surface-2"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={deselectAllImportable}
+                  className="rounded-md border border-border bg-surface-0 px-2 py-1 font-medium hover:bg-surface-2"
+                >
+                  Deselect all
+                </button>
+              </div>
+            </div>
+            <p className="mb-2 text-xs text-muted">
+              Uncheck individual items to skip them. Unsupported types
+              (Dashboard, StoryMap, Form, etc.) can&apos;t be toggled
+              because there&apos;s no import path for them yet.
+            </p>
+            <div className="max-h-96 overflow-y-auto rounded border border-border bg-surface-0">
               <table className="w-full text-xs">
                 <thead className="bg-surface-2 text-left">
                   <tr>
+                    <th className="w-8 px-2 py-1.5 font-medium" />
                     <th className="px-2 py-1.5 font-medium">Title</th>
                     <th className="px-2 py-1.5 font-medium">AGO type</th>
                     <th className="px-2 py-1.5 font-medium">Folder</th>
@@ -461,38 +549,64 @@ export function FromAgoView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.items.map((row) => (
-                    <tr
-                      key={row.agoId}
-                      className="border-t border-border align-top"
-                    >
-                      <td className="px-2 py-1.5">{row.title}</td>
-                      <td className="px-2 py-1.5 font-mono text-muted">
-                        {row.agoType}
-                      </td>
-                      <td className="px-2 py-1.5 text-muted">
-                        {row.folderTitle}
-                      </td>
-                      <td className="px-2 py-1.5 text-muted">
-                        {row.access ?? ''}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        {row.willImport ? (
-                          <span className="text-success">
-                            -&gt; {row.targetType}
-                          </span>
-                        ) : (
-                          <span className="text-warning">
-                            skip - {row.reason ?? 'no reason'}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {preview.items.map((row) => {
+                    const toggleable = isToggleable(row);
+                    const included = willActuallyImport(row);
+                    return (
+                      <tr
+                        key={row.agoId}
+                        className={`border-t border-border align-top ${
+                          toggleable && !included ? 'opacity-50' : ''
+                        }`}
+                      >
+                        <td className="px-2 py-1.5">
+                          <input
+                            type="checkbox"
+                            disabled={!toggleable}
+                            checked={included}
+                            onChange={() => toggleRow(row.agoId)}
+                            className="h-3.5 w-3.5 cursor-pointer accent-accent disabled:cursor-not-allowed"
+                            aria-label={
+                              toggleable
+                                ? `Include ${row.title} in import`
+                                : `${row.title} cannot be imported (unsupported type)`
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">{row.title}</td>
+                        <td className="px-2 py-1.5 font-mono text-muted">
+                          {row.agoType}
+                        </td>
+                        <td className="px-2 py-1.5 text-muted">
+                          {row.folderTitle}
+                        </td>
+                        <td className="px-2 py-1.5 text-muted">
+                          {row.access ?? ''}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          {toggleable ? (
+                            included ? (
+                              <span className="text-success">
+                                -&gt; {row.targetType}
+                              </span>
+                            ) : (
+                              <span className="text-muted">
+                                excluded
+                              </span>
+                            )
+                          ) : (
+                            <span className="text-warning">
+                              skip - {row.reason ?? 'no reason'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-          </details>
+          </div>
         </section>
       )}
 
