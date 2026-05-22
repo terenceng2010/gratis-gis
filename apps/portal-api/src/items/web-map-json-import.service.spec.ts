@@ -234,6 +234,45 @@ describe('WebMapJsonImportService', () => {
     expect(args.data.zoom).toBeLessThan(14);
   });
 
+  it('projects web-mercator viewpoint envelopes back to lng/lat', async () => {
+    // Real AGO WebMaps store the viewpoint envelope in the map's
+    // spatialReference, which is almost always web mercator
+    // (wkid 102100 = 3857). Storing those meter values verbatim
+    // as the portal map's center blew up MapLibre with "Invalid
+    // LngLat latitude value: must be between -90 and 90" the
+    // moment the viewer tried to fit the camera.
+    const items = makeItemsMock();
+    const svc = new WebMapJsonImportService(makePrismaMock(), items.service);
+    const wm: EsriWebMap = {
+      ...baseWebMap,
+      initialState: {
+        viewpoint: {
+          // Bbox around West Virginia (the test case Matt's prod
+          // import hit), expressed in web mercator metres.
+          targetGeometry: {
+            xmin: -9_300_000,
+            ymin: 4_500_000,
+            xmax: -8_700_000,
+            ymax: 4_900_000,
+            spatialReference: { wkid: 102100 },
+          },
+          scale: 500_000,
+        },
+      },
+    };
+    await svc.import({ user: makeUser(), webMap: wm });
+    const args = items.lastCreate.args as {
+      data: { center: [number, number]; zoom: number };
+    };
+    // Web mercator (-9_000_000, 4_700_000) is roughly
+    // (-80.85, 38.82) -- West Virginia. The exact values come
+    // out of the standard EPSG:3857 inverse formula.
+    expect(args.data.center[0]).toBeGreaterThan(-82);
+    expect(args.data.center[0]).toBeLessThan(-79);
+    expect(args.data.center[1]).toBeGreaterThan(37);
+    expect(args.data.center[1]).toBeLessThan(40);
+  });
+
   it('uses default center+zoom when initialState is missing', async () => {
     const items = makeItemsMock();
     const svc = new WebMapJsonImportService(makePrismaMock(), items.service);

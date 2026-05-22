@@ -365,20 +365,74 @@ function lensViewFromViewpoint(
 ): LensView | undefined {
   const env = vp.targetGeometry;
   if (!env) return undefined;
+  // An Esri WebMap envelope is in the WebMap's spatialReference,
+  // and on AGO that is almost always web mercator (wkid 102100 /
+  // 3857 / 102113). Storing those values verbatim into a portal
+  // map's lng/lat fields blows up MapLibre with "Invalid LngLat
+  // latitude value: must be between -90 and 90" the moment the
+  // viewer tries to fit the camera. Detect the spatial reference
+  // and project to WGS84 when needed.
+  const wkid = env.spatialReference?.wkid ?? 4326;
+  const isWebMercator =
+    wkid === 102100 || wkid === 3857 || wkid === 102113;
+  const [xmin, ymin] = isWebMercator
+    ? webMercatorToLngLat(env.xmin, env.ymin)
+    : [env.xmin, env.ymin];
+  const [xmax, ymax] = isWebMercator
+    ? webMercatorToLngLat(env.xmax, env.ymax)
+    : [env.xmax, env.ymax];
   const center: [number, number] = [
-    (env.xmin + env.xmax) / 2,
-    (env.ymin + env.ymax) / 2,
+    (xmin + xmax) / 2,
+    (ymin + ymax) / 2,
   ];
   const zoom =
     typeof vp.scale === 'number' && vp.scale > 0
       ? Math.log2(591657550.5 / vp.scale)
       : 0;
+  // Defensive clamp: if some unusual spatial reference slips
+  // through (a state plane projection, an Alaska polar
+  // projection) we still want to deliver a map that opens.
+  // Centre at 0,0 / zoom 0 in that case rather than blowing up
+  // MapLibre.
+  const safeCenter: [number, number] =
+    Number.isFinite(center[0]) &&
+    Number.isFinite(center[1]) &&
+    center[0] >= -180 &&
+    center[0] <= 180 &&
+    center[1] >= -90 &&
+    center[1] <= 90
+      ? center
+      : [0, 0];
+  const viewportSafe: BBox =
+    safeCenter === center
+      ? ([xmin, ymin, xmax, ymax] as BBox)
+      : ([-180, -85, 180, 85] as BBox);
   return {
-    center,
+    center: safeCenter,
     zoom: Number.isFinite(zoom) ? zoom : 0,
     ...(typeof vp.rotation === 'number' && { bearing: vp.rotation }),
-    viewport: [env.xmin, env.ymin, env.xmax, env.ymax] as BBox,
+    viewport: viewportSafe,
   };
+}
+
+/**
+ * Inverse spherical web-mercator projection: (x, y) in meters
+ * -> (lng, lat) in degrees. Reasonable to inline here because
+ * the engine package deliberately keeps proj4 / @turf out (#22:
+ * dep-leanness review).  The formulas are the standard EPSG:3857
+ * inverse and match what proj4 would emit to within fp epsilon
+ * inside the validity band [-85, 85] degrees latitude.
+ */
+function webMercatorToLngLat(
+  x: number,
+  y: number,
+): [number, number] {
+  const R = 6378137; // WGS84 semi-major axis (meters)
+  const lng = (x / R) * (180 / Math.PI);
+  const lat =
+    (180 / Math.PI) *
+    (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2);
+  return [lng, lat];
 }
 
 function bboxToEsriEnvelope([xmin, ymin, xmax, ymax]: BBox): {
