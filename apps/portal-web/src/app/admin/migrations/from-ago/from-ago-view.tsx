@@ -12,7 +12,11 @@ import {
   Search,
   Upload,
 } from 'lucide-react';
-import { STATE_STORAGE_KEY } from './oauth-callback/page';
+import {
+  ORG_URL_STORAGE_KEY,
+  SHARING_BASE_STORAGE_KEY,
+  STATE_STORAGE_KEY,
+} from './oauth-storage-keys';
 
 interface DryRunItem {
   agoId: string;
@@ -652,13 +656,6 @@ function Counter({
   );
 }
 
-/**
- * sessionStorage keys for the OAuth round trip. The opener +
- * popup share these; both pages read+remove their entries when
- * they're done so a stale state doesn't bleed across sign-ins.
- */
-const SHARING_BASE_STORAGE_KEY = 'gratisgis.ago-oauth-sharing-base';
-const ORG_URL_STORAGE_KEY = 'gratisgis.ago-oauth-org-url';
 // Unused-import silencer for the CloudDownload icon import that
 // the legacy version kept. Keeps the lint pass clean if a future
 // refactor reaches for it.

@@ -2,6 +2,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { STATE_STORAGE_KEY } from '../oauth-storage-keys';
 
 /**
  * AGO OAuth callback page. Runs inside a small popup window the
@@ -140,10 +141,3 @@ export default function AgoOauthCallback() {
   );
 }
 
-/**
- * sessionStorage key used to round-trip the CSRF state token
- * across the popup window. The opener writes the state; this
- * page reads + verifies + removes it. Kept stable so the two
- * sides stay in sync without a separate wire format.
- */
-export const STATE_STORAGE_KEY = 'gratisgis.ago-oauth-state';
