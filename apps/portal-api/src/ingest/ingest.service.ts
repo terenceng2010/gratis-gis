@@ -5,10 +5,9 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 
 /**
  * Opens an uploaded vector file with GDAL and returns a GeoJSON
@@ -62,8 +61,12 @@ export class IngestService {
     // Write to a temp dir so GDAL can open it by path. Directory-based
     // formats (`.gdb`) are delivered as zips, which GDAL handles via
     // its `/vsizip/` virtual filesystem when we point at the zip.
-    const dirPath = join(tmpdir(), `gg-ingest-${randomUUID()}`);
-    await mkdir(dirPath, { recursive: true });
+    //
+    // mkdtemp creates a uniquely-named directory atomically with
+    // 0700 perms (vs `mkdir(join(tmpdir(), uuid))` which races against
+    // a malicious symlink and was flagged by CodeQL js/insecure-
+    // temporary-file).
+    const dirPath = await mkdtemp(join(tmpdir(), 'gg-ingest-'));
     const filePath = join(dirPath, safeFilename(originalName));
     await writeFile(filePath, buffer);
     const openPath = filePath.toLowerCase().endsWith('.zip')
@@ -187,8 +190,8 @@ export class IngestService {
         `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
       );
     }
-    const dirPath = join(tmpdir(), `gg-probe-${randomUUID()}`);
-    await mkdir(dirPath, { recursive: true });
+    // mkdtemp: atomic + 0700, vs mkdir-after-join which races.
+    const dirPath = await mkdtemp(join(tmpdir(), 'gg-probe-'));
     const filePath = join(dirPath, safeFilename(originalName));
     await writeFile(filePath, buffer);
     try {
@@ -350,8 +353,8 @@ export class IngestService {
         `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
       );
     }
-    const dirPath = join(tmpdir(), `gg-ingest-${randomUUID()}`);
-    await mkdir(dirPath, { recursive: true });
+    // mkdtemp: atomic + 0700, vs mkdir-after-join which races.
+    const dirPath = await mkdtemp(join(tmpdir(), 'gg-ingest-'));
     const filePath = join(dirPath, safeFilename(originalName));
     await writeFile(filePath, buffer);
     try {
@@ -476,8 +479,8 @@ export class IngestService {
         `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
       );
     }
-    const dirPath = join(tmpdir(), `gg-ingest-${randomUUID()}`);
-    await mkdir(dirPath, { recursive: true });
+    // mkdtemp: atomic + 0700, vs mkdir-after-join which races.
+    const dirPath = await mkdtemp(join(tmpdir(), 'gg-ingest-'));
     const filePath = join(dirPath, safeFilename(originalName));
     await writeFile(filePath, buffer);
     const cleanup = async () => {
