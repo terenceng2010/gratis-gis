@@ -2,15 +2,13 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { getServerSession } from 'next-auth';
-import { ArrowLeft, Compass, ExternalLink, Heart, LogIn } from 'lucide-react';
+import { ArrowLeft, Compass, LogIn } from 'lucide-react';
 import { authOptions } from '@/lib/auth';
 
 /**
- * /credits - the project's "what we are built on" page. Lists
- * the load-bearing open-source projects GratisGIS uses, with
- * a specific thanks section for the small-team / single-maintainer
- * libraries where visibility is part of how those projects stay
- * sustainable.
+ * /credits - the project's "what we are built on" page. Lists the
+ * load-bearing open-source projects GratisGIS uses with links back
+ * to each project's home page.
  *
  * Public-shell layout matches /why so a visitor can land on
  * either page directly from a search engine or a shared link.
@@ -18,22 +16,13 @@ import { authOptions } from '@/lib/auth';
 export const metadata: Metadata = {
   title: 'Built on - GratisGIS',
   description:
-    'The open-source projects GratisGIS stands on. Stack overview plus a specific thanks to the maintainers whose work makes everything possible.',
+    'The open-source projects GratisGIS is built on, with links to each project.',
 };
 
 interface StackRow {
   layer: string;
   /** Display name; can include multiple links (rendered comma-separated). */
   projects: Array<{ label: string; href: string }>;
-}
-
-interface AcknowledgmentRow {
-  name: string;
-  handle: string;
-  /** Where to point people who want to find them. */
-  href: string;
-  /** What they're being thanked for in this project. */
-  why: string;
 }
 
 const STACK: StackRow[] = [
@@ -170,57 +159,6 @@ const STACK: StackRow[] = [
   },
 ];
 
-const ACKNOWLEDGMENTS: AcknowledgmentRow[] = [
-  {
-    name: 'Paul Ramsey',
-    handle: '@pramsey',
-    href: 'https://github.com/pramsey',
-    why:
-      'PostGIS + pg_tileserv. The spatial database substrate the whole project sits on, plus our tile-server fallback for admin basemaps.',
-  },
-  {
-    name: 'James Milner',
-    handle: '@JamesLMilner',
-    href: 'https://github.com/JamesLMilner',
-    why:
-      'Terra Draw and the MapLibre adapter. Every drawing surface in GratisGIS (map editor, geo-boundary editor, field PWA, editor template) runs on Terra Draw.',
-  },
-  {
-    name: 'Brandon Liu',
-    handle: '@bdon',
-    href: 'https://github.com/bdon',
-    why:
-      'PMTiles and the Protomaps stack. The format that lets us host tiled raster pyramids as static MinIO objects with no tile-server in the request path.',
-  },
-  {
-    name: 'Tom MacWright',
-    handle: '@tmcw',
-    href: 'https://github.com/tmcw',
-    why:
-      'togeojson and much of the geospatial JS ecosystem we lean on. KML / GPX import in the file-upload flow runs through his library.',
-  },
-  {
-    name: 'Calvin Metcalf',
-    handle: '@calvinmetcalf',
-    href: 'https://github.com/calvinmetcalf',
-    why: 'shpjs. Shapefile uploads parse through it.',
-  },
-  {
-    name: 'Brian Carlson',
-    handle: '@brianc',
-    href: 'https://github.com/brianc',
-    why:
-      'node-postgres + pg-copy-streams. Every Postgres call from the API goes through his work.',
-  },
-  {
-    name: 'Momtchil Momtchev',
-    handle: '@mmomtchev',
-    href: 'https://github.com/mmomtchev',
-    why:
-      'node-gdal-async. The Node bindings that let our ingest + raster-pyramid worker use GDAL without shelling out.',
-  },
-];
-
 export default async function CreditsPage() {
   const session = await getServerSession(authOptions);
   const isAuthenticated = !!session;
@@ -246,10 +184,9 @@ export default async function CreditsPage() {
             The open-source projects we stand on.
           </h1>
           <p className="mt-3 text-base text-muted">
-            GratisGIS leans on a stack of open-source projects, many
-            of them maintained by small teams or single people doing
-            remarkable work. If you find GratisGIS useful, consider
-            sending some of that goodwill upstream too.
+            GratisGIS is built on the open-source projects below.
+            Each row links to the project's home page; please consider
+            supporting them directly.
           </p>
         </header>
 
@@ -294,53 +231,6 @@ export default async function CreditsPage() {
           </div>
         </section>
 
-        <section className="mt-12">
-          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-ink-0">
-            <Heart className="h-4 w-4 text-accent" />A specific thank-you to
-          </h2>
-          <p className="mt-2 text-sm text-muted">
-            Some of the most load-bearing pieces of this project are
-            maintained by individuals or small teams whose names
-            rarely appear next to the products they enable. Visibility
-            is part of how their work stays sustainable.
-          </p>
-          <ul className="mt-5 space-y-4">
-            {ACKNOWLEDGMENTS.map((row) => (
-              <li
-                key={row.handle}
-                className="rounded-md border border-border bg-surface-1 p-4"
-              >
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <a
-                    href={row.href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm font-semibold text-ink-0 hover:underline"
-                  >
-                    {row.name}
-                  </a>
-                  <a
-                    href={row.href}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-0.5 text-xs text-muted hover:text-ink-0"
-                  >
-                    {row.handle}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                </div>
-                <p className="mt-1.5 text-sm text-ink-1">{row.why}</p>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-6 text-sm text-muted">
-            The Cedar team at AWS, the PostGIS contributors, the
-            MapLibre contributors, the NestJS + Prisma + Next.js +
-            React + Tailwind core teams, the OGC working groups whose
-            standards we build against - same gratitude, just too
-            many names to list here.
-          </p>
-        </section>
       </main>
 
       <footer className="border-t border-border bg-surface-1 py-6 text-center text-xs text-muted">

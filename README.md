@@ -94,11 +94,8 @@ and [docs/architecture/cedar-policy-integration.md](./docs/architecture/cedar-po
 
 ## Built on
 
-GratisGIS stands on a stack of open-source projects, many of them
-maintained by small teams or single people doing remarkable work.
-The list below names the load-bearing ones and links to where the
-maintainers want them to be reached. If you find GratisGIS useful,
-consider sending some of that goodwill upstream too.
+GratisGIS is built on a stack of open-source projects. Links go to
+each project's home page; please consider supporting them directly.
 
 ### Stack at a glance
 
@@ -131,49 +128,10 @@ consider sending some of that goodwill upstream too.
 | Monorepo | [pnpm](https://pnpm.io/) + [Turborepo](https://turborepo.com/) |
 | CI | [GitHub Actions](https://github.com/features/actions) |
 
-### A specific thank-you to
-
-Some of the most load-bearing pieces of this project are
-maintained by individuals or small teams whose names rarely
-appear next to the products they enable. The ones we lean on
-most heavily:
-
-- **[Paul Ramsey](https://github.com/pramsey)** — PostGIS,
-  pg\_tileserv. The spatial database substrate the whole project
-  sits on, plus the tile-serving fallback we use for admin
-  basemaps.
-- **[James Milner](https://github.com/JamesLMilner)** —
-  [Terra Draw](https://github.com/JamesLMilner/terra-draw) and
-  the MapLibre adapter. Every drawing surface in GratisGIS
-  (map editor, geo-boundary editor, field PWA, editor
-  template) runs on Terra Draw. Filling the gap mapbox-gl-draw
-  left behind and doing it well.
-- **[Brandon Liu](https://github.com/bdon)** —
-  [PMTiles](https://github.com/protomaps/PMTiles) and the
-  Protomaps stack. The format that lets us host tiled raster
-  pyramids as static MinIO objects with no tile-server in the
-  request path.
-- **[Tom MacWright](https://github.com/tmcw)** — togeojson,
-  much of the geospatial JS ecosystem we lean on. KML / GPX
-  import in the file-upload flow runs through his library.
-- **[Calvin Metcalf](https://github.com/calvinmetcalf)** —
-  shpjs. Shapefile uploads parse through it.
-- **[Brian Carlson](https://github.com/brianc)** — node-postgres
-  and pg-copy-streams. Every Postgres call from the API goes
-  through his work.
-- **[Momtchil Momtchev](https://github.com/mmomtchev)** —
-  node-gdal-async. The Node bindings that let our ingest +
-  raster-pyramid worker use GDAL without shelling out.
-
-The Cedar team at AWS, the PostGIS contributors, the MapLibre
-contributors, the NestJS + Prisma + Next.js + React + Tailwind
-core teams, the OGC working groups whose standards we build
-against — same gratitude, just too many names to list here.
-
-Every load-bearing dependency is open-source. Where a project
-is maintained by a single person and the surface is wide, we
-track an internal swap path so an abandoned upstream doesn't
-become an existential threat.
+Every load-bearing dependency is open-source. Where a project has
+a narrow maintainer base and a wide surface, we track an internal
+swap path so an abandoned upstream does not become an existential
+threat.
 
 ## Repo Layout
 
