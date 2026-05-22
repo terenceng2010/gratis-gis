@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   DashStyle,
   LineCap,
@@ -287,6 +287,15 @@ function SymbolBtn({
  * browse the whole library. Selecting an entry sets the layer's
  * iconName; an SVG preview renders each option at 24x24.
  */
+/** One uploaded SVG icon row, as the picker consumes it. Same
+ *  shape the api emits at /api/map-icons. */
+interface UploadedIcon {
+  id: string;
+  storageKey: string;
+  storageUrl: string;
+  label: string;
+}
+
 function IconPicker({
   value,
   onChange,
@@ -296,6 +305,27 @@ function IconPicker({
 }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string>('all');
+  const [uploads, setUploads] = useState<UploadedIcon[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadingName, setUploadingName] = useState<string | null>(null);
+
+  // Load the org's uploaded icons on mount. We don't refetch on
+  // every keystroke -- the list is small (capped at 200 server-
+  // side) and only grows when the user uploads a new icon, in
+  // which case we splice the new row in client-side.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const resp = await fetch('/api/portal/map-icons');
+        if (resp.ok) {
+          const rows = (await resp.json()) as UploadedIcon[];
+          setUploads(rows);
+        }
+      } catch {
+        /* uploads section just stays empty */
+      }
+    })();
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -309,6 +339,58 @@ function IconPicker({
       );
     });
   }, [query, category]);
+
+  const filteredUploads = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || category === 'all' || category === 'uploads') {
+      return uploads.filter((u) =>
+        q ? u.label.toLowerCase().includes(q) : true,
+      );
+    }
+    // When the user picks a non-"uploads" category we hide the
+    // uploaded section entirely, mirroring the per-category
+    // filter on the bundled grid.
+    return [];
+  }, [uploads, query, category]);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-uploading the same name
+    if (!file) return;
+    setUploadingName(file.name);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      const resp = await fetch('/api/portal/map-icons', {
+        method: 'POST',
+        body: fd,
+      });
+      if (!resp.ok) {
+        const body = await resp.text();
+        let msg = body;
+        try {
+          const j = JSON.parse(body) as { message?: string | string[] };
+          msg = Array.isArray(j.message)
+            ? j.message.join('; ')
+            : j.message ?? body;
+        } catch {
+          /* not JSON; use raw */
+        }
+        throw new Error(msg || `HTTP ${resp.status}`);
+      }
+      const row = (await resp.json()) as UploadedIcon;
+      setUploads((prev) => [row, ...prev]);
+      // Select the just-uploaded icon so the user can see it
+      // applied immediately. The renderer resolves the
+      // `upload:<key>` form by URL lookup at map load.
+      onChange(`upload:${row.storageKey}`);
+    } catch (err) {
+      setUploadError((err as Error).message || 'Upload failed');
+    } finally {
+      setUploadingName(null);
+    }
+  }
 
   return (
     <div className="rounded-md border border-border bg-surface-1 p-2">
@@ -332,7 +414,59 @@ function IconPicker({
             </option>
           ))}
         </select>
+        <label className="flex h-7 cursor-pointer items-center rounded border border-border bg-surface-1 px-2 text-[11px] hover:bg-surface-2">
+          + SVG
+          <input
+            type="file"
+            accept="image/svg+xml,.svg"
+            onChange={handleUpload}
+            className="sr-only"
+            disabled={uploadingName !== null}
+          />
+        </label>
       </div>
+      {uploadingName ? (
+        <div className="mb-2 rounded border border-border bg-surface-0 px-2 py-1 text-[11px] text-muted">
+          Uploading {uploadingName}...
+        </div>
+      ) : null}
+      {uploadError ? (
+        <div className="mb-2 rounded border border-danger/30 bg-danger/5 px-2 py-1 text-[11px] text-danger">
+          {uploadError}
+        </div>
+      ) : null}
+      {filteredUploads.length > 0 ? (
+        <>
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted">
+            Your uploads
+          </div>
+          <div className="mb-2 grid grid-cols-6 gap-1">
+            {filteredUploads.map((u) => {
+              const refName = `upload:${u.storageKey}`;
+              const active = refName === value;
+              return (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => onChange(refName)}
+                  title={u.label}
+                  className={`flex aspect-square items-center justify-center rounded border p-1 transition-colors ${
+                    active
+                      ? 'border-accent bg-accent/10 ring-2 ring-accent/30'
+                      : 'border-border bg-surface-1 hover:bg-surface-2'
+                  }`}
+                >
+                  <img
+                    src={u.storageUrl}
+                    alt={u.label}
+                    className="h-full w-full object-contain"
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
       <div className="grid max-h-40 grid-cols-6 gap-1 overflow-y-auto">
         {filtered.map(([name, icon]) => {
           const svg = renderIconSvg(name) ?? '';
@@ -352,7 +486,7 @@ function IconPicker({
             />
           );
         })}
-        {filtered.length === 0 ? (
+        {filtered.length === 0 && filteredUploads.length === 0 ? (
           <div className="col-span-6 py-4 text-center text-[11px] text-muted">
             No icons match.
           </div>

@@ -33,7 +33,13 @@ export type AssetKind =
   // size cap (several GB possible) because regional raster basemap
   // caches legitimately get big; range-request friendly so we serve
   // through MinIO without holding the whole file in memory.
-  | 'item-tile-layer';
+  | 'item-tile-layer'
+  // #73: user-uploaded SVG marker glyphs for the map point-symbol
+  // picker. Each upload is a sanitized SVG body served from a
+  // public bucket key so the renderer can resolve
+  // `upload:<key>` icon references without proxying through the
+  // api. Small (low-KB) so no streaming required.
+  | 'map-icon';
 
 const ALLOWED_CONTENT_TYPES = new Set([
   'image/png',
@@ -300,6 +306,44 @@ export class StorageService implements OnModuleInit {
    * presignUpload would, so the caller can persist them on the
    * tile_layer item.
    */
+  /**
+   * In-memory variant of `uploadLocalFile` (#73). Used by the
+   * map-icon upload path: the sanitizer parses + rewrites the
+   * SVG to a buffer before it ever touches disk, so we push the
+   * buffer to MinIO directly without a tmp-file round trip.
+   * Returns the same `{ key, publicUrl }` shape so callers can
+   * persist them on whatever item / row they belong to.
+   */
+  async uploadBuffer(
+    kind: AssetKind,
+    body: Buffer,
+    contentType = 'application/octet-stream',
+  ): Promise<{ key: string; publicUrl: string }> {
+    if (!this.bootstrapped) {
+      try {
+        await this.ensureBucket();
+        this.bootstrapped = true;
+      } catch (err) {
+        this.log.warn(
+          `Storage still not ready: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+    const key = `${kind}/${randomUUID()}`;
+    const cmd = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ContentType: contentType,
+      ContentLength: body.length,
+      Body: body,
+    });
+    await this.client.send(cmd);
+    const publicUrl = StorageService.isPrivateKind(kind)
+      ? this.apiUrlFor(kind, key)
+      : `${this.publicBase.replace(/\/$/, '')}/${this.bucket}/${key}`;
+    return { key, publicUrl };
+  }
+
   async uploadLocalFile(
     kind: AssetKind,
     localPath: string,

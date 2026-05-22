@@ -1236,3 +1236,48 @@ model AgoImportJob {
   @@map("ago_import_job")
 }
 
+/// User-uploaded SVG marker glyphs for the map point-symbol
+/// picker (#73). One row per upload. Layer styles reference a
+/// row by storageKey: a PointStyle with `iconName = 'upload:<key>'`
+/// resolves through the renderer's image loader to the MinIO
+/// URL stored here.
+///
+/// Per-org scope: the picker's "Org uploads" section lists rows
+/// where org_id matches the caller's org. Per-user `created_by`
+/// is also tracked so a future "My uploads" section can split
+/// the list, and so an admin can audit who introduced a given
+/// icon. Soft-delete is not modeled today; uploads stay until
+/// the row is explicitly removed (rare in practice).
+model MapIconUpload {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// Object key inside the MinIO bucket
+  /// (e.g. `map-icon/abc...uuid`). Same shape as every other
+  /// `kind/<uuid>` storage key the StorageService emits.
+  storageKey  String   @map("storage_key")
+  /// Browser-facing URL the renderer fetches. Resolved through
+  /// the BFF passthrough for private kinds; we keep it on the
+  /// row so the picker doesn't have to recompute on every list.
+  storageUrl  String   @map("storage_url")
+  /// Operator-supplied label shown in the picker. Defaults to
+  /// the uploaded filename minus the extension; the upload UI
+  /// lets the user override before saving.
+  label       String
+  /// Original filename. Carried for diagnostics and as the
+  /// fallback label when the operator doesn't set one.
+  fileName    String   @map("file_name")
+  /// Compressed SVG body, in bytes, for "this is suspiciously
+  /// large" detection in the picker. Source of truth is MinIO;
+  /// this column is purely informational.
+  sizeBytes   Int      @map("size_bytes")
+  /// Owning org. Indexed so the picker's per-org list query is
+  /// a single index scan.
+  orgId       String   @map("org_id") @db.Uuid
+  /// User who uploaded the icon. Informational today.
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([orgId, createdAt(sort: Desc)], map: "map_icon_upload_org_created_idx")
+  @@index([createdBy, createdAt(sort: Desc)], map: "map_icon_upload_user_created_idx")
+  @@map("map_icon_upload")
+}
+

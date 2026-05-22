@@ -1754,6 +1754,7 @@ async function loadAllIcons(m: maplibregl.Map): Promise<void> {
 }
 
 async function loadAllIconsImpl(m: maplibregl.Map): Promise<void> {
+  // Bundled lucide-derived icons (#73).
   await Promise.all(
     Object.keys(MAP_ICONS).map(async (name) => {
       const plainId = iconImageId(name);
@@ -1786,6 +1787,54 @@ async function loadAllIconsImpl(m: maplibregl.Map): Promise<void> {
       }
     }),
   );
+  // User-uploaded SVG icons (#73). The picker stores
+  // `upload:<storageKey>` in the layer style; the renderer
+  // fetches the cleaned SVG from the per-org map-icons endpoint
+  // and rasterizes it through the same path as the bundled
+  // glyphs. Done after the bundled pass so a slow upload list
+  // doesn't delay the always-cached bundled icons.
+  try {
+    const resp = await fetch('/api/portal/map-icons');
+    if (!resp.ok) return;
+    const rows = (await resp.json()) as Array<{
+      storageKey: string;
+      storageUrl: string;
+    }>;
+    await Promise.all(
+      rows.map(async (row) => {
+        const refName = `upload:${row.storageKey}`;
+        const plainId = iconImageId(refName);
+        const sdfId = iconSdfImageId(refName);
+        if (m.hasImage(plainId) && m.hasImage(sdfId)) return;
+        try {
+          const svgResp = await fetch(row.storageUrl, { cache: 'no-store' });
+          if (!svgResp.ok) return;
+          const svgText = await svgResp.text();
+          if (!m.hasImage(plainId)) {
+            const img = await rasterizeSvg(svgText, 48);
+            if (!m.hasImage(plainId)) {
+              m.addImage(plainId, img, { pixelRatio: 2 });
+            }
+          }
+          if (!m.hasImage(sdfId)) {
+            // SVGs uploaded as inline color don't tint cleanly
+            // when SDF-rendered; the renderer falls back to the
+            // plain image when SDF isn't available. We still
+            // generate one so iconTint works for icons that
+            // were authored with currentColor strokes.
+            const sdf = await svgToSdf(svgText, 48);
+            if (!m.hasImage(sdfId)) {
+              m.addImage(sdfId, sdf, { pixelRatio: 2, sdf: true });
+            }
+          }
+        } catch {
+          /* non-fatal; missing icon falls through to circle */
+        }
+      }),
+    );
+  } catch {
+    /* non-fatal */
+  }
 }
 
 /**
