@@ -234,6 +234,55 @@ describe('WebMapJsonImportService', () => {
     expect(args.data.zoom).toBeLessThan(14);
   });
 
+  it('lifts an AGO simple-fill renderer onto the polygon style', async () => {
+    // Real AGO WebMaps carry the operational layer's symbology
+    // under layerDefinition.drawingInfo.renderer. For the 100-mile
+    // border zone the renderer is a simple-fill with a purple
+    // transparent fill (RGBA [165, 75, 200, 100] in Esri's 0-255
+    // range). The portal map's polygon style should pick that up
+    // instead of falling back to the default blue (#70 + #71).
+    const items = makeItemsMock();
+    const svc = new WebMapJsonImportService(makePrismaMock(), items.service);
+    const wm: EsriWebMap = {
+      ...baseWebMap,
+      operationalLayers: [
+        {
+          id: 'border-zone',
+          title: '100 Mile Border Zone',
+          url: 'https://services.example.com/arcgis/rest/services/Border/FeatureServer/0',
+          layerType: 'ArcGISFeatureLayer',
+          layerDefinition: {
+            drawingInfo: {
+              renderer: {
+                type: 'simple',
+                symbol: {
+                  type: 'esriSFS',
+                  style: 'esriSFSSolid',
+                  color: [165, 75, 200, 100],
+                  outline: {
+                    type: 'esriSLS',
+                    style: 'esriSLSSolid',
+                    color: [120, 50, 150, 255],
+                    width: 1.5,
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    } as EsriWebMap;
+    await svc.import({ user: makeUser(), webMap: wm });
+    const args = items.lastCreate.args as {
+      data: { layers: Array<{ style: { polygon: any } }> };
+    };
+    const poly = args.data.layers[0]!.style.polygon;
+    expect(poly.fillColor).toBe('#a54bc8');
+    expect(poly.fillOpacity).toBeCloseTo(100 / 255, 2);
+    expect(poly.strokeColor).toBe('#783296');
+    expect(poly.strokeWidth).toBe(1.5);
+  });
+
   it('projects web-mercator viewpoint envelopes back to lng/lat', async () => {
     // Real AGO WebMaps store the viewpoint envelope in the map's
     // spatialReference, which is almost always web mercator

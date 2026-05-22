@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Loader2,
   LogIn,
   LogOut,
@@ -158,10 +160,39 @@ export function FromAgoView() {
   // view the moment the job completes (the import-results
   // section sits below the preview, which can be a long table).
   const importResultsRef = useRef<HTMLElement | null>(null);
+  // AGO-type group collapse state for the per-item preview table.
+  // Default-populated whenever a fresh preview lands: any AGO
+  // type with zero importable rows (Dashboard, StoryMap, Form,
+  // GeoJSON when there's no mapping, etc.) starts collapsed so
+  // the table opens to just the actionable rows. The user can
+  // expand a skipped group to inspect what's being left behind.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    new Set(),
+  );
   // Reset the exclusion set whenever a fresh preview lands so a
   // re-preview doesn't carry over stale opt-outs.
   useEffect(() => {
     setExcludedAgoIds(new Set());
+  }, [preview]);
+
+  // Re-seed the collapse set on a fresh preview: any AGO type
+  // group whose rows are all classifier-skipped collapses by
+  // default. Importable groups stay expanded so the actionable
+  // rows are visible without an extra click.
+  useEffect(() => {
+    if (!preview) return;
+    const byType = new Map<string, DryRunItem[]>();
+    for (const row of preview.items) {
+      const arr = byType.get(row.agoType) ?? [];
+      arr.push(row);
+      byType.set(row.agoType, arr);
+    }
+    const collapsed = new Set<string>();
+    for (const [type, rows] of byType) {
+      const anyImportable = rows.some((r) => r.willImport && r.targetType);
+      if (!anyImportable) collapsed.add(type);
+    }
+    setCollapsedGroups(collapsed);
   }, [preview]);
 
   // Load the connections list once on mount.
@@ -564,6 +595,55 @@ export function FromAgoView() {
     return !excludedAgoIds.has(row.agoId);
   }
 
+  function toggleGroup(type: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  }
+
+  /** Group preview rows by AGO type for the collapsible table.
+   *
+   * Sort order is two-tier: importable types first (so the
+   * actionable bit of the migration is what the operator sees
+   * by default), then unsupported types alphabetically. Within
+   * each group rows sort by folder, then title -- the dry-run
+   * returns rows in walk order which doesn't help when scanning
+   * a large org. */
+  const groupedItems = useMemo(() => {
+    if (!preview) return [];
+    const byType = new Map<string, DryRunItem[]>();
+    for (const row of preview.items) {
+      const arr = byType.get(row.agoType) ?? [];
+      arr.push(row);
+      byType.set(row.agoType, arr);
+    }
+    const list = Array.from(byType, ([type, rows]) => {
+      rows.sort((a, b) => {
+        const af = a.folderTitle ?? '';
+        const bf = b.folderTitle ?? '';
+        if (af !== bf) return af.localeCompare(bf);
+        return a.title.localeCompare(b.title);
+      });
+      const importableCount = rows.filter(
+        (r) => r.willImport && r.targetType,
+      ).length;
+      return { type, rows, importableCount };
+    });
+    list.sort((a, b) => {
+      if (
+        (a.importableCount > 0) !==
+        (b.importableCount > 0)
+      ) {
+        return a.importableCount > 0 ? -1 : 1;
+      }
+      return a.type.localeCompare(b.type);
+    });
+    return list;
+  }, [preview]);
+
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-border bg-surface-1 p-5 shadow-card">
@@ -666,9 +746,9 @@ export function FromAgoView() {
               (Dashboard, StoryMap, Form, etc.) can&apos;t be toggled
               because there&apos;s no import path for them yet.
             </p>
-            <div className="max-h-96 overflow-y-auto rounded border border-border bg-surface-0">
+            <div className="max-h-[32rem] overflow-y-auto rounded border border-border bg-surface-0">
               <table className="w-full text-xs">
-                <thead className="bg-surface-2 text-left">
+                <thead className="sticky top-0 z-10 bg-surface-2 text-left">
                   <tr>
                     <th className="w-8 px-2 py-1.5 font-medium" />
                     <th className="px-2 py-1.5 font-medium">Title</th>
@@ -679,58 +759,99 @@ export function FromAgoView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.items.map((row) => {
-                    const toggleable = isToggleable(row);
-                    const included = willActuallyImport(row);
+                  {groupedItems.map((group) => {
+                    const collapsed = collapsedGroups.has(group.type);
+                    const totalInGroup = group.rows.length;
+                    const isUnsupported = group.importableCount === 0;
                     return (
-                      <tr
-                        key={row.agoId}
-                        className={`border-t border-border align-top ${
-                          toggleable && !included ? 'opacity-50' : ''
-                        }`}
-                      >
-                        <td className="px-2 py-1.5">
-                          <input
-                            type="checkbox"
-                            disabled={!toggleable}
-                            checked={included}
-                            onChange={() => toggleRow(row.agoId)}
-                            className="h-3.5 w-3.5 cursor-pointer accent-accent disabled:cursor-not-allowed"
-                            aria-label={
-                              toggleable
-                                ? `Include ${row.title} in import`
-                                : `${row.title} cannot be imported (unsupported type)`
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-1.5">{row.title}</td>
-                        <td className="px-2 py-1.5 font-mono text-muted">
-                          {row.agoType}
-                        </td>
-                        <td className="px-2 py-1.5 text-muted">
-                          {row.folderTitle}
-                        </td>
-                        <td className="px-2 py-1.5 text-muted">
-                          {row.access ?? ''}
-                        </td>
-                        <td className="px-2 py-1.5">
-                          {toggleable ? (
-                            included ? (
-                              <span className="text-success">
-                                -&gt; {row.targetType}
-                              </span>
-                            ) : (
+                      <Fragment key={group.type}>
+                        <tr
+                          className={`border-t border-border bg-surface-1 ${
+                            isUnsupported ? 'text-muted' : 'text-ink-0'
+                          }`}
+                        >
+                          <td
+                            colSpan={6}
+                            className="cursor-pointer px-2 py-1.5"
+                            onClick={() => toggleGroup(group.type)}
+                          >
+                            <div className="flex items-center gap-2">
+                              {collapsed ? (
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              )}
+                              <span className="font-medium">{group.type}</span>
                               <span className="text-muted">
-                                excluded
+                                {isUnsupported
+                                  ? `(${totalInGroup} - unsupported)`
+                                  : `(${group.importableCount} of ${totalInGroup} importable)`}
                               </span>
-                            )
-                          ) : (
-                            <span className="text-warning">
-                              skip - {row.reason ?? 'no reason'}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
+                            </div>
+                          </td>
+                        </tr>
+                        {!collapsed &&
+                          group.rows.map((row) => {
+                            const toggleable = isToggleable(row);
+                            const included = willActuallyImport(row);
+                            // Dim ANY row that isn't going to land
+                            // in the portal: classifier-skipped
+                            // rows are dimmed the same way an
+                            // operator-excluded row is, so the
+                            // eye can pick the actionable rows out.
+                            const dim = !included;
+                            return (
+                              <tr
+                                key={row.agoId}
+                                className={`border-t border-border align-top ${
+                                  dim ? 'opacity-50' : ''
+                                }`}
+                              >
+                                <td className="px-2 py-1.5">
+                                  <input
+                                    type="checkbox"
+                                    disabled={!toggleable}
+                                    checked={included}
+                                    onChange={() => toggleRow(row.agoId)}
+                                    className="h-3.5 w-3.5 cursor-pointer accent-accent disabled:cursor-not-allowed"
+                                    aria-label={
+                                      toggleable
+                                        ? `Include ${row.title} in import`
+                                        : `${row.title} cannot be imported (unsupported type)`
+                                    }
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">{row.title}</td>
+                                <td className="px-2 py-1.5 font-mono text-muted">
+                                  {row.agoType}
+                                </td>
+                                <td className="px-2 py-1.5 text-muted">
+                                  {row.folderTitle}
+                                </td>
+                                <td className="px-2 py-1.5 text-muted">
+                                  {row.access ?? ''}
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  {toggleable ? (
+                                    included ? (
+                                      <span className="text-success">
+                                        -&gt; {row.targetType}
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted">
+                                        excluded
+                                      </span>
+                                    )
+                                  ) : (
+                                    <span className="text-muted">
+                                      skip - {row.reason ?? 'no reason'}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </Fragment>
                     );
                   })}
                 </tbody>

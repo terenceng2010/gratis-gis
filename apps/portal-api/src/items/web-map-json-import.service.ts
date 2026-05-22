@@ -401,13 +401,24 @@ function buildMapLayer(args: {
   // Stable layer id keeps round-trip metadata predictable. UUID
   // is overkill but we don't have a better counter handy.
   const id = `imported-${Math.random().toString(36).slice(2, 10)}`;
+  // Try to lift the AGO renderer the engine stashed on
+  // `lens.query.agoRenderer` (#71). When present, the simple-fill
+  // / simple-marker / simple-line symbol is read off the renderer
+  // and merged into the portal layer's style on top of the
+  // default, so the imported map looks roughly like the AGO source
+  // instead of every layer rendering as the same blue. Falls back
+  // to the default style when the renderer is missing / not a
+  // shape we understand.
+  const agoRenderer = (args.lens.query as { agoRenderer?: unknown })
+    .agoRenderer;
+  const style = mergeAgoSymbolIntoStyle(defaultLayerStyle(), agoRenderer);
   return {
     id,
     title: args.lens.name,
     visible: true,
     opacity: 1,
     source: args.source,
-    style: defaultLayerStyle(),
+    style,
     renderer: { kind: 'simple' },
     popup: { enabled: true, fields: [] },
     interactions: { hoverEffect: false, clickToZoom: false },
@@ -425,6 +436,137 @@ function buildMapLayer(args: {
   };
 }
 
+/**
+ * Approximate an Esri renderer's primary symbol on the portal
+ * MapLayer style (#71). Only the simple renderer is honoured
+ * end-to-end today: a uniqueValue or classBreaks renderer would
+ * map to a portal "uniqueValue" or "classBreaks" MapLayer
+ * renderer kind, which is out of scope for v1 of this lift.
+ * For those, we still take the renderer's `defaultSymbol`
+ * (when present) so the imported layer at least looks like
+ * the majority class instead of falling back to plain blue.
+ *
+ * Esri symbol shapes recognised:
+ *   - esriSFS  (Simple Fill Symbol)   -> polygon style
+ *   - esriSLS  (Simple Line Symbol)   -> line style + polygon
+ *                                        stroke
+ *   - esriSMS  (Simple Marker Symbol) -> point style
+ *
+ * Colors arrive as RGBA arrays in 0-255 range; the portal style
+ * stores hex RGB + a separate 0..1 opacity. We split them on the
+ * way out. Anything missing / malformed leaves the style at
+ * defaults.
+ */
+function mergeAgoSymbolIntoStyle(
+  base: MapLayerOut['style'],
+  renderer: unknown,
+): MapLayerOut['style'] {
+  const sym = extractEsriSymbol(renderer);
+  if (!sym) return base;
+  const next: MapLayerOut['style'] = JSON.parse(JSON.stringify(base));
+  const type = (sym as { type?: string }).type;
+  if (type === 'esriSFS') {
+    const fill = rgbaToHexOpacity((sym as { color?: unknown }).color);
+    if (fill) {
+      next.polygon.fillColor = fill.hex;
+      next.polygon.fillOpacity = fill.opacity;
+    }
+    const outline = (sym as { outline?: unknown }).outline;
+    const outlineColor = rgbaToHexOpacity(
+      (outline as { color?: unknown } | undefined)?.color,
+    );
+    if (outlineColor) next.polygon.strokeColor = outlineColor.hex;
+    const outlineWidth = (outline as { width?: unknown } | undefined)?.width;
+    if (typeof outlineWidth === 'number' && outlineWidth >= 0) {
+      next.polygon.strokeWidth = outlineWidth;
+    }
+  } else if (type === 'esriSLS') {
+    const stroke = rgbaToHexOpacity((sym as { color?: unknown }).color);
+    if (stroke) {
+      next.line.color = stroke.hex;
+      next.polygon.strokeColor = stroke.hex;
+    }
+    const width = (sym as { width?: unknown }).width;
+    if (typeof width === 'number' && width >= 0) {
+      next.line.width = width;
+      next.polygon.strokeWidth = width;
+    }
+  } else if (type === 'esriSMS') {
+    const fill = rgbaToHexOpacity((sym as { color?: unknown }).color);
+    if (fill) next.point.color = fill.hex;
+    const size = (sym as { size?: unknown }).size;
+    if (typeof size === 'number' && size > 0) {
+      // Esri size is point diameter; portal radius is half that.
+      next.point.radius = Math.max(1, Math.round(size / 2));
+    }
+    const outline = (sym as { outline?: unknown }).outline;
+    const outlineColor = rgbaToHexOpacity(
+      (outline as { color?: unknown } | undefined)?.color,
+    );
+    if (outlineColor) next.point.strokeColor = outlineColor.hex;
+    const outlineWidth = (outline as { width?: unknown } | undefined)?.width;
+    if (typeof outlineWidth === 'number' && outlineWidth >= 0) {
+      next.point.strokeWidth = outlineWidth;
+    }
+    // Portal point symbol vocabulary is intentionally tiny right
+    // now (circle / icon). Any Esri marker variant falls back to
+    // "circle" so the layer at least renders with the right
+    // color + size; richer marker shapes are a follow-up.
+    next.point.symbol = 'circle';
+  }
+  return next;
+}
+
+/**
+ * Walk an Esri renderer envelope and return the symbol the
+ * imported layer should be styled with. Handles the three
+ * common renderer shapes:
+ *   - simple        -> renderer.symbol
+ *   - uniqueValue   -> renderer.defaultSymbol or first uniqueValueInfo
+ *   - classBreaks   -> renderer.defaultSymbol or first classBreakInfo
+ */
+function extractEsriSymbol(renderer: unknown): unknown {
+  if (!renderer || typeof renderer !== 'object') return null;
+  const r = renderer as Record<string, unknown>;
+  if (r.symbol) return r.symbol;
+  if (r.defaultSymbol) return r.defaultSymbol;
+  const infos = r.uniqueValueInfos ?? r.classBreakInfos;
+  if (Array.isArray(infos) && infos.length > 0) {
+    const first = infos[0] as { symbol?: unknown };
+    if (first?.symbol) return first.symbol;
+  }
+  return null;
+}
+
+/**
+ * Convert an Esri RGBA color (`[r, g, b, a]`, each 0-255 except
+ * a which is 0-255) into a `{ hex, opacity }` pair where hex is
+ * the portal style's `#rrggbb` and opacity is a 0..1 float.
+ * Returns null for malformed input so the caller leaves the
+ * default style intact.
+ */
+function rgbaToHexOpacity(
+  color: unknown,
+): { hex: string; opacity: number } | null {
+  if (!Array.isArray(color) || color.length < 3) return null;
+  const [r, g, b, a] = color as number[];
+  if (
+    typeof r !== 'number' ||
+    typeof g !== 'number' ||
+    typeof b !== 'number'
+  ) {
+    return null;
+  }
+  const clamp = (n: number): number => Math.max(0, Math.min(255, Math.round(n)));
+  const hex =
+    '#' +
+    [clamp(r), clamp(g), clamp(b)]
+      .map((n) => n.toString(16).padStart(2, '0'))
+      .join('');
+  const opacity = typeof a === 'number' ? clamp(a) / 255 : 1;
+  return { hex, opacity };
+}
+
 function defaultLayerStyle(): MapLayerOut['style'] {
   return {
     point: {
@@ -438,11 +580,19 @@ function defaultLayerStyle(): MapLayerOut['style'] {
       iconTint: false,
     },
     line: { color: '#3b82f6', width: 2 },
+    // Polygon defaults: bumped from light-blue / 40% opacity to a
+    // saturated blue / 25% opacity with a 2px stroke. The previous
+    // values were nearly invisible against a topographic basemap,
+    // which made AGO-imported polygon layers look like they hadn't
+    // imported at all (#70). A future pass that lifts the AGO
+    // renderer's actual colour will replace this default per-layer
+    // (#71); these values are the fallback when no renderer info
+    // is available.
     polygon: {
-      fillColor: '#93c5fd',
-      fillOpacity: 0.4,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.25,
       strokeColor: '#1e3a8a',
-      strokeWidth: 1,
+      strokeWidth: 2,
     },
   };
 }

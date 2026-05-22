@@ -52,6 +52,12 @@ export interface EsriOperationalLayer {
   /** Esri definition expression. Maps to LensQuery.attrFilter. */
   layerDefinition?: {
     definitionExpression?: string;
+    /** Symbology block; mostly the renderer (simple / uniqueValue
+     *  / classBreaks) we lift into the portal layer's style when
+     *  importing from AGO. Left as opaque `unknown` so we don't
+     *  pull in the full Esri symbol vocabulary at the engine
+     *  layer; the converter just stashes it on the lens. */
+    drawingInfo?: { renderer?: unknown };
   };
   [key: string]: unknown;
 }
@@ -323,6 +329,16 @@ export function webMapJsonToLenses(json: EsriWebMap): {
       // against existing portal items. Unknown attrs on the query
       // shape are preserved by the engine read path.
       (lens.query as { sourceUrl?: string }).sourceUrl = layer.url;
+    }
+    // Stash the Esri renderer so the AGO -> portal import path
+    // can lift the symbology into the new MapLayer's style (#71).
+    // Carried on lens.query alongside sourceUrl rather than on a
+    // typed Lens field because portal-side runtime doesn't render
+    // through Esri symbols; the converter consumes it and drops
+    // it.
+    const agoRenderer = layer.layerDefinition?.drawingInfo?.renderer;
+    if (agoRenderer && typeof agoRenderer === 'object') {
+      (lens.query as { agoRenderer?: unknown }).agoRenderer = agoRenderer;
     }
     lenses.push(lens);
   }
