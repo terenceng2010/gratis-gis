@@ -662,14 +662,22 @@ export class ItemsService {
       const typeLabel = Array.isArray(opts.type)
         ? opts.type.join('|')
         : (opts.type ?? 'any');
+      // Pass user-influenced values (typeLabel, q) as separate args
+      // rather than interpolating them into the format string. Keeps
+      // any CR/LF or format-specifier characters from corrupting the
+      // log stream (CodeQL js/log-injection).
       // eslint-disable-next-line no-console
       console.log(
-        `[items.list] type=${typeLabel} mine=${opts.mine ?? false} ` +
-          `lite=${opts.lite ?? false} q=${opts.q ?? ''} ` +
-          `rows=${rows.length} ` +
-          `inherit=${tInheritDone - tStart}ms ` +
-          `findMany=${tFindDone - tInheritDone}ms ` +
-          `total=${tFindDone - tStart}ms`,
+        '[items.list] type=%s mine=%s lite=%s q=%s rows=%d ' +
+          'inherit=%dms findMany=%dms total=%dms',
+        typeLabel,
+        opts.mine ?? false,
+        opts.lite ?? false,
+        opts.q ?? '',
+        rows.length,
+        tInheritDone - tStart,
+        tFindDone - tInheritDone,
+        tFindDone - tStart,
       );
     }
     // #66: surface the auto-thumbnail URL for rows without an

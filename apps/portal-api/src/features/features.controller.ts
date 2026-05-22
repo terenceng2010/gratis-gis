@@ -407,8 +407,13 @@ export class FeaturesController {
       });
     } catch (err) {
       // Non-fatal: metadata sync failure shouldn't roll back the write.
+      // Pass user-controlled fields as separate console args (not
+      // interpolated into the format string) so a crafted item id or
+      // error message can't smuggle in format specifiers or CR/LF
+      // sequences that would corrupt the log stream (CodeQL
+      // js/log-injection).
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`syncItemMeta failed for ${itemId}: ${msg}`);
+      console.warn('syncItemMeta failed for %s: %s', itemId, msg);
     }
   }
 }

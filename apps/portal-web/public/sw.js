@@ -183,6 +183,12 @@ self.addEventListener('fetch', (event) => {
  * the SW can confirm pre-fetches landed and report progress.
  */
 self.addEventListener('message', (event) => {
+  // Reject cross-origin messages. Pages on a different origin shouldn't
+  // be able to drive cache-management actions on our SW.  Browsers
+  // already scope a SW to its registering origin, but a defensive
+  // origin compare keeps a misbehaving extension / nested iframe from
+  // sneaking in (CodeQL js/missing-origin-check).
+  if (event.origin && event.origin !== self.location.origin) return;
   const data = event.data;
   if (!data || typeof data !== 'object') return;
   if (data.type === 'tile-cache-stats') {

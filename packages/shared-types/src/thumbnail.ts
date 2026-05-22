@@ -253,11 +253,19 @@ export function renderThumbnailSvg(args: {
 </svg>`;
 }
 
-function clamp01(v: number): number {
-  if (!Number.isFinite(v)) return 1;
-  if (v < 0) return 0;
-  if (v > 1) return 1;
-  return v;
+function clamp01(v: unknown): number {
+  // Accept `unknown` (not `number`): the thumbnailDesign blob is
+  // a Prisma JSON column whose runtime type is unenforced. A
+  // non-numeric value here would otherwise flow straight into SVG
+  // attribute values and let an attacker break out of the attribute
+  // ("0.5/><script>"). Coerce to a real number; non-finite, non-
+  // numeric, and out-of-range values collapse to safe defaults
+  // (CodeQL js/html-constructed-from-input).
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return 1;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
 }
 
 /**
