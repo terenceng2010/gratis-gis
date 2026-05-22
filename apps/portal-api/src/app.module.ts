@@ -14,6 +14,7 @@ import { ItemsModule } from './items/items.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { IngestModule } from './ingest/ingest.module.js';
 import { ImportJobsModule } from './import-jobs/import-jobs.module.js';
+import { ImportAgoModule } from './import-ago/import-ago.module.js';
 import { FeaturesModule } from './features/features.module.js';
 import { MaintenanceModule } from './maintenance/maintenance.module.js';
 import { AdminModule } from './admin/admin.module.js';
@@ -59,6 +60,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     StorageModule,
     IngestModule,
     ImportJobsModule,
+    ImportAgoModule,
     FeaturesModule,
     MaintenanceModule,
     AdminModule,

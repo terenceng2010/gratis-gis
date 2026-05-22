@@ -144,21 +144,21 @@ const MAPPING: Record<string, AgoTypeMapping> = Object.fromEntries(
       },
       {
         agoType: 'Web Mapping Application',
-        targetType: 'web_app',
-        needsDataFetch: true,
+        targetType: null,
+        needsDataFetch: false,
         needsServiceProbe: false,
-        supported: true,
+        supported: false,
         notes:
-          'AGO Web Mapping Application -> portal `web_app` item. Application configuration converts best-effort; some template-specific behaviours may not translate.',
+          'AGO Web Mapping Applications use Esri-proprietary templates that do not translate cleanly. v1 importer skips; rebuild through the portal app templates after the underlying maps + services are imported.',
       },
       {
         agoType: 'Dashboard',
-        targetType: 'dashboard',
-        needsDataFetch: true,
+        targetType: null,
+        needsDataFetch: false,
         needsServiceProbe: false,
-        supported: true,
+        supported: false,
         notes:
-          'AGO Dashboard -> portal `dashboard` item. Layout converts; widget catalog drift may leave gaps for the operator to backfill.',
+          'AGO Dashboard widget catalog differs significantly from the portal dashboard runtime. v1 importer skips; rebuild through the portal dashboard editor after the underlying maps + layers are imported.',
       },
       {
         agoType: 'StoryMap',
@@ -181,21 +181,21 @@ const MAPPING: Record<string, AgoTypeMapping> = Object.fromEntries(
       // ---- Forms / surveys ----
       {
         agoType: 'Form',
-        targetType: 'form',
-        needsDataFetch: true,
+        targetType: null,
+        needsDataFetch: false,
         needsServiceProbe: false,
-        supported: true,
+        supported: false,
         notes:
-          'AGO Form -> portal `form` item. XLSForm round-trip uses the existing portal form parser.',
+          'AGO Forms / Survey123 use XLSForm payloads that have not been round-tripped through the portal form designer yet. v1 importer skips; recreate forms in the portal once the underlying submission layers exist.',
       },
       {
         agoType: 'Survey',
-        targetType: 'form',
-        needsDataFetch: true,
+        targetType: null,
+        needsDataFetch: false,
         needsServiceProbe: false,
-        supported: true,
+        supported: false,
         notes:
-          'Survey123 form -> portal `form` item. Same XLSForm path as native AGO Forms.',
+          'Survey123 surveys not supported on v1 import; see the Form row note. The companion Feature Service that backs the survey is imported normally.',
       },
       // ---- Files / docs ----
       {
