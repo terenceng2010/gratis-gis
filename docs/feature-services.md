@@ -34,10 +34,13 @@ After parsing, a staged preview shows the detected format, feature
 count, and derived fields with types. Nothing is persisted until the
 user clicks **Save replacement**.
 
-Dependencies: `@tmcw/togeojson` for KML, `jszip` for KMZ + zip
-sniffing, `shpjs` for shapefiles. All three are dynamically imported
+Dependencies: `@tmcw/togeojson` for KML; KMZ and zipped shapefiles
+round-trip through the server's GDAL pipeline at
+`POST /api/ingest/to-geojson` (the same /vsizip/-backed reader that
+powers `.gdb` ingest below). The KML path is dynamically imported
 so the default bundle stays small for users who never open the
-ingest flow.
+ingest flow; the KMZ / shapefile path adds no client-side parser
+weight at all.
 
 ### File Geodatabase (.gdb)
 

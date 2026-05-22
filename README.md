@@ -117,7 +117,6 @@ each project's home page; please consider supporting them directly.
 | Tile bundles | [PMTiles](https://github.com/protomaps/PMTiles) |
 | Spatial indexing | [h3-js](https://github.com/uber/h3-js) |
 | KML / GPX import | [@tmcw/togeojson](https://github.com/tmcw/togeojson) |
-| Shapefile import | [shpjs](https://github.com/calvinmetcalf/shapefile-js) |
 | Raster / vector I/O | [GDAL](https://gdal.org/) (via [`gdal-async`](https://github.com/mmomtchev/node-gdal-async)) |
 | Component kit | [shadcn/ui](https://ui.shadcn.com/) (Radix primitives + Tailwind) |
 | Charts | [Recharts](https://recharts.org/) |

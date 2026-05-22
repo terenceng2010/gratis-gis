@@ -109,12 +109,6 @@ const STACK: StackRow[] = [
     ],
   },
   {
-    layer: 'Shapefile import',
-    projects: [
-      { label: 'shpjs', href: 'https://github.com/calvinmetcalf/shapefile-js' },
-    ],
-  },
-  {
     layer: 'Raster / vector I/O',
     projects: [
       { label: 'GDAL', href: 'https://gdal.org/' },
