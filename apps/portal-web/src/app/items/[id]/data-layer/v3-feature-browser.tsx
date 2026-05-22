@@ -65,6 +65,7 @@ export function V3FeatureBrowser({
   onRefreshCounts,
 }: Props) {
   const [features, setFeatures] = useState<FeatureRecord[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -78,22 +79,39 @@ export function V3FeatureBrowser({
 
   const fields = layer.fields ?? [];
 
+  /**
+   * How many rows the inline browser fetches per open. The
+   * underlying server endpoint caps at 5000; we ask for the cap
+   * so any layer up to that size loads in one shot, larger
+   * layers truncate with a banner pointing the user at the map
+   * editor for full-table workflows.
+   *
+   * Previously the browser hit /features (full GeoJSON, default
+   * limit 100,000) which hung the portal on a 1.4M-row WV
+   * Parcels layer (#72). /features-page strips geometry server-
+   * side and caps response size, making the inline editor safe
+   * to open on any layer regardless of feature count.
+   */
+  const PAGE_LIMIT = 5000;
+
   const reload = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/portal/items/${itemId}/layers/${layer.id}/features`,
+        `/api/portal/items/${itemId}/layers/${layer.id}/features-page?limit=${PAGE_LIMIT}`,
       );
       if (!res.ok) {
         setError(`Could not load features: ${res.status} ${await res.text()}`);
         return;
       }
-      const body = (await res.json()) as
-        | FeatureRecord[]
-        | { features: FeatureRecord[] };
-      const rows = Array.isArray(body) ? body : (body?.features ?? []);
-      setFeatures(rows);
+      const body = (await res.json()) as {
+        features: FeatureRecord[];
+        count: number;
+        truncated: boolean;
+      };
+      setFeatures(body.features ?? []);
+      setTruncated(Boolean(body.truncated));
     } catch (err) {
       setError((err as Error).message || 'Could not load features');
     } finally {
@@ -271,6 +289,17 @@ export function V3FeatureBrowser({
         <div className="flex items-start gap-1.5 border-b border-border bg-danger/5 px-3 py-1.5 text-[11px] text-danger">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           <span>{error}</span>
+        </div>
+      ) : null}
+
+      {truncated ? (
+        <div className="flex items-start gap-1.5 border-b border-border bg-warning/5 px-3 py-1.5 text-[11px] text-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            Showing the first {PAGE_LIMIT.toLocaleString()} rows. This layer
+            has more than that; open it in the map editor for the full feature
+            set or use the Export button for the complete table.
+          </span>
         </div>
       ) : null}
 
