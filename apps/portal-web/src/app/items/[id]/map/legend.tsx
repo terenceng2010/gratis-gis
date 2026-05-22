@@ -315,7 +315,7 @@ function IconMark({
   iconName: string;
   color: string;
 }) {
-  const svg = renderIconSvg(iconName, color) ?? '';
+  const svg = renderIconSvg(iconName, { stroke: color }) ?? '';
   return (
     <span
       aria-hidden="true"
