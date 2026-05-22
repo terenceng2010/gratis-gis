@@ -17,7 +17,7 @@
     "@gratis-gis/ui": "workspace:*",
     "@tmcw/togeojson": "^6.0.1",
     "framer-motion": "^11.11.1",
-    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.1.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.447.0",
     "maplibre-gl": "^4.7.1",
@@ -35,6 +35,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.12.12",
     "@types/react": "^18.3.10",
     "@types/react-dom": "^18.3.0",

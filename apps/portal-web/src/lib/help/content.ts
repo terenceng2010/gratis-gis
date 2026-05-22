@@ -3,9 +3,9 @@
  * Help documentation loader (#118).
  *
  * Reads MDX-ish files from `apps/portal-web/content/help/`, parses
- * frontmatter via gray-matter, and converts the markdown body to
- * HTML via marked.  Runs server-side only -- the rendered HTML +
- * a slim search index ship to the client.
+ * the YAML frontmatter block, and converts the markdown body to
+ * HTML via marked. Runs server-side only: the rendered HTML and a
+ * slim search index ship to the client.
  *
  * File layout:
  *   content/help/<category>/<slug>.md   -> /help/<category>/<slug>
@@ -14,14 +14,81 @@
  *
  * Each file's frontmatter is the single source of truth for nav
  * placement, search summary, control bindings (data-help ids that
- * point at this page), and prerequisites.  See `HelpFrontmatter`
+ * point at this page), and prerequisites. See `HelpFrontmatter`
  * below for the schema.
+ *
+ * Frontmatter parsing was previously delegated to gray-matter@4,
+ * which still calls `yaml.safeLoad()` (removed in js-yaml@4). The
+ * gray-matter project has been quiet since 2021, so rather than
+ * pin js-yaml to the 3.x line we own a small parser here that
+ * targets the exact `---\\n<yaml>\\n---\\n<body>` shape every help
+ * doc uses. js-yaml@4's load() is safe-by-default so this is also
+ * the safer path.
  */
 
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import matter from 'gray-matter';
+import { load as yamlLoad } from 'js-yaml';
 import { marked } from 'marked';
+
+/**
+ * Split a help-doc file into its YAML frontmatter and markdown body.
+ *
+ * Accepts either form:
+ *   1. No frontmatter: returns `{ data: {}, content: <whole input> }`.
+ *   2. Frontmatter present: the file MUST start with a `---` line
+ *      (optional leading BOM allowed) and the YAML block MUST end
+ *      with a matching `---` line on its own. Anything after the
+ *      closing fence is the markdown body.
+ *
+ * The frontmatter is parsed with js-yaml's safe `load()`. A parse
+ * error propagates so a broken doc is loud at build time, not silent
+ * at runtime. Documents that fail to parse are caught by the caller
+ * (it logs + skips them).
+ *
+ * Mirrors the gray-matter shape we used previously: `{ data, content }`.
+ * Replaces gray-matter so we can stay on js-yaml@4 (and drop a dep).
+ */
+function parseFrontmatter(raw: string): {
+  data: Record<string, unknown>;
+  content: string;
+} {
+  // Strip a leading BOM if any. Some editors save .md with it.
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  // Open fence must be the very first line.
+  if (!text.startsWith('---')) {
+    return { data: {}, content: text };
+  }
+  // Walk past the opening fence's line terminator.
+  // Accepts `---\n` or `---\r\n`.
+  const afterOpen =
+    text.charAt(3) === '\r' && text.charAt(4) === '\n'
+      ? 5
+      : text.charAt(3) === '\n'
+        ? 4
+        : -1;
+  if (afterOpen < 0) {
+    // `---` not followed by a newline is not a real fence.
+    return { data: {}, content: text };
+  }
+  // Find the closing fence on its own line.
+  const closeRe = /\r?\n---(?:\r?\n|$)/;
+  closeRe.lastIndex = afterOpen;
+  const closeMatch = closeRe.exec(text.slice(afterOpen));
+  if (!closeMatch) {
+    // Unterminated frontmatter: treat as a body, don't guess.
+    return { data: {}, content: text };
+  }
+  const yamlBody = text.slice(afterOpen, afterOpen + closeMatch.index);
+  const after = afterOpen + closeMatch.index + closeMatch[0].length;
+  const content = text.slice(after);
+  const parsed = yamlLoad(yamlBody);
+  const data =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  return { data, content };
+}
 
 /**
  * AI-ready metadata schema.  Every page must have at least
@@ -241,8 +308,12 @@ async function walk(
     if (!ent.isFile()) continue;
     if (!/\.mdx?$/i.test(entry)) continue;
     const raw = await readFile(full, 'utf8');
-    const parsed = matter(raw);
-    const fm = parsed.data as HelpFrontmatter;
+    const parsed = parseFrontmatter(raw);
+    // Cast via unknown: parseFrontmatter returns the YAML's actual
+    // shape (Record<string, unknown>); the title / summary check on
+    // the next two lines is what validates the HelpFrontmatter
+    // contract at runtime.
+    const fm = parsed.data as unknown as HelpFrontmatter;
     if (!fm.title || !fm.summary) {
       console.warn(
         `[help] skipping ${entry}: missing required frontmatter (title, summary)`,
