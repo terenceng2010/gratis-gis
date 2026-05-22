@@ -128,9 +128,19 @@ export class AgoImportService {
     portalUrl: string;
     token: string;
     report: DryRunReport;
-    /** Per-item callback so the dialog / future job runner can
-     *  stream progress without buffering. */
-    onProgress?: (result: ImportResult, idx: number, total: number) => void;
+    /** Per-item callback so the dialog / async job runner can
+     *  stream progress without buffering. May be async; the
+     *  importer awaits it before moving to the next item. The
+     *  async job runner uses this to write progress to the
+     *  AgoImportJob row and check for caller-initiated cancellation
+     *  (it throws a sentinel error to abort the run from inside
+     *  the callback). */
+    onProgress?: (state: {
+      result: ImportResult;
+      done: number;
+      total: number;
+      currentItem: string;
+    }) => void | Promise<void>;
   }): Promise<ImportReport> {
     const startedAt = new Date();
     const client = new AgoClient({
@@ -254,7 +264,20 @@ export class AgoImportService {
       ) {
         folderChildIds.get(item.ownerFolder)!.push(result.portalItemId);
       }
-      args.onProgress?.(result, i, ordered.length);
+      // Progress hook fires AFTER folder bookkeeping so the runner
+      // sees the final state for this item. The callback can also
+      // throw to abort the loop (the async job runner uses this for
+      // cancellation); we let the error propagate to the run()
+      // caller without wrapping it as a per-item failure.
+      const nextItem = ordered[i + 1];
+      await args.onProgress?.({
+        result,
+        done: i + 1,
+        total: ordered.length,
+        currentItem: nextItem
+          ? `${nextItem.title} (${nextItem.agoType})`
+          : '',
+      });
     }
 
     // Skipped items from the report (willImport=false) are

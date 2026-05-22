@@ -1165,3 +1165,74 @@ model AgoOauthConnection {
   @@map("ago_oauth_connection")
 }
 
+/// Status values for AgoImportJob. Matches the ingest ImportJob's
+/// enum almost identically; kept distinct so the two job pipelines
+/// can diverge later without forcing a single union.
+enum AgoImportJobStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
+/// Async background job for an AGO migration run (#55). The
+/// preview / report shape is sized at preview time (one row per
+/// AGO item the operator picked) but the actual feature copy
+/// can take many minutes for a hosted Feature Service of any
+/// meaningful size. A single HTTP POST that holds the connection
+/// open for that long is a brittle UX -- the browser can
+/// disconnect, the user can navigate away, and the operator has
+/// no visibility into what's happening mid-run.
+///
+/// This row decouples the import wall-clock from the user's
+/// attention. The controller's /run/start endpoint creates an
+/// AgoImportJob row in status='queued' and returns the id; the
+/// background runner (the same node process the controller runs
+/// in -- single replica today) picks it up immediately and writes
+/// progress as it goes. The wizard polls /run/:id every second
+/// and renders a progress bar; refresh / close / reopen are safe
+/// because the row carries everything needed to render the
+/// current state.
+model AgoImportJob {
+  id              String              @id @default(uuid()) @db.Uuid
+  /// User who started the job. Owner of the resulting items.
+  createdBy       String              @map("created_by") @db.Uuid
+  /// Org scoping for visibility checks. Denormalized so the
+  /// polling endpoint doesn't need a join through user.
+  orgId           String              @map("org_id") @db.Uuid
+  status          AgoImportJobStatus  @default(queued)
+  /// AGO sharing-rest base the job is pulling from. Stored so the
+  /// detail-page banner can name the source org.
+  portalUrl       String              @map("portal_url")
+  /// Number of items the dry-run report flagged as willImport. The
+  /// progress bar denominator.
+  total           Int                 @default(0)
+  /// Live counter the runner bumps after each item finishes (any
+  /// status -- created / failed / skipped).
+  done            Int                 @default(0)
+  /// Short human description of the in-flight AGO item, e.g.
+  /// "Importing 'Parcels' (Feature Service)". Lets the banner show
+  /// something more interesting than a percentage.
+  currentItem     String?             @map("current_item")
+  /// The dry-run report the user signed off on, persisted so the
+  /// background runner has a self-contained input set and the job
+  /// detail page can show "what was queued". Includes any
+  /// excludedAgoIds the operator deselected in the preview.
+  requestPayload  Json                @map("request_payload")
+  /// The final ImportReport produced by AgoImportService.run.
+  /// Populated when status flips to succeeded or failed; null
+  /// while queued / running.
+  report          Json?
+  /// Filled when status flips to failed (covers the runner crash
+  /// case where AgoImportService threw before producing a report).
+  errorMessage    String?             @map("error_message")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  startedAt       DateTime?           @map("started_at")
+  finishedAt      DateTime?           @map("finished_at")
+
+  @@index([createdBy, createdAt], map: "ago_import_job_user_created_idx")
+  @@index([orgId, status], map: "ago_import_job_org_status_idx")
+  @@map("ago_import_job")
+}
+

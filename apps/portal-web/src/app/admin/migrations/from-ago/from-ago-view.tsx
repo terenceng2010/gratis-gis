@@ -96,6 +96,40 @@ interface SessionState {
   expiresAtMs: number;
 }
 
+/** Snapshot of one in-flight async ImportJob row (#55). Mirrors
+ *  the server's AgoImportJobDto shape so the controller's polling
+ *  response can be assigned in directly. */
+interface AgoImportJob {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  total: number;
+  done: number;
+  currentItem: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  report: ImportReport | null;
+}
+
+/** Locally-tracked progress state for the in-flight job. Trimmed
+ *  to the bits the progress bar + status line render so a tiny
+ *  setState doesn't unnecessarily re-render the rest of the page. */
+interface JobProgress {
+  done: number;
+  total: number;
+  currentItem: string | null;
+  status: AgoImportJob['status'];
+}
+
+const POLL_INTERVAL_MS = 1000;
+
+/** Tiny sleep helper used by the job polling loop. Inlined so we
+ *  don't add a util import for a one-liner. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
 export function FromAgoView() {
   const [conns, setConns] = useState<AgoConnection[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -113,6 +147,13 @@ export function FromAgoView() {
   const [excludedAgoIds, setExcludedAgoIds] = useState<Set<string>>(
     new Set(),
   );
+  // Async ImportJob (#55) state. jobProgress is null when no job
+  // is in-flight; once a run starts the polling loop bumps it on
+  // every status response. activeJobIdRef survives across renders
+  // so the cancel button + the polling loop can both reach the
+  // current job id without a stale-closure problem.
+  const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
   // Reset the exclusion set whenever a fresh preview lands so a
   // re-preview doesn't carry over stale opt-outs.
   useEffect(() => {
@@ -362,6 +403,7 @@ export function FromAgoView() {
     if (!preview || !session) return;
     setBusy('run');
     setError(null);
+    setJobProgress(null);
     try {
       // Apply the operator's per-item opt-outs by clearing
       // willImport on each excluded row. The backend already
@@ -375,25 +417,92 @@ export function FromAgoView() {
             : row,
         ),
       };
-      const resp = await fetch('/api/portal/admin/import-ago/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          portalUrl: session.sharingRestBase,
-          token: session.token,
-          report: effective,
-        }),
-      });
-      if (!resp.ok) {
+      // Kick off the async job. The single sync POST /run is
+      // still available but the wizard always uses the job path
+      // so a 30-minute hosted-FS import doesn't hold a long-lived
+      // HTTP connection. /run/start returns immediately with the
+      // job id; we then poll /run/:id until the status flips to
+      // a terminal value.
+      const startResp = await fetch(
+        '/api/portal/admin/import-ago/run/start',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            portalUrl: session.sharingRestBase,
+            token: session.token,
+            report: effective,
+          }),
+        },
+      );
+      if (!startResp.ok) {
         throw new Error(
-          `Import failed: HTTP ${resp.status} ${await resp.text()}`,
+          `Import failed: HTTP ${startResp.status} ${await startResp.text()}`,
         );
       }
-      setImportReport((await resp.json()) as ImportReport);
+      const { id: jobId } = (await startResp.json()) as { id: string };
+      activeJobIdRef.current = jobId;
+      // Poll every second until we land on a terminal state. The
+      // server-side runner writes done + currentItem on every item
+      // boundary so the progress bar updates smoothly.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await sleep(POLL_INTERVAL_MS);
+        if (activeJobIdRef.current !== jobId) {
+          // The user navigated away or started a new job; stop
+          // polling this one rather than racing the UI state.
+          return;
+        }
+        const statusResp = await fetch(
+          `/api/portal/admin/import-ago/run/${encodeURIComponent(jobId)}`,
+        );
+        if (!statusResp.ok) {
+          throw new Error(
+            `Job polling failed: HTTP ${statusResp.status} ${await statusResp.text()}`,
+          );
+        }
+        const job = (await statusResp.json()) as AgoImportJob;
+        setJobProgress({
+          done: job.done,
+          total: job.total,
+          currentItem: job.currentItem,
+          status: job.status,
+        });
+        if (
+          job.status === 'succeeded' ||
+          job.status === 'failed' ||
+          job.status === 'cancelled'
+        ) {
+          if (job.status === 'succeeded' && job.report) {
+            setImportReport(job.report);
+          } else if (job.status === 'failed') {
+            throw new Error(
+              `Import failed: ${job.errorMessage ?? 'unknown error'}`,
+            );
+          } else if (job.status === 'cancelled') {
+            setError('Import cancelled.');
+          }
+          activeJobIdRef.current = null;
+          return;
+        }
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function cancelImport() {
+    const jobId = activeJobIdRef.current;
+    if (!jobId) return;
+    try {
+      await fetch(
+        `/api/portal/admin/import-ago/run/${encodeURIComponent(jobId)}/cancel`,
+        { method: 'POST' },
+      );
+    } catch (e) {
+      setError(`Cancel failed: ${(e as Error).message}`);
     }
   }
 
@@ -607,6 +716,50 @@ export function FromAgoView() {
               </table>
             </div>
           </div>
+        </section>
+      )}
+
+      {jobProgress && !importReport && (
+        <section className="rounded-lg border border-border bg-surface-1 p-5 shadow-card">
+          <h2 className="text-base font-semibold">
+            {jobProgress.status === 'cancelled'
+              ? 'Import cancelled'
+              : jobProgress.status === 'failed'
+              ? 'Import failed'
+              : 'Import in progress'}
+          </h2>
+          <p className="mt-1 text-xs text-muted">
+            {jobProgress.status === 'queued'
+              ? 'Waiting for the runner to pick up the job...'
+              : jobProgress.currentItem
+              ? `Next: ${jobProgress.currentItem}`
+              : `Processed ${jobProgress.done} of ${jobProgress.total} item(s).`}
+          </p>
+          <div className="mt-3 h-2 w-full overflow-hidden rounded bg-surface-2">
+            <div
+              className="h-full bg-accent transition-all"
+              style={{
+                width: `${
+                  jobProgress.total > 0
+                    ? Math.round((jobProgress.done / jobProgress.total) * 100)
+                    : 0
+                }%`,
+              }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            {jobProgress.done} / {jobProgress.total} item(s)
+          </p>
+          {(jobProgress.status === 'queued' ||
+            jobProgress.status === 'running') && (
+            <button
+              type="button"
+              className="mt-3 rounded border border-border bg-surface-0 px-3 py-1 text-xs text-ink-1 hover:bg-surface-2"
+              onClick={cancelImport}
+            >
+              Cancel import
+            </button>
+          )}
         </section>
       )}
 

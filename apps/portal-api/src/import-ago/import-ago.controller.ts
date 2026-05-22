@@ -25,6 +25,10 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 
 import { AgoDryRunService, type DryRunReport } from './dry-run.js';
 import { AgoImportService, type ImportReport } from './import.js';
+import {
+  AgoImportJobsService,
+  type AgoImportJobDto,
+} from './jobs.service.js';
 import { buildAgoAuthorizeUrl, normalizeAgoUrl } from './ago-url.js';
 import {
   AgoConnectionsService,
@@ -110,6 +114,7 @@ export class ImportAgoController {
     private readonly dryRun: AgoDryRunService,
     private readonly importer: AgoImportService,
     private readonly connections: AgoConnectionsService,
+    private readonly jobs: AgoImportJobsService,
   ) {}
 
   // ---- Connections CRUD ------------------------------------------------
@@ -242,6 +247,69 @@ export class ImportAgoController {
       token: dto.token,
       report: dto.report,
     });
+  }
+
+  // ---- Async ImportJob endpoints (#55) --------------------------------
+  //
+  // The wizard prefers the async path: a single HTTP request that
+  // hangs open for 30+ minutes on a hosted-FS-heavy import is a
+  // brittle UX. POST /run/start kicks off a background job and
+  // returns immediately; the client polls /run/:id every second.
+  // POST /run is kept around for API consumers and small imports
+  // that don't need the polling overhead.
+
+  /**
+   * Queue an AGO migration job. Returns the new job id immediately;
+   * the background runner picks up the row and writes progress as
+   * it goes.
+   */
+  @Post('run/start')
+  async runStart(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: AgoRunDto,
+  ): Promise<{ id: string }> {
+    if (!isHttpsUrl(dto.portalUrl)) {
+      throw new BadRequestException(
+        'portalUrl must be an https:// URL ending at the /sharing/rest root.',
+      );
+    }
+    if (!dto.report || !Array.isArray(dto.report.items)) {
+      throw new BadRequestException(
+        'report must be the DryRunReport returned from /preview.',
+      );
+    }
+    return this.jobs.start({
+      user,
+      portalUrl: dto.portalUrl,
+      token: dto.token,
+      report: dto.report,
+    });
+  }
+
+  /**
+   * Poll one job. The wizard hits this every second while the job
+   * is running. Once the status flips to a terminal value
+   * (succeeded / failed / cancelled) the final report ships back
+   * inline so the client doesn't need a second round-trip.
+   */
+  @Get('run/:id')
+  async runStatus(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ): Promise<AgoImportJobDto> {
+    return this.jobs.get(user, id);
+  }
+
+  /**
+   * Cancel a running job. Returns the (cancelled) row. No-op when
+   * the job has already finished.
+   */
+  @Post('run/:id/cancel')
+  async runCancel(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ): Promise<AgoImportJobDto> {
+    return this.jobs.cancel(user, id);
   }
 }
 

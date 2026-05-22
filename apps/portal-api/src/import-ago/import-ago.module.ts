@@ -11,6 +11,7 @@ import { AgoConnectionsService } from './connections.service.js';
 import { AgoDryRunService } from './dry-run.js';
 import { AgoHostedFsImportService } from './hosted-fs.js';
 import { AgoImportService } from './import.js';
+import { AgoImportJobsService } from './jobs.service.js';
 import { ImportAgoController } from './import-ago.controller.js';
 
 /**
@@ -38,12 +39,14 @@ import { ImportAgoController } from './import-ago.controller.js';
     AgoDryRunService,
     AgoHostedFsImportService,
     AgoImportService,
+    AgoImportJobsService,
   ],
   exports: [
     AgoConnectionsService,
     AgoDryRunService,
     AgoHostedFsImportService,
     AgoImportService,
+    AgoImportJobsService,
   ],
 })
 export class ImportAgoModule {}
