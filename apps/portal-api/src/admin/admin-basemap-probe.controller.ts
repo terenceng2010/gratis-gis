@@ -753,7 +753,22 @@ function looksLikeXyzTemplate(url: string): boolean {
   // Accept the common placeholder shapes: {z}/{x}/{y} (XYZ
   // convention), {z}/{y}/{x} (Esri convention if the user pasted
   // a pre-shaped Esri tile URL).
-  return /\{z\}.*\{x\}.*\{y\}|\{z\}.*\{y\}.*\{x\}/i.test(url);
+  //
+  // Implemented as three indexOf checks rather than a regex with
+  // unbounded `.*` between fixed tokens: the regex form was
+  // O(n^3) on inputs full of '{z}{x}{y}' repetitions (catastrophic
+  // backtracking flagged by CodeQL js/polynomial-redos).
+  const lower = url.toLowerCase();
+  const z = lower.indexOf('{z}');
+  if (z < 0) return false;
+  const x = lower.indexOf('{x}', z + 3);
+  const y = lower.indexOf('{y}', z + 3);
+  if (x < 0 || y < 0) return false;
+  // Either order: {z}...{x}...{y} or {z}...{y}...{x}.
+  return (
+    (x < y && lower.indexOf('{y}', x + 3) >= 0) ||
+    (y < x && lower.indexOf('{x}', y + 3) >= 0)
+  );
 }
 
 function looksLikeArcgisMapServer(parsed: URL): boolean {

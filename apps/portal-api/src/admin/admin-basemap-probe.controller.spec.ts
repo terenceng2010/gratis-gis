@@ -8,7 +8,17 @@ import { AdminBasemapProbeController } from './admin-basemap-probe.controller.js
  * are the XML-parser-driven WMTS + WMS handlers. We stub `fetch`
  * at the module level so the suite stays hermetic and we can
  * assert against real-world capabilities documents.
+ *
+ * `node:dns/promises.lookup` is also stubbed: the production
+ * fetchWithTimeout routes through the SSRF guard which does a real
+ * DNS lookup as a DNS-rebinding defense. The fake hostnames the
+ * tests use (`old.example.org`, etc.) don't resolve, so we feed
+ * the guard a fixed public IP for every lookup. The hostname-only
+ * check still runs and still rejects `localhost` / private ranges.
  */
+jest.mock('node:dns/promises', () => ({
+  lookup: jest.fn(async () => ({ address: '93.184.216.34', family: 4 })),
+}));
 
 type FetchStub = (url: string) => Promise<{
   ok: boolean;

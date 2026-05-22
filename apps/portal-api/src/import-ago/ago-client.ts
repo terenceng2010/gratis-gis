@@ -93,7 +93,13 @@ export class AgoClient {
   private readonly timeoutMs: number;
 
   constructor(config: AgoClientConfig) {
-    this.portalUrl = config.portalUrl.replace(/\/+$/, '');
+    // Manual trailing-slash strip: the regex form (`/\/+$/`) is
+    // O(n) on a fully-slashes input but CodeQL js/polynomial-redos
+    // still flags it because of the user-controlled source. A loop
+    // is just as cheap and sidesteps the warning.
+    let portal = config.portalUrl;
+    while (portal.endsWith('/')) portal = portal.slice(0, -1);
+    this.portalUrl = portal;
     this.token = config.token;
     this.timeoutMs = config.timeoutMs ?? 15_000;
   }

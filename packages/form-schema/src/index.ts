@@ -1652,7 +1652,24 @@ function validateType(q: Question, value: unknown): string | null {
       // with one @, a non-empty local part, and a domain that has at
       // least one dot. The full RFC grammar is famously over-broad
       // and rejects almost no real addresses; this catches typos.
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      //
+      // Implemented as discrete index-based checks rather than a
+      // single regex with three nested `[^\s@]+` runs (which CodeQL
+      // js/polynomial-redos flags for backtracking on adversarial
+      // inputs like '!@!.!.!.').
+      const at = value.indexOf('@');
+      const lastAt = value.lastIndexOf('@');
+      const hasWhitespace = /\s/.test(value);
+      if (
+        hasWhitespace ||
+        at < 1 ||
+        at !== lastAt ||
+        at === value.length - 1
+      ) {
+        return 'Enter a valid email address.';
+      }
+      const domain = value.slice(at + 1);
+      if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) {
         return 'Enter a valid email address.';
       }
       return null;
@@ -2693,11 +2710,16 @@ export function parseExportEnvelope(
  * "Nest Inspections" -> "nest-inspections.gratisgis-form.json"
  */
 export function suggestExportFilename(form: FormSchema): string {
-  const slug = form.title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60) || 'form';
+  // Trim leading / trailing dashes manually rather than with a
+  // `^-+|-+$` regex: the regex form runs slow on adversarial inputs
+  // full of dashes (CodeQL js/polynomial-redos), and the loop is
+  // O(n) in the worst case with no backtracking.
+  let slug = form.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  let start = 0;
+  let end = slug.length;
+  while (start < end && slug.charCodeAt(start) === 45 /* '-' */) start += 1;
+  while (end > start && slug.charCodeAt(end - 1) === 45) end -= 1;
+  slug = slug.slice(start, end).slice(0, 60) || 'form';
   return `${slug}.gratisgis-form.json`;
 }
 

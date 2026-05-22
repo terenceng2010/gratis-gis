@@ -370,9 +370,24 @@ function estimateLuminance(color: string): number {
     );
   }
   // hsl(h, s%, l%) -- use l directly as a luminance proxy.
-  m = /^hsla?\(\s*-?\d+(?:\.\d+)?\s*,?\s*\d+(?:\.\d+)?%?\s*,?\s*(\d+(?:\.\d+)?)%/.exec(c);
-  if (m) {
-    return Number(m[1]) / 100;
+  //
+  // Parsed by hand rather than with a single regex. The old regex
+  // had three `\d+(?:\.\d+)?` runs separated by optional commas and
+  // CodeQL flagged it as polynomial-redos: adversarial inputs like
+  // 'hsl(0000000000...' would let the engine try many `\d+` /
+  // optional-fraction splits. Splitting on the structural characters
+  // is O(n) and rejects malformed inputs cleanly.
+  if (c.startsWith('hsl(') || c.startsWith('hsla(')) {
+    const open = c.indexOf('(');
+    const close = c.indexOf(')', open + 1);
+    if (open > 0 && close > open) {
+      const parts = c.slice(open + 1, close).split(',');
+      const lRaw = parts[2]?.trim().replace(/%$/, '');
+      if (lRaw && /^-?\d+(\.\d+)?$/.test(lRaw)) {
+        const l = Number(lRaw);
+        if (Number.isFinite(l)) return l / 100;
+      }
+    }
   }
   return 0.7;
 }
