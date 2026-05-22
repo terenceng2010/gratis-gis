@@ -85,6 +85,9 @@ function makeFakeWebMapImport(): WebMapJsonImportService {
     import: jest.fn(async (_args: any) => ({
       itemId: 'portal-map-1',
       warnings: [] as string[],
+      layerCount: 1,
+      skippedLayerCount: 0,
+      remappedToDataLayerCount: 0,
     })),
   } as unknown as WebMapJsonImportService;
 }
@@ -103,6 +106,10 @@ function makeFakeHostedFs(): import('./hosted-fs.js').AgoHostedFsImportService {
         featuresInserted: 10,
         attachmentsCopied: 0,
         warnings: [],
+        // The Web Map remap path joins on this; the fake exposes a
+        // single AGO layer 0 -> portal sublayer 'parcels' so the
+        // spec can assert the resulting MapLayerSource shape.
+        agoLayerIdToSublayerKey: { 0: 'parcels' },
       };
     }),
   } as unknown as import('./hosted-fs.js').AgoHostedFsImportService;
@@ -580,13 +587,25 @@ describe('AgoImportService.run', () => {
         },
       ),
     );
+    // Capture the agoDataLayerLookup the importer hands to
+    // WebMapJsonImportService so the spec can verify the lookup
+    // was populated with the hosted-FS we just imported.
+    let capturedLookup: Map<
+      string,
+      { itemId: string; agoLayerIdToSublayerKey: Record<number, string> }
+    > | null = null;
     const fakeWebMap = {
       import: jest.fn(async (args: any) => {
-        // Capture the (rewritten) URL that the importer hands us.
-        const layers = args.webMap.operationalLayers ?? [];
+        capturedLookup = args.agoDataLayerLookup ?? null;
         return {
           itemId: 'portal-map-1',
-          warnings: [`captured-url:${layers[0]?.url ?? ''}`],
+          warnings: [],
+          layerCount: 1,
+          skippedLayerCount: 0,
+          // Pretend the converter found the lookup-rerouted layer
+          // and emitted a `data-layer` source. The AgoImportService
+          // surfaces this count in the import-result warnings.
+          remappedToDataLayerCount: 1,
         };
       }),
     } as unknown as WebMapJsonImportService;
@@ -608,14 +627,21 @@ describe('AgoImportService.run', () => {
     expect(
       mapResult?.warnings.some((w) => /Remapped 1 layer reference/.test(w)),
     ).toBe(true);
-    // And the URL passed to WebMapJsonImportService.import should
-    // now point at the new portal item, with the sublayer suffix
-    // preserved.
-    expect(
-      mapResult?.warnings.some((w) =>
-        /captured-url:\/api\/items\/portal-data-layer-1\/0/.test(w),
-      ),
-    ).toBe(true);
+    // The lookup the AgoImportService threaded to the WebMap
+    // converter should carry an entry for the canonicalized AGO
+    // service URL, mapping to the just-imported portal data_layer
+    // + per-AGO-layer-id sublayer map.
+    expect(capturedLookup).not.toBeNull();
+    const lookup = capturedLookup as unknown as Map<
+      string,
+      { itemId: string; agoLayerIdToSublayerKey: Record<number, string> }
+    >;
+    const entry = lookup.get(
+      'https://palavido.maps.arcgis.com/arcgis/rest/services/parcels/featureserver',
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.itemId).toBe('portal-data-layer-1');
+    expect(entry?.agoLayerIdToSublayerKey[0]).toBe('parcels');
   });
   it('auto-probes a connected Map Service and writes layers onto the new item', async () => {
     const items = [

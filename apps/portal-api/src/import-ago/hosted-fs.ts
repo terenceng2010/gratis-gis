@@ -121,6 +121,19 @@ export interface HostedFsImportResult {
   featuresInserted: number;
   attachmentsCopied: number;
   warnings: string[];
+  /**
+   * Map from AGO REST layer id (the integer in `<serviceUrl>/<id>`)
+   * to the portal data_layer sublayer key. The Web Map importer
+   * needs this to translate a WebMap operationalLayer URL like
+   * `https://services1.arcgis.com/.../FeatureServer/0` into a
+   * portal `{ kind: 'data-layer', itemId, layerKey }` source.
+   * Without this, the WebMap converter falls back to the
+   * external-arcgis-rest path and the imported map keeps pointing
+   * at AGO. Key is the AGO layer id (number); value is the
+   * sublayer.id we just stored on the portal item (a sanitized
+   * version of the AGO layer name).
+   */
+  agoLayerIdToSublayerKey: Record<number, string>;
 }
 
 // ----------------------------------------------------------------
@@ -282,12 +295,22 @@ export class AgoHostedFsImportService {
       }
     }
 
+    // Build the AGO-layer-id -> portal-sublayer-key mapping so the
+    // Web Map importer can translate `<serviceUrl>/<n>` references
+    // straight into a portal data-layer source. Without this, the
+    // imported map stays pointed at AGO.
+    const agoLayerIdToSublayerKey: Record<number, string> = {};
+    for (const pl of perLayer) {
+      agoLayerIdToSublayerKey[pl.stubId] = pl.sublayer.id;
+    }
+
     return {
       portalItemId: created.id,
       layerCount: sublayers.length,
       featuresInserted,
       attachmentsCopied,
       warnings,
+      agoLayerIdToSublayerKey,
     };
   }
 

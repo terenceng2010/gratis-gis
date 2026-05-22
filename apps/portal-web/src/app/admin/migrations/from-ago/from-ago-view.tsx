@@ -154,6 +154,10 @@ export function FromAgoView() {
   // current job id without a stale-closure problem.
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  // Ref for the import-results section so we can scroll it into
+  // view the moment the job completes (the import-results
+  // section sits below the preview, which can be a long table).
+  const importResultsRef = useRef<HTMLElement | null>(null);
   // Reset the exclusion set whenever a fresh preview lands so a
   // re-preview doesn't carry over stale opt-outs.
   useEffect(() => {
@@ -475,7 +479,24 @@ export function FromAgoView() {
         ) {
           if (job.status === 'succeeded' && job.report) {
             setImportReport(job.report);
+            // Clear the progress banner so the results table is
+            // the next thing the user sees; without this the
+            // progress section + the import-results section
+            // stack and the "Run Import" button reappearing
+            // looks like nothing happened.
+            setJobProgress(null);
+            // Scroll the results into view -- on a long preview
+            // table the results section is well below the
+            // fold, and the user reported the import "finishing
+            // with no visual indication."
+            requestAnimationFrame(() => {
+              importResultsRef.current?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+              });
+            });
           } else if (job.status === 'failed') {
+            setJobProgress(null);
             throw new Error(
               `Import failed: ${job.errorMessage ?? 'unknown error'}`,
             );
@@ -764,8 +785,14 @@ export function FromAgoView() {
       )}
 
       {importReport && (
-        <section className="rounded-lg border border-border bg-surface-1 p-5 shadow-card">
-          <h2 className="text-base font-semibold">Import results</h2>
+        <section
+          ref={importResultsRef}
+          className="rounded-lg border-2 border-success bg-success/5 p-5 shadow-card"
+        >
+          <h2 className="flex items-center gap-2 text-base font-semibold text-success">
+            <CheckCircle2 className="h-5 w-5" />
+            Import complete
+          </h2>
           <p className="mt-1 text-xs text-muted">
             Completed in {(importReport.durationMs / 1000).toFixed(1)} s.
             {importReport.folders.length > 0 ? (

@@ -82,11 +82,37 @@ export class WebMapJsonImportService {
      * sharing scope pass it explicitly.
      */
     access?: 'private' | 'org' | 'public';
+    /**
+     * Optional: lookup the AGO importer fills with newly-imported
+     * data_layers so this converter can resolve a WebMap layer
+     * URL like `<serviceUrl>/<n>` into a portal-rooted
+     * `{ kind: 'data-layer', itemId, layerKey }` source instead
+     * of leaving the layer pointing at AGO. Key is the canonical
+     * (normalized, lowercase, no sublayer suffix) service URL;
+     * value carries the portal item id and a per-AGO-layer-id
+     * map onto the data_layer's sublayer keys.
+     *
+     * When unset (every caller pre-AGO-importer-phase-6) the
+     * converter falls back to the arcgis_service / geojson-url
+     * paths, matching the historical behaviour.
+     */
+    agoDataLayerLookup?: Map<
+      string,
+      {
+        itemId: string;
+        agoLayerIdToSublayerKey: Record<number, string>;
+      }
+    >;
   }): Promise<{
     itemId: string;
     warnings: string[];
     layerCount: number;
     skippedLayerCount: number;
+    /** Count of operational-layer URLs that matched a newly-imported
+     *  portal data_layer (via agoDataLayerLookup) and were rerouted
+     *  to a portal-rooted source. Surfaces in the import report so
+     *  the operator can see the "no longer pointing at AGO" effect. */
+    remappedToDataLayerCount: number;
   }> {
     const { user, webMap } = args;
 
@@ -130,6 +156,7 @@ export class WebMapJsonImportService {
     // since v1 doesn't have a Lens registry.
     const layers: MapLayerOut[] = [];
     let skipped = 0;
+    let remappedToDataLayerCount = 0;
     for (const lens of parsed.lenses) {
       const sourceUrl = (lens.query as { sourceUrl?: string }).sourceUrl;
       if (!sourceUrl) {
@@ -137,6 +164,19 @@ export class WebMapJsonImportService {
         warnings.push(
           `Lens "${lens.name}" has no source URL; skipped.`,
         );
+        continue;
+      }
+      // First chance: if the AGO importer just brought this
+      // FeatureServer in as a portal data_layer, point the new map
+      // at the portal item directly. Without this, the map would
+      // stay tethered to AGO even after the data is sitting in
+      // our PostGIS.
+      const dataLayerSource = args.agoDataLayerLookup
+        ? matchAgoDataLayerSource(sourceUrl, args.agoDataLayerLookup)
+        : null;
+      if (dataLayerSource) {
+        layers.push(buildMapLayer({ lens, source: dataLayerSource }));
+        remappedToDataLayerCount += 1;
         continue;
       }
       const mapped = mapSourceFromUrl({
@@ -201,6 +241,7 @@ export class WebMapJsonImportService {
       warnings,
       layerCount: layers.length,
       skippedLayerCount: skipped,
+      remappedToDataLayerCount,
     };
   }
 
@@ -255,6 +296,57 @@ interface ResolvedSource {
  *                                   pointer for now)
  *   - *.geojson / *.json         -> geojson-url
  */
+/**
+ * Resolve an Esri operationalLayer URL against the AGO importer's
+ * just-imported portal data_layers (#54/#55/#56 wave). The AGO
+ * importer fills the lookup as it converts hosted Feature
+ * Services into portal data_layer items; for every WebMap layer
+ * URL of the form `<serviceUrl>/<agoLayerId>` we check whether
+ * the service was one we just imported and, if so, point the new
+ * MapLayer at the portal item directly.
+ *
+ * Returns null when:
+ *   - the URL doesn't match the FeatureServer/MapServer + layer
+ *     id shape (e.g. plain GeoJSON URLs, vector tile URLs)
+ *   - the service URL isn't in the lookup (external service)
+ *   - the service was imported but the specific AGO layer id
+ *     wasn't (e.g. operator excluded one sublayer of a multi-
+ *     layer service in the preview)
+ *
+ * The caller falls back to the legacy arcgis_service / geojson
+ * paths when null is returned.
+ */
+function matchAgoDataLayerSource(
+  sourceUrl: string,
+  lookup: Map<
+    string,
+    { itemId: string; agoLayerIdToSublayerKey: Record<number, string> }
+  >,
+): MapLayerOut['source'] | null {
+  const url = sourceUrl.trim();
+  if (!url) return null;
+  // Match the same FeatureServer/MapServer + integer sublayer
+  // shape mapSourceFromUrl uses, so the two paths stay in sync.
+  const m = url.match(/^(.*\/(?:FeatureServer|MapServer))\/(\d+)\/?$/i);
+  if (!m) return null;
+  const serviceRoot = m[1] as string;
+  const agoLayerId = Number.parseInt(m[2] as string, 10);
+  // Normalize the service root the same way the AGO importer
+  // did when populating the lookup (lowercase, no trailing
+  // sublayer / slash / query string). Inlined rather than
+  // imported from import-ago/ to avoid a backwards module dep.
+  const canonical = serviceRoot.replace(/\/\d+\/*(?:\?.*)?$/, '').toLowerCase();
+  const hit = lookup.get(canonical) ?? lookup.get(serviceRoot.toLowerCase());
+  if (!hit) return null;
+  const layerKey = hit.agoLayerIdToSublayerKey[agoLayerId];
+  if (!layerKey) return null;
+  return {
+    kind: 'data-layer',
+    itemId: hit.itemId,
+    layerKey,
+  };
+}
+
 function mapSourceFromUrl(args: {
   url: string;
   renderKind: 'geojson' | 'mvt' | 'geojson_table' | 'scalar_json';
