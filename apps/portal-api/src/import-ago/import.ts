@@ -327,7 +327,7 @@ export class AgoImportService {
   ): Promise<ImportResult> {
     switch (row.targetType) {
       case 'service':
-        return this.importService(user, row);
+        return this.importService(user, row, token);
       case 'data_layer':
         // Hosted feature services route through the dedicated
         // hosted-FS importer that walks the AGO REST surface,
@@ -407,21 +407,32 @@ export class AgoImportService {
    * AGO service items map onto portal ``service`` items. We
    * already know the AGO type so the protocol is derived from
    * the dry-run classification (the dry-run row's
-   * ``serviceUrl`` carries the upstream URL). No /data fetch
-   * needed -- services don't carry one.
+   * ``serviceUrl`` carries the upstream URL).
+   *
+   * Auto-probe (#54): after creating the item we immediately
+   * hit the service root with ``?f=json`` to enumerate layers
+   * and tables, then write them onto the item via
+   * ``items.update``. This means a freshly imported connected
+   * service is immediately usable on the map; without it the
+   * operator had to re-probe each service by hand. Probe
+   * failures (auth required, 404, network) surface in warnings
+   * but don't fail the import -- the item is still valid and a
+   * manual re-probe will recover the layer list once the
+   * operator supplies the missing credential.
    */
   private async importService(
     user: AuthUser,
     row: DryRunItem,
+    token: string,
   ): Promise<ImportResult> {
     const url = row.serviceUrl ?? '';
     if (!url) {
       return failed(row, 'AGO service item carried no URL.');
     }
     const protocol = inferServiceProtocol(row.agoType);
-    const data = {
+    const data: Record<string, unknown> = {
       url,
-      layers: [] as Array<{ name: string; title?: string }>,
+      layers: [] as Array<{ name: string; title: string }>,
       version: 1,
       protocol,
       serviceTitle: row.title,
@@ -432,9 +443,43 @@ export class AgoImportService {
     const created = await this.items.create(user, {
       type: 'service',
       title: row.title,
-      data,
+      data: data as unknown as Prisma.InputJsonValue,
       access: agoAccessToPortal(row.access),
     });
+
+    // Auto-probe step. Best-effort: any failure here just leaves
+    // the item with an empty layer list (the warning steers the
+    // operator to the re-probe path).
+    const probeWarnings: string[] = [];
+    const probe = await probeAgoService(url, token);
+    if (probe.ok) {
+      const layers = probe.layers;
+      const updateData: Record<string, unknown> = {
+        ...data,
+        layers,
+        // Default-select every probed layer so the map / app
+        // immediately shows the whole service rather than a blank
+        // until the user opens the picker.
+        selectedLayerIds: layers.map((_, i) => i),
+        probedAt: new Date().toISOString(),
+      };
+      try {
+        await this.items.update(user, created.id, {
+          data: updateData as unknown as Prisma.InputJsonValue,
+        });
+      } catch (e) {
+        probeWarnings.push(
+          `Auto-probe enumerated ${layers.length} layer(s) but the item update failed: ${errorMessage(e)}. ` +
+            'Re-probe the service from the portal admin UI to recover.',
+        );
+      }
+    } else {
+      probeWarnings.push(
+        `Auto-probe could not enumerate layers (${probe.reason}). ` +
+          'Re-probe the service from the portal admin UI once it is reachable; the item is otherwise valid.',
+      );
+    }
+
     return {
       agoId: row.agoId,
       agoType: row.agoType,
@@ -442,9 +487,7 @@ export class AgoImportService {
       status: 'created',
       portalItemId: created.id,
       portalItemType: 'service',
-      warnings: [
-        'Layer list will be empty until portal admin re-probes the service.',
-      ],
+      warnings: probeWarnings,
     };
   }
 
@@ -800,6 +843,114 @@ function defaultExtensionFor(agoType: string): string {
       return '';
     default:
       return '';
+  }
+}
+
+/**
+ * Auto-probe (#54) for connected service items. After we create
+ * a portal `service` item we immediately fetch the ArcGIS service
+ * root with `?f=json` to enumerate layers + tables so the new
+ * item is usable without a manual re-probe step.
+ *
+ * Returns either { ok: true, layers } or { ok: false, reason }.
+ * Reasons are short human strings suitable for inclusion in the
+ * per-item warning the import report surfaces.
+ *
+ * Probe failures are NOT treated as import failures: the AGO item
+ * may require credentials the OAuth bearer doesn't satisfy
+ * (different identity store, unauthed endpoint behind a private
+ * portal) and the operator can recover with the existing in-app
+ * probe flow once the item exists.
+ */
+async function probeAgoService(
+  serviceUrl: string,
+  token: string,
+): Promise<
+  | { ok: true; layers: Array<{ name: string; title: string; geometryType?: string }> }
+  | { ok: false; reason: string }
+> {
+  // Strip any trailing sublayer id / query so we hit the service
+  // root rather than a per-layer endpoint. The normalize helper
+  // already exists for the WebMap remap path; reusing it keeps
+  // the URL shape consistent.
+  const root = normalizeAgoServiceUrl(serviceUrl);
+  if (!root) return { ok: false, reason: 'service URL was empty' };
+  const u = new URL(root);
+  u.searchParams.set('f', 'json');
+  if (token) u.searchParams.set('token', token);
+  let res: Response;
+  try {
+    res = await fetch(u.toString());
+  } catch (e) {
+    return { ok: false, reason: `network error: ${errorMessage(e)}` };
+  }
+  if (!res.ok) {
+    return { ok: false, reason: `HTTP ${res.status}` };
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return { ok: false, reason: 'service root did not return JSON' };
+  }
+  // AGO returns 200 with an error envelope on auth failure.
+  if (
+    body &&
+    typeof body === 'object' &&
+    'error' in (body as Record<string, unknown>)
+  ) {
+    const err = (body as { error?: { code?: number; message?: string } }).error;
+    return {
+      ok: false,
+      reason: `AGO error ${err?.code ?? '?'}: ${err?.message ?? 'unknown'}`,
+    };
+  }
+  const desc = body as {
+    layers?: Array<{ id?: number; name?: string; geometryType?: string }>;
+    tables?: Array<{ id?: number; name?: string }>;
+  };
+  const layers: Array<{
+    name: string;
+    title: string;
+    geometryType?: string;
+  }> = [];
+  for (const l of desc.layers ?? []) {
+    if (typeof l?.id !== 'number') continue;
+    layers.push({
+      name: String(l.id),
+      title: l.name ?? `Layer ${l.id}`,
+      ...(l.geometryType
+        ? { geometryType: agoGeometryTypeToPortal(l.geometryType) }
+        : {}),
+    });
+  }
+  for (const t of desc.tables ?? []) {
+    if (typeof t?.id !== 'number') continue;
+    layers.push({
+      name: String(t.id),
+      title: t.name ?? `Table ${t.id}`,
+    });
+  }
+  return { ok: true, layers };
+}
+
+/**
+ * Map an Esri geometryType string onto the portal short form used
+ * in ServiceLayerSnapshot.geometryType. Matches the same convention
+ * the hosted-FS importer uses.
+ */
+function agoGeometryTypeToPortal(g: string): string {
+  switch (g) {
+    case 'esriGeometryPoint':
+      return 'point';
+    case 'esriGeometryMultipoint':
+      return 'point';
+    case 'esriGeometryPolyline':
+      return 'line';
+    case 'esriGeometryPolygon':
+      return 'polygon';
+    default:
+      return g;
   }
 }
 

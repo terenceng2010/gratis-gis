@@ -127,6 +127,13 @@ let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
+  // Default to a no-network fetch mock so the importService
+  // auto-probe path (which calls fetch on the AGO service URL)
+  // doesn't hit DNS in tests that don't override fetch. Tests
+  // that care about the probe response set their own jest.fn.
+  globalThis.fetch = jest.fn(async () =>
+    new Response('mock', { status: 404 }),
+  ) as unknown as typeof fetch;
 });
 
 afterEach(() => {
@@ -609,6 +616,117 @@ describe('AgoImportService.run', () => {
         /captured-url:\/api\/items\/portal-data-layer-1\/0/.test(w),
       ),
     ).toBe(true);
+  });
+  it('auto-probes a connected Map Service and writes layers onto the new item', async () => {
+    const items = [
+      sample({
+        id: 'svc-ms',
+        type: 'Map Service',
+        title: 'County Map',
+        url: 'https://server/arcgis/rest/services/County/MapServer',
+      }),
+    ];
+    // The probe fetch hits /MapServer?f=json&token=tok and returns
+    // a layer + table list. The auto-probe should populate the
+    // service item's layers + selectedLayerIds + probedAt.
+    globalThis.fetch = jest.fn(async (input: unknown) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : (input as { toString(): string }).toString();
+      if (/mapserver/i.test(url) && url.includes('f=json')) {
+        return new Response(
+          JSON.stringify({
+            layers: [
+              { id: 0, name: 'Parcels', geometryType: 'esriGeometryPolygon' },
+              { id: 1, name: 'Roads', geometryType: 'esriGeometryPolyline' },
+            ],
+            tables: [{ id: 2, name: 'OwnersTable' }],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        );
+      }
+      return new Response('not-found', { status: 404 });
+    }) as unknown as typeof fetch;
+    const fakeItems = makeFakeItems();
+    const importer = new AgoImportService(
+      fakeItems,
+      makeFakeWebMapImport(),
+      makeFakeHostedFs(),
+      makeFakeStorage(),
+    );
+    const report = await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report: reportFrom(items),
+    });
+    expect(report.created).toBe(1);
+    // The probe should have triggered an items.update call with
+    // the layers array populated.
+    const updated = (fakeItems as any).__updated as Array<{
+      id: string;
+      data: any;
+    }>;
+    expect(updated).toHaveLength(1);
+    const updatedData = updated[0]!.data;
+    expect(updatedData.layers).toHaveLength(3); // 2 layers + 1 table
+    expect(updatedData.layers[0]).toMatchObject({
+      name: '0',
+      title: 'Parcels',
+      geometryType: 'polygon',
+    });
+    expect(updatedData.layers[1]).toMatchObject({
+      name: '1',
+      title: 'Roads',
+      geometryType: 'line',
+    });
+    expect(updatedData.layers[2]).toMatchObject({
+      name: '2',
+      title: 'OwnersTable',
+    });
+    expect(updatedData.selectedLayerIds).toEqual([0, 1, 2]);
+    expect(typeof updatedData.probedAt).toBe('string');
+    // No warning should be emitted on the happy path.
+    const svc = report.results.find((r) => r.agoId === 'svc-ms');
+    expect(svc?.warnings).toEqual([]);
+  });
+
+  it('records a warning when auto-probe cannot reach the service', async () => {
+    const items = [
+      sample({
+        id: 'svc-blocked',
+        type: 'Feature Service',
+        title: 'Blocked svc',
+        url: 'https://server/arcgis/rest/services/Blocked/FeatureServer',
+      }),
+    ];
+    // Probe gets a 403: item still gets created, warning is emitted.
+    globalThis.fetch = jest.fn(async () =>
+      new Response('forbidden', { status: 403 }),
+    ) as unknown as typeof fetch;
+    const fakeItems = makeFakeItems();
+    const importer = new AgoImportService(
+      fakeItems,
+      makeFakeWebMapImport(),
+      makeFakeHostedFs(),
+      makeFakeStorage(),
+    );
+    const report = await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report: reportFrom(items),
+    });
+    expect(report.created).toBe(1);
+    // No items.update fired because probe failed.
+    const updated = (fakeItems as any).__updated as Array<{ id: string }>;
+    expect(updated).toHaveLength(0);
+    const svc = report.results.find((r) => r.agoId === 'svc-blocked');
+    expect(svc?.warnings.join(' ')).toMatch(/Auto-probe.*HTTP 403/);
   });
 });
 
