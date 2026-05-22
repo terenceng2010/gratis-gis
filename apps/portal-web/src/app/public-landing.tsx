@@ -212,6 +212,10 @@ export function PublicLanding({
         Powered by GratisGIS &middot;{' '}
         <Link href="/why" className="underline hover:text-ink-0">
           Why GratisGIS
+        </Link>{' '}
+        &middot;{' '}
+        <Link href="/credits" className="underline hover:text-ink-0">
+          Built on
         </Link>
       </footer>
     </div>

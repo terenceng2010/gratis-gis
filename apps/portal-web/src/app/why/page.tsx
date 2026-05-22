@@ -208,6 +208,10 @@ export default async function WhyPage() {
         Powered by GratisGIS &middot;{' '}
         <Link href="/" className="underline hover:text-ink-0">
           Home
+        </Link>{' '}
+        &middot;{' '}
+        <Link href="/credits" className="underline hover:text-ink-0">
+          Built on
         </Link>
       </footer>
     </div>

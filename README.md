@@ -92,33 +92,88 @@ reads, free audit trails, and Cedar-based geometry-aware authorization.
 See [docs/architecture/observation-log-engine.md](./docs/architecture/observation-log-engine.md)
 and [docs/architecture/cedar-policy-integration.md](./docs/architecture/cedar-policy-integration.md).
 
-## Tech Stack
+## Built on
 
-Chosen for long-term sustainability and maximal code sharing across surfaces.
+GratisGIS stands on a stack of open-source projects, many of them
+maintained by small teams or single people doing remarkable work.
+The list below names the load-bearing ones and links to where the
+maintainers want them to be reached. If you find GratisGIS useful,
+consider sending some of that goodwill upstream too.
 
-| Layer | Tech |
+### Stack at a glance
+
+| Layer | Project |
 | --- | --- |
-| Language | TypeScript everywhere |
-| Backend API | Node.js + NestJS |
-| Database | PostgreSQL 16 + PostGIS 3 |
-| ORM / migrations | Prisma |
-| Auth / identity | Keycloak (OIDC) |
-| Authorization | Cedar (`@cedar-policy/cedar-wasm`) |
-| Object storage | MinIO (S3-compatible) |
-| Tile / feature serving | pg\_tileserv + PostGIS views |
-| Web frontend | Next.js 14 (App Router) + React 18 |
-| Mobile (field app) | React Native + Expo |
-| Node-graph canvas | React Flow (tool + widget builder) |
-| Map rendering | MapLibre GL (web) / MapLibre Native (mobile) |
-| Component kit | shadcn/ui (Radix primitives + Tailwind) |
-| Motion | framer-motion (respects `prefers-reduced-motion`) |
-| Icons | lucide-react |
-| Typography | Inter + Geist Mono (variable fonts) |
-| Styling | Tailwind CSS with a custom token theme |
-| Monorepo | pnpm workspaces + Turborepo |
-| CI | GitHub Actions |
+| Language | [TypeScript](https://www.typescriptlang.org/) |
+| Backend API | [Node.js](https://nodejs.org/) + [NestJS](https://nestjs.com/) |
+| Database | [PostgreSQL](https://www.postgresql.org/) + [PostGIS](https://postgis.net/) |
+| ORM / migrations | [Prisma](https://www.prisma.io/) |
+| Auth / identity | [Keycloak](https://www.keycloak.org/) (OIDC) |
+| Authorization | [Cedar](https://www.cedarpolicy.com/) (`@cedar-policy/cedar-wasm`) |
+| Object storage | [MinIO](https://min.io/) (S3-compatible) |
+| HTTP edge | [Caddy](https://caddyserver.com/) |
+| Tile serving | [pg\_tileserv](https://github.com/CrunchyData/pg_tileserv) + in-house MVT controllers over PostGIS |
+| Web frontend | [Next.js](https://nextjs.org/) (App Router) + [React](https://react.dev/) |
+| Map rendering | [MapLibre GL](https://maplibre.org/) |
+| Drawing tools | [Terra Draw](https://terradraw.io/) + [terra-draw-maplibre-gl-adapter](https://github.com/JamesLMilner/terra-draw) |
+| Vector tile spec | [Mapbox Vector Tile](https://github.com/mapbox/vector-tile-spec) (via PostGIS `ST_AsMVT`) |
+| Tile bundles | [PMTiles](https://github.com/protomaps/PMTiles) |
+| Spatial indexing | [h3-js](https://github.com/uber/h3-js) |
+| KML / GPX import | [@tmcw/togeojson](https://github.com/tmcw/togeojson) |
+| Shapefile import | [shpjs](https://github.com/calvinmetcalf/shapefile-js) |
+| Raster / vector I/O | [GDAL](https://gdal.org/) (via [`gdal-async`](https://github.com/mmomtchev/node-gdal-async)) |
+| Component kit | [shadcn/ui](https://ui.shadcn.com/) (Radix primitives + Tailwind) |
+| Motion | [framer-motion](https://www.framer.com/motion/) |
+| Charts | [Recharts](https://recharts.org/) |
+| Icons | [lucide-react](https://lucide.dev/) |
+| Markdown | [marked](https://marked.js.org/) |
+| Styling | [Tailwind CSS](https://tailwindcss.com/) |
+| Monorepo | [pnpm](https://pnpm.io/) + [Turborepo](https://turborepo.com/) |
+| CI | [GitHub Actions](https://github.com/features/actions) |
 
-Every dependency is OSS with broad corporate backing and multi-decade trajectory.
+### A specific thank-you to
+
+Some of the most load-bearing pieces of this project are
+maintained by individuals or small teams whose names rarely
+appear next to the products they enable. The ones we lean on
+most heavily:
+
+- **[Paul Ramsey](https://github.com/pramsey)** — PostGIS,
+  pg\_tileserv. The spatial database substrate the whole project
+  sits on, plus the tile-serving fallback we use for admin
+  basemaps.
+- **[James Milner](https://github.com/JamesLMilner)** —
+  [Terra Draw](https://github.com/JamesLMilner/terra-draw) and
+  the MapLibre adapter. Every drawing surface in GratisGIS
+  (map editor, geo-boundary editor, field PWA, editor
+  template) runs on Terra Draw. Filling the gap mapbox-gl-draw
+  left behind and doing it well.
+- **[Brandon Liu](https://github.com/bdon)** —
+  [PMTiles](https://github.com/protomaps/PMTiles) and the
+  Protomaps stack. The format that lets us host tiled raster
+  pyramids as static MinIO objects with no tile-server in the
+  request path.
+- **[Tom MacWright](https://github.com/tmcw)** — togeojson,
+  much of the geospatial JS ecosystem we lean on. KML / GPX
+  import in the file-upload flow runs through his library.
+- **[Calvin Metcalf](https://github.com/calvinmetcalf)** —
+  shpjs. Shapefile uploads parse through it.
+- **[Brian Carlson](https://github.com/brianc)** — node-postgres
+  and pg-copy-streams. Every Postgres call from the API goes
+  through his work.
+- **[Momtchil Momtchev](https://github.com/mmomtchev)** —
+  node-gdal-async. The Node bindings that let our ingest +
+  raster-pyramid worker use GDAL without shelling out.
+
+The Cedar team at AWS, the PostGIS contributors, the MapLibre
+contributors, the NestJS + Prisma + Next.js + React + Tailwind
+core teams, the OGC working groups whose standards we build
+against — same gratitude, just too many names to list here.
+
+Every load-bearing dependency is open-source. Where a project
+is maintained by a single person and the surface is wide, we
+track an internal swap path so an abandoned upstream doesn't
+become an existential threat.
 
 ## Repo Layout
 
