@@ -44,7 +44,6 @@ surface must feel crafted and consistent. "Good enough" is not good enough.
 - **Radix UI** primitives: a11y-correct dialogs, menus, popovers, tabs,
   tooltips, toasts (what shadcn/ui is built on)
 - **lucide-react**: clean, consistent icon set
-- **framer-motion**: motion system
 - **Inter** (variable) for UI, **Geist Mono** for code/numbers
 - **cmdk**: command palette (⌘K) across every app
 

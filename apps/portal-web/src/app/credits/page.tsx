@@ -129,12 +129,6 @@ const STACK: StackRow[] = [
     projects: [{ label: 'shadcn/ui', href: 'https://ui.shadcn.com/' }],
   },
   {
-    layer: 'Motion',
-    projects: [
-      { label: 'framer-motion', href: 'https://www.framer.com/motion/' },
-    ],
-  },
-  {
     layer: 'Charts',
     projects: [{ label: 'Recharts', href: 'https://recharts.org/' }],
   },

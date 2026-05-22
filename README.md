@@ -120,7 +120,6 @@ each project's home page; please consider supporting them directly.
 | Shapefile import | [shpjs](https://github.com/calvinmetcalf/shapefile-js) |
 | Raster / vector I/O | [GDAL](https://gdal.org/) (via [`gdal-async`](https://github.com/mmomtchev/node-gdal-async)) |
 | Component kit | [shadcn/ui](https://ui.shadcn.com/) (Radix primitives + Tailwind) |
-| Motion | [framer-motion](https://www.framer.com/motion/) |
 | Charts | [Recharts](https://recharts.org/) |
 | Icons | [lucide-react](https://lucide.dev/) |
 | Markdown | [marked](https://marked.js.org/) |
