@@ -1113,8 +1113,16 @@ function TemplateEditModal({
    */
   function derivePlainTextFromHtml() {
     if (typeof document === 'undefined') return;
-    const tmp = document.createElement('div');
-    tmp.innerHTML = bodyHtml;
+    // Parse the admin-authored HTML in an inert document via
+    // DOMParser instead of assigning to a live element's innerHTML.
+    // DOMParser('text/html') doesn't execute scripts and doesn't
+    // resolve external resources, which closes the
+    // js/xss-through-dom hole CodeQL flagged on the innerHTML form
+    // (defense in depth: the only writer is an authenticated org
+    // admin, but the parsed-tree variant has no execution side
+    // effects either way).
+    const parsed = new DOMParser().parseFromString(bodyHtml, 'text/html');
+    const tmp = parsed.body;
     // Replace block-ish elements with line breaks so paragraphs
     // don't end up jammed onto one line.
     tmp.querySelectorAll('p, br, li, h1, h2, h3, h4, h5, h6, div').forEach(

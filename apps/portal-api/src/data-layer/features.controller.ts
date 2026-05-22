@@ -18,6 +18,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
   IsArray,
   IsObject,
   IsOptional,
@@ -67,6 +68,13 @@ class CalculateFieldDto {
 
 class AppendFeaturesBodyDto {
   @IsArray()
+  // Bulk-append cap. Caps adversarial loop-bound: without it a
+  // crafted POST with features.length === 10_000_000 would spin
+  // through assertGeometriesInsideLimit's per-row Intersects loop
+  // and tie up the worker. Real field-app sync flushes ship dozens
+  // of rows per request; 5000 leaves a wide margin without leaving
+  // an unbounded loop reachable from anonymous traffic.
+  @ArrayMaxSize(5000)
   @ValidateNested({ each: true })
   @Type(() => AppendFeatureDto)
   features!: AppendFeatureDto[];

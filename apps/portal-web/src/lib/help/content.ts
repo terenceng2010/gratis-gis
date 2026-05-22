@@ -18,7 +18,7 @@
  * below for the schema.
  */
 
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { marked } from 'marked';
@@ -219,20 +219,26 @@ async function walk(
   prefix: string[],
   out: HelpDoc[],
 ): Promise<void> {
-  let entries: string[];
+  // `withFileTypes` returns Dirent objects we can branch on without a
+  // second stat(). Avoiding the stat-then-readFile pattern closes the
+  // js/file-system-race window CodeQL flagged: between stat and
+  // readFile the entry could be swapped out for a symlink. Dirent's
+  // isDirectory() is decided at the readdir cursor.
+  let entries: import('node:fs').Dirent[];
   try {
-    entries = await readdir(dir);
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     // Directory missing entirely (first run, or no docs yet).
     return;
   }
-  for (const entry of entries) {
+  for (const ent of entries) {
+    const entry = ent.name;
     const full = path.join(dir, entry);
-    const st = await stat(full);
-    if (st.isDirectory()) {
+    if (ent.isDirectory()) {
       await walk(full, [...prefix, entry], out);
       continue;
     }
+    if (!ent.isFile()) continue;
     if (!/\.mdx?$/i.test(entry)) continue;
     const raw = await readFile(full, 'utf8');
     const parsed = matter(raw);

@@ -632,6 +632,14 @@ export function renderNotification(
   payload: unknown,
   ctx: RenderContext,
 ): RenderedNotification | null {
+  // Validate that `type` is a known key before indexing `renderers`.
+  // The DB enum guarantees this at runtime today, but CodeQL flags
+  // the raw bracket-lookup as js/unvalidated-dynamic-method-call
+  // because the type parameter is plumbed in from notification rows
+  // that originate from external input. A hasOwnProperty gate makes
+  // the safe set explicit and prevents prototype-chain method
+  // dispatch (`toString`, `hasOwnProperty`, etc).
+  if (!Object.prototype.hasOwnProperty.call(renderers, type)) return null;
   const r = renderers[type];
   if (!r) return null;
   return r(payload, ctx);

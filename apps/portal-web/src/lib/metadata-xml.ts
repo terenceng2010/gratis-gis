@@ -53,12 +53,27 @@ export function parseMetadataXml(text: string): ParsedMetadata {
   if (localName === 'rdf' || localName === 'dc' || localName === 'oai_dc:dc') {
     return parseDublinCore(doc);
   }
-  // Heuristic fallback: look for the namespaces we know.
-  const xml = root.outerHTML;
-  if (xml.includes('http://www.isotc211.org/2005/gmd')) return parseIso(doc);
-  if (xml.includes('http://purl.org/dc/elements/1.1/')) {
-    return parseDublinCore(doc);
+  // Heuristic fallback: look for the namespaces we know on the
+  // actual xmlns* attributes, not in a substring of the serialised
+  // outerHTML.  The substring form (`xml.includes(...)`) was both
+  // a CodeQL js/incomplete-url-substring-sanitization (an attacker
+  // namespace `http://evil.com/?http://www.isotc211.org/2005/gmd`
+  // would have matched) and a js/xss-through-dom finding on the
+  // outerHTML read.  Iterating xmlns* attributes is exact and the
+  // ns string we compare against can't be re-positioned by the
+  // attacker.
+  const isoNs = 'http://www.isotc211.org/2005/gmd';
+  const dcNs = 'http://purl.org/dc/elements/1.1/';
+  for (let i = 0; i < root.attributes.length; i += 1) {
+    const a = root.attributes[i]!;
+    if (a.name !== 'xmlns' && !a.name.startsWith('xmlns:')) continue;
+    if (a.value === isoNs) return parseIso(doc);
+    if (a.value === dcNs) return parseDublinCore(doc);
   }
+  // Also check the root's own resolved namespaceURI (set when the
+  // root element itself declares xmlns without a prefix).
+  if (root.namespaceURI === isoNs) return parseIso(doc);
+  if (root.namespaceURI === dcNs) return parseDublinCore(doc);
   return { source: 'unknown' };
 }
 

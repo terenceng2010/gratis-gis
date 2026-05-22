@@ -293,6 +293,12 @@ export class IngestController {
     res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');
     res.setHeader('cache-control', 'no-cache, no-transform');
     res.setHeader('x-accel-buffering', 'no');
+    // The NDJSON body echoes back user-supplied fields (sourceLayer,
+    // filename, error.message). Browsers shouldn't sniff this as
+    // HTML, but if a content-type-relaxed reverse proxy ever strips
+    // the type header an attacker-controlled error message could
+    // become reflected XSS. nosniff keeps that loop closed.
+    res.setHeader('x-content-type-options', 'nosniff');
     res.flushHeaders?.();
     const writeEvent = (msg: Record<string, unknown>): void => {
       res.write(JSON.stringify(msg) + '\n');
@@ -503,9 +509,15 @@ export class IngestController {
           });
         }
       } catch (err) {
+        // Pass user-controlled itemId / layerId as separate console
+        // arguments rather than interpolated into the format string,
+        // so the surrounding `%`-detection inside console.* can't be
+        // tricked by a crafted id (CodeQL js/tainted-format-string).
         // eslint-disable-next-line no-console
         console.warn(
-          `[ingestV3Layer] bbox recompute failed for ${itemId}/${layerId}:`,
+          '[ingestV3Layer] bbox recompute failed for %s/%s:',
+          itemId,
+          layerId,
           err instanceof Error ? err.message : err,
         );
       }
@@ -534,9 +546,15 @@ export class IngestController {
       // for some gdal-async / native errors prints as the bare
       // string "Error" with no message and no stack -- making the
       // failure mode invisible without attaching a debugger.
+      // Pass user-controlled fields as separate console args so the
+      // first-arg format-string detection can't be tricked by a
+      // crafted id or error message (CodeQL js/tainted-format-string).
       // eslint-disable-next-line no-console
       console.error(
-        `[ingestV3Layer] stream failed for ${itemId}/${layerId}: ${message}`,
+        '[ingestV3Layer] stream failed for %s/%s: %s',
+        itemId,
+        layerId,
+        message,
         err instanceof Error ? err.stack : err,
       );
       writeEvent({ event: 'error', message });

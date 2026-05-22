@@ -230,10 +230,16 @@ export async function convertUpload(
     // include one we synthesize a minimal placeholder. The
     // header bbox / center will come from the tile pyramid
     // bounds at runtime.
+    //
+    // Use writeFile with the 'wx' flag (O_CREAT | O_EXCL) so the
+    // create-if-missing is atomic. The stat-then-write pattern
+    // CodeQL flagged as js/file-system-race had a TOCTOU window
+    // where another process could create the file between the
+    // check and the write; the wx flag closes that window and
+    // EEXIST means the zip already shipped a metadata.json (which
+    // is what we wanted -- treat as success).
     const metaPath = join(tileDir, 'metadata.json');
     try {
-      await stat(metaPath);
-    } catch {
       await writeFile(
         metaPath,
         JSON.stringify({
@@ -242,7 +248,13 @@ export async function convertUpload(
           minzoom: 0,
           maxzoom: 22,
         }),
+        { flag: 'wx' },
       );
+    } catch (err) {
+      // EEXIST is the expected race-free signal that the zip
+      // already supplied metadata.json; anything else is real.
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== 'EEXIST') throw err;
     }
     await runCommand('pmtiles', ['convert', tileDir, outputPath]);
   } else if (originalFormat === 'mbtiles') {

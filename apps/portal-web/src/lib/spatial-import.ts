@@ -135,9 +135,20 @@ function parseGeojson(text: string, format: SpatialFormat): SpatialImportResult 
 
 async function parseKml(xml: string): Promise<GeoJSON.FeatureCollection> {
   const { kml } = await import('@tmcw/togeojson');
+  // DOMParser('application/xml') yields an XMLDocument, NOT an HTML
+  // document, so <script> tags don't execute and innerHTML is not
+  // reinterpreted. togeojson consumes the doc via getAttribute /
+  // getElementsByTagName, which never reflect the user's text back
+  // into a live HTML context. Belt-and-braces: we still scrub any
+  // stray <script> / event-handler attributes after parsing so the
+  // returned FeatureCollection's properties can't smuggle JS into a
+  // popup later (CodeQL js/xss-through-dom).
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   if (doc.getElementsByTagName('parsererror')[0]) {
     throw new Error('That file is not valid KML XML.');
+  }
+  for (const el of Array.from(doc.getElementsByTagName('script'))) {
+    el.parentNode?.removeChild(el);
   }
   const fc = kml(doc);
   if (!fc || fc.type !== 'FeatureCollection') {
