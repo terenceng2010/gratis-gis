@@ -264,20 +264,50 @@ export function FromAgoView() {
         );
       }
       popupRef.current = popup;
-      const closeWatcher = window.setInterval(() => {
-        if (popup.closed) {
-          window.clearInterval(closeWatcher);
+      // No popup.closed polling here: under COOP (especially in
+      // Edge / Chrome) `popup.closed` returns true the instant the
+      // popup navigates cross-origin to AGO, well before the user
+      // has signed in. The token handoff via BroadcastChannel is
+      // the authoritative success signal; for the "user closed
+      // the popup without signing in" path, the long-timeout
+      // safety net below + the manual Cancel button reset busy
+      // state without false positives.
+      window.setTimeout(
+        () => {
           if (popupRef.current === popup) {
             setBusy(null);
-            setError('Sign-in window was closed before completing.');
+            setError(
+              'Sign-in did not complete within 10 minutes. Try again.',
+            );
             popupRef.current = null;
           }
-        }
-      }, 500);
+        },
+        10 * 60 * 1000,
+      );
     } catch (e) {
       setBusy(null);
       setError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /** Manual cancel for the sign-in popup. The popup itself stays
+   *  open (closing it under COOP requires the popup's own context),
+   *  but the opener stops waiting and the user can dismiss the
+   *  popup themselves. */
+  function cancelSignIn() {
+    if (busy !== 'auth') return;
+    setBusy(null);
+    setError(null);
+    // Best-effort: close the popup if we still hold a reference
+    // the browser will honour. Under strict COOP this no-ops.
+    try {
+      if (popupRef.current && !popupRef.current.closed) {
+        popupRef.current.close();
+      }
+    } catch {
+      /* COOP blocked the close; user closes the popup manually */
+    }
+    popupRef.current = null;
   }
 
   function signOut() {
@@ -362,6 +392,7 @@ export function FromAgoView() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onSignIn={signIn}
+            onCancelSignIn={cancelSignIn}
             busy={busy}
           />
         )}
@@ -555,6 +586,7 @@ function PickConnectionPanel({
   selectedId,
   onSelect,
   onSignIn,
+  onCancelSignIn,
   busy,
 }: {
   conns: AgoConnection[] | null;
@@ -562,6 +594,7 @@ function PickConnectionPanel({
   selectedId: string;
   onSelect: (id: string) => void;
   onSignIn: () => void;
+  onCancelSignIn: () => void;
   busy: 'auth' | 'preview' | 'run' | null;
 }) {
   if (loadError) {
@@ -630,8 +663,17 @@ function PickConnectionPanel({
           ) : (
             <LogIn className="h-4 w-4" />
           )}
-          Sign in to ArcGIS Online
+          {busy === 'auth' ? 'Waiting for sign-in...' : 'Sign in to ArcGIS Online'}
         </button>
+        {busy === 'auth' && (
+          <button
+            type="button"
+            onClick={onCancelSignIn}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium text-muted hover:bg-surface-2 hover:text-ink-0"
+          >
+            Cancel
+          </button>
+        )}
       </div>
     </>
   );
