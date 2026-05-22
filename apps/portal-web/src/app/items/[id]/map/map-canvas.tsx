@@ -21,6 +21,7 @@ import type {
 import {
   ZOOM_MAX,
   ZOOM_MIN,
+  dashArrayFor,
   effectiveLayerScale,
   scaledStyleExpression,
 } from '@gratis-gis/shared-types';
@@ -2434,6 +2435,15 @@ function syncOverlays(
     // Polygon outline (separate layer so paint rules stay simple).
     // Selected polygons get an accent color and a thicker outline so
     // the pick is obvious without repainting the fill.
+    //
+    // Dash / cap / join (#73): the dash array is in line-width
+    // units, so the same preset reads visually identical across
+    // line widths. Cap + join move into the `layout` block (where
+    // MapLibre wants them); they're constants because feature-
+    // state can't drive layout properties. The current resolved
+    // style picks them at render time; switching the polygon's
+    // strokeDashStyle re-runs this addLayer.
+    const polyDashArr = dashArrayFor(s.polygon.strokeDashStyle);
     m.addLayer({
       id: `gg:${layer.id}-poly-line`,
       type: 'line',
@@ -2442,6 +2452,10 @@ function syncOverlays(
       minzoom,
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'Polygon'], layer.filter),
+      layout: {
+        'line-cap': s.polygon.strokeCap ?? 'round',
+        'line-join': s.polygon.strokeJoin ?? 'round',
+      },
       paint: {
         // scaledStepCase puts the case inside each zoom-step branch
         // so the expression has exactly one zoom-step (see helper
@@ -2462,10 +2476,16 @@ function syncOverlays(
           ),
         ) as unknown as number,
         'line-opacity': op,
+        // Empty array reads as "solid" and is skipped so MapLibre
+        // doesn't waste cycles in the dash-resolve pass.
+        ...(polyDashArr.length > 0
+          ? { 'line-dasharray': polyDashArr }
+          : {}),
       },
     });
 
-    // LineString geometries
+    // LineString geometries.
+    const lineDashArr = dashArrayFor(s.line.dashStyle);
     m.addLayer({
       id: `gg:${layer.id}-line`,
       type: 'line',
@@ -2474,6 +2494,10 @@ function syncOverlays(
       minzoom,
       maxzoom,
       filter: combineFilter(['==', ['geometry-type'], 'LineString'], layer.filter),
+      layout: {
+        'line-cap': s.line.cap ?? 'round',
+        'line-join': s.line.join ?? 'round',
+      },
       paint: {
         'line-color': scaledStepCase((st) =>
           stateCase(
@@ -2490,6 +2514,9 @@ function syncOverlays(
           ),
         ) as unknown as number,
         'line-opacity': op,
+        ...(lineDashArr.length > 0
+          ? { 'line-dasharray': lineDashArr }
+          : {}),
       },
     });
 

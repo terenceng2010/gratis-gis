@@ -478,12 +478,60 @@ export type MapLayerSource =
  * Colors are CSS / hex strings, rendered via MapLibre paint properties.
  */
 /**
- * Which marker shape a point layer renders. `circle` keeps the
- * classic dot; `icon` swaps in a named symbol registered with
- * MapLibre via the map-icons library. Additional kinds (e.g. custom
- * uploaded SVG) slot in here.
+ * Which marker shape a point layer renders (#73).
+ *
+ *   - `circle` keeps the classic dot.
+ *   - `square` / `diamond` / `triangle` / `pin` / `star` paint a
+ *     vector shape from a bundled sprite. Color + radius + outline
+ *     apply the same way as `circle`.
+ *   - `icon` composites a glyph from the bundled icon library on
+ *     top of the shape underneath. When `shape` is `icon`, the
+ *     `shapeUnder` field picks the colored shape to render
+ *     beneath the glyph (the "AGO look" -- white badge inside a
+ *     filled circle).
+ *
+ * Legacy `symbol` (typed as `'circle' | 'icon'`) is preserved on
+ * the layer style as `shape` and `shapeUnder` for backward compat
+ * with older items; the renderer reads new shapes first and falls
+ * back to `symbol` when shape is unset.
+ */
+export type PointShape =
+  | 'circle'
+  | 'square'
+  | 'diamond'
+  | 'triangle'
+  | 'pin'
+  | 'star'
+  | 'icon';
+
+/**
+ * Legacy alias kept so the older two-state field
+ * (`symbol: 'circle' | 'icon'`) still typechecks while we
+ * migrate. New code reads `shape` instead.
  */
 export type PointSymbol = 'circle' | 'icon';
+
+/**
+ * Common stroke-dash presets that map cleanly onto MapLibre's
+ * `line-dasharray` paint property (#73). The renderer expands
+ * the preset into the dash + gap-length pair MapLibre wants. A
+ * preset stays stable across line widths because MapLibre scales
+ * the dash array by line width internally.
+ */
+export type DashStyle =
+  | 'solid'
+  | 'dash'
+  | 'short-dash'
+  | 'long-dash'
+  | 'dash-dot'
+  | 'dot'
+  | 'dash-dot-dot';
+
+/** MapLibre line-cap vocabulary, surfaced verbatim. */
+export type LineCap = 'butt' | 'round' | 'square';
+
+/** MapLibre line-join vocabulary, surfaced verbatim. */
+export type LineJoin = 'bevel' | 'round' | 'miter';
 
 /**
  * #114: per-zoom-range symbology class.  Carries its own style +
@@ -542,12 +590,25 @@ export interface MapLayerStyle {
   line: {
     color: string;
     width: number;
+    /** Dash preset (#73). Renderer expands this into a MapLibre
+     *  line-dasharray pair. Missing field reads as `'solid'` so
+     *  legacy layers don't change appearance. */
+    dashStyle?: DashStyle;
+    /** Stroke cap style; defaults to `'round'`. */
+    cap?: LineCap;
+    /** Stroke join style; defaults to `'round'`. */
+    join?: LineJoin;
   };
   polygon: {
     fillColor: string;
     fillOpacity: number;
     strokeColor: string;
     strokeWidth: number;
+    /** Same dash preset as `line.dashStyle`, applied to the
+     *  polygon's outline stroke (#73). */
+    strokeDashStyle?: DashStyle;
+    strokeCap?: LineCap;
+    strokeJoin?: LineJoin;
   };
 }
 
@@ -694,14 +755,92 @@ export const DEFAULT_LAYER_STYLE: MapLayerStyle = {
   line: {
     color: '#6366f1',
     width: 2,
+    dashStyle: 'solid',
+    cap: 'round',
+    join: 'round',
   },
   polygon: {
     fillColor: '#6366f1',
     fillOpacity: 0.25,
     strokeColor: '#4338ca',
     strokeWidth: 1.5,
+    strokeDashStyle: 'solid',
+    strokeCap: 'round',
+    strokeJoin: 'round',
   },
 };
+
+/**
+ * Map a `DashStyle` preset to the MapLibre `line-dasharray`
+ * pair (dash length, gap length, ...) in line-width units (#73).
+ * `'solid'` returns an empty array, which the renderer should
+ * skip emitting so MapLibre falls back to its solid default
+ * without going through a redundant per-segment dash-cap
+ * resolution pass.
+ *
+ * The exact values come from tuning against MapLibre's default
+ * vector tiles: small enough that dashes read as distinct at
+ * mid zooms, large enough that they don't blur at low zooms.
+ * Tuned for `line-cap: round` which is our default; flat-cap
+ * lines will see slightly different visual ratios.
+ */
+export function dashArrayFor(style: DashStyle | undefined): number[] {
+  switch (style) {
+    case 'dash':
+      return [4, 2];
+    case 'short-dash':
+      return [2, 2];
+    case 'long-dash':
+      return [8, 2];
+    case 'dot':
+      return [0.5, 2];
+    case 'dash-dot':
+      return [4, 2, 0.5, 2];
+    case 'dash-dot-dot':
+      return [4, 2, 0.5, 2, 0.5, 2];
+    case 'solid':
+    case undefined:
+    default:
+      return [];
+  }
+}
+
+/** Human-readable label for a `DashStyle` preset, used in
+ *  dropdown labels in the style editor (#73). */
+export function dashStyleLabel(style: DashStyle): string {
+  switch (style) {
+    case 'solid':
+      return 'Solid';
+    case 'dash':
+      return 'Dash';
+    case 'short-dash':
+      return 'Short dash';
+    case 'long-dash':
+      return 'Long dash';
+    case 'dot':
+      return 'Dotted';
+    case 'dash-dot':
+      return 'Dash-dot';
+    case 'dash-dot-dot':
+      return 'Dash-dot-dot';
+  }
+}
+
+/** Ordered list of every dash-style preset, for dropdown
+ *  enumeration. Adding a new preset requires updating
+ *  `dashArrayFor` and `dashStyleLabel`. */
+export const DASH_STYLES: DashStyle[] = [
+  'solid',
+  'dash',
+  'short-dash',
+  'long-dash',
+  'dot',
+  'dash-dot',
+  'dash-dot-dot',
+];
+
+export const LINE_CAPS: LineCap[] = ['butt', 'round', 'square'];
+export const LINE_JOINS: LineJoin[] = ['bevel', 'round', 'miter'];
 
 export const DEFAULT_LAYER_POPUP: MapLayerPopup = {
   enabled: true,

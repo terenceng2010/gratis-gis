@@ -2,7 +2,19 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { MapLayerStyle, PointSymbol } from '@gratis-gis/shared-types';
+import type {
+  DashStyle,
+  LineCap,
+  LineJoin,
+  MapLayerStyle,
+  PointSymbol,
+} from '@gratis-gis/shared-types';
+import {
+  DASH_STYLES,
+  LINE_CAPS,
+  LINE_JOINS,
+  dashStyleLabel,
+} from '@gratis-gis/shared-types';
 import type { GeometryFamily } from './layer-metadata';
 import {
   MAP_ICONS,
@@ -81,6 +93,26 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
             value={value.polygon.strokeWidth}
             onChange={(n) => patch('polygon', { strokeWidth: n })}
           />
+          {/* Dash style / cap / join (#73). Defaults to solid /
+              round / round so existing polygons keep their look
+              when this section appears below the size sliders. */}
+          <DashSelect
+            label="Outline dash"
+            value={value.polygon.strokeDashStyle ?? 'solid'}
+            onChange={(d) => patch('polygon', { strokeDashStyle: d })}
+          />
+          <CapJoinSelect
+            label="Outline cap"
+            options={LINE_CAPS}
+            value={value.polygon.strokeCap ?? 'round'}
+            onChange={(c) => patch('polygon', { strokeCap: c as LineCap })}
+          />
+          <CapJoinSelect
+            label="Outline join"
+            options={LINE_JOINS}
+            value={value.polygon.strokeJoin ?? 'round'}
+            onChange={(j) => patch('polygon', { strokeJoin: j as LineJoin })}
+          />
         </div>
       </section>
       ) : null}
@@ -103,6 +135,23 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
             step={0.5}
             value={value.line.width}
             onChange={(n) => patch('line', { width: n })}
+          />
+          <DashSelect
+            label="Dash"
+            value={value.line.dashStyle ?? 'solid'}
+            onChange={(d) => patch('line', { dashStyle: d })}
+          />
+          <CapJoinSelect
+            label="Cap"
+            options={LINE_CAPS}
+            value={value.line.cap ?? 'round'}
+            onChange={(c) => patch('line', { cap: c as LineCap })}
+          />
+          <CapJoinSelect
+            label="Join"
+            options={LINE_JOINS}
+            value={value.line.join ?? 'round'}
+            onChange={(j) => patch('line', { join: j as LineJoin })}
           />
         </div>
       </section>
@@ -387,6 +436,67 @@ export function Slider({
         onChange={(e) => onChange(Number(e.target.value))}
         className="accent-accent"
       />
+    </label>
+  );
+}
+
+/** Dropdown for a DashStyle preset (#73). Pairs with
+ *  `DASH_STYLES` from shared-types so adding a new preset there
+ *  shows up here automatically. */
+function DashSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: DashStyle;
+  onChange: (d: DashStyle) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] text-muted">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as DashStyle)}
+        className="h-7 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+      >
+        {DASH_STYLES.map((d) => (
+          <option key={d} value={d}>
+            {dashStyleLabel(d)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** Dropdown for line-cap / line-join. Generic over both because
+ *  the option list shape + render is identical (#73). */
+function CapJoinSelect({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: readonly string[];
+  value: string;
+  onChange: (s: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] text-muted">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-7 rounded border border-border bg-surface-1 px-2 text-xs focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+      >
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o[0]!.toUpperCase() + o.slice(1)}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }
