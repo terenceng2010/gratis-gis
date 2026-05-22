@@ -18,7 +18,7 @@ import {
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -191,6 +191,11 @@ export class IngestStagingService implements OnModuleInit {
    */
   async dropStaging(stagingId: string): Promise<void> {
     if (!stagingId) return;
+    // Same shape gate as getStaging: refuse anything that isn't a
+    // hex / hyphen UUID-shaped token before it lands in a join().
+    // Without the gate, a caller passing '../../bin' would resolve
+    // outside this.root.
+    if (!/^[0-9a-f-]{8,40}$/i.test(stagingId)) return;
     const dir = join(this.root, stagingId);
     await rm(dir, { recursive: true, force: true }).catch((err) => {
       this.log.warn(
@@ -278,8 +283,21 @@ interface StagingMeta {
  * Mirrors the safeFilename helper in ingest.service.ts. Kept local so
  * the staging service does not import from the GDAL-loading service
  * (which has heavier transitive deps).
+ *
+ * Defends against path-traversal: the user-supplied name flows into
+ * join(this.root, stagingId, safeFilename(name)) so a malicious
+ * `../../etc/x` could otherwise escape the staging root. Steps:
+ *   1. basename() strips any path segments,
+ *   2. char filter scrubs everything outside [A-Za-z0-9._-],
+ *   3. leading and trailing dots are replaced so `..` / `.hidden`
+ *      cannot survive,
+ *   4. empty / single-underscore results fall back to upload.bin.
+ *
+ * Keep these two helpers in sync.
  */
 function safeFilename(name: string): string {
-  const base = name.replace(/[^\w.-]/g, '_');
-  return base.length > 0 ? base : 'upload.bin';
+  const fileOnly = basename(name);
+  let base = fileOnly.replace(/[^\w.-]/g, '_');
+  base = base.replace(/^\.+/, '_').replace(/\.+$/, '_');
+  return base.length > 0 && base !== '_' ? base : 'upload.bin';
 }

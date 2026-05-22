@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { TileLayerOriginalFormat } from '@gratis-gis/shared-types';
 
@@ -424,13 +424,19 @@ export async function cleanupConversion(workDir: string): Promise<void> {
 /**
  * Strip path separators + control characters from the upload
  * filename so we can use it as a temp-file name without worrying
- * about directory traversal in the workDir. The pmtiles CLI is
- * fine with arbitrary names, this is purely for sanity.
+ * about directory traversal in the workDir.
+ *
+ * Defends against `..` traversal: the bare char filter would let
+ * a literal `..` through (both chars are in the allowed set). We
+ * basename() first to drop any path segments, then run the filter,
+ * then collapse leading / trailing dot runs so `..` and `.hidden`
+ * cannot escape the workDir or hide as dotfiles.
  */
 function sanitizeFileName(name: string): string {
-  return (
-    name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200) || 'upload.bin'
-  );
+  const fileOnly = basename(name);
+  let base = fileOnly.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+  base = base.replace(/^\.+/, '_').replace(/\.+$/, '_');
+  return base.length > 0 && base !== '_' ? base : 'upload.bin';
 }
 
 /**

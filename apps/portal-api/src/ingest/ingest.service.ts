@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -664,10 +664,29 @@ export class IngestService {
   }
 }
 
-/** Keep tmp filenames predictable and safe for shell-adjacent tools. */
+/**
+ * Keep tmp filenames predictable and safe for shell-adjacent tools.
+ *
+ * Defends against path-traversal: the user-supplied name flows into
+ * join(tmpdir, ..., safeFilename(name)) so a malicious `../../etc/x`
+ * could otherwise escape the temp dir. We:
+ *   1. take only the basename so any path segments are stripped,
+ *   2. replace every non-[A-Za-z0-9._-] character with `_`,
+ *   3. strip leading dots so a literal `..` or `.hidden` can't
+ *      survive (a leading dot becomes a single `_`),
+ *   4. fall back to upload.bin when the result is empty.
+ *
+ * The dot stripping is the load-bearing step against `..`-style
+ * traversal; the basename strip + char filter handle the rest.
+ */
 function safeFilename(name: string): string {
-  const base = name.replace(/[^\w.-]/g, '_');
-  return base.length > 0 ? base : 'upload.bin';
+  const fileOnly = basename(name);
+  let base = fileOnly.replace(/[^\w.-]/g, '_');
+  // Replace any leading-dot run so '..' / '.hidden' cannot escape
+  // the temp dir or hide as a dotfile. A single trailing dot is also
+  // suspicious on Windows; flatten it.
+  base = base.replace(/^\.+/, '_').replace(/\.+$/, '_');
+  return base.length > 0 && base !== '_' ? base : 'upload.bin';
 }
 
 function gdalTypeToSimple(
