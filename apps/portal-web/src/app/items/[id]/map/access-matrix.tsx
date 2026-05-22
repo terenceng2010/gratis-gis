@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -430,9 +430,6 @@ export function AccessMatrix({
                         const isOpen =
                           activePopover?.layerId === layer.id &&
                           activePopover.principalKey === key;
-                        const granting =
-                          grantingKey ===
-                          (itemId ? `${itemId}:${key}` : '');
                         return (
                           <td
                             key={key}

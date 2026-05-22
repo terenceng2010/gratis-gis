@@ -53,9 +53,7 @@ import {
 } from 'lucide-react';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import {
-  DEFAULT_PRINT_TEMPLATE,
   DYNAMIC_TOKEN_IDS,
-  PAPER_SIZE_INCHES,
   resolvePaperInches,
   type DynamicTokenId,
   type PrintElement,

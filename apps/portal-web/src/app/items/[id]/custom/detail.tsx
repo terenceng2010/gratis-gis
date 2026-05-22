@@ -62,7 +62,6 @@ import type {
   WebAppData,
 } from '@gratis-gis/shared-types';
 import {
-  DEFAULT_MAP,
   APP_THEMES,
   applyAppTheme,
   applyAppThemeTokens,
@@ -6320,38 +6319,6 @@ function ToolModeSection({
   );
 }
 
-/**
- * Friendly label for a widget kind, shown in the children list and
- * in the add menu.  Kept terse so a 280px-wide right rail can show
- * them on one line.
- */
-const WIDGET_KIND_LABEL: Record<CustomWidgetKind, string> = {
-  map: 'Map',
-  legend: 'Legend',
-  'layer-list': 'Layers',
-  search: 'Search',
-  print: 'Print',
-  select: 'Select',
-  export: 'Export',
-  splash: 'Splash',
-  'basemap-gallery': 'Basemaps',
-  bookmark: 'Bookmarks',
-  coordinates: 'Coordinates',
-  'my-location': 'My location',
-  'time-slider': 'Time slider',
-  'create-feature': 'Add feature',
-  'edit-feature': 'Edit feature',
-  'delete-feature': 'Delete feature',
-  'attribute-table': 'Attribute table',
-  text: 'Text',
-  chart: 'Chart',
-  image: 'Image',
-  embed: 'Embed',
-  button: 'Button',
-  divider: 'Divider',
-  tabs: 'Tabs',
-  container: 'Container',
-};
 
 /**
  * #92 generic container editor.  The container is a PURE layout

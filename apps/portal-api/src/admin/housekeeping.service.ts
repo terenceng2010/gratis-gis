@@ -1369,49 +1369,6 @@ function collectArcgisLayerIds(layersData: unknown): number[] {
   return out;
 }
 
-/** #85: walk an editor's data (legacy `editor` type or
- *  `web_app` + data.template='editor') and return every spatial
- *  item id it references: the runtime map first, then each
- *  target's data_layer id. Used by refreshItemBbox so an editor
- *  item picks up the union extent of what its runtime would show.
- *  Both the legacy `editor` shape (data is EditorData) and the
- *  migrated `web_app` shape (data.template='editor', config.editor
- *  is EditorData) are supported.
- */
-function collectEditorItemRefs(data: unknown): string[] {
-  if (!data || typeof data !== 'object') return [];
-  const out = new Set<string>();
-  // Locate the EditorData payload regardless of which schema the
-  // row uses. Avoids importing the shared-types helper into this
-  // service since the helper expects an Item-shaped wrapper.
-  let editor: Record<string, unknown> | null = null;
-  const top = data as Record<string, unknown>;
-  if (typeof top.mapId === 'string' || Array.isArray(top.targets)) {
-    editor = top;
-  } else if (
-    top.template === 'editor' &&
-    top.config &&
-    typeof top.config === 'object'
-  ) {
-    const cfg = top.config as Record<string, unknown>;
-    if (cfg.editor && typeof cfg.editor === 'object') {
-      editor = cfg.editor as Record<string, unknown>;
-    }
-  }
-  if (!editor) return [];
-  const mapRef = editor.mapId;
-  if (typeof mapRef === 'string' && mapRef.length > 0) out.add(mapRef);
-  const targets = editor.targets;
-  if (Array.isArray(targets)) {
-    for (const t of targets) {
-      if (!t || typeof t !== 'object') continue;
-      const dl = (t as { dataLayerId?: unknown }).dataLayerId;
-      if (typeof dl === 'string' && dl.length > 0) out.add(dl);
-    }
-  }
-  return Array.from(out);
-}
-
 /** Walk a map's data.layers[] and return the underlying portal item
  *  ids the layers reference (data_layer source.itemId, plus
  *  arcgis-rest source.sourceItemId when set). Other source kinds

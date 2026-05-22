@@ -141,15 +141,13 @@ export class TileLayerService {
     // raster inputs).  Pass-through inputs (already-PMTiles
     // uploads) come back with format='pmtiles' and outputPath=''.
     let conversion: Awaited<ReturnType<typeof convertUpload>> | null = null;
-    let conversionWorkDir = '';
     try {
       conversion = await convertUpload(input.storageUrl, input.fileName);
-      conversionWorkDir = conversion.workDir;
     } catch (err) {
-      // Clean up any temp dir the converter created before
-      // re-raising. The original upload stays in MinIO so the
-      // user can retry without re-uploading.
-      if (conversionWorkDir) await cleanupConversion(conversionWorkDir);
+      // convertUpload owns its own temp-dir lifecycle: any workdir
+      // it created before throwing is its own to clean up. We don't
+      // have a handle to it from out here. The original upload
+      // stays in MinIO so the user can retry without re-uploading.
       throw new BadRequestException(
         `Conversion failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -192,7 +190,11 @@ export class TileLayerService {
         }
       }
     } finally {
-      if (conversionWorkDir) await cleanupConversion(conversionWorkDir);
+      // Clean up the converter's temp workdir regardless of upload
+      // outcome. conversion is non-null here (we returned early via
+      // the catch block above if convertUpload threw), so reading
+      // .workDir directly is safe.
+      if (conversion.workDir) await cleanupConversion(conversion.workDir);
     }
 
     // Branch on output format.  PMTiles serves via the existing

@@ -92,12 +92,8 @@ export default async function EditorRuntimePage(props: Props) {
   // under data.config.editor (migrated type='web_app' rows after
   // #258). readEditorData unwraps either layout below.
   let editorItem: Item<unknown>;
-  let me: { id: string; orgRole: string };
   try {
-    [editorItem, me] = await Promise.all([
-      apiFetch<Item<unknown>>(`/api/items/${params.id}`),
-      apiFetch<{ id: string; orgRole: string }>('/api/users/me'),
-    ]);
+    editorItem = await apiFetch<Item<unknown>>(`/api/items/${params.id}`);
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
     throw err;

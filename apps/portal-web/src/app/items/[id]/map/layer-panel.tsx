@@ -147,15 +147,6 @@ export function LayerPanel({
   function removeLayer(id: string) {
     onChange(layers.filter((l) => l.id !== id));
   }
-  function moveLayer(from: number, to: number) {
-    if (from === to || from < 0 || to < 0) return;
-    const next = [...layers];
-    const [moved] = next.splice(from, 1);
-    if (!moved) return;
-    next.splice(to, 0, moved);
-    onChange(next);
-  }
-
   // Collect every descendant id of a group (#71). Walks the tree
   // rooted at `groupId` so cascade helpers (toggle, opacity, remove,
   // ungroup) handle nested groups correctly: toggling a top-level

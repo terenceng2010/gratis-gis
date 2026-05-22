@@ -8,7 +8,6 @@ import {
   type Lens,
   type LensView,
   lensesToWebMapJson,
-  operationalLayerForLens,
 } from '@gratis-gis/engine';
 
 import { PrismaService } from '../prisma/prisma.service.js';

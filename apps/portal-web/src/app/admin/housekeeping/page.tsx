@@ -164,11 +164,9 @@ async function BundleSection() {
       summary,
       staleItems,
       staleUsers,
-      largeItems,
       expiringShares,
       expiringUsers,
       storage,
-      largestTables,
       largestDataLayers,
     ] = await Promise.all([
       apiFetch<HousekeepingBundle['summary']>(
@@ -180,9 +178,6 @@ async function BundleSection() {
       apiFetch<HousekeepingBundle['staleUsers']>(
         '/api/admin/housekeeping/stale-users',
       ),
-      apiFetch<HousekeepingBundle['largeItems']>(
-        '/api/admin/housekeeping/large-items',
-      ),
       apiFetch<HousekeepingBundle['expiringShares']>(
         '/api/admin/housekeeping/expiring-shares',
       ),
@@ -192,9 +187,6 @@ async function BundleSection() {
       apiFetch<HousekeepingBundle['storage']>(
         '/api/admin/housekeeping/storage',
       ),
-      apiFetch<HousekeepingBundle['largestTables']>(
-        '/api/admin/housekeeping/largest-tables',
-      ),
       apiFetch<HousekeepingBundle['largestDataLayers']>(
         '/api/admin/housekeeping/largest-data-layers',
       ),
@@ -203,11 +195,9 @@ async function BundleSection() {
       summary,
       staleItems,
       staleUsers,
-      largeItems,
       expiringShares,
       expiringUsers,
       storage,
-      largestTables,
       largestDataLayers,
     };
     return <HousekeepingView bundle={bundle} />;

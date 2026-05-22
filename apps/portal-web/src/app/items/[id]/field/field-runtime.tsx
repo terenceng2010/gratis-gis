@@ -11,7 +11,6 @@ import {
   CircleSlash,
   CloudDownload,
   CloudOff,
-  ClipboardList,
   Compass,
   Crosshair,
   Eye,
@@ -27,7 +26,6 @@ import {
   Search,
   Tag,
   Trash2,
-  Wifi,
   X,
 } from 'lucide-react';
 import maplibregl from 'maplibre-gl';
@@ -5215,53 +5213,6 @@ function FieldMoreMenu({
 }
 
 /**
- * Compact pill in the runtime header showing network state. Three
- * variants: green "Online", amber "Offline (cached)" when we have a
- * deployment manifest, red "Offline (no cache)" when we don't and
- * the user can't actually do anything until they reconnect. Tooltip
- * carries the cache timestamp.
- */
-function ConnectivityPill({
-  isOnline,
-  cachedAt,
-}: {
-  isOnline: boolean;
-  cachedAt: string | null;
-}) {
-  if (isOnline) {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700"
-        title="Online: edits sync immediately"
-      >
-        <Wifi className="h-3 w-3" />
-        Online
-      </span>
-    );
-  }
-  if (cachedAt) {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
-        title={`Offline. Cached on ${new Date(cachedAt).toLocaleString()}.`}
-      >
-        <CloudOff className="h-3 w-3" />
-        Offline
-      </span>
-    );
-  }
-  return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-medium text-rose-700"
-      title="Offline and no cached data for this deployment."
-    >
-      <CircleSlash className="h-3 w-3" />
-      No cache
-    </span>
-  );
-}
-
-/**
  * Queue badge + sync trigger (Slice 5). Renders only when there's
  * something queued; the field worker shouldn't see queue-related
  * chrome during normal online work. Three visual states:
@@ -5316,52 +5267,6 @@ function QueueBadge({
   );
 }
 
-/**
- * Persistence-state badge alongside the connectivity pill (Slice 6).
- * Communicates whether the browser will keep our IndexedDB across
- * disk-pressure events so the user can see at a glance whether their
- * cached data + queued edits are protected.
- *
- * Three states:
- *   - 'unknown': we haven't checked yet (rendering nothing avoids a
- *     flash of "Best effort" on a freshly-loaded page).
- *   - 'persistent': muted green dot, no copy. Shows on hover what it
- *     means. Subtle on purpose -- this is the safe state.
- *   - 'best-effort': amber, "Best effort" copy. The user can do
- *     something about it (start a download, which prompts) so the
- *     badge is visible enough to notice.
- *
- * On platforms that don't expose navigator.storage.persist (older
- * Safari, locked-down WebViews) the state stays 'best-effort' since
- * we can't get a positive guarantee. The runtime still works.
- */
-function PersistenceBadge({
-  state,
-}: {
-  state: 'unknown' | 'persistent' | 'best-effort';
-}) {
-  if (state === 'unknown') return null;
-  if (state === 'persistent') {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700"
-        title="Persistent storage: the browser will not auto-evict your cached deployment or queued edits. Only an explicit Clear browsing data removes it."
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-        Persistent
-      </span>
-    );
-  }
-  return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
-      title="Best-effort storage: the browser may evict your cached data under disk pressure. Starting an offline download prompts to upgrade to persistent."
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-      Best effort
-    </span>
-  );
-}
 
 /**
  * Progress modal shown while a download is running and after it

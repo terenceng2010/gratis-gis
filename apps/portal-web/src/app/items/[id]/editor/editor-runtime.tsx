@@ -8,7 +8,6 @@ import {
   ArrowLeft,
   ChevronDown,
   ClipboardList,
-  Hand,
   Layers as LayersIcon,
   Map as MapBaseIcon,
   MousePointer2,
@@ -2155,7 +2154,6 @@ export function EditorRuntime({
     }
   }
 
-  const activeTarget = activeTargetKey ? targetByKey.get(activeTargetKey) : undefined;
   const pendingTarget = pendingFeature
     ? targetByKey.get(pendingFeature.targetKey)
     : undefined;

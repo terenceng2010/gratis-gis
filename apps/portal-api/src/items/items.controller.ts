@@ -464,7 +464,8 @@ export class ItemsController {
   private async toDataUrl(
     href: string | null | undefined,
   ): Promise<string | null | undefined> {
-    if (!href) return href ?? null;
+    // href is falsy here (null / undefined / empty string).
+    if (!href) return null;
     if (href.startsWith('data:')) return href;
     try {
       const res = await fetch(href, {

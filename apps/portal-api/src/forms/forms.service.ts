@@ -830,41 +830,6 @@ function extractAttachments(
   return out;
 }
 
-/**
- * Return a deep copy of the response with every attachment array
- * stripped (replaced with an empty array, so question keys still
- * resolve to a defined value). Avoids storing 5+ MB of attachment
- * descriptors in the parent row's properties JSONB when those
- * descriptors live more naturally in feature_attachment.
- *
- * Non-attachment data inside repeat groups is preserved; only the
- * attachment-shaped sub-arrays are replaced with [].
- */
-function stripAttachments(
-  response: Record<string, unknown>,
-): Record<string, unknown> {
-  const clone = (node: unknown): unknown => {
-    if (Array.isArray(node)) {
-      // An array purely of attachment descriptors -> empty array.
-      // Mixed arrays (shouldn't happen with current question types
-      // but defensive) keep their non-attachment items.
-      const filtered = node
-        .map((item) =>
-          isAttachmentDescriptor(item) ? null : clone(item),
-        )
-        .filter((item) => item !== null);
-      return filtered;
-    }
-    if (node && typeof node === 'object') {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(node)) out[k] = clone(v);
-      return out;
-    }
-    return node;
-  };
-  return clone(response) as Record<string, unknown>;
-}
-
 // ---------------------------------------------------------------------------
 // #325 geometry-binding helpers for the form-mirror submit path.
 //
@@ -977,9 +942,10 @@ function responseValueToGeoJson(
 ): unknown | undefined {
   if (value === null || value === undefined) return undefined;
   if (geometryType === 'point') {
+    // null was already excluded above; typeof === 'object' narrows
+    // value to a non-null object, no second null guard needed.
     if (
       typeof value === 'object' &&
-      value !== null &&
       typeof (value as { lat?: unknown }).lat === 'number' &&
       typeof (value as { lng?: unknown }).lng === 'number'
     ) {

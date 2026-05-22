@@ -170,21 +170,15 @@ export function AppShellChrome({
             >
               <Bell className="h-4 w-4" />
             </button>
-            {signedIn ? (
-              <UserMenu
-                seed={me?.id ?? fallbackEmail ?? 'you'}
-                displayName={me?.fullName ?? fallbackName ?? 'You'}
-                orgName={me?.orgName ?? null}
-                avatarUrl={me?.avatarUrl ?? null}
-              />
-            ) : (
-              <Link
-                href="/signin"
-                className="inline-flex h-9 items-center rounded-md bg-accent px-3 text-sm font-medium text-accent-foreground hover:opacity-90"
-              >
-                Sign in
-              </Link>
-            )}
+            {/* signedIn is guaranteed true here; the unauthenticated
+                case returned early above without rendering the chrome,
+                so the unsigned Sign-in button would be dead JSX. */}
+            <UserMenu
+              seed={me?.id ?? fallbackEmail ?? 'you'}
+              displayName={me?.fullName ?? fallbackName ?? 'You'}
+              orgName={me?.orgName ?? null}
+              avatarUrl={me?.avatarUrl ?? null}
+            />
           </div>
         </header>
 

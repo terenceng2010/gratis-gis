@@ -292,9 +292,6 @@ export class ImportJobsWorker implements OnModuleInit {
       lastDriver = meta.driver;
       lastLayerName = meta.layerName;
       lastSourceSrs = meta.sourceSrs;
-      lastDriver = meta.driver;
-      lastLayerName = meta.layerName;
-      lastSourceSrs = meta.sourceSrs;
 
       if (cancelled) {
         // The job row is already at status='cancelled' (the user

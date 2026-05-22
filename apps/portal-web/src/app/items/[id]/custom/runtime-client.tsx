@@ -3203,12 +3203,6 @@ function AttributeTableWidgetRender({ widget }: { widget: CustomWidget }) {
   );
 }
 
-function formatCell(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
-
 // ---- Text widget -----------------------------------------------------------
 
 const TEXT_PRESET_CLS: Record<string, string> = {

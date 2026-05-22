@@ -7,13 +7,10 @@ import {
   Check,
   Database,
   Globe,
-  GripVertical,
   Loader2,
   RefreshCw,
   Save,
   Search,
-  Trash2,
-  X,
 } from 'lucide-react';
 import type {
   DataLayerDataV3,

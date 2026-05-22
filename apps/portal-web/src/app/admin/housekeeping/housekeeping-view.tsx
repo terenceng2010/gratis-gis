@@ -71,25 +71,6 @@ export interface HousekeepingBundle {
     lastSeenAt: string | null;
     ownedItemCount: number;
   }>;
-  largeItems: Array<{
-    id: string;
-    title: string;
-    type: string;
-    ownerId: string;
-    ownerLabel: string;
-    /** Total = metadataBytes + dataBytes (the latter is non-zero only
-     *  for data_layer items, where it sums every per-layer feature
-     *  table). Sort key. */
-    sizeBytes: number;
-    /** Just the item's JSON blob in the `item` table. */
-    metadataBytes: number;
-    /** For data_layer items: pg_total_relation_size summed across the
-     *  v3 feature tables (`fs_<itemIdNoDashes>_*`). 0 for any other
-     *  type -- file attachments and form submissions aren't attributed
-     *  back to the item here; they're visible in the storage cards. */
-    dataBytes: number;
-    updatedAt: string;
-  }>;
   /** Storage telemetry (#161). Rendered as a single card at the top
    *  of the page so the operator can answer "are we running low" at
    *  a glance. */
@@ -115,16 +96,6 @@ export interface HousekeepingBundle {
       freeBytes: number;
     } | null;
   };
-  /** Top 10 tables by pg_total_relation_size (#161). Diagnostic
-   *  for "which table is bloating the cluster". */
-  largestTables: Array<{
-    schema: string;
-    name: string;
-    totalBytes: number;
-    tableBytes: number;
-    indexBytes: number;
-    rowEstimate: number;
-  }>;
   /** Top 50 data_layer scopes by approximate observation footprint
    *  (#115 P10 follow-up). After the engine pivot the per-table
    *  list is dominated by `observation_p202xxxxx` partitions that
@@ -185,11 +156,9 @@ export function HousekeepingView({ bundle }: Props) {
     summary,
     staleItems,
     staleUsers,
-    largeItems,
     expiringShares,
     expiringUsers,
     storage,
-    largestTables,
     largestDataLayers,
   } = bundle;
 
@@ -1197,65 +1166,6 @@ function StaleUsersTable({
   );
 }
 
-function LargeItemsTable({
-  rows,
-}: {
-  rows: HousekeepingBundle['largeItems'];
-}) {
-  return (
-    <table className="w-full text-sm">
-      <thead className="bg-surface-2 text-left text-[11px] uppercase tracking-wide text-muted">
-        <tr>
-          <th className="px-4 py-2">Title</th>
-          <th className="px-4 py-2">Type</th>
-          <th className="px-4 py-2">Owner</th>
-          <th className="px-4 py-2">Size</th>
-          <th className="px-4 py-2">Last updated</th>
-          <th className="px-4 py-2" />
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border">
-        {rows.map((r) => (
-          <tr key={r.id}>
-            <td className="px-4 py-2">
-              <Link
-                href={`/items/${r.id}`}
-                className="text-ink-0 hover:text-accent"
-              >
-                {r.title}
-              </Link>
-            </td>
-            <td className="px-4 py-2 text-muted">{r.type}</td>
-            <td className="px-4 py-2 text-muted">{r.ownerLabel}</td>
-            <td className="px-4 py-2 font-mono text-ink-0">
-              <span title="Total backend footprint: metadata JSON plus, for data_layer items, the per-layer feature tables.">
-                {formatBytes(r.sizeBytes)}
-              </span>
-              {r.dataBytes > 0 ? (
-                <span className="ml-2 text-[10px] text-muted">
-                  ({formatBytes(r.dataBytes)} data + {formatBytes(r.metadataBytes)} meta)
-                </span>
-              ) : null}
-            </td>
-            <td className="px-4 py-2 text-muted">
-              {new Date(r.updatedAt).toLocaleDateString()}
-            </td>
-            <td className="px-4 py-2 text-right">
-              <Link
-                href={`/items/${r.id}`}
-                className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-              >
-                Open
-                <ChevronRight className="h-3 w-3" />
-              </Link>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
 /**
  * Top-of-page storage telemetry card (#161). Three readouts plus a
  * single visual gauge. We pick "host disk used %" as the gauge
@@ -1370,50 +1280,6 @@ function StorageCard({
         </dl>
       </div>
     </section>
-  );
-}
-
-function LargestTablesTable({
-  rows,
-}: {
-  rows: HousekeepingBundle['largestTables'];
-}) {
-  return (
-    <table className="w-full text-sm">
-      <thead className="bg-surface-2 text-left text-[11px] uppercase tracking-wide text-muted">
-        <tr>
-          <th className="px-4 py-2">Table</th>
-          <th className="px-4 py-2">Total</th>
-          <th className="px-4 py-2">Heap</th>
-          <th className="px-4 py-2">Indexes</th>
-          <th className="px-4 py-2">Rows (est.)</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border">
-        {rows.map((r) => (
-          <tr key={`${r.schema}.${r.name}`}>
-            <td className="px-4 py-2 font-mono text-ink-0">
-              {r.name}
-              {r.schema !== 'public' ? (
-                <span className="text-muted">.{r.schema}</span>
-              ) : null}
-            </td>
-            <td className="px-4 py-2 font-mono text-ink-0">
-              {formatBytes(r.totalBytes)}
-            </td>
-            <td className="px-4 py-2 font-mono text-muted">
-              {formatBytes(r.tableBytes)}
-            </td>
-            <td className="px-4 py-2 font-mono text-muted">
-              {formatBytes(r.indexBytes)}
-            </td>
-            <td className="px-4 py-2 font-mono text-muted">
-              {r.rowEstimate >= 0 ? r.rowEstimate.toLocaleString() : '–'}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }
 

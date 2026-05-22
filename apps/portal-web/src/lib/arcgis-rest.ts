@@ -68,7 +68,7 @@ export async function probeService(
   rawUrl: string,
   signal?: AbortSignal,
 ): Promise<ArcgisServiceDescription> {
-  const { serviceUrl, layerId } = splitServiceUrl(rawUrl);
+  const { serviceUrl } = splitServiceUrl(rawUrl);
   const json = await fetchJson(
     appendQuery(serviceUrl, { f: 'json' }),
     signal,

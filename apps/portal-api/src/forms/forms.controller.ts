@@ -13,7 +13,6 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   IsInt,
   IsObject,
-  IsOptional,
   IsString,
   Length,
   Min,

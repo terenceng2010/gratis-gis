@@ -164,7 +164,6 @@ export function NotificationPreferencesForm({ initial }: Props) {
                       const pref = t.preferences[channel];
                       const key = `${t.type}|${channel}`;
                       const saving = savingKey === key;
-                      const error = errorByKey[key];
                       return (
                         <div
                           key={channel}

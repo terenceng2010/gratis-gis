@@ -462,7 +462,7 @@ export function ArcgisServiceEditor({ itemId, initial, canEdit }: Props) {
                         value={currentLabel}
                         onChange={(e) => setLayerLabel(l.id, e.target.value)}
                         placeholder="Override display label (optional)"
-                        disabled={!canEdit || !included}
+                        disabled={!included}
                         className="mt-0.5 h-6 w-full rounded border border-border bg-surface-0 px-1.5 text-[11px] focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30 disabled:opacity-50"
                       />
                     ) : override?.label ? (

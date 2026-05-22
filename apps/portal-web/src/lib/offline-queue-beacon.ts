@@ -96,7 +96,6 @@ function newFingerprint(): string {
  */
 async function buildManifest(): Promise<ManifestEntry[]> {
   const cached: CachedDeployment[] = await listDeployments();
-  const cachedById = new Map(cached.map((c) => [c.dataCollectionId, c]));
 
   // Walk every cached deployment + the queue scoped to it. A
   // deployment with no queued records still gets reported so the

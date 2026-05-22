@@ -54,7 +54,6 @@ interface Props {
 
 export function AdminUsersView({ initialUsers, currentUserId }: Props) {
   const confirm = useConfirm();
-  const alert = useAlert();
   const [users, setUsers] = useState<AdminUserRow[]>(initialUsers);
   const [query, setQuery] = useState('');
   const [inviteOpen, setInviteOpen] = useState(false);

@@ -37,7 +37,6 @@ import {
   getItemTypeAccent,
   getItemDisplayIcon,
   getItemDisplayLabel,
-  getItemTypeIcon,
   getItemTypeLabel,
   hasRuntime,
 } from '@/lib/item-type-icon';

@@ -81,9 +81,6 @@ export function DataLayerEditor({ itemId, initial, canEdit }: Props) {
     : v2
       ? (initial as DataLayerDataV2).featureCount
       : ((initial as DataLayerDataV1).data?.features?.length ?? 0);
-  const currentFields: FeatureField[] = v3
-    ? ((initial as DataLayerDataV3).layers[0]?.fields ?? [])
-    : (initial as DataLayerDataV1 | DataLayerDataV2).fields;
   const currentUpdatedAt = initial.updatedAt;
   const currentBbox = v3
     ? ((initial as DataLayerDataV3).layers[0]?.bbox ?? null)
@@ -112,15 +109,6 @@ export function DataLayerEditor({ itemId, initial, canEdit }: Props) {
     : v2 && currentFeatureCount > 0
       ? [{ url: `/api/portal/items/${itemId}/geojson` }]
       : [];
-
-  // Derived fields only needed for v1 (v2/v3 always store explicit fields).
-  const v1Features =
-    v2 || v3 ? [] : ((initial as DataLayerDataV1).data?.features ?? []);
-  const derivedFields = useMemo<FeatureField[]>(
-    () => (v2 ? [] : deriveFields(v1Features, 500)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [v2],
-  );
 
   async function importFile(file: File) {
     setError(null);
