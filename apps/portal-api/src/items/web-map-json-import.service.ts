@@ -75,6 +75,13 @@ export class WebMapJsonImportService {
      * detail page like any user-authored description.
      */
     description?: string;
+    /**
+     * Optional: sharing scope for the new map item. Defaults to
+     * 'private' to preserve the original (pre-AGO-importer)
+     * behaviour; callers that want to mirror an upstream
+     * sharing scope pass it explicitly.
+     */
+    access?: 'private' | 'org' | 'public';
   }): Promise<{
     itemId: string;
     warnings: string[];
@@ -182,7 +189,7 @@ export class WebMapJsonImportService {
       title,
       ...(args.description !== undefined && { description: args.description }),
       data: mapData as unknown as Prisma.InputJsonValue,
-      access: 'private',
+      access: args.access ?? 'private',
     });
 
     this.log.log(

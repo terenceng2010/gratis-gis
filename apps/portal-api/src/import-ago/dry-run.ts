@@ -45,6 +45,14 @@ export interface DryRunItem {
   /** Source URL captured from AGO for services. Empty for
    *  non-service items. */
   serviceUrl?: string;
+  /** AGO sharing scope on the source item. Mirrored onto the
+   *  portal item the importer creates (with ``shared`` collapsed
+   *  to ``org`` since GratisGIS doesn't have a per-group share
+   *  primitive on the items table -- per-group shares are done
+   *  via the sharing table after the fact). Surfacing this on
+   *  the row lets the dialog show a sharing-scope breakdown
+   *  before the import runs. */
+  access: 'private' | 'org' | 'public' | 'shared';
 }
 
 /**
@@ -63,6 +71,10 @@ export interface DryRunCounts {
   /** count by AGO type, including unsupported ones, so the
    *  dialog can show "and 4 StoryMap items will be skipped". */
   byAgoType: Record<string, number>;
+  /** Count of items in each AGO sharing scope (post-classification:
+   *  only items that will import contribute). Lets the dialog warn
+   *  about how many items are about to be created public / private. */
+  byAccess: Partial<Record<DryRunItem['access'], number>>;
 }
 
 /**
@@ -177,6 +189,10 @@ export function classifyAndRow(
     folderTitle,
     willImport: mapping.supported && mapping.targetType !== null,
     targetType: mapping.targetType,
+    // AGO listing always carries an access; default to 'private'
+    // if a malformed row drops it, since refusing to import is
+    // less surprising than over-sharing.
+    access: item.access ?? 'private',
   };
   if (!row.willImport) {
     row.reason = mapping.notes;
@@ -185,6 +201,30 @@ export function classifyAndRow(
     row.serviceUrl = item.url;
   }
   return row;
+}
+
+/**
+ * Map an AGO sharing scope onto a portal ItemAccess. AGO's
+ * ``shared`` (specific-groups) value has no direct equivalent on
+ * the items table (group shares live on the sharing table after
+ * the fact) so it collapses to ``org``; the operator can tighten
+ * via the per-share UI after import.
+ *
+ * Exposed for tests and for the importer.
+ */
+export function agoAccessToPortal(
+  access: DryRunItem['access'],
+): 'private' | 'org' | 'public' {
+  switch (access) {
+    case 'public':
+      return 'public';
+    case 'org':
+    case 'shared':
+      return 'org';
+    case 'private':
+    default:
+      return 'private';
+  }
 }
 
 /**
@@ -197,6 +237,7 @@ export function computeCounts(
 ): DryRunCounts {
   const byTargetType: Partial<Record<GratisGisImportType, number>> = {};
   const byAgoType: Record<string, number> = {};
+  const byAccess: Partial<Record<DryRunItem['access'], number>> = {};
   let itemsToImport = 0;
   let itemsToSkip = 0;
   for (const it of items) {
@@ -204,6 +245,7 @@ export function computeCounts(
     if (it.willImport && it.targetType) {
       itemsToImport += 1;
       byTargetType[it.targetType] = (byTargetType[it.targetType] ?? 0) + 1;
+      byAccess[it.access] = (byAccess[it.access] ?? 0) + 1;
     } else {
       itemsToSkip += 1;
     }
@@ -215,6 +257,7 @@ export function computeCounts(
     itemsToSkip,
     byTargetType,
     byAgoType,
+    byAccess,
   };
 }
 
@@ -281,6 +324,32 @@ export function computeWarnings(
         `${serviceCount} connected-service item(s) will be created. ` +
         'Services that require authentication will need credentials ' +
         'configured in portal admin before they resolve in maps.',
+    });
+  }
+
+  // Surface public sharing explicitly: operators sometimes assume
+  // an import lands everything private and are surprised when
+  // mirrored AGO-public items stay world-readable on the portal.
+  const publicCount = counts.byAccess.public ?? 0;
+  if (publicCount > 0) {
+    warnings.push({
+      severity: 'warn',
+      message:
+        `${publicCount} item(s) are PUBLIC on AGO and will be created as ` +
+        'public on the portal. Tighten in the per-item sharing UI after ' +
+        'import if that is not what you want.',
+    });
+  }
+
+  // Folder summary so the dialog can show "imports will be
+  // organized into N folders" without iterating the items list.
+  if (counts.foldersTotal > 0) {
+    warnings.push({
+      severity: 'info',
+      message:
+        `Imports will be organized into ${counts.foldersTotal} folder(s), ` +
+        'mirroring the AGO folder layout. Items at the AGO root land at ' +
+        'the portal root.',
     });
   }
 

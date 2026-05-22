@@ -38,14 +38,16 @@
  * safe is required.
  */
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { EsriWebMap } from '@gratis-gis/engine';
+import { DEFAULT_FOLDER } from '@gratis-gis/shared-types';
 
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { ItemsService } from '../items/items.service.js';
 import { WebMapJsonImportService } from '../items/web-map-json-import.service.js';
 
 import { AgoApiError, AgoClient } from './ago-client.js';
-import type { DryRunItem, DryRunReport } from './dry-run.js';
+import { agoAccessToPortal, type DryRunItem, type DryRunReport } from './dry-run.js';
 import { sortByImportOrder } from './type-mapping.js';
 
 /**
@@ -80,9 +82,26 @@ export interface ImportReport {
   failed: number;
   skipped: number;
   results: ImportResult[];
+  /** Folders the importer created to mirror the AGO folder layout.
+   *  Empty when the source had no folders (everything at root) or
+   *  when folder creation was skipped entirely (e.g. an empty
+   *  willImport set). */
+  folders: ImportedFolder[];
   startedAt: string;
   completedAt: string;
   durationMs: number;
+}
+
+/** One folder the importer created. The dialog uses this to show
+ *  "imported into 3 folders: Field Data, Maps, Public" after the
+ *  job finishes. */
+export interface ImportedFolder {
+  agoFolderId: string;
+  title: string;
+  portalItemId: string;
+  /** Number of items the importer placed in this folder. May be
+   *  zero if every item in the AGO folder was skipped or failed. */
+  childCount: number;
 }
 
 @Injectable()
@@ -115,6 +134,57 @@ export class AgoImportService {
       token: args.token,
     });
 
+    // Phase 6: pre-create one portal folder per AGO folder that
+    // actually contains at least one importable item. Skipping
+    // empty folders keeps the portal-side folder list from filling
+    // with placeholders that the operator has to clean up later.
+    const folderIdsWithImports = new Set<string>();
+    for (const it of args.report.items) {
+      if (!it.willImport) continue;
+      if (it.ownerFolder) folderIdsWithImports.add(it.ownerFolder);
+    }
+    const portalFolderByAgoId = new Map<string, string>();
+    const folderChildIds = new Map<string, string[]>();
+    const folderReport: ImportedFolder[] = [];
+    for (const folder of args.report.folders) {
+      if (!folderIdsWithImports.has(folder.id)) continue;
+      try {
+        const created = await this.items.create(args.user, {
+          type: 'folder',
+          title: folder.title,
+          // FolderData has an optional smartQuery field that TS
+          // doesn't see as Prisma.InputJsonValue-compatible
+          // directly; an explicit cast keeps the type-check happy
+          // without losing the shape contract (FolderData itself
+          // is the validator).
+          data: {
+            ...DEFAULT_FOLDER,
+            childItemIds: [],
+          } as unknown as Prisma.InputJsonValue,
+          access: 'private',
+        });
+        portalFolderByAgoId.set(folder.id, created.id);
+        folderChildIds.set(folder.id, []);
+        folderReport.push({
+          agoFolderId: folder.id,
+          title: folder.title,
+          portalItemId: created.id,
+          childCount: 0,
+        });
+      } catch (e) {
+        // Folder-create failure is non-fatal: items just land at
+        // the root instead of in the missing folder. Log + keep
+        // going so a permission edge doesn't take down the whole
+        // import.
+        this.log.warn(
+          'Failed to create AGO folder %s ("%s"): %s',
+          folder.id,
+          folder.title,
+          errorMessage(e),
+        );
+      }
+    }
+
     // Order: services first (so maps can reference them),
     // then maps, then files. Items the report marks as
     // not-importable stay out entirely.
@@ -142,6 +212,16 @@ export class AgoImportService {
         }),
       );
       results.push(result);
+      // Track folder membership for the post-pass that writes
+      // childItemIds back to each created folder.
+      if (
+        result.status === 'created' &&
+        result.portalItemId &&
+        item.ownerFolder &&
+        folderChildIds.has(item.ownerFolder)
+      ) {
+        folderChildIds.get(item.ownerFolder)!.push(result.portalItemId);
+      }
       args.onProgress?.(result, i, ordered.length);
     }
 
@@ -159,6 +239,33 @@ export class AgoImportService {
       });
     }
 
+    // Post-pass: populate each portal folder's childItemIds with
+    // the list of items the importer placed in it. Done in one
+    // update per folder rather than incrementally so a folder
+    // never sits in a half-populated state.
+    for (const [agoFolderId, portalFolderId] of portalFolderByAgoId) {
+      const childIds = folderChildIds.get(agoFolderId) ?? [];
+      try {
+        await this.items.update(args.user, portalFolderId, {
+          data: {
+            ...DEFAULT_FOLDER,
+            childItemIds: childIds,
+          } as unknown as Prisma.InputJsonValue,
+        });
+      } catch (e) {
+        this.log.warn(
+          'Failed to populate childItemIds on portal folder %s: %s',
+          portalFolderId,
+          errorMessage(e),
+        );
+      }
+      // Mirror the count into the report.
+      const reportRow = folderReport.find(
+        (r) => r.agoFolderId === agoFolderId,
+      );
+      if (reportRow) reportRow.childCount = childIds.length;
+    }
+
     const completedAt = new Date();
     return {
       total: args.report.items.length,
@@ -166,6 +273,7 @@ export class AgoImportService {
       failed: results.filter((r) => r.status === 'failed').length,
       skipped: results.filter((r) => r.status === 'skipped').length,
       results,
+      folders: folderReport,
       startedAt: startedAt.toISOString(),
       completedAt: completedAt.toISOString(),
       durationMs: completedAt.getTime() - startedAt.getTime(),
@@ -241,7 +349,7 @@ export class AgoImportService {
       type: 'service',
       title: row.title,
       data,
-      access: 'private',
+      access: agoAccessToPortal(row.access),
     });
     return {
       agoId: row.agoId,
@@ -277,6 +385,7 @@ export class AgoImportService {
       user,
       webMap,
       title: row.title,
+      access: agoAccessToPortal(row.access),
     });
     return {
       agoId: row.agoId,
@@ -313,7 +422,7 @@ export class AgoImportService {
       type: 'file',
       title: row.title,
       data,
-      access: 'private',
+      access: agoAccessToPortal(row.access),
     });
     return {
       agoId: row.agoId,

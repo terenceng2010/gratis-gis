@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  agoAccessToPortal,
   classifyAndRow,
   computeCounts,
   computeWarnings,
@@ -116,5 +117,85 @@ describe('computeWarnings', () => {
     expect(
       warnings.some((w) => /credentials/.test(w.message)),
     ).toBe(false);
+  });
+
+  it('warns the operator about public items so the import is not surprising', () => {
+    const items: DryRunItem[] = [
+      classifyAndRow(
+        sample({ id: 'w1', type: 'Web Map', access: 'public' }),
+        '(root)',
+      ),
+      classifyAndRow(
+        sample({ id: 'w2', type: 'Web Map', access: 'public' }),
+        '(root)',
+      ),
+      classifyAndRow(
+        sample({ id: 'w3', type: 'Web Map', access: 'private' }),
+        '(root)',
+      ),
+    ];
+    const counts = computeCounts(items, 0);
+    const warnings = computeWarnings(items, counts);
+    const pub = warnings.find((w) => /PUBLIC on AGO/.test(w.message));
+    expect(pub).toBeDefined();
+    expect(pub!.severity).toBe('warn');
+    expect(pub!.message).toMatch(/^2 item\(s\) are PUBLIC/);
+  });
+
+  it('emits a folder summary when the source had folders', () => {
+    const items: DryRunItem[] = [
+      classifyAndRow(sample({ id: 'w', type: 'Web Map' }), 'F1'),
+    ];
+    const counts = computeCounts(items, 3);
+    const warnings = computeWarnings(items, counts);
+    const folder = warnings.find((w) => /organized into 3 folder/.test(w.message));
+    expect(folder).toBeDefined();
+    expect(folder!.severity).toBe('info');
+  });
+});
+
+describe('agoAccessToPortal', () => {
+  it('maps each AGO scope onto the portal access enum', () => {
+    expect(agoAccessToPortal('private')).toBe('private');
+    expect(agoAccessToPortal('org')).toBe('org');
+    expect(agoAccessToPortal('public')).toBe('public');
+    // AGO's `shared` (specific groups) collapses to org; group-
+    // level shares ride on the sharing table after import.
+    expect(agoAccessToPortal('shared')).toBe('org');
+  });
+});
+
+describe('classifyAndRow access passthrough', () => {
+  it('carries the AGO access scope onto the row', () => {
+    const row = classifyAndRow(
+      sample({ type: 'Feature Service', access: 'org' }),
+      '(root)',
+    );
+    expect(row.access).toBe('org');
+  });
+
+  it('defaults to private when the AGO listing somehow drops access', () => {
+    const item = sample({ type: 'Feature Service' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (item as any).access;
+    const row = classifyAndRow(item, '(root)');
+    expect(row.access).toBe('private');
+  });
+});
+
+describe('computeCounts byAccess', () => {
+  it('rolls up the access distribution across importable items only', () => {
+    const items: DryRunItem[] = [
+      classifyAndRow(sample({ id: 'a', type: 'Web Map', access: 'public' }), '(root)'),
+      classifyAndRow(sample({ id: 'b', type: 'Web Map', access: 'public' }), '(root)'),
+      classifyAndRow(sample({ id: 'c', type: 'Web Map', access: 'org' }), '(root)'),
+      classifyAndRow(sample({ id: 'd', type: 'Web Map', access: 'private' }), '(root)'),
+      // Skipped item, contributes to itemsToSkip but not byAccess.
+      classifyAndRow(sample({ id: 'e', type: 'StoryMap', access: 'public' }), '(root)'),
+    ];
+    const counts = computeCounts(items, 0);
+    expect(counts.byAccess.public).toBe(2);
+    expect(counts.byAccess.org).toBe(1);
+    expect(counts.byAccess.private).toBe(1);
   });
 });

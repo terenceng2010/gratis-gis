@@ -39,6 +39,7 @@ function reportFrom(items: AgoItem[]): DryRunReport {
       itemsToSkip: 0,
       byTargetType: {},
       byAgoType: {},
+      byAccess: {},
     },
     folders: [],
     items: items.map((it) => classifyAndRow(it, '(root)')),
@@ -48,14 +49,33 @@ function reportFrom(items: AgoItem[]): DryRunReport {
 
 function makeFakeItems(): ItemsService {
   let counter = 0;
-  const created: Array<{ type: string; title: string; data: unknown }> = [];
+  const created: Array<{
+    id: string;
+    type: string;
+    title: string;
+    data: unknown;
+    access?: string;
+  }> = [];
+  const updated: Array<{ id: string; data: unknown }> = [];
   const fake = {
     create: jest.fn(async (_user: AuthUser, input: any) => {
       counter += 1;
-      created.push({ type: input.type, title: input.title, data: input.data });
-      return { id: `portal-item-${counter}` };
+      const id = `portal-item-${counter}`;
+      created.push({
+        id,
+        type: input.type,
+        title: input.title,
+        data: input.data,
+        access: input.access,
+      });
+      return { id };
+    }),
+    update: jest.fn(async (_user: AuthUser, id: string, input: any) => {
+      updated.push({ id, data: input.data });
+      return { id };
     }),
     __created: created,
+    __updated: updated,
   };
   return fake as unknown as ItemsService;
 }
@@ -273,5 +293,160 @@ describe('AgoImportService.run', () => {
     });
     expect(report.failed).toBe(1);
     expect(report.results[0]!.error).toMatch(/Fetching WebMap JSON failed/);
+  });
+
+  it('mirrors AGO sharing scope onto created portal items', async () => {
+    const items = [
+      sample({
+        id: 'svc-priv',
+        type: 'Feature Service',
+        title: 'Private svc',
+        access: 'private',
+        url: 'https://server/arcgis/rest/services/Priv/FeatureServer',
+      }),
+      sample({
+        id: 'svc-org',
+        type: 'Feature Service',
+        title: 'Org svc',
+        access: 'org',
+        url: 'https://server/arcgis/rest/services/Org/FeatureServer',
+      }),
+      sample({
+        id: 'svc-pub',
+        type: 'Feature Service',
+        title: 'Public svc',
+        access: 'public',
+        url: 'https://server/arcgis/rest/services/Pub/FeatureServer',
+      }),
+      // AGO's `shared` (specific groups) value has no items-table
+      // equivalent on the portal; the importer collapses it to `org`
+      // and the operator can tighten via the per-share UI.
+      sample({
+        id: 'svc-shared',
+        type: 'Feature Service',
+        title: 'Shared svc',
+        access: 'shared',
+        url: 'https://server/arcgis/rest/services/Sh/FeatureServer',
+      }),
+    ];
+    const fakeItems = makeFakeItems();
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report: reportFrom(items),
+    });
+    const created = (fakeItems as any).__created as Array<{
+      title: string;
+      access: string;
+    }>;
+    expect(created.find((c) => c.title === 'Private svc')!.access).toBe(
+      'private',
+    );
+    expect(created.find((c) => c.title === 'Org svc')!.access).toBe('org');
+    expect(created.find((c) => c.title === 'Public svc')!.access).toBe(
+      'public',
+    );
+    expect(created.find((c) => c.title === 'Shared svc')!.access).toBe('org');
+  });
+
+  it('pre-creates portal folders and populates childItemIds after items land', async () => {
+    const items = [
+      sample({
+        id: 'svc-1',
+        type: 'Feature Service',
+        title: 'In Field Data',
+        ownerFolder: 'folder-1',
+        url: 'https://server/arcgis/rest/services/A/FeatureServer',
+      }),
+      sample({
+        id: 'svc-2',
+        type: 'Feature Service',
+        title: 'Also in Field Data',
+        ownerFolder: 'folder-1',
+        url: 'https://server/arcgis/rest/services/B/FeatureServer',
+      }),
+      sample({
+        id: 'svc-3',
+        type: 'Feature Service',
+        title: 'At root',
+        url: 'https://server/arcgis/rest/services/C/FeatureServer',
+      }),
+    ];
+    const report = reportFrom(items);
+    // Inject the folder + the per-row folder ids the dry-run would
+    // have captured (classifyAndRow's input goes through the
+    // AgoClient.walkUserContent path which passes the folder, but
+    // the spec helper sample() lets us set ownerFolder directly).
+    report.folders = [
+      { id: 'folder-1', title: 'Field Data' },
+    ];
+    report.counts.foldersTotal = 1;
+    const fakeItems = makeFakeItems();
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    const result = await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report,
+    });
+    expect(result.created).toBe(3);
+    expect(result.folders).toHaveLength(1);
+    const folder = result.folders[0]!;
+    expect(folder.agoFolderId).toBe('folder-1');
+    expect(folder.title).toBe('Field Data');
+    expect(folder.childCount).toBe(2);
+
+    // The folder item was created first (so child items can
+    // reference its id) and then updated with childItemIds.
+    const created = (fakeItems as any).__created as Array<{
+      id: string;
+      type: string;
+      title: string;
+    }>;
+    const folderItem = created.find((c) => c.type === 'folder')!;
+    expect(folderItem.title).toBe('Field Data');
+    const updated = (fakeItems as any).__updated as Array<{
+      id: string;
+      data: { childItemIds: string[] };
+    }>;
+    const folderUpdate = updated.find((u) => u.id === folderItem.id)!;
+    expect(folderUpdate.data.childItemIds).toHaveLength(2);
+
+    // The item at the AGO root did NOT get pulled into the folder.
+    const rootItem = created.find((c) => c.title === 'At root')!;
+    expect(folderUpdate.data.childItemIds).not.toContain(rootItem.id);
+  });
+
+  it('does not create a portal folder when the AGO folder has no importable items', async () => {
+    const items = [
+      sample({
+        id: 'dash',
+        type: 'Dashboard', // skipped by classifier
+        title: 'Dashboard in empty folder',
+        ownerFolder: 'folder-empty',
+      }),
+    ];
+    const report = reportFrom(items);
+    // Mark the row as skipped (matches what dry-run does for
+    // unsupported types).
+    for (const row of report.items) {
+      row.willImport = false;
+      row.targetType = null;
+      row.reason = 'Unsupported';
+    }
+    report.folders = [{ id: 'folder-empty', title: 'Just Dashboards' }];
+    const fakeItems = makeFakeItems();
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    const result = await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report,
+    });
+    expect(result.folders).toHaveLength(0);
+    const created = (fakeItems as any).__created as Array<{ type: string }>;
+    expect(created.find((c) => c.type === 'folder')).toBeUndefined();
   });
 });
