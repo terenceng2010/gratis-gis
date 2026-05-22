@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Archive,
+  ArrowRightLeft,
   Bell,
   ClipboardList,
   Compass,
@@ -286,6 +287,18 @@ function NavList({
             onNavigate={cb}
           >
             Field queues
+          </NavLink>
+          {/* Migrations sits at the bottom of Admin on purpose: it is
+              a real first-class admin task but a one-shot tool, not
+              part of daily ops. Bidirectional name leaves room for
+              "to AGO" / "to PostGIS" / etc. siblings on the same
+              landing page. */}
+          <NavLink
+            href="/admin/migrations"
+            icon={<ArrowRightLeft className="h-4 w-4" />}
+            onNavigate={cb}
+          >
+            Migrations
           </NavLink>
         </>
       ) : null}
