@@ -36,8 +36,8 @@
  * runs to completion or the user closes the tab.
  */
 
-import JSZip from 'jszip';
-import * as XLSX from 'xlsx';
+import { ZipWriter } from './zip-writer';
+import { writeXlsx, type XlsxSheet } from './xlsx';
 
 export interface BundleExportOptions {
   /** Root data_layer item id. */
@@ -397,33 +397,29 @@ export async function exportBundle(opts: BundleExportOptions): Promise<{
     totalFeatures += features.length;
   }
 
-  // Build the workbook: one sheet per layer.
+  // Build the workbook: one sheet per layer. The vendored XLSX
+  // writer (#51) takes an array of { name, rows } sheets and
+  // emits a Blob directly.
   progress('Building data.xlsx…');
-  const wb = XLSX.utils.book_new();
-  for (const layer of plan) {
+  const xlsxSheets: XlsxSheet[] = plan.map((layer) => {
     const features = featuresByLayer.get(layer.id) ?? [];
     const rows = buildSheetRows(features, layer.fields ?? []);
-    const sheet = XLSX.utils.aoa_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, sheet, sheetName(layer));
-  }
-  const xlsxBytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    return { name: sheetName(layer), rows };
+  });
+  const xlsxBlob = await writeXlsx(xlsxSheets);
 
   // Build the ZIP.  Layout: <rootName>/data.xlsx + optional
-  // attachments folder per layer.
-  const zip = new JSZip();
+  // attachments folder per layer. ZIP itself has no real folder
+  // type; entries with "/" in the name render as folders in
+  // Explorer / Finder. ZipWriter (vendored, #50) takes
+  // slash-separated paths directly so we don't need a folder
+  // helper.
+  const zip = new ZipWriter();
   const rootName = sanitizeSegment(opts.filename);
-  const rootFolder = zip.folder(rootName);
-  if (!rootFolder) {
-    throw new Error('ZIP root folder creation failed');
-  }
-  rootFolder.file('data.xlsx', xlsxBytes);
+  await zip.file(`${rootName}/data.xlsx`, xlsxBlob);
 
   let attachmentCount = 0;
   if (opts.includeAttachments) {
-    const attachmentsFolder = rootFolder.folder('attachments');
-    if (!attachmentsFolder) {
-      throw new Error('attachments folder creation failed');
-    }
     // For each layer, for each feature, fetch attachments + bundle.
     // Errors fetching one attachment don't fail the whole bundle:
     // they're logged + counted as a soft warning so a single
@@ -460,8 +456,11 @@ export async function exportBundle(opts: BundleExportOptions): Promise<{
 
         // Optional split-by-field: drop attachments under a subfolder
         // named for the field's value.  Files for that feature land
-        // at <splitValue>/<prefix>_ATT<id>_<original>.
-        let folder = attachmentsFolder;
+        // at <splitValue>/<prefix>_ATT<id>_<original>. Folder
+        // structure inside the archive is purely path-based now
+        // (#50) since ZipWriter is folder-less; the resulting
+        // archive layout is identical to what JSZip emitted.
+        let attachmentsPath = `${rootName}/attachments`;
         if (
           opts.attachmentSplitField &&
           f.properties &&
@@ -472,10 +471,7 @@ export async function exportBundle(opts: BundleExportOptions): Promise<{
           ];
           if (typeof raw === 'string' || typeof raw === 'number') {
             const sub = sanitizeSegment(String(raw));
-            if (sub) {
-              const subFolder = attachmentsFolder.folder(sub);
-              if (subFolder) folder = subFolder;
-            }
+            if (sub) attachmentsPath = `${attachmentsPath}/${sub}`;
           }
         }
 
@@ -491,7 +487,7 @@ export async function exportBundle(opts: BundleExportOptions): Promise<{
               att.fileName.replace(/\s+/g, ''),
             );
             const finalName = `${prefix}_ATT${att.id.slice(0, 8)}_${safeName}`;
-            folder.file(finalName, blob);
+            await zip.file(`${attachmentsPath}/${finalName}`, blob);
             attachmentCount += 1;
           } catch (err) {
             console.warn('[bundle] attachment error', att.id, err);
@@ -502,11 +498,7 @@ export async function exportBundle(opts: BundleExportOptions): Promise<{
   }
 
   progress('Compressing…');
-  const zipBlob = await zip.generateAsync({
-    type: 'blob',
-    compression: 'DEFLATE',
-    compressionOptions: { level: 6 },
-  });
+  const zipBlob = await zip.blob();
 
   downloadBlob(zipBlob, `${rootName}.zip`);
 

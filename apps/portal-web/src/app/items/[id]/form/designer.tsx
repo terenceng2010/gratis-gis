@@ -516,22 +516,18 @@ export function FormDesigner({ itemId, initial, canEdit }: Props) {
   async function importXlsFormFile(file: File) {
     let workbook: XlsFormWorkbook;
     try {
-      // Dynamic import keeps the ~600KB SheetJS bundle out of the
-      // initial designer chunk -- only authors who actually import
-      // an XLSForm pay for it.
-      const XLSX = await import('xlsx');
+      // Dynamic import keeps the vendored OOXML reader out of
+      // the initial designer chunk -- only authors who actually
+      // import an XLSForm pay for it (#51).
+      const { readXlsx } = await import('@/lib/xlsx');
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array' });
+      const wb = await readXlsx(buf);
       const sheetTo = (name: string): Record<string, unknown>[] => {
-        const ws = wb.Sheets[name];
-        if (!ws) return [];
-        // defval: '' so blank cells come through as empty strings
-        // rather than missing keys -- makes the translator's
-        // optional-field handling simpler.
-        return XLSX.utils.sheet_to_json(ws, { defval: '' }) as Record<
-          string,
-          unknown
-        >[];
+        if (!wb.sheetNames.includes(name)) return [];
+        // Blank cells come through as empty strings already (the
+        // reader pads short rows on the way out), which keeps the
+        // translator's optional-field handling simple.
+        return wb.sheetToObjects(name);
       };
       workbook = {
         survey: sheetTo('survey'),

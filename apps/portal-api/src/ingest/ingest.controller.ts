@@ -77,6 +77,37 @@ export class IngestController {
   }
 
   /**
+   * Parse an uploaded spatial file and return the full GeoJSON
+   * FeatureCollection (#52). Backs the in-browser unified spatial
+   * importer's shapefile branch: we used to bundle `shpjs` on the
+   * client to parse zipped shapefiles, but GDAL already lives on
+   * the server for the regular ingest path and produces better
+   * output (real SRS reprojection, multi-layer flattening, field
+   * type inference). Server-side parse + return is a small
+   * round-trip cost compared to shipping ~120 KB of shp + dbf
+   * parsing code into every page that imports anything.
+   *
+   * Same auth + file-size posture as /ingest/probe (admin-or-up,
+   * 1 GB cap). Driver / SRS info is returned alongside the
+   * GeoJSON so the client can surface a "Reprojected from EPSG:X"
+   * note when the source was anything other than WGS84.
+   */
+  @Post('ingest/to-geojson')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 1024 * 1024 * 1024 },
+    }),
+  )
+  async toGeoJson(@UploadedFile() file: Express.Multer.File | undefined) {
+    if (!file) {
+      throw new BadRequestException(
+        'No file uploaded; field name must be "file".',
+      );
+    }
+    return this.ingest.fileToGeoJson(file.buffer, file.originalname);
+  }
+
+  /**
    * Stage an upload for later ingest AND return the schema preview.
    * Combines /ingest/probe + a server-side hold so the wizard can do
    * one upload, get the schema, let the user edit details, and then

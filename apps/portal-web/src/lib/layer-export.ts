@@ -25,7 +25,7 @@
  * proper geometry handling when it lands.
  */
 
-import * as XLSX from 'xlsx';
+import { writeXlsx } from './xlsx';
 
 export interface ExportFeature {
   id?: string;
@@ -220,30 +220,40 @@ export function exportFeaturesToCsv(
 }
 
 /** Build an XLSX file from features and trigger a download. */
-export function exportFeaturesToXlsx(
+export async function exportFeaturesToXlsx(
   features: ExportFeature[],
   opts: ExportOptions,
-): void {
+): Promise<void> {
   const { headers, data } = buildRows(features, opts);
-  const sheetData = [headers, ...data];
-  const ws = XLSX.utils.aoa_to_sheet(sheetData);
-  const wb = XLSX.utils.book_new();
-  // Sheet names are limited to 31 chars by the XLSX spec.  Truncate
+  // Sheet names are limited to 31 chars by the XLSX spec. Truncate
   // gracefully so a 50-char layer name doesn't blow up the writer.
-  const sheetName = opts.filename.slice(0, 31) || 'Sheet1';
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  const blob = new Blob([XLSX.write(wb, { type: 'array', bookType: 'xlsx' })], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  });
+  const sheetName = sanitizeSheetName(opts.filename.slice(0, 31)) || 'Sheet1';
+  const blob = await writeXlsx([
+    { name: sheetName, rows: [headers, ...data] },
+  ]);
   downloadBlob(blob, `${opts.filename}.xlsx`);
 }
 
-/** Dispatch to the right writer based on format. */
+/** Excel reserves a handful of characters in sheet names. The
+ *  vendored writer (#51) is strict about this where SheetJS was
+ *  lenient -- strip the forbidden chars rather than emitting an
+ *  invalid file that Excel would refuse to open. */
+function sanitizeSheetName(name: string): string {
+  return name.replace(/[\\/?*[\]:]/g, '_');
+}
+
+/** Dispatch to the right writer based on format. Returns a
+ *  promise because the XLSX writer is async (#51); CSV completes
+ *  synchronously inside the same call so callers that fire-and-
+ *  forget can still ignore the promise. */
 export function exportFeatures(
   features: ExportFeature[],
   format: ExportFormat,
   opts: ExportOptions,
-): void {
-  if (format === 'csv') exportFeaturesToCsv(features, opts);
-  else exportFeaturesToXlsx(features, opts);
+): Promise<void> {
+  if (format === 'csv') {
+    exportFeaturesToCsv(features, opts);
+    return Promise.resolve();
+  }
+  return exportFeaturesToXlsx(features, opts);
 }

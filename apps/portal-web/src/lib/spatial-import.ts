@@ -169,47 +169,58 @@ async function parseKml(xml: string): Promise<GeoJSON.FeatureCollection> {
 }
 
 async function parseKmz(file: File): Promise<GeoJSON.FeatureCollection> {
-  const { default: JSZip } = await import('jszip');
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  let entry = zip.file('doc.kml');
-  if (!entry) {
-    const kmls = Object.values(zip.files).filter(
-      (f) => !f.dir && f.name.toLowerCase().endsWith('.kml'),
-    );
-    entry = kmls[0] ?? null;
-  }
-  if (!entry) throw new Error('KMZ archive has no .kml entry inside.');
-  return parseKml(await entry.async('string'));
+  // KMZ parsing moved server-side along with shapefile (#50). The
+  // browser used to bundle JSZip to extract the .kml entry from
+  // the KMZ archive; GDAL is already in portal-api for the
+  // streaming ingest path and handles KMZ natively as an OGR
+  // driver. Same /api/ingest/to-geojson endpoint as the
+  // shapefile branch -- the server picks the right driver based
+  // on the file's contents.
+  return uploadAndParseSpatialFile(file);
 }
 
 async function parseShapefileZip(file: File): Promise<GeoJSON.FeatureCollection> {
-  // Sniff the zip to distinguish "this is a shapefile zip" from "this
-  // is a zipped GDB that ended in .zip without .gdb". That lets us
-  // give the latter its own helpful message.
-  const { default: JSZip } = await import('jszip');
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const entries = Object.values(zip.files);
-  if (entries.some((e) => /\.gdb\//i.test(e.name))) {
-    throw new Error(
-      'This zip looks like a File Geodatabase (.gdb). FGDB import needs server-side GDAL, which is not yet wired up. Export to Shapefile or GeoJSON from ArcGIS Pro / QGIS for now.',
-    );
-  }
-  if (!entries.some((e) => /\.shp$/i.test(e.name))) {
-    throw new Error(
-      'No .shp file inside that zip. A shapefile zip needs at least the .shp, .dbf, and .prj components together.',
-    );
-  }
+  // Shapefile parsing moved server-side (#52). The browser used to
+  // run `shpjs` (a 120+ KB shp/dbf parser); GDAL is already in
+  // portal-api for the streaming ingest path and produces better
+  // output (proper SRS reprojection, multi-layer flattening, real
+  // field-type inference).
+  return uploadAndParseSpatialFile(file);
+}
 
-  const { default: shp } = await import('shpjs');
-  const result = await shp(await file.arrayBuffer());
-  // shpjs returns either a single FeatureCollection (one .shp in the
-  // zip) or an array (multiple .shp layers). Flatten to one collection;
-  // a future v2.5 feature could let the user keep them separate.
-  if (Array.isArray(result)) {
-    return {
-      type: 'FeatureCollection',
-      features: result.flatMap((fc) => fc.features ?? []),
-    };
+/**
+ * Shared helper for the formats that bounce through the server's
+ * GDAL-backed parser (#50, #52). The portal-web BFF injects the
+ * Keycloak access token; portal-api gates the endpoint with
+ * AdminGuard the same way as /ingest/probe + /ingest/stage. The
+ * upstream error message is forwarded as-is so GDAL hints
+ * ("missing .prj", "unknown driver", etc.) reach the user
+ * instead of a generic "import failed".
+ */
+async function uploadAndParseSpatialFile(
+  file: File,
+): Promise<GeoJSON.FeatureCollection> {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const resp = await fetch('/api/portal/ingest/to-geojson', {
+    method: 'POST',
+    body: fd,
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    let msg = body;
+    try {
+      const parsed = JSON.parse(body) as { message?: string | string[] };
+      msg = Array.isArray(parsed.message)
+        ? parsed.message.join('; ')
+        : parsed.message ?? body;
+    } catch {
+      /* not JSON; use raw body */
+    }
+    throw new Error(msg || `Server returned HTTP ${resp.status}.`);
   }
-  return result as GeoJSON.FeatureCollection;
+  const out = (await resp.json()) as {
+    geojson: GeoJSON.FeatureCollection;
+  };
+  return out.geojson;
 }

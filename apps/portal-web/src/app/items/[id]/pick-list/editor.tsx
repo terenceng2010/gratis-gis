@@ -16,7 +16,7 @@ import {
   Save,
   Trash2,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { readXlsx } from '@/lib/xlsx';
 import type {
   PickListData,
   PickListEntry,
@@ -158,20 +158,20 @@ export function PickListEditor({ itemId, initial, canEdit }: Props) {
     setImporting(true);
     try {
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array' });
-      const firstSheet = wb.SheetNames[0];
+      const wb = await readXlsx(buf);
+      const firstSheet = wb.sheetNames[0];
       if (!firstSheet) {
         setError('The .xlsx has no sheets.');
         return;
       }
-      const sheet = wb.Sheets[firstSheet]!;
-      // header:1 returns a raw array-of-arrays; we do our own header
-      // resolution so both CSV and XLSX paths share the same parser.
-      const matrix = XLSX.utils.sheet_to_json<string[]>(sheet, {
-        header: 1,
-        blankrows: false,
-        defval: '',
-      });
+      // The vendored reader hands back a raw matrix already (#51);
+      // we do our own header resolution so both CSV and XLSX paths
+      // share the same parser. Drop entirely-blank rows here -- the
+      // reader emits them as empty arrays for layout reasons but
+      // the parser downstream expects no leading blanks.
+      const matrix = wb
+        .sheetToMatrix(firstSheet)
+        .filter((row) => row.some((cell) => cell !== ''));
       const parsed = rowsToEntries(matrix);
       if (parsed.length === 0) {
         setError(
