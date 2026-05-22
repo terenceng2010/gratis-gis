@@ -16,7 +16,11 @@ import { ItemsService } from '../items/items.service.js';
 import { SharingService } from '../items/sharing.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
-import { isPrivateOrLoopbackHost } from '../common/net-guards.js';
+import {
+  assertSafeOutboundUrl,
+  isPrivateOrLoopbackHost,
+  UnsafeOutboundUrlError,
+} from '../common/net-guards.js';
 
 /**
  * Runtime engine for the geocoding_service item type (#74).
@@ -638,7 +642,17 @@ export class GeocodingService {
     }
     const base = parsed.toString().replace(/\/+$/, '');
     const metaUrl = `${base}?f=json`;
-    const res = await fetch(metaUrl, {
+    // DNS-rebinding defense in addition to the hostname check above.
+    let safeMetaUrl: URL;
+    try {
+      safeMetaUrl = await assertSafeOutboundUrl(metaUrl);
+    } catch (err) {
+      if (err instanceof UnsafeOutboundUrlError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
+    const res = await fetch(safeMetaUrl, {
       headers: { 'user-agent': 'GratisGIS/geocoder-probe' },
     });
     if (!res.ok) {

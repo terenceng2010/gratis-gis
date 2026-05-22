@@ -424,6 +424,22 @@ export class StorageService implements OnModuleInit {
     };
   }
 
+  /**
+   * Stream an object to a local file path. Used by the tile-layer
+   * conversion pipeline so the conversion doesn't have to fetch a
+   * user-supplied URL (which would be an SSRF surface). The caller
+   * provides the storage key; we read via the S3 client and pipe
+   * the body to disk.
+   *
+   * Errors propagate. Caller owns the destination file lifecycle.
+   */
+  async streamObjectToDisk(key: string, destPath: string): Promise<void> {
+    const { createWriteStream } = await import('node:fs');
+    const { pipeline } = await import('node:stream/promises');
+    const obj = await this.streamObject(key);
+    await pipeline(obj.body, createWriteStream(destPath));
+  }
+
   /** Delete an object by key. Idempotent. Used when a feature
    *  attachment row is removed so we don't leak bytes in MinIO. */
   async deleteObject(key: string): Promise<void> {

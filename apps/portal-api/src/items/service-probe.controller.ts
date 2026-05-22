@@ -126,7 +126,9 @@ export class ServiceProbeController {
     // SSRF guard: refuse private / loopback / single-label hosts and
     // re-check the resolved IP to defeat DNS rebinding.  Run on the
     // pre-credential URL the user provided so the error message
-    // doesn't leak the credential.
+    // doesn't leak the credential, then re-validate finalUrl (same
+    // host, but capturing the URL object makes the dataflow into
+    // fetch explicit).
     try {
       await assertSafeOutboundUrl(dto.url);
     } catch (err) {
@@ -135,10 +137,11 @@ export class ServiceProbeController {
       }
       throw err;
     }
+    const safeFinalUrl = await assertSafeOutboundUrl(finalUrl);
 
     let upstream: Response;
     try {
-      upstream = await fetch(finalUrl, {
+      upstream = await fetch(safeFinalUrl, {
         method: 'GET',
         headers,
       });

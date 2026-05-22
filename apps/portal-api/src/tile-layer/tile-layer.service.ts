@@ -142,7 +142,16 @@ export class TileLayerService {
     // uploads) come back with format='pmtiles' and outputPath=''.
     let conversion: Awaited<ReturnType<typeof convertUpload>> | null = null;
     try {
-      conversion = await convertUpload(input.storageUrl, input.fileName);
+      conversion = await convertUpload(
+        // Stream the source straight from MinIO via the S3 client.
+        // Avoids fetching a user-supplied URL (the prior storageUrl
+        // input was an SSRF surface) and side-steps the unnecessary
+        // round-trip through the public-base hostname when MINIO_
+        // PUBLIC_BASE is a CDN-fronted URL.
+        (destPath) =>
+          this.storage.streamObjectToDisk(input.storageKey, destPath),
+        input.fileName,
+      );
     } catch (err) {
       // convertUpload owns its own temp-dir lifecycle: any workdir
       // it created before throwing is its own to clean up. We don't

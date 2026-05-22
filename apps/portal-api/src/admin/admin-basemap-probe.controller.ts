@@ -13,7 +13,11 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { XMLParser } from 'fast-xml-parser';
 
 import { AdminGuard } from './admin.guard.js';
-import { isPrivateOrLoopbackHost } from '../common/net-guards.js';
+import {
+  assertSafeOutboundUrl,
+  isPrivateOrLoopbackHost,
+  UnsafeOutboundUrlError,
+} from '../common/net-guards.js';
 
 /**
  * Basemap-URL probe (#144). The admin pastes a URL into the
@@ -786,7 +790,14 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const res = await fetch(url, {
+    // Route every probe fetch through the SSRF guard (DNS-resolution
+    // + private-range block). The endpoint-level check at line ~99
+    // catches obvious internal URLs early; this catches the DNS-
+    // rebinding case where a public hostname resolves to an internal
+    // IP. Throws UnsafeOutboundUrlError on a private resolution; we
+    // surface it as a 400 so the admin sees a useful message.
+    const safe = await assertSafeOutboundUrl(url);
+    const res = await fetch(safe, {
       signal: ctrl.signal,
       // Force a small user-agent so upstream logs see "GratisGIS"
       // instead of "node". Some services (looking at you, ArcGIS
@@ -795,6 +806,9 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
     });
     return res;
   } catch (err) {
+    if (err instanceof UnsafeOutboundUrlError) {
+      throw new BadRequestException(err.message);
+    }
     if (err instanceof Error && err.name === 'AbortError') {
       throw new HttpException(
         'Probe timed out (10s). Check the URL or try again.',

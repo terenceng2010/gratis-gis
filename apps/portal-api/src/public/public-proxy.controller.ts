@@ -154,8 +154,9 @@ export class PublicProxyController {
     // url points at an internal host, the entire internet could
     // read internal responses through that item id.  Hard-refuse
     // before fetching.
+    let safeTarget: URL;
     try {
-      await assertSafeOutboundUrl(target);
+      safeTarget = await assertSafeOutboundUrl(target);
     } catch (err) {
       if (err instanceof UnsafeOutboundUrlError) {
         res.status(400).json({ message: err.message });
@@ -166,7 +167,7 @@ export class PublicProxyController {
 
     let upstream: Response | globalThis.Response;
     try {
-      upstream = await fetch(target, { method: 'GET', headers });
+      upstream = await fetch(safeTarget, { method: 'GET', headers });
     } catch (err) {
       this.log.warn(
         `public proxy fetch failed for item=${itemId} target=${maskCredential(

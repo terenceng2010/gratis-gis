@@ -158,8 +158,9 @@ export class ItemProxyController {
     // SSRF guard.  An item with a malicious data.url that pointed
     // at an internal host would otherwise be a free SSRF reflector
     // for any user with read access to that item.
+    let safeTarget: URL;
     try {
-      await assertSafeOutboundUrl(target);
+      safeTarget = await assertSafeOutboundUrl(target);
     } catch (err) {
       if (err instanceof UnsafeOutboundUrlError) {
         res.status(400).json({ message: err.message });
@@ -170,7 +171,7 @@ export class ItemProxyController {
 
     let upstream: Response | globalThis.Response;
     try {
-      upstream = await fetch(target, { method: 'GET', headers });
+      upstream = await fetch(safeTarget, { method: 'GET', headers });
     } catch (err) {
       this.log.warn(
         `proxy fetch failed for item=${itemId} target=${maskCredential(target)}: ${

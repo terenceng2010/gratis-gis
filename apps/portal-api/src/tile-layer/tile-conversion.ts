@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
 
 import type { TileLayerOriginalFormat } from '@gratis-gis/shared-types';
 
@@ -172,8 +169,17 @@ export function detectOriginalFormat(
  * case is a no-op empty directory so the caller's cleanup
  * branch can call rm uniformly.
  */
+/**
+ * Downloader callback: write the upload's bytes to `destPath`.
+ * The caller (tile-layer.service) wires this to StorageService's
+ * direct S3 stream so the converter never touches a user-supplied
+ * URL.  This removes the SSRF surface that the old `downloadTo`
+ * helper had to defend against.
+ */
+export type TileSourceDownloader = (destPath: string) => Promise<void>;
+
 export async function convertUpload(
-  sourceUrl: string,
+  download: TileSourceDownloader,
   fileName: string,
 ): Promise<ConversionResult> {
   const originalFormat = detectOriginalFormat(fileName);
@@ -183,15 +189,14 @@ export async function convertUpload(
   // of this function handles pre-tiled inputs (PMTiles / MBTiles
   // / XYZ-zip).
   if (isRawRasterFormat(originalFormat)) {
-    return runCogConversion(sourceUrl, fileName, originalFormat, workDir);
+    return runCogConversion(download, fileName, originalFormat, workDir);
   }
 
   // Pass-through path. We don't download the file -- the bytes
-  // are already in MinIO at sourceUrl, and finalize() will read
-  // the header from there with range requests. Returning a
-  // dummy output path that doesn't exist would confuse the
-  // caller; signal pass-through by returning `outputPath === ''`
-  // and the caller decides what to do.
+  // are already in MinIO, and finalize() will read the header from
+  // there with range requests. Returning a dummy output path that
+  // doesn't exist would confuse the caller; signal pass-through by
+  // returning `outputPath === ''` and the caller decides what to do.
   if (originalFormat === 'pmtiles') {
     return {
       format: 'pmtiles',
@@ -208,7 +213,7 @@ export async function convertUpload(
   // Download the upload to a local file. pmtiles CLI needs a
   // local input path; it doesn't read HTTP URLs.
   const inputPath = join(workDir, sanitizeFileName(fileName));
-  await downloadTo(sourceUrl, inputPath);
+  await download(inputPath);
 
   let outputPath = join(workDir, 'out.pmtiles');
   if (originalFormat === 'xyz-zip') {
@@ -288,7 +293,7 @@ export const convertToPmtiles = convertUpload;
  * than trying to guess from band structure.
  */
 async function runCogConversion(
-  sourceUrl: string,
+  download: TileSourceDownloader,
   fileName: string,
   originalFormat: TileLayerOriginalFormat,
   workDir: string,
@@ -296,7 +301,7 @@ async function runCogConversion(
   const start = Date.now();
 
   const inputPath = join(workDir, sanitizeFileName(fileName));
-  await downloadTo(sourceUrl, inputPath);
+  await download(inputPath);
 
   const outputPath = join(workDir, 'out.tif');
 
@@ -425,25 +430,6 @@ export async function cleanupConversion(workDir: string): Promise<void> {
 function sanitizeFileName(name: string): string {
   return (
     name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200) || 'upload.bin'
-  );
-}
-
-/**
- * Stream a remote URL to a local file. node:fetch's Response.body
- * is a web ReadableStream; pipe it through Readable.fromWeb to
- * land bytes on disk without holding the file in memory.
- */
-async function downloadTo(url: string, dest: string): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Download failed (HTTP ${res.status}) from ${url}`);
-  }
-  if (!res.body) {
-    throw new Error(`Download returned no body from ${url}`);
-  }
-  await pipeline(
-    Readable.fromWeb(res.body as unknown as import('stream/web').ReadableStream),
-    createWriteStream(dest),
   );
 }
 
