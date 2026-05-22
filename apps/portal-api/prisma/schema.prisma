@@ -1127,3 +1127,41 @@ model ImportJob {
   @@map("import_job")
 }
 
+/// One registered OAuth app per AGO portal the operator wants to
+/// import from. AGO requires apps to be registered per-portal
+/// (Add-ins UI or POST /sharing/rest/oauth2/registerApp). We store
+/// the resulting client_id here so admins manage AGO connections
+/// from the portal UI instead of editing an env file, and so the
+/// portal supports multiple AGO orgs side by side.
+///
+/// orgHost is unique because a single AGO host registers a single
+/// "GratisGIS Importer" app; if the operator wants to swap the
+/// client_id they edit the existing row rather than juggling
+/// duplicates.
+///
+/// Per-org client_id is not a secret on AGO's implicit-grant flow
+/// (it's embedded in the authorize URL) so we store it plain. AGO
+/// app secrets live on the AGO side, not here.
+model AgoOauthConnection {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// Canonical org URL, e.g. https://palavido.maps.arcgis.com. Same
+  /// shape the importer's URL normalizer outputs.
+  orgUrl      String   @map("org_url")
+  /// Host portion of orgUrl, e.g. palavido.maps.arcgis.com. Unique
+  /// so the OAuth start path can look up a connection by host
+  /// without scanning every row.
+  orgHost     String   @unique @map("org_host")
+  /// Human-readable label admins see in the connections list and
+  /// the importer's connection picker. Defaults to orgHost when
+  /// the user doesn't supply one explicitly.
+  displayName String   @map("display_name")
+  /// AGO OAuth client id. Required.
+  clientId    String   @map("client_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  /// User who registered the connection. Informational; not used
+  /// for authz today (any org admin can edit any connection).
+  createdById String   @map("created_by_id") @db.Uuid
+
+  @@map("ago_oauth_connection")
+}
+

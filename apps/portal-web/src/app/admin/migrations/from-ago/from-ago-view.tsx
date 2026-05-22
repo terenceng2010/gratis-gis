@@ -2,13 +2,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertTriangle,
   CheckCircle2,
-  CloudDownload,
   Loader2,
   LogIn,
   LogOut,
+  Plus,
   Search,
   Upload,
 } from 'lucide-react';
@@ -17,6 +18,16 @@ import {
   SHARING_BASE_STORAGE_KEY,
   STATE_STORAGE_KEY,
 } from './oauth-storage-keys';
+
+interface AgoConnection {
+  id: string;
+  orgUrl: string;
+  orgHost: string;
+  displayName: string;
+  clientId: string;
+  createdAt: string;
+  createdById: string;
+}
 
 interface DryRunItem {
   agoId: string;
@@ -78,29 +89,16 @@ interface ImportReport {
 }
 
 interface SessionState {
-  /** AGO access token captured from the OAuth popup. */
   token: string;
-  /** Canonical /sharing/rest base the importer should hit. */
   sharingRestBase: string;
-  /** Original org URL the user pasted -- shown in the UI so
-   *  they can confirm they signed into the right portal. */
-  orgUrl: string;
-  /** Wall-clock ms when the token expires. Computed from the
-   *  popup callback's `expiresIn` so we don't trust client
-   *  clocks drifting between the popup and this page. */
+  connectionDisplayName: string;
   expiresAtMs: number;
 }
 
-export function FromAgoView({
-  oauthConfig,
-}: {
-  oauthConfig: {
-    configured: boolean;
-    clientId: string | null;
-    reason: string | null;
-  };
-}) {
-  const [orgUrl, setOrgUrl] = useState('');
+export function FromAgoView() {
+  const [conns, setConns] = useState<AgoConnection[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string>('');
   const [session, setSession] = useState<SessionState | null>(null);
   const [preview, setPreview] = useState<DryRunReport | null>(null);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
@@ -108,10 +106,29 @@ export function FromAgoView({
   const [error, setError] = useState<string | null>(null);
   const popupRef = useRef<Window | null>(null);
 
-  // Listen for the token-postMessage from the OAuth popup. The
-  // popup is a same-origin page (we control it), so we still
-  // require the origin to match ours to keep an extension /
-  // sibling iframe from spoofing.
+  // Load the connections list once on mount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const resp = await fetch(
+          '/api/portal/admin/import-ago/connections',
+        );
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status} ${await resp.text()}`);
+        }
+        const list = (await resp.json()) as AgoConnection[];
+        setConns(list);
+        if (list.length > 0 && !selectedId) setSelectedId(list[0]!.id);
+      } catch (e) {
+        setLoadError((e as Error).message);
+      }
+    })();
+    // selectedId intentionally omitted from deps: we only auto-pick
+    // on first load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // OAuth popup token handoff.
   useEffect(() => {
     function onMessage(event: MessageEvent<unknown>) {
       if (event.origin !== window.location.origin) return;
@@ -130,24 +147,20 @@ export function FromAgoView({
         setBusy(null);
         return;
       }
-      // Reconstruct the sharingRestBase the popup used. We saved
-      // it in sessionStorage alongside the state when we opened
-      // the popup so the opener never has to re-derive it.
       const sharingRestBase =
         window.sessionStorage.getItem(SHARING_BASE_STORAGE_KEY) ?? '';
-      const orgUrlAtAuth =
+      const displayName =
         window.sessionStorage.getItem(ORG_URL_STORAGE_KEY) ?? '';
       const expiresIn = Number(data.expiresIn) || 3600;
       const receivedAt = Number(data.receivedAt) || Date.now();
       setSession({
         token: data.token,
         sharingRestBase,
-        orgUrl: orgUrlAtAuth,
+        connectionDisplayName: displayName,
         expiresAtMs: receivedAt + expiresIn * 1000,
       });
       setBusy(null);
       setError(null);
-      // Clean up the popup if it didn't close itself.
       if (popupRef.current && !popupRef.current.closed) {
         popupRef.current.close();
       }
@@ -158,9 +171,8 @@ export function FromAgoView({
   }, []);
 
   async function signIn() {
-    if (!oauthConfig.configured) return;
-    if (!orgUrl.trim()) {
-      setError('Enter your ArcGIS Online org URL first.');
+    if (!selectedId) {
+      setError('Pick a connection first.');
       return;
     }
     setBusy('auth');
@@ -172,7 +184,7 @@ export function FromAgoView({
       const resp = await fetch('/api/portal/admin/import-ago/oauth/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orgUrl: orgUrl.trim(), redirectUri }),
+        body: JSON.stringify({ connectionId: selectedId, redirectUri }),
       });
       if (!resp.ok) {
         throw new Error(
@@ -183,20 +195,18 @@ export function FromAgoView({
         authorizeUrl: string;
         sharingRestBase: string;
         state: string;
+        connection: AgoConnection;
       };
-      // Stash the state + sharingRestBase so the callback page
-      // can verify and the opener can use it without a second
-      // server round-trip.
       window.sessionStorage.setItem(STATE_STORAGE_KEY, data.state);
       window.sessionStorage.setItem(
         SHARING_BASE_STORAGE_KEY,
         data.sharingRestBase,
       );
-      window.sessionStorage.setItem(ORG_URL_STORAGE_KEY, orgUrl.trim());
+      window.sessionStorage.setItem(
+        ORG_URL_STORAGE_KEY,
+        data.connection.displayName,
+      );
 
-      // Open the popup at a fixed size. width/height are AGO-
-      // recommended; the sign-in form needs ~520x680 to fit
-      // without scrollbars on a default desktop zoom.
       const w = 540;
       const h = 700;
       const left = window.screenX + (window.outerWidth - w) / 2;
@@ -212,13 +222,9 @@ export function FromAgoView({
         );
       }
       popupRef.current = popup;
-      // Detect popup-close-without-token (user clicked X / cancelled).
       const closeWatcher = window.setInterval(() => {
         if (popup.closed) {
           window.clearInterval(closeWatcher);
-          // Only flip back to idle if we never received the
-          // token-postMessage (the success path clears
-          // popupRef before close).
           if (popupRef.current === popup) {
             setBusy(null);
             setError('Sign-in window was closed before completing.');
@@ -295,18 +301,6 @@ export function FromAgoView({
     }
   }
 
-  if (!oauthConfig.configured) {
-    return (
-      <section className="rounded-lg border border-warning/30 bg-warning/5 p-5 text-sm text-warning">
-        <p className="font-medium">OAuth is not configured on this portal.</p>
-        <p className="mt-2 text-xs">
-          {oauthConfig.reason ??
-            'AGO_OAUTH_CLIENT_ID env var is not set on this portal.'}
-        </p>
-      </section>
-    );
-  }
-
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-border bg-surface-1 p-5 shadow-card">
@@ -320,9 +314,11 @@ export function FromAgoView({
             canRun={!!preview}
           />
         ) : (
-          <SignInPanel
-            orgUrl={orgUrl}
-            onChangeOrgUrl={setOrgUrl}
+          <PickConnectionPanel
+            conns={conns}
+            loadError={loadError}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
             onSignIn={signIn}
             busy={busy}
           />
@@ -511,43 +507,79 @@ export function FromAgoView({
   );
 }
 
-function SignInPanel({
-  orgUrl,
-  onChangeOrgUrl,
+function PickConnectionPanel({
+  conns,
+  loadError,
+  selectedId,
+  onSelect,
   onSignIn,
   busy,
 }: {
-  orgUrl: string;
-  onChangeOrgUrl: (v: string) => void;
+  conns: AgoConnection[] | null;
+  loadError: string | null;
+  selectedId: string;
+  onSelect: (id: string) => void;
   onSignIn: () => void;
   busy: 'auth' | 'preview' | 'run' | null;
 }) {
+  if (loadError) {
+    return (
+      <div className="rounded border border-danger/30 bg-danger/5 p-3 text-xs text-danger">
+        Failed to load AGO connections: {loadError}
+      </div>
+    );
+  }
+  if (conns === null) {
+    return (
+      <p className="flex items-center gap-2 text-xs text-muted">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Loading AGO connections...
+      </p>
+    );
+  }
+  if (conns.length === 0) {
+    return (
+      <>
+        <h2 className="text-base font-semibold">No AGO connections yet</h2>
+        <p className="mt-1 text-xs text-muted">
+          Register at least one AGO portal before importing. One-time
+          setup; afterwards sign-in is one click.
+        </p>
+        <Link
+          href="/admin/migrations/from-ago/connections"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90"
+        >
+          <Plus className="h-4 w-4" />
+          Add AGO connection
+        </Link>
+      </>
+    );
+  }
   return (
     <>
       <h2 className="text-base font-semibold">Sign in to ArcGIS Online</h2>
       <p className="mb-4 mt-1 text-xs text-muted">
-        Enter your org URL (e.g. <code>palavido.maps.arcgis.com</code> or{' '}
-        <code>https://www.arcgis.com</code>). The sign-in happens in a popup;
-        the token never leaves this portal.
+        Pick which AGO portal to import from. The sign-in happens in
+        a popup; the token never leaves this portal.
       </p>
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-xs text-muted">ArcGIS Online org URL</span>
-        <input
-          type="text"
-          autoFocus
+        <span className="text-xs text-muted">AGO connection</span>
+        <select
+          value={selectedId}
+          onChange={(e) => onSelect(e.target.value)}
           className="rounded border border-border bg-surface-0 px-2 py-1.5 text-sm"
-          value={orgUrl}
-          onChange={(e) => onChangeOrgUrl(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onSignIn();
-          }}
-          placeholder="palavido.maps.arcgis.com"
-        />
+        >
+          {conns.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.displayName} ({c.orgHost})
+            </option>
+          ))}
+        </select>
       </label>
-      <div className="mt-4">
+      <div className="mt-4 flex gap-2">
         <button
           type="button"
-          disabled={!orgUrl.trim() || busy !== null}
+          disabled={!selectedId || busy !== null}
           className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
           onClick={onSignIn}
         >
@@ -586,10 +618,11 @@ function SignedInPanel({
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold">Connected to ArcGIS Online</h2>
+          <h2 className="text-base font-semibold">
+            Connected to {session.connectionDisplayName}
+          </h2>
           <p className="mt-1 text-xs text-muted">
-            <span className="font-mono">{session.orgUrl}</span> &middot; token
-            expires in ~{minutesLeft} min
+            token expires in ~{minutesLeft} min
           </p>
         </div>
         <button
@@ -655,8 +688,3 @@ function Counter({
     </div>
   );
 }
-
-// Unused-import silencer for the CloudDownload icon import that
-// the legacy version kept. Keeps the lint pass clean if a future
-// refactor reaches for it.
-void CloudDownload;

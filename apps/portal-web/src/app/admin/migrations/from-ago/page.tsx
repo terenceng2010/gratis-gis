@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft, CloudDownload } from 'lucide-react';
+import { ArrowLeft, CloudDownload, Plug } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { FromAgoView } from './from-ago-view';
 
 /**
- * Admin-only "Migrate from ArcGIS Online" page. The user signs
- * into AGO via an OAuth popup (no token paste), the dry-run
- * previews what will be imported, and a second click commits.
+ * Admin-only "Migrate from ArcGIS Online" page. Operator picks an
+ * AGO connection from the dropdown (registered once via
+ * /admin/migrations/from-ago/connections), signs in via OAuth
+ * popup, previews + commits the import.
  */
 export default async function AdminMigrateFromAgoPage() {
   let me: { orgRole: string };
@@ -18,27 +19,6 @@ export default async function AdminMigrateFromAgoPage() {
     redirect('/items');
   }
   if (me.orgRole !== 'admin') redirect('/items');
-
-  // Read OAuth config once on the server so the client knows
-  // whether the Sign-In button can do anything before rendering.
-  let oauthConfig: {
-    configured: boolean;
-    clientId: string | null;
-    reason: string | null;
-  };
-  try {
-    oauthConfig = await apiFetch<{
-      configured: boolean;
-      clientId: string | null;
-      reason: string | null;
-    }>('/api/admin/import-ago/oauth/config');
-  } catch {
-    oauthConfig = {
-      configured: false,
-      clientId: null,
-      reason: 'OAuth config endpoint unreachable.',
-    };
-  }
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
@@ -53,20 +33,27 @@ export default async function AdminMigrateFromAgoPage() {
         <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent/10 text-accent">
           <CloudDownload className="h-5 w-5" />
         </span>
-        <div>
+        <div className="flex-1">
           <p className="text-xs text-muted">Migrations / Import</p>
           <h1 className="text-2xl font-semibold tracking-tight">
             From ArcGIS Online
           </h1>
           <p className="mt-0.5 text-sm text-muted">
-            Sign in to ArcGIS Online, preview what will be imported,
-            then commit. Folder layout and per-item sharing scope are
-            preserved. Apps, dashboards, and forms are skipped; their
-            runtimes don&apos;t round-trip cleanly.
+            Pick a registered AGO connection, sign in, preview what
+            will be imported, then commit. Folder layout and per-item
+            sharing scope are preserved. Apps, dashboards, and forms
+            are skipped.
           </p>
         </div>
+        <Link
+          href="/admin/migrations/from-ago/connections"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm font-medium hover:bg-surface-2"
+        >
+          <Plug className="h-4 w-4" />
+          Manage connections
+        </Link>
       </header>
-      <FromAgoView oauthConfig={oauthConfig} />
+      <FromAgoView />
     </div>
   );
 }

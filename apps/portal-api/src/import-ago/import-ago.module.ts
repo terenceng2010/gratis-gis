@@ -3,7 +3,9 @@ import { Module } from '@nestjs/common';
 
 import { AdminModule } from '../admin/admin.module.js';
 import { ItemsModule } from '../items/items.module.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
 
+import { AgoConnectionsService } from './connections.service.js';
 import { AgoDryRunService } from './dry-run.js';
 import { AgoImportService } from './import.js';
 import { ImportAgoController } from './import-ago.controller.js';
@@ -16,11 +18,13 @@ import { ImportAgoController } from './import-ago.controller.js';
  *     conversion).
  *   - ``AdminModule`` for the ``AdminGuard`` the controller
  *     enforces.
+ *   - ``PrismaModule`` for the AgoConnectionsService that owns
+ *     the per-portal client_id table.
  */
 @Module({
-  imports: [ItemsModule, AdminModule],
+  imports: [ItemsModule, AdminModule, PrismaModule],
   controllers: [ImportAgoController],
-  providers: [AgoDryRunService, AgoImportService],
-  exports: [AgoDryRunService, AgoImportService],
+  providers: [AgoConnectionsService, AgoDryRunService, AgoImportService],
+  exports: [AgoConnectionsService, AgoDryRunService, AgoImportService],
 })
 export class ImportAgoModule {}

@@ -3,14 +3,20 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
+  Patch,
   Post,
-  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ConfigService } from '@nestjs/config';
-import { IsObject, IsOptional, IsString } from 'class-validator';
+import {
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from 'class-validator';
 import { randomBytes } from 'node:crypto';
 
 import { AdminGuard } from '../admin/admin.guard.js';
@@ -20,18 +26,11 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import { AgoDryRunService, type DryRunReport } from './dry-run.js';
 import { AgoImportService, type ImportReport } from './import.js';
 import { buildAgoAuthorizeUrl, normalizeAgoUrl } from './ago-url.js';
+import {
+  AgoConnectionsService,
+  type AgoConnectionDto,
+} from './connections.service.js';
 
-/**
- * DTOs.
- *
- * Token + URL are sent on every request rather than persisted
- * via a long-lived "AGO portal connection" item. v1 keeps the
- * credential surface narrow: an operator pastes a token into
- * the dialog, runs the import, and the token never touches the
- * portal's DB. Phase 5 (workstream 3 in next-workstreams.md)
- * can add credential persistence once the multi-portal admin
- * UX is fleshed out.
- */
 class AgoPreviewDto {
   @IsString()
   portalUrl!: string;
@@ -39,8 +38,6 @@ class AgoPreviewDto {
   @IsString()
   token!: string;
 
-  /** Optional explicit username; defaults to the username
-   *  returned by /portals/self. */
   @IsString()
   @IsOptional()
   username?: string;
@@ -53,50 +50,57 @@ class AgoRunDto {
   @IsString()
   token!: string;
 
-  /** The dry-run report from a previous /preview call. The
-   *  worker doesn't re-walk AGO; it acts on whatever the
-   *  preview captured so the user sees what they signed up for. */
   @IsObject()
   report!: DryRunReport;
 }
 
-/**
- * Admin-only HTTP surface for the AGO migration importer.
- * Two endpoints:
- *
- *   - POST /admin/import-ago/preview
- *     Walks the AGO portal, classifies items, returns a
- *     ``DryRunReport``. Read-only, idempotent.
- *
- *   - POST /admin/import-ago/run
- *     Takes a previously-fetched report + the connection
- *     credentials, creates portal items for everything the
- *     report says should be imported, returns an
- *     ``ImportReport`` with per-item outcomes.
- *
- * Both endpoints are gated by ``AdminGuard`` because the
- * importer creates items on the user's behalf and connects
- * outbound to an arbitrary AGO portal. A future phase can open
- * this up to contributors with finer-grained credential
- * scoping.
- */
-/**
- * Body shape for the OAuth /start endpoint. Takes whatever URL
- * shape the operator pasted (org subdomain only, full URL, /home
- * suffix, etc.) and returns the authorize URL the browser should
- * redirect to.
- */
-class AgoOauthStartDto {
+class CreateConnectionDto {
   /** AGO org URL in any shape the normalizer accepts. */
   @IsString()
   orgUrl!: string;
 
-  /** Where AGO should redirect after the user signs in. Must match
-   *  one of the redirect URIs registered on the AGO app. */
+  /** Optional human label. Defaults to the org host on the server. */
+  @IsString()
+  @IsOptional()
+  displayName?: string;
+
+  /** AGO OAuth client id (from registering an app on the AGO portal). */
+  @IsString()
+  clientId!: string;
+}
+
+class UpdateConnectionDto {
+  @IsString()
+  @IsOptional()
+  displayName?: string;
+
+  @IsString()
+  @IsOptional()
+  clientId?: string;
+}
+
+class AgoOauthStartDto {
+  /** UUID of an AgoOauthConnection row. */
+  @IsUUID()
+  connectionId!: string;
+
+  /** Where AGO should redirect after the user signs in. */
   @IsString()
   redirectUri!: string;
 }
 
+/**
+ * Admin-only HTTP surface for AGO migration. Three concerns:
+ *
+ *   1. CRUD on the per-portal OAuth connection table. Operators
+ *      register one connection per AGO portal they want to import
+ *      from; each carries its own client_id.
+ *   2. OAuth start: build the authorize URL with the looked-up
+ *      client_id.
+ *   3. The dry-run / run endpoints.
+ *
+ * Every endpoint is gated by AdminGuard.
+ */
 @ApiBearerAuth()
 @ApiTags('admin', 'import-ago')
 @Controller('admin/import-ago')
@@ -105,96 +109,103 @@ export class ImportAgoController {
   constructor(
     private readonly dryRun: AgoDryRunService,
     private readonly importer: AgoImportService,
-    private readonly config: ConfigService,
+    private readonly connections: AgoConnectionsService,
   ) {}
 
-  /**
-   * Report whether OAuth is configured on this portal so the UI
-   * can decide whether to render the Sign-In button or a "set
-   * AGO_OAUTH_CLIENT_ID" hint.
-   *
-   * Returning the client id here is intentional: AGO's
-   * implicit-grant flow embeds it in the authorize URL anyway, so
-   * there's no secret to leak. AGO app secrets live on the AGO
-   * side, not here.
-   */
-  @Get('oauth/config')
-  oauthConfig(): {
-    configured: boolean;
-    clientId: string | null;
-    reason: string | null;
-  } {
-    const clientId = this.config.get<string>('AGO_OAUTH_CLIENT_ID');
-    if (!clientId) {
-      return {
-        configured: false,
-        clientId: null,
-        reason:
-          'AGO_OAUTH_CLIENT_ID env var is not set on this portal. ' +
-          'Register an app on ArcGIS Online (Settings -> Add-ins or ' +
-          '/sharing/rest/oauth2/registerApp) and add the client id ' +
-          'to /etc/gratisgis/env, then restart portal-api.',
-      };
-    }
-    return { configured: true, clientId, reason: null };
+  // ---- Connections CRUD ------------------------------------------------
+
+  @Get('connections')
+  async listConnections(): Promise<AgoConnectionDto[]> {
+    return this.connections.list();
   }
+
+  @Get('connections/:id')
+  async getConnection(
+    @Param('id') id: string,
+  ): Promise<AgoConnectionDto> {
+    return this.connections.getById(id);
+  }
+
+  @Post('connections')
+  async createConnection(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateConnectionDto,
+  ): Promise<AgoConnectionDto> {
+    return this.connections.create(user, {
+      orgUrl: dto.orgUrl,
+      clientId: dto.clientId,
+      ...(dto.displayName !== undefined && { displayName: dto.displayName }),
+    });
+  }
+
+  @Patch('connections/:id')
+  async updateConnection(
+    @Param('id') id: string,
+    @Body() dto: UpdateConnectionDto,
+  ): Promise<AgoConnectionDto> {
+    return this.connections.update(id, {
+      ...(dto.displayName !== undefined && { displayName: dto.displayName }),
+      ...(dto.clientId !== undefined && { clientId: dto.clientId }),
+    });
+  }
+
+  @Delete('connections/:id')
+  async deleteConnection(@Param('id') id: string): Promise<{ ok: true }> {
+    await this.connections.delete(id);
+    return { ok: true };
+  }
+
+  // ---- OAuth start -----------------------------------------------------
 
   /**
    * Build the AGO authorize URL the browser should send the user
-   * to. Takes any shape of org URL the user pasted, normalizes it
-   * to the /sharing/rest base, and embeds the registered
-   * client_id + caller's redirect URI + a CSRF state token.
-   *
-   * The state token is the import-ago controller's own
-   * cryptographic random; the callback page verifies it before
-   * accepting the returned token. We don't store it server-side
-   * because the SPA owns the popup lifecycle.
+   * to. Looks up the connection row by id to fetch the registered
+   * client_id and the canonical sharing-rest base, embeds them in
+   * /oauth2/authorize, and emits a CSRF state token the callback
+   * page verifies.
    */
   @Post('oauth/start')
-  startOauth(@Body() dto: AgoOauthStartDto): {
+  async startOauth(@Body() dto: AgoOauthStartDto): Promise<{
     authorizeUrl: string;
     sharingRestBase: string;
     state: string;
-  } {
-    const clientId = this.config.get<string>('AGO_OAUTH_CLIENT_ID');
-    if (!clientId) {
-      throw new BadRequestException(
-        'AGO_OAUTH_CLIENT_ID is not configured on this portal.',
-      );
-    }
-    const normalized = normalizeAgoUrl(dto.orgUrl);
+    connection: AgoConnectionDto;
+  }> {
+    const conn = await this.connections.getById(dto.connectionId);
+    // Re-normalize from the stored orgUrl in case the row's
+    // orgUrl was hand-edited on the DB side. The normalizer
+    // returning null on a row we created is a defensive case
+    // worth surfacing as a 400 rather than a 500.
+    const normalized = normalizeAgoUrl(conn.orgUrl);
     if (!normalized) {
       throw new BadRequestException(
-        `Could not parse "${dto.orgUrl}" as an AGO portal URL. ` +
-          'Try the org host (e.g. palavido.maps.arcgis.com).',
+        `Stored orgUrl on connection ${conn.id} is not parseable.`,
       );
     }
-    // Refuse redirect URIs that don't match our own portal. AGO
-    // will also enforce its registered-redirect-URI allowlist, but
-    // we belt-and-suspenders here so a misconfigured AGO app can't
-    // get tricked into echoing to a third-party origin.
-    if (!isLikelyOwnPortalRedirect(dto.redirectUri)) {
+    if (!isHttpsUrl(dto.redirectUri)) {
       throw new BadRequestException(
-        'redirectUri must be an https:// URL under this portal.',
+        'redirectUri must be an https:// URL.',
       );
     }
     const state = randomBytes(24).toString('base64url');
     const authorizeUrl = buildAgoAuthorizeUrl({
       sharingRestBase: normalized.sharingRestBase,
-      clientId,
+      clientId: conn.clientId,
       redirectUri: dto.redirectUri,
       state,
-      // AGO's max for implicit-grant is 20160 (two weeks), but
-      // the importer needs the token only as long as the dialog
-      // is open. Cap at 60 min so a leaked URL goes stale fast.
+      // Cap token lifetime at 60 min: importer dialogs are
+      // short-lived; a leaked token expires fast.
       expirationMinutes: 60,
     });
     return {
       authorizeUrl,
       sharingRestBase: normalized.sharingRestBase,
       state,
+      connection: conn,
     };
   }
+
+  // ---- Import endpoints (unchanged) ------------------------------------
 
   @Post('preview')
   async preview(@Body() dto: AgoPreviewDto): Promise<DryRunReport> {
@@ -235,21 +246,6 @@ export class ImportAgoController {
 }
 
 function isHttpsUrl(value: string): boolean {
-  try {
-    const u = new URL(value);
-    return u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Best-effort sanity check that the OAuth redirect URI points back
- * at the portal itself rather than a third-party origin. Accepts
- * any https:// URL: AGO performs the authoritative check against
- * its registered allowlist, this is just an extra guard.
- */
-function isLikelyOwnPortalRedirect(value: string): boolean {
   try {
     const u = new URL(value);
     return u.protocol === 'https:';
