@@ -81,6 +81,19 @@ export interface AgoTypeMapping {
   /** Human-readable explanation, surfaced in dry-run and the
    *  post-import report. */
   notes: string;
+  /**
+   * For Feature Services specifically: distinguishes hosted (AGO
+   * owns the data) from referenced (AGO points at an external
+   * ArcGIS Server). v1 imports both, but the eventual data-copy
+   * phases (Phase 2-4 in #43 follow-up) only apply to hosted.
+   *
+   * Today the importer creates a connected-`service` item for
+   * both modes; the dry-run preview just labels them correctly
+   * so the operator sees the right intent. When phases 2-4 ship,
+   * hosted rows will create real `data_layer` items with copied
+   * data and the connected-service pointer goes away.
+   */
+  hostedDataCopyPending?: boolean;
 }
 
 /**
@@ -306,9 +319,38 @@ const MAPPING: Record<string, AgoTypeMapping> = Object.fromEntries(
  * so the dry-run can tell the operator what's missing without
  * crashing.
  */
-export function classifyAgoType(agoType: string): AgoTypeMapping {
+export function classifyAgoType(
+  agoType: string,
+  typeKeywords?: ReadonlyArray<string>,
+): AgoTypeMapping {
   const row = MAPPING[agoType];
-  if (row) return row;
+  if (row) {
+    // Promotion for Feature Services: AGO marks hosted services
+    // (data lives in AGO's database, not pointing at an external
+    // ArcGIS Server) with the `Hosted Service` typeKeyword. These
+    // are the ones we can actually migrate -- query their features
+    // via REST + insert into a new data_layer. External / referenced
+    // feature services stay as `service` items because we don't own
+    // their data.
+    if (
+      row.agoType === 'Feature Service' &&
+      Array.isArray(typeKeywords) &&
+      typeKeywords.includes('Hosted Service')
+    ) {
+      return {
+        ...row,
+        targetType: 'data_layer',
+        // Importer no longer needs to probe via the existing
+        // service-probe path for these; the hosted-FS importer
+        // does its own per-layer schema fetch.
+        needsServiceProbe: false,
+        hostedDataCopyPending: false,
+        notes:
+          'AGO hosted Feature Service -> portal `data_layer` item. The service\'s sublayers + their features are copied into PostGIS; the new data_layer is portal-owned and no longer depends on AGO.',
+      };
+    }
+    return row;
+  }
   return {
     agoType,
     targetType: null,

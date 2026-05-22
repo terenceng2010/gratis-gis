@@ -48,6 +48,7 @@ import { WebMapJsonImportService } from '../items/web-map-json-import.service.js
 
 import { AgoApiError, AgoClient } from './ago-client.js';
 import { agoAccessToPortal, type DryRunItem, type DryRunReport } from './dry-run.js';
+import { AgoHostedFsImportService } from './hosted-fs.js';
 import { sortByImportOrder } from './type-mapping.js';
 
 /**
@@ -111,6 +112,7 @@ export class AgoImportService {
   constructor(
     private readonly items: ItemsService,
     private readonly webMapImport: WebMapJsonImportService,
+    private readonly hostedFs: AgoHostedFsImportService,
   ) {}
 
   /**
@@ -198,10 +200,23 @@ export class AgoImportService {
         .map((row) => ({ ...row, type: row.agoType })),
     ) as DryRunItem[];
 
+    // Track AGO service URL -> portal data_layer item id as the
+    // import progresses. Phase 6 (the Web Map remapper) reads this
+    // when an imported map references an AGO feature service we
+    // just imported -- the layer reference gets rewritten to
+    // /api/items/<newId>/... instead of pointing back at AGO.
+    const agoUrlToPortalDataLayer = new Map<string, string>();
+
     const results: ImportResult[] = [];
     for (let i = 0; i < ordered.length; i += 1) {
       const item = ordered[i]!;
-      const result = await this.importOne(args.user, client, item).catch(
+      const result = await this.importOne(
+        args.user,
+        client,
+        item,
+        args.token,
+        agoUrlToPortalDataLayer,
+      ).catch(
         (e): ImportResult => ({
           agoId: item.agoId,
           agoType: item.agoType,
@@ -211,6 +226,21 @@ export class AgoImportService {
           error: errorMessage(e),
         }),
       );
+      // Record the mapping for Phase 6: if this row was a hosted
+      // FS that just became a data_layer, remember its source URL
+      // so any Web Map imported later can be remapped to point at
+      // the new portal item.
+      if (
+        result.status === 'created' &&
+        result.portalItemId &&
+        result.portalItemType === 'data_layer' &&
+        item.serviceUrl
+      ) {
+        agoUrlToPortalDataLayer.set(
+          normalizeAgoServiceUrl(item.serviceUrl),
+          result.portalItemId,
+        );
+      }
       results.push(result);
       // Track folder membership for the post-pass that writes
       // childItemIds back to each created folder.
@@ -290,12 +320,21 @@ export class AgoImportService {
     user: AuthUser,
     client: AgoClient,
     row: DryRunItem,
+    token: string,
+    agoUrlToPortalDataLayer: Map<string, string>,
   ): Promise<ImportResult> {
     switch (row.targetType) {
       case 'service':
         return this.importService(user, row);
+      case 'data_layer':
+        // Hosted feature services route through the dedicated
+        // hosted-FS importer that walks the AGO REST surface,
+        // copies the schema, and streams every feature into
+        // PostGIS. End-to-end migration: the new data_layer is
+        // portal-owned and no longer depends on AGO.
+        return this.importHostedFs(user, row, token);
       case 'map':
-        return this.importMap(user, client, row);
+        return this.importMap(user, client, row, agoUrlToPortalDataLayer);
       case 'file':
         return this.importFile(user, row);
       default:
@@ -313,6 +352,49 @@ export class AgoImportService {
           error: `Importer does not handle target type "${row.targetType}".`,
         };
     }
+  }
+
+  /**
+   * Hosted Feature Service -> portal data_layer. Delegates to the
+   * AgoHostedFsImportService that owns the schema + feature copy
+   * pipeline.
+   */
+  private async importHostedFs(
+    user: AuthUser,
+    row: DryRunItem,
+    token: string,
+  ): Promise<ImportResult> {
+    const url = row.serviceUrl ?? '';
+    if (!url) {
+      return failed(row, 'AGO hosted Feature Service item carried no URL.');
+    }
+    const result = await this.hostedFs.run({
+      user,
+      serviceUrl: url,
+      agoItemId: row.agoId,
+      title: row.title,
+      access: agoAccessToPortal(row.access),
+      token,
+      // v1: attempt attachments. Per-attachment failures land in
+      // warnings; success path is silent.
+      copyAttachments: true,
+    });
+    return {
+      agoId: row.agoId,
+      agoType: row.agoType,
+      agoTitle: row.title,
+      status: 'created',
+      portalItemId: result.portalItemId,
+      portalItemType: 'data_layer',
+      warnings: [
+        `Copied ${result.featuresInserted.toLocaleString()} feature(s) across ${result.layerCount} layer(s)` +
+          (result.attachmentsCopied > 0
+            ? `, plus ${result.attachmentsCopied} attachment(s)`
+            : '') +
+          '.',
+        ...result.warnings,
+      ],
+    };
   }
 
   // -----------------------------------------------------------
@@ -369,11 +451,19 @@ export class AgoImportService {
    * ``WebMapJsonImportService``. We fetch the /data envelope
    * here (the dry-run intentionally doesn't, so it stays cheap
    * for large walks).
+   *
+   * Phase 6 remap: before handing the WebMap JSON to the
+   * converter, we rewrite every operational-layer URL that
+   * matches an AGO service we just imported as a data_layer.
+   * The rewritten URL points at the portal item, so the imported
+   * map is genuinely portal-rooted instead of still pointing
+   * back at AGO.
    */
   private async importMap(
     user: AuthUser,
     client: AgoClient,
     row: DryRunItem,
+    agoUrlToPortalDataLayer: Map<string, string>,
   ): Promise<ImportResult> {
     let webMap: EsriWebMap;
     try {
@@ -381,9 +471,10 @@ export class AgoImportService {
     } catch (e) {
       return failed(row, `Fetching WebMap JSON failed: ${errorMessage(e)}`);
     }
+    const remap = remapWebMapLayers(webMap, agoUrlToPortalDataLayer);
     const result = await this.webMapImport.import({
       user,
-      webMap,
+      webMap: remap.webMap,
       title: row.title,
       access: agoAccessToPortal(row.access),
     });
@@ -394,7 +485,14 @@ export class AgoImportService {
       status: 'created',
       portalItemId: result.itemId,
       portalItemType: 'map',
-      warnings: result.warnings,
+      warnings: [
+        ...(remap.remappedCount > 0
+          ? [
+              `Remapped ${remap.remappedCount} layer reference(s) from AGO services to imported portal data_layers.`,
+            ]
+          : []),
+        ...result.warnings,
+      ],
     };
   }
 
@@ -485,4 +583,75 @@ function errorMessage(e: unknown): string {
   }
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+/**
+ * Canonicalize an AGO service URL so the same upstream service
+ * reaches the same map entry whether the dry-run captured it as
+ * `.../FeatureServer`, `.../FeatureServer/`, or
+ * `.../FeatureServer/0`. The hosted-FS importer stores at the
+ * service root; the WebMap remapper resolves layer URLs that may
+ * carry a sublayer suffix.
+ *
+ * Exposed so tests can pin the normalization behaviour.
+ */
+export function normalizeAgoServiceUrl(raw: string): string {
+  let s = raw.trim();
+  if (!s) return '';
+  // Strip token + query string -- different tokens shouldn't
+  // produce different map keys for the same service.
+  const q = s.indexOf('?');
+  if (q >= 0) s = s.slice(0, q);
+  // Strip a trailing sublayer-id segment (.../FeatureServer/0).
+  s = s.replace(/\/(\d+)\/*$/, '');
+  // Strip trailing slashes.
+  s = s.replace(/\/+$/, '');
+  return s.toLowerCase();
+}
+
+/**
+ * Phase 6: rewrite operational-layer URLs in an EsriWebMap so any
+ * layer that pointed at an AGO feature service we just imported as
+ * a portal data_layer now points at the portal item instead.
+ *
+ * The match is by canonical service URL (sublayer id stripped, see
+ * normalizeAgoServiceUrl). When a match is found, the layer's
+ * `url` is rewritten to a portal-rooted API URL and the original
+ * AGO URL is stashed under `__importedFrom` so a future debug pass
+ * can reconstruct the migration trail.
+ *
+ * Returns the (possibly mutated) WebMap and a count of layers
+ * that were remapped, for the post-import report.
+ */
+function remapWebMapLayers(
+  webMap: EsriWebMap,
+  agoUrlToPortalDataLayer: Map<string, string>,
+): { webMap: EsriWebMap; remappedCount: number } {
+  if (agoUrlToPortalDataLayer.size === 0) {
+    return { webMap, remappedCount: 0 };
+  }
+  // Deep-clone so we don't mutate the AGO response the caller may
+  // still be holding a reference to. WebMap JSON is plain data.
+  const cloned = JSON.parse(JSON.stringify(webMap)) as EsriWebMap;
+  let count = 0;
+  const opLayers = (cloned as { operationalLayers?: unknown[] })
+    .operationalLayers;
+  if (Array.isArray(opLayers)) {
+    for (const layer of opLayers) {
+      if (!layer || typeof layer !== 'object') continue;
+      const l = layer as Record<string, unknown> & { url?: string };
+      if (typeof l.url !== 'string' || !l.url) continue;
+      const canonical = normalizeAgoServiceUrl(l.url);
+      const portalId = agoUrlToPortalDataLayer.get(canonical);
+      if (!portalId) continue;
+      // Preserve the sublayer id when the AGO URL carried one, so
+      // the portal item can route the right sublayer.
+      const sublayerMatch = /\/(\d+)\/*(?:\?|$)/.exec(l.url);
+      const sublayerSuffix = sublayerMatch ? `/${sublayerMatch[1]}` : '';
+      l.__importedFromAgoUrl = l.url;
+      l.url = `/api/items/${portalId}${sublayerSuffix}`;
+      count += 1;
+    }
+  }
+  return { webMap: cloned, remappedCount: count };
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { AgoImportService } from './import.js';
+import { AgoImportService, normalizeAgoServiceUrl } from './import.js';
 import type { DryRunReport } from './dry-run.js';
 import { classifyAndRow } from './dry-run.js';
 import type { AgoItem } from './ago-types.js';
@@ -89,6 +89,25 @@ function makeFakeWebMapImport(): WebMapJsonImportService {
   } as unknown as WebMapJsonImportService;
 }
 
+/** Fake hosted-FS importer for tests that don't exercise the
+ *  hosted-FS dispatch path. Calls to `run` produce a stable
+ *  "imported as data_layer" stub the assertions can inspect. */
+function makeFakeHostedFs(): import('./hosted-fs.js').AgoHostedFsImportService {
+  let counter = 0;
+  return {
+    run: jest.fn(async (_args: { title: string }) => {
+      counter += 1;
+      return {
+        portalItemId: `portal-data-layer-${counter}`,
+        layerCount: 1,
+        featuresInserted: 10,
+        attachmentsCopied: 0,
+        warnings: [],
+      };
+    }),
+  } as unknown as import('./hosted-fs.js').AgoHostedFsImportService;
+}
+
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
@@ -120,7 +139,7 @@ describe('AgoImportService.run', () => {
     );
     const fakeItems = makeFakeItems();
     const fakeWebMap = makeFakeWebMapImport();
-    const importer = new AgoImportService(fakeItems, fakeWebMap);
+    const importer = new AgoImportService(fakeItems, fakeWebMap, makeFakeHostedFs());
     const report = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -184,7 +203,7 @@ describe('AgoImportService.run', () => {
         return { id: `portal-${input.title}` };
       }),
     } as unknown as ItemsService;
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
     const report = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -227,7 +246,7 @@ describe('AgoImportService.run', () => {
         row.reason = 'Skipped by classifier';
       }
     }
-    const importer = new AgoImportService(makeFakeItems(), makeFakeWebMapImport());
+    const importer = new AgoImportService(makeFakeItems(), makeFakeWebMapImport(), makeFakeHostedFs());
     const result = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -263,7 +282,7 @@ describe('AgoImportService.run', () => {
         warnings: ['Unresolvable layer XYZ skipped'],
       })),
     } as unknown as WebMapJsonImportService;
-    const importer = new AgoImportService(makeFakeItems(), fakeWebMap);
+    const importer = new AgoImportService(makeFakeItems(), fakeWebMap, makeFakeHostedFs());
     const report = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -284,6 +303,7 @@ describe('AgoImportService.run', () => {
     const importer = new AgoImportService(
       makeFakeItems(),
       makeFakeWebMapImport(),
+      makeFakeHostedFs(),
     );
     const report = await importer.run({
       user: USER,
@@ -330,7 +350,7 @@ describe('AgoImportService.run', () => {
       }),
     ];
     const fakeItems = makeFakeItems();
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
     await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -384,7 +404,7 @@ describe('AgoImportService.run', () => {
     ];
     report.counts.foldersTotal = 1;
     const fakeItems = makeFakeItems();
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
     const result = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -438,7 +458,7 @@ describe('AgoImportService.run', () => {
     }
     report.folders = [{ id: 'folder-empty', title: 'Just Dashboards' }];
     const fakeItems = makeFakeItems();
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
     const result = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -448,5 +468,140 @@ describe('AgoImportService.run', () => {
     expect(result.folders).toHaveLength(0);
     const created = (fakeItems as any).__created as Array<{ type: string }>;
     expect(created.find((c) => c.type === 'folder')).toBeUndefined();
+  });
+
+  it('dispatches hosted feature services through the hosted-FS importer', async () => {
+    const items = [
+      sample({
+        id: 'svc-hosted',
+        type: 'Feature Service',
+        title: 'Hosted Parcels',
+        typeKeywords: ['Hosted Service', 'Feature Service'],
+        url: 'https://palavido.maps.arcgis.com/arcgis/rest/services/Parcels/FeatureServer',
+      }),
+    ];
+    const fakeItems = makeFakeItems();
+    const fakeHosted = makeFakeHostedFs();
+    const importer = new AgoImportService(
+      fakeItems,
+      makeFakeWebMapImport(),
+      fakeHosted,
+    );
+    const result = await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report: reportFrom(items),
+    });
+    // Hosted FS should NOT have created a service item; it should
+    // have gone through the dedicated hosted-FS path which produces
+    // a data_layer.
+    expect(fakeHosted.run).toHaveBeenCalledTimes(1);
+    expect(result.created).toBe(1);
+    expect(result.results[0]!.portalItemType).toBe('data_layer');
+    expect(result.results[0]!.warnings.join(' ')).toMatch(/Copied 10 feature/);
+  });
+
+  it('remaps Web Map layer URLs to the just-imported portal data_layers', async () => {
+    const items = [
+      sample({
+        id: 'svc-hosted',
+        type: 'Feature Service',
+        title: 'Hosted Parcels',
+        typeKeywords: ['Hosted Service', 'Feature Service'],
+        url: 'https://palavido.maps.arcgis.com/arcgis/rest/services/Parcels/FeatureServer',
+      }),
+      sample({ id: 'wm-1', type: 'Web Map', title: 'Parcels Map' }),
+    ];
+    // The Web Map data fetch returns a WebMap that references the
+    // same FeatureServer (sublayer 0) we just imported as a
+    // data_layer.
+    globalThis.fetch = jest.fn(async () =>
+      new Response(
+        JSON.stringify({
+          version: '2.30',
+          operationalLayers: [
+            {
+              id: 'parcels-layer',
+              title: 'Parcels',
+              url: 'https://palavido.maps.arcgis.com/arcgis/rest/services/Parcels/FeatureServer/0',
+              layerType: 'ArcGISFeatureLayer',
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+    const fakeWebMap = {
+      import: jest.fn(async (args: any) => {
+        // Capture the (rewritten) URL that the importer hands us.
+        const layers = args.webMap.operationalLayers ?? [];
+        return {
+          itemId: 'portal-map-1',
+          warnings: [`captured-url:${layers[0]?.url ?? ''}`],
+        };
+      }),
+    } as unknown as WebMapJsonImportService;
+    const importer = new AgoImportService(
+      makeFakeItems(),
+      fakeWebMap,
+      makeFakeHostedFs(),
+    );
+    const result = await importer.run({
+      user: USER,
+      portalUrl: PORTAL_URL,
+      token: 'tok',
+      report: reportFrom(items),
+    });
+    expect(result.created).toBe(2);
+    const mapResult = result.results.find((r) => r.agoId === 'wm-1');
+    // The remap warning should fire on the map import result.
+    expect(
+      mapResult?.warnings.some((w) => /Remapped 1 layer reference/.test(w)),
+    ).toBe(true);
+    // And the URL passed to WebMapJsonImportService.import should
+    // now point at the new portal item, with the sublayer suffix
+    // preserved.
+    expect(
+      mapResult?.warnings.some((w) =>
+        /captured-url:\/api\/items\/portal-data-layer-1\/0/.test(w),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('normalizeAgoServiceUrl', () => {
+  it('strips a trailing sublayer id', () => {
+    expect(
+      normalizeAgoServiceUrl(
+        'https://palavido.maps.arcgis.com/arcgis/rest/services/Parcels/FeatureServer/0',
+      ),
+    ).toBe(
+      'https://palavido.maps.arcgis.com/arcgis/rest/services/parcels/featureserver',
+    );
+  });
+
+  it('strips a trailing slash + query string', () => {
+    expect(
+      normalizeAgoServiceUrl(
+        'https://palavido.maps.arcgis.com/arcgis/rest/services/Parcels/FeatureServer/?token=abc',
+      ),
+    ).toBe(
+      'https://palavido.maps.arcgis.com/arcgis/rest/services/parcels/featureserver',
+    );
+  });
+
+  it('is idempotent on an already-canonical URL', () => {
+    const url =
+      'https://palavido.maps.arcgis.com/arcgis/rest/services/parcels/featureserver';
+    expect(normalizeAgoServiceUrl(url)).toBe(url);
+  });
+
+  it('returns empty for empty input', () => {
+    expect(normalizeAgoServiceUrl('')).toBe('');
+    expect(normalizeAgoServiceUrl('   ')).toBe('');
   });
 });

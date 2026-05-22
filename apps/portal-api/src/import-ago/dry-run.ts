@@ -179,7 +179,7 @@ export function classifyAndRow(
   item: AgoItem,
   folderTitle: string,
 ): DryRunItem {
-  const mapping = classifyAgoType(item.type);
+  const mapping = classifyAgoType(item.type, item.typeKeywords);
   const row: DryRunItem = {
     agoId: item.id,
     agoType: item.type,
