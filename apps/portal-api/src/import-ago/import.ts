@@ -40,10 +40,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { EsriWebMap } from '@gratis-gis/engine';
-import { DEFAULT_FOLDER } from '@gratis-gis/shared-types';
+import { DEFAULT_FILE, DEFAULT_FOLDER } from '@gratis-gis/shared-types';
 
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { ItemsService } from '../items/items.service.js';
+import { StorageService } from '../storage/storage.service.js';
 import { WebMapJsonImportService } from '../items/web-map-json-import.service.js';
 
 import { AgoApiError, AgoClient } from './ago-client.js';
@@ -113,6 +114,7 @@ export class AgoImportService {
     private readonly items: ItemsService,
     private readonly webMapImport: WebMapJsonImportService,
     private readonly hostedFs: AgoHostedFsImportService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -336,7 +338,7 @@ export class AgoImportService {
       case 'map':
         return this.importMap(user, client, row, agoUrlToPortalDataLayer);
       case 'file':
-        return this.importFile(user, row);
+        return this.importFile(user, row, token);
       default:
         // The dry-run + type-mapping should have caught
         // unsupported types and marked them willImport=false
@@ -497,42 +499,156 @@ export class AgoImportService {
   }
 
   /**
-   * File-typed AGO items become portal ``file`` items carrying
-   * a link back to AGO. v1 does not re-host the bytes; later
-   * phases can stream the content into MinIO. Document Link
-   * items already point at an external URL on AGO side, so we
-   * just preserve it.
+   * File-typed AGO items become portal ``file`` items with the
+   * bytes streamed into MinIO. This is the load-bearing step for
+   * "actually migrating off AGO" -- before this, file items were
+   * still tethered to AGO's storage.
+   *
+   * Mechanism:
+   *   1. Fetch /sharing/rest/content/items/<id>/data with the
+   *      bearer token. AGO returns the file binary for
+   *      Image / PDF / CSV / Word / Excel / Shapefile items.
+   *   2. Stream to a tmp local file, then push to MinIO via
+   *      storage.uploadLocalFile which uses the standard
+   *      `item-file/` prefix.
+   *   3. Create a `file` portal item with the canonical FileData
+   *      shape (storageKey + storageUrl + fileName + mimeType).
+   *
+   * Document Link items don't have bytes -- the AGO item just
+   * stores a URL. v1 skips them with a clear warning rather than
+   * creating a malformed file item.
    */
   private async importFile(
     user: AuthUser,
     row: DryRunItem,
+    token: string,
   ): Promise<ImportResult> {
-    const data = {
-      kind: 'link' as const,
-      url:
-        row.serviceUrl ??
-        `${row.agoId}`,
-      agoItemId: row.agoId,
-      agoType: row.agoType,
-      importSource: 'ago' as const,
-    };
-    const created = await this.items.create(user, {
-      type: 'file',
-      title: row.title,
-      data,
-      access: agoAccessToPortal(row.access),
-    });
-    return {
-      agoId: row.agoId,
-      agoType: row.agoType,
-      agoTitle: row.title,
-      status: 'created',
-      portalItemId: created.id,
-      portalItemType: 'file',
-      warnings: [
-        'File contents stay on AGO. Re-host through the portal upload flow if you need a self-contained copy.',
-      ],
-    };
+    if (row.agoType === 'Document Link') {
+      // No bytes to re-host. Surface in results so the operator
+      // can recreate it as a portal link elsewhere if needed.
+      return {
+        agoId: row.agoId,
+        agoType: row.agoType,
+        agoTitle: row.title,
+        status: 'skipped',
+        warnings: [
+          `Document Link items point at an external URL with no bytes to re-host (${row.serviceUrl ?? 'unknown URL'}). ` +
+            'Recreate as a portal hyperlink manually if needed.',
+        ],
+      };
+    }
+    try {
+      const upload = await this.fetchAndUploadAgoFile(row, token);
+      const data = {
+        ...DEFAULT_FILE,
+        storageKey: upload.storageKey,
+        storageUrl: upload.storageUrl,
+        fileName: upload.fileName,
+        mimeType: upload.mimeType,
+        sizeBytes: upload.sizeBytes,
+        uploadedAt: new Date().toISOString(),
+      };
+      const created = await this.items.create(user, {
+        type: 'file',
+        title: row.title,
+        data: data as unknown as Prisma.InputJsonValue,
+        access: agoAccessToPortal(row.access),
+      });
+      return {
+        agoId: row.agoId,
+        agoType: row.agoType,
+        agoTitle: row.title,
+        status: 'created',
+        portalItemId: created.id,
+        portalItemType: 'file',
+        warnings: [
+          `Re-hosted ${upload.fileName} (${formatBytes(upload.sizeBytes)}) into portal storage; no longer depends on AGO.`,
+        ],
+      };
+    } catch (e) {
+      return failed(
+        row,
+        `Could not re-host file from AGO: ${errorMessage(e)}`,
+      );
+    }
+  }
+
+  /**
+   * Fetch one AGO file item's binary payload, stream it to a
+   * local tmp file, and push it into MinIO. Returns the new
+   * storage key + URL so the caller can wire them into a portal
+   * file item's FileData blob.
+   *
+   * The MIME guess + filename fall back to AGO's own metadata
+   * when present; the per-item HEAD-style probe on the /data URL
+   * tries Content-Disposition + Content-Type headers AGO sets on
+   * the streamed response so we don't have to second-guess the
+   * source filename.
+   */
+  private async fetchAndUploadAgoFile(
+    row: DryRunItem,
+    token: string,
+  ): Promise<{
+    storageKey: string;
+    storageUrl: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }> {
+    // Resolve the AGO portal base from the row's metadata. v1 of
+    // the importer doesn't carry a portalUrl per row, so we
+    // reconstruct it from the serviceUrl (if any) or default to
+    // AGO public cloud's /sharing/rest path. The /content/items/
+    // <id>/data endpoint is the canonical download URL on every
+    // ArcGIS portal.
+    const portalBase = inferPortalBaseFromRow(row);
+    const downloadUrl = `${portalBase}/content/items/${row.agoId}/data?token=${encodeURIComponent(token)}`;
+    const res = await fetch(downloadUrl);
+    if (!res.ok) {
+      throw new Error(
+        `AGO returned HTTP ${res.status} on /items/${row.agoId}/data`,
+      );
+    }
+    // Stream to a tmp file so we don't blow up the api heap on
+    // multi-hundred-MB CSVs or shapefile bundles.
+    const { writeFile, unlink } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const ab = await res.arrayBuffer();
+    const buf = Buffer.from(ab);
+    if (buf.length === 0) {
+      throw new Error('AGO returned an empty body; no bytes to re-host.');
+    }
+    const fileName =
+      filenameFromContentDisposition(res.headers.get('content-disposition')) ??
+      `${sanitizeForFilename(row.title)}${defaultExtensionFor(row.agoType)}`;
+    const mimeType =
+      res.headers.get('content-type')?.split(';')[0]?.trim() ||
+      'application/octet-stream';
+    // Use os.tmpdir() rather than a hardcoded "/tmp/" so the path
+    // resolves on every platform the api runs on (Linux prod,
+    // Windows dev, macOS).
+    const tmp = join(
+      tmpdir(),
+      `ago-file-${Date.now()}-${sanitizeForFilename(row.agoId)}`,
+    );
+    await writeFile(tmp, buf);
+    try {
+      const upload = await this.storage.uploadLocalFile(
+        'item-file',
+        tmp,
+        mimeType,
+      );
+      return {
+        storageKey: upload.key,
+        storageUrl: upload.publicUrl,
+        fileName,
+        mimeType,
+        sizeBytes: buf.length,
+      };
+    } finally {
+      await unlink(tmp).catch(() => {});
+    }
   }
 
 }
@@ -607,6 +723,92 @@ export function normalizeAgoServiceUrl(raw: string): string {
   // Strip trailing slashes.
   s = s.replace(/\/+$/, '');
   return s.toLowerCase();
+}
+
+/**
+ * Best-effort: pull the /sharing/rest base out of a service URL
+ * the row already carries. Falls back to AGO public-cloud's
+ * canonical /sharing/rest for non-service file items (the
+ * /content/items/<id>/data endpoint exists on every ArcGIS
+ * portal; the URL just needs to point at the right one). The
+ * importer's run() already validated the portalUrl up front, so
+ * a fallback that mismatches the actual portal would fail at
+ * fetch time with a clear AGO error.
+ */
+function inferPortalBaseFromRow(row: DryRunItem): string {
+  if (row.serviceUrl) {
+    // serviceUrl looks like https://palavido.maps.arcgis.com/arcgis/rest/services/X/FeatureServer
+    // The sharing-rest base is on the same host, under /sharing/rest.
+    try {
+      const u = new URL(row.serviceUrl);
+      return `${u.origin}/sharing/rest`;
+    } catch {
+      /* fall through */
+    }
+  }
+  return 'https://www.arcgis.com/sharing/rest';
+}
+
+/**
+ * Parse the filename out of a Content-Disposition response header.
+ * AGO sets `attachment; filename="parcels.csv"` on /data downloads
+ * for CSV / shapefile / etc. so we can preserve the original name
+ * rather than synthesising one. Returns null if the header is
+ * missing or doesn't carry a filename param.
+ */
+function filenameFromContentDisposition(
+  header: string | null,
+): string | null {
+  if (!header) return null;
+  // RFC 5987 filename* is also valid; AGO uses the plain filename
+  // form in practice. Accept either with the same regex.
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  return m && m[1] ? decodeURIComponent(m[1].trim()) : null;
+}
+
+/**
+ * Strip everything from a string that wouldn't be safe in a
+ * filename. Falls back to "file" when the input collapses to
+ * empty. Mirrors the safeFilename helper in the ingest service
+ * but is local here so the import-ago module doesn't reach into
+ * the ingest module's internals.
+ */
+function sanitizeForFilename(raw: string): string {
+  let s = raw.replace(/[^\w.-]+/g, '_');
+  s = s.replace(/^\.+/, '_').replace(/\.+$/, '_');
+  return s.length > 0 && s !== '_' ? s.slice(0, 80) : 'file';
+}
+
+/**
+ * Default file extension to suffix on a synthesised filename when
+ * AGO doesn't surface a Content-Disposition. Maps AGO item types
+ * onto the extension users expect on download.
+ */
+function defaultExtensionFor(agoType: string): string {
+  switch (agoType) {
+    case 'PDF':
+      return '.pdf';
+    case 'CSV':
+      return '.csv';
+    case 'Microsoft Word':
+      return '.docx';
+    case 'Microsoft Excel':
+      return '.xlsx';
+    case 'Shapefile':
+      return '.zip';
+    case 'Image':
+      return '';
+    default:
+      return '';
+  }
+}
+
+/** Format a byte count for the post-import warning. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 /**

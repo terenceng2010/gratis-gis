@@ -108,6 +108,21 @@ function makeFakeHostedFs(): import('./hosted-fs.js').AgoHostedFsImportService {
   } as unknown as import('./hosted-fs.js').AgoHostedFsImportService;
 }
 
+/** Fake storage service: file-import path uploadLocalFile call
+ *  hands back stable storage-key + URL the assertions can inspect. */
+function makeFakeStorage(): import('../storage/storage.service.js').StorageService {
+  let counter = 0;
+  return {
+    uploadLocalFile: jest.fn(async (kind: string, _path: string) => {
+      counter += 1;
+      return {
+        key: `${kind}/portal-file-${counter}`,
+        publicUrl: `/api/portal/storage/private/${kind}/portal-file-${counter}`,
+      };
+    }),
+  } as unknown as import('../storage/storage.service.js').StorageService;
+}
+
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
@@ -130,16 +145,34 @@ describe('AgoImportService.run', () => {
       }),
       sample({ id: 'file-1', type: 'PDF', title: 'Spec.pdf' }),
     ];
-    // Web Map data fetch goes through fetch().
-    globalThis.fetch = jest.fn(async () =>
-      new Response(JSON.stringify({ version: '2.30', layers: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
+    // Web Map data fetch goes through fetch() and returns JSON;
+    // file /data fetch goes through fetch() and returns binary
+    // bytes the importer streams into MinIO via StorageService.
+    globalThis.fetch = jest.fn(async (input: unknown) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : (input as { toString(): string }).toString();
+      if (url.includes('/content/items/wm-1/data')) {
+        return new Response(JSON.stringify({ version: '2.30', layers: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/content/items/file-1/data')) {
+        return new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename="Spec.pdf"',
+          },
+        });
+      }
+      return new Response('not-found', { status: 404 });
+    }) as unknown as typeof fetch;
     const fakeItems = makeFakeItems();
     const fakeWebMap = makeFakeWebMapImport();
-    const importer = new AgoImportService(fakeItems, fakeWebMap, makeFakeHostedFs());
+    const importer = new AgoImportService(fakeItems, fakeWebMap, makeFakeHostedFs(), makeFakeStorage());
     const report = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -170,8 +203,11 @@ describe('AgoImportService.run', () => {
     expect(service.data.protocol).toBe('arcgis_features');
     expect(service.data.agoItemId).toBe('svc-1');
     const file = created.find((c: any) => c.type === 'file');
-    expect(file.data.kind).toBe('link');
-    expect(file.data.agoItemId).toBe('file-1');
+    expect(file.data.fileName).toBe('Spec.pdf');
+    expect(file.data.mimeType).toBe('application/pdf');
+    expect(file.data.sizeBytes).toBe(4);
+    expect(file.data.storageKey).toMatch(/^item-file\//);
+    expect(file.data.storageUrl).toMatch(/^\/api\/portal\/storage\//);
   });
 
   it('records per-item failures without blocking the rest of the import', async () => {
@@ -203,7 +239,7 @@ describe('AgoImportService.run', () => {
         return { id: `portal-${input.title}` };
       }),
     } as unknown as ItemsService;
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs(), makeFakeStorage());
     const report = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -246,7 +282,7 @@ describe('AgoImportService.run', () => {
         row.reason = 'Skipped by classifier';
       }
     }
-    const importer = new AgoImportService(makeFakeItems(), makeFakeWebMapImport(), makeFakeHostedFs());
+    const importer = new AgoImportService(makeFakeItems(), makeFakeWebMapImport(), makeFakeHostedFs(), makeFakeStorage());
     const result = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -282,7 +318,7 @@ describe('AgoImportService.run', () => {
         warnings: ['Unresolvable layer XYZ skipped'],
       })),
     } as unknown as WebMapJsonImportService;
-    const importer = new AgoImportService(makeFakeItems(), fakeWebMap, makeFakeHostedFs());
+    const importer = new AgoImportService(makeFakeItems(), fakeWebMap, makeFakeHostedFs(), makeFakeStorage());
     const report = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -304,6 +340,7 @@ describe('AgoImportService.run', () => {
       makeFakeItems(),
       makeFakeWebMapImport(),
       makeFakeHostedFs(),
+      makeFakeStorage(),
     );
     const report = await importer.run({
       user: USER,
@@ -350,7 +387,7 @@ describe('AgoImportService.run', () => {
       }),
     ];
     const fakeItems = makeFakeItems();
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs(), makeFakeStorage());
     await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -404,7 +441,7 @@ describe('AgoImportService.run', () => {
     ];
     report.counts.foldersTotal = 1;
     const fakeItems = makeFakeItems();
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs(), makeFakeStorage());
     const result = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -458,7 +495,7 @@ describe('AgoImportService.run', () => {
     }
     report.folders = [{ id: 'folder-empty', title: 'Just Dashboards' }];
     const fakeItems = makeFakeItems();
-    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs());
+    const importer = new AgoImportService(fakeItems, makeFakeWebMapImport(), makeFakeHostedFs(), makeFakeStorage());
     const result = await importer.run({
       user: USER,
       portalUrl: PORTAL_URL,
@@ -486,6 +523,7 @@ describe('AgoImportService.run', () => {
       fakeItems,
       makeFakeWebMapImport(),
       fakeHosted,
+      makeFakeStorage(),
     );
     const result = await importer.run({
       user: USER,
@@ -549,6 +587,7 @@ describe('AgoImportService.run', () => {
       makeFakeItems(),
       fakeWebMap,
       makeFakeHostedFs(),
+      makeFakeStorage(),
     );
     const result = await importer.run({
       user: USER,
