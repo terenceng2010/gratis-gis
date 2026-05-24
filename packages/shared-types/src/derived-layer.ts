@@ -520,17 +520,46 @@ export type SpatialPredicate =
   | 'near';
 
 /**
- * Reference to a step's "other source" -- either a hardcoded
- * data_layer reference (the only form valid in a saved derived_layer)
- * or a tool-recipe parameter reference resolved at run time.
+ * Reference to a step's "other source".  Three forms cover the
+ * recipe-vocabulary use cases:
  *
- * Steps that allow a parameter reference are usable inside a
- * tool recipe; the derived_layer save-time validator rejects any
- * `{ kind: 'parameter' }` shape because derived_layers have no
- * parameters of their own.
+ *   - `data_layer`:       a portal data_layer item, optionally
+ *                         restricted to a sublayer and / or a
+ *                         specific set of feature ids.  The only
+ *                         form valid in a saved derived_layer.
+ *   - `inline-geometry`:  raw GeoJSON spliced into the step at run
+ *                         time.  Populated by the tool-recipe runner
+ *                         when a `feature-source` parameter bound to
+ *                         `runtime-draw` is resolved.  Rejected by
+ *                         the derived_layer save-time validator (an
+ *                         inline geometry baked into a saved recipe
+ *                         would freeze a once-drawn AOI forever).
+ *   - `parameter`:        unresolved reference to a tool-recipe
+ *                         parameter slot.  Valid only inside a tool
+ *                         recipe's pipeline at design time; the
+ *                         recipe runner replaces every parameter ref
+ *                         with the appropriate resolved shape before
+ *                         handing the pipeline to the SQL compiler.
  */
 export type SourceRef =
-  | { kind: 'data_layer'; itemId: string; layerKey?: string }
+  | {
+      kind: 'data_layer';
+      itemId: string;
+      layerKey?: string;
+      /** Optional subset; when present, the step's right-side rows
+       *  are restricted to these feature ids.  Populated by the
+       *  recipe runner when a feature-source parameter bound to
+       *  `runtime-selection` resolves to "use the current selection
+       *  on this layer". */
+      featureIds?: Array<string | number>;
+    }
+  | {
+      /** Inline GeoJSON Feature, FeatureCollection, or bare Geometry.
+       *  Only valid post-resolution; the SQL compiler converts the
+       *  shape into a one-row VALUES table via ST_GeomFromGeoJSON. */
+      kind: 'inline-geometry';
+      geometry: unknown;
+    }
   | { kind: 'parameter'; name: string };
 
 /** Distance reference: a fixed meters value or a parameter resolved at run time. */

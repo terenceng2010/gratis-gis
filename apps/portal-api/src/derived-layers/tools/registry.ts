@@ -17,6 +17,7 @@ import { fishnetGenerator } from './fishnet.js';
 import { nearestNeighborGenerator } from './nearest-neighbor.js';
 import { randomSampleGenerator } from './random-sample.js';
 import { simplifyGenerator } from './simplify.js';
+import { spatialFilterGenerator } from './spatial-filter.js';
 import { spatialJoinGenerator } from './spatial-join.js';
 import { topNGenerator } from './top-n.js';
 import { verticesGenerator } from './vertices.js';
@@ -65,6 +66,10 @@ const REGISTRY: Map<string, ToolGenerator<unknown>> = new Map([
   [
     spatialJoinGenerator.kind,
     spatialJoinGenerator as ToolGenerator<unknown>,
+  ],
+  [
+    spatialFilterGenerator.kind,
+    spatialFilterGenerator as ToolGenerator<unknown>,
   ],
   [contourGenerator.kind, contourGenerator as ToolGenerator<unknown>],
 ]);
