@@ -1,0 +1,1329 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+'use client';
+
+/**
+ * Recipe-action editor for tool items v2 (#90).
+ *
+ * Surfaces three concerns on the tool detail page:
+ *   1. Parameters: the slots authors expose for hardcoded /
+ *      runtime-resolved inputs (AOI, target layer, predicate,
+ *      distance, ...).
+ *   2. Pipeline: the ordered ToolStep recipe that consumes
+ *      parameters and produces output rows.  Only spatial-filter is
+ *      param-aware in v1; the editor still shows the slot so future
+ *      param-aware steps slot in additively.
+ *   3. Output: the sink that fires when the recipe finishes.
+ *      Selection-on-target-layer is the v1 default; derived-layer
+ *      and data-layer sinks light up once the backend lands them.
+ *
+ * Kept in one file because every section talks to the same
+ * RecipeAction blob -- breaking out per-section would just shuffle
+ * the same prop drilling around.  Sub-renderers are factored out
+ * within the file when one section's UI is non-trivial.
+ */
+
+import { Trash2, Plus } from 'lucide-react';
+import type {
+  DistanceParameter,
+  FeatureSourceParameter,
+  NumberParameter,
+  PredicateParameter,
+  RecipeAction,
+  SpatialPredicate,
+  TextParameter,
+  ToolOutput,
+  ToolParameter,
+  ToolStep,
+} from '@gratis-gis/shared-types';
+import { DEFAULT_TOOL_SELECTION_LIMIT } from '@gratis-gis/shared-types';
+
+const PREDICATE_LABELS: Record<SpatialPredicate, string> = {
+  intersects: 'Intersects',
+  within: 'Within',
+  contains: 'Contains',
+  touches: 'Touches',
+  near: 'Within distance (near)',
+};
+
+const PREDICATES: SpatialPredicate[] = [
+  'intersects',
+  'within',
+  'contains',
+  'touches',
+  'near',
+];
+
+interface Props {
+  recipe: RecipeAction;
+  canEdit: boolean;
+  onChange: (next: RecipeAction) => void;
+}
+
+export function RecipeEditor({ recipe, canEdit, onChange }: Props) {
+  const labelCls =
+    'block text-xs font-medium uppercase tracking-wide text-muted';
+  const inputCls =
+    'mt-1 w-full rounded-md border border-border bg-surface-0 px-2 py-1.5 text-sm text-ink-0 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60';
+
+  function setParameters(next: ToolParameter[]) {
+    onChange({ ...recipe, parameters: next });
+  }
+  function setPipeline(next: ToolStep[]) {
+    onChange({ ...recipe, pipeline: next });
+  }
+  function setOutput(next: ToolOutput) {
+    onChange({ ...recipe, output: next });
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+        A recipe is an on-demand action authors can drop on a map.  At
+        run time the user fills in any runtime parameters, the recipe
+        executes the pipeline, and the output fires (e.g. updates the
+        host map&apos;s selection).
+      </p>
+
+      <ParametersSection
+        parameters={recipe.parameters}
+        canEdit={canEdit}
+        onChange={setParameters}
+        labelCls={labelCls}
+        inputCls={inputCls}
+      />
+
+      <PipelineSection
+        pipeline={recipe.pipeline}
+        parameters={recipe.parameters}
+        canEdit={canEdit}
+        onChange={setPipeline}
+        labelCls={labelCls}
+        inputCls={inputCls}
+      />
+
+      <OutputSection
+        output={recipe.output}
+        parameters={recipe.parameters}
+        canEdit={canEdit}
+        onChange={setOutput}
+        labelCls={labelCls}
+        inputCls={inputCls}
+      />
+
+      <div>
+        <label className={labelCls}>Selection cap</label>
+        <input
+          type="number"
+          disabled={!canEdit}
+          min={1}
+          max={50_000}
+          value={recipe.selectionLimit ?? DEFAULT_TOOL_SELECTION_LIMIT}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (!Number.isFinite(v) || v <= 0) return;
+            onChange({ ...recipe, selectionLimit: Math.floor(v) });
+          }}
+          className={inputCls}
+        />
+        <p className="mt-1 text-[11px] text-muted">
+          Maximum feature ids returned per run.  The runtime banner
+          warns the user when the limit is reached so they know the
+          selection is incomplete.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---- Parameters -----------------------------------------------------------
+
+function ParametersSection({
+  parameters,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  parameters: ToolParameter[];
+  canEdit: boolean;
+  onChange: (next: ToolParameter[]) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  function add(kind: ToolParameter['kind']) {
+    const seedName = nextParamName(parameters, kind);
+    const next: ToolParameter = paramSeed(kind, seedName);
+    onChange([...parameters, next]);
+  }
+  function update(index: number, patch: Partial<ToolParameter>) {
+    onChange(
+      parameters.map((p, i) =>
+        i === index ? ({ ...p, ...patch } as ToolParameter) : p,
+      ),
+    );
+  }
+  function remove(index: number) {
+    onChange(parameters.filter((_, i) => i !== index));
+  }
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-ink-0">Parameters</h3>
+          <p className="text-[11px] text-muted">
+            Slots the recipe exposes.  A parameter can be hardcoded
+            into the tool or filled at run time by the host app /
+            end-user.
+          </p>
+        </div>
+        {canEdit ? (
+          <div className="flex items-center gap-1">
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) {
+                  add(e.target.value as ToolParameter['kind']);
+                  e.target.value = '';
+                }
+              }}
+              className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs text-ink-0"
+            >
+              <option value="">+ Add parameter</option>
+              <option value="feature-source">Feature source (layer / AOI)</option>
+              <option value="predicate">Predicate</option>
+              <option value="distance">Distance (meters)</option>
+              <option value="number">Number</option>
+              <option value="text">Text</option>
+            </select>
+          </div>
+        ) : null}
+      </div>
+
+      {parameters.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border bg-surface-2 px-3 py-4 text-center text-[11px] text-muted">
+          No parameters yet.  Add at least one so the runtime knows
+          which layer to operate on.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {parameters.map((p, i) => (
+            <ParameterCard
+              key={`${p.name}-${i}`}
+              parameter={p}
+              canEdit={canEdit}
+              onChange={(next) => update(i, next)}
+              onRemove={() => remove(i)}
+              labelCls={labelCls}
+              inputCls={inputCls}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ParameterCard({
+  parameter,
+  canEdit,
+  onChange,
+  onRemove,
+  labelCls,
+  inputCls,
+}: {
+  parameter: ToolParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  onRemove: () => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface-2 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={labelCls}>Slug</label>
+              <input
+                type="text"
+                disabled={!canEdit}
+                value={parameter.name}
+                onChange={(e) =>
+                  onChange({ name: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })
+                }
+                placeholder="aoi"
+                className={`${inputCls} font-mono`}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Label</label>
+              <input
+                type="text"
+                disabled={!canEdit}
+                value={parameter.label}
+                onChange={(e) => onChange({ label: e.target.value })}
+                placeholder="Area of interest"
+                className={inputCls}
+              />
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Hint (optional)</label>
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={parameter.hint ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                onChange(v ? { hint: v } : ({ hint: undefined as never } as Partial<ToolParameter>));
+              }}
+              placeholder="Shown under the field at run time"
+              className={inputCls}
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs text-ink-1">
+            <input
+              type="checkbox"
+              disabled={!canEdit}
+              checked={!!parameter.required}
+              onChange={(e) => onChange({ required: e.target.checked })}
+            />
+            Required
+          </label>
+
+          <ParameterBindingEditor
+            parameter={parameter}
+            canEdit={canEdit}
+            onChange={onChange}
+            labelCls={labelCls}
+            inputCls={inputCls}
+          />
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <span className="rounded-full bg-surface-1 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted">
+            {parameter.kind}
+          </span>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="rounded-md border border-border bg-surface-1 p-1 text-rose-700 hover:bg-rose-50"
+              title="Remove parameter"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ParameterBindingEditor({
+  parameter,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  parameter: ToolParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  switch (parameter.kind) {
+    case 'feature-source':
+      return (
+        <FeatureSourceBindingEditor
+          parameter={parameter}
+          canEdit={canEdit}
+          onChange={onChange}
+          labelCls={labelCls}
+          inputCls={inputCls}
+        />
+      );
+    case 'predicate':
+      return (
+        <PredicateBindingEditor
+          parameter={parameter}
+          canEdit={canEdit}
+          onChange={onChange}
+          labelCls={labelCls}
+        />
+      );
+    case 'distance':
+      return (
+        <DistanceBindingEditor
+          parameter={parameter}
+          canEdit={canEdit}
+          onChange={onChange}
+          labelCls={labelCls}
+          inputCls={inputCls}
+        />
+      );
+    case 'number':
+      return (
+        <NumberBindingEditor
+          parameter={parameter}
+          canEdit={canEdit}
+          onChange={onChange}
+          labelCls={labelCls}
+          inputCls={inputCls}
+        />
+      );
+    case 'text':
+      return (
+        <TextBindingEditor
+          parameter={parameter}
+          canEdit={canEdit}
+          onChange={onChange}
+          labelCls={labelCls}
+          inputCls={inputCls}
+        />
+      );
+  }
+}
+
+function FeatureSourceBindingEditor({
+  parameter,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  parameter: FeatureSourceParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  const mode = parameter.binding.mode;
+  function setMode(next: FeatureSourceParameter['binding']['mode']) {
+    let binding: FeatureSourceParameter['binding'];
+    if (next === 'hardcoded') {
+      binding = { mode: 'hardcoded', value: { kind: 'data_layer', itemId: '' } };
+    } else if (next === 'runtime-host') {
+      binding = { mode: 'runtime-host' };
+    } else if (next === 'runtime-draw') {
+      binding = { mode: 'runtime-draw' };
+    } else {
+      binding = { mode: 'runtime-selection' };
+    }
+    onChange({ binding });
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface-1 p-2">
+      <label className={labelCls}>Binding</label>
+      <select
+        disabled={!canEdit}
+        value={mode}
+        onChange={(e) => setMode(e.target.value as typeof mode)}
+        className={inputCls}
+      >
+        <option value="hardcoded">Hardcoded — baked into the tool</option>
+        <option value="runtime-host">From host app (auto-binds at runtime)</option>
+        <option value="runtime-draw">User draws geometry at run time</option>
+        <option value="runtime-selection">Use current selection</option>
+      </select>
+      {mode === 'hardcoded' ? (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className={labelCls}>data_layer item id</label>
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={parameter.binding.mode === 'hardcoded' ? (parameter.binding.value.itemId ?? '') : ''}
+              onChange={(e) => {
+                if (parameter.binding.mode !== 'hardcoded') return;
+                onChange({
+                  binding: {
+                    mode: 'hardcoded',
+                    value: {
+                      ...parameter.binding.value,
+                      kind: 'data_layer',
+                      itemId: e.target.value.trim(),
+                    },
+                  },
+                });
+              }}
+              className={`${inputCls} font-mono`}
+              placeholder="00000000-..."
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Sublayer key (optional)</label>
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={parameter.binding.mode === 'hardcoded' ? (parameter.binding.value.layerKey ?? '') : ''}
+              onChange={(e) => {
+                if (parameter.binding.mode !== 'hardcoded') return;
+                const layerKey = e.target.value.trim();
+                onChange({
+                  binding: {
+                    mode: 'hardcoded',
+                    value: {
+                      ...parameter.binding.value,
+                      ...(layerKey ? { layerKey } : { layerKey: undefined }),
+                    } as FeatureSourceParameter['binding'] extends { mode: 'hardcoded' }
+                      ? { mode: 'hardcoded'; value: import('@gratis-gis/shared-types').FeatureSourceValue }['value']
+                      : never,
+                  },
+                });
+              }}
+              className={`${inputCls} font-mono`}
+              placeholder="default"
+            />
+          </div>
+        </div>
+      ) : null}
+      <p className="text-[11px] text-muted">
+        Geometry type:&nbsp;
+        <select
+          disabled={!canEdit}
+          value={parameter.geometryType ?? 'any'}
+          onChange={(e) =>
+            onChange({
+              geometryType: e.target.value as NonNullable<FeatureSourceParameter['geometryType']>,
+            })
+          }
+          className="rounded-md border border-border bg-surface-1 px-2 py-0.5 text-xs"
+        >
+          <option value="any">Any</option>
+          <option value="point">Point</option>
+          <option value="line">Line</option>
+          <option value="polygon">Polygon</option>
+        </select>
+      </p>
+    </div>
+  );
+}
+
+function PredicateBindingEditor({
+  parameter,
+  canEdit,
+  onChange,
+  labelCls,
+}: {
+  parameter: PredicateParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  labelCls: string;
+}) {
+  const mode = parameter.binding.mode;
+  function setMode(next: 'hardcoded' | 'runtime-pick') {
+    let binding: PredicateParameter['binding'];
+    if (next === 'hardcoded') {
+      binding = { mode: 'hardcoded', value: 'intersects' };
+    } else {
+      binding = { mode: 'runtime-pick', defaultValue: 'intersects' };
+    }
+    onChange({ binding });
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface-1 p-2">
+      <label className={labelCls}>Binding</label>
+      <select
+        disabled={!canEdit}
+        value={mode}
+        onChange={(e) => setMode(e.target.value as 'hardcoded' | 'runtime-pick')}
+        className="w-full rounded-md border border-border bg-surface-0 px-2 py-1.5 text-sm"
+      >
+        <option value="hardcoded">Hardcoded</option>
+        <option value="runtime-pick">User picks at run time</option>
+      </select>
+      <div>
+        <label className={labelCls}>
+          {mode === 'hardcoded' ? 'Predicate' : 'Default predicate'}
+        </label>
+        <select
+          disabled={!canEdit}
+          value={
+            mode === 'hardcoded'
+              ? parameter.binding.value
+              : (parameter.binding as Extract<PredicateParameter['binding'], { mode: 'runtime-pick' }>).defaultValue
+          }
+          onChange={(e) => {
+            const val = e.target.value as SpatialPredicate;
+            if (mode === 'hardcoded') {
+              onChange({ binding: { mode: 'hardcoded', value: val } });
+            } else {
+              onChange({
+                binding: {
+                  mode: 'runtime-pick',
+                  defaultValue: val,
+                  ...((parameter.binding as Extract<PredicateParameter['binding'], { mode: 'runtime-pick' }>).allowed
+                    ? { allowed: (parameter.binding as Extract<PredicateParameter['binding'], { mode: 'runtime-pick' }>).allowed }
+                    : {}),
+                },
+              });
+            }
+          }}
+          className="w-full rounded-md border border-border bg-surface-0 px-2 py-1.5 text-sm"
+        >
+          {PREDICATES.map((p) => (
+            <option key={p} value={p}>
+              {PREDICATE_LABELS[p]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {mode === 'runtime-pick' ? (
+        <div>
+          <label className={labelCls}>Allowed at run time (leave all checked = all)</label>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {PREDICATES.map((p) => {
+              const allowed =
+                (parameter.binding as Extract<PredicateParameter['binding'], { mode: 'runtime-pick' }>).allowed ?? PREDICATES;
+              const on = allowed.includes(p);
+              return (
+                <label key={p} className="flex items-center gap-1 rounded-md border border-border bg-surface-0 px-2 py-0.5 text-[11px]">
+                  <input
+                    type="checkbox"
+                    disabled={!canEdit}
+                    checked={on}
+                    onChange={(e) => {
+                      const cur = new Set(allowed);
+                      if (e.target.checked) cur.add(p);
+                      else cur.delete(p);
+                      const next = PREDICATES.filter((x) => cur.has(x));
+                      onChange({
+                        binding: {
+                          mode: 'runtime-pick',
+                          defaultValue: (parameter.binding as Extract<PredicateParameter['binding'], { mode: 'runtime-pick' }>).defaultValue,
+                          allowed: next,
+                        },
+                      });
+                    }}
+                  />
+                  {PREDICATE_LABELS[p]}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DistanceBindingEditor({
+  parameter,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  parameter: DistanceParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  const mode = parameter.binding.mode;
+  function setMode(next: 'hardcoded' | 'runtime-input') {
+    let binding: DistanceParameter['binding'];
+    if (next === 'hardcoded') {
+      binding = { mode: 'hardcoded', meters: 100 };
+    } else {
+      binding = { mode: 'runtime-input', defaultMeters: 100 };
+    }
+    onChange({ binding });
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface-1 p-2">
+      <label className={labelCls}>Binding</label>
+      <select
+        disabled={!canEdit}
+        value={mode}
+        onChange={(e) => setMode(e.target.value as 'hardcoded' | 'runtime-input')}
+        className={inputCls}
+      >
+        <option value="hardcoded">Hardcoded meters</option>
+        <option value="runtime-input">User types at run time</option>
+      </select>
+      <div>
+        <label className={labelCls}>
+          {mode === 'hardcoded' ? 'Meters' : 'Default meters'}
+        </label>
+        <input
+          type="number"
+          disabled={!canEdit}
+          min={0}
+          value={
+            mode === 'hardcoded'
+              ? parameter.binding.meters
+              : (parameter.binding as Extract<DistanceParameter['binding'], { mode: 'runtime-input' }>).defaultMeters
+          }
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            if (mode === 'hardcoded') {
+              onChange({ binding: { mode: 'hardcoded', meters: n } });
+            } else {
+              const cur = parameter.binding as Extract<DistanceParameter['binding'], { mode: 'runtime-input' }>;
+              onChange({
+                binding: {
+                  mode: 'runtime-input',
+                  defaultMeters: n,
+                  ...(cur.minMeters !== undefined ? { minMeters: cur.minMeters } : {}),
+                  ...(cur.maxMeters !== undefined ? { maxMeters: cur.maxMeters } : {}),
+                },
+              });
+            }
+          }}
+          className={inputCls}
+        />
+      </div>
+    </div>
+  );
+}
+
+function NumberBindingEditor({
+  parameter,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  parameter: NumberParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  const mode = parameter.binding.mode;
+  function setMode(next: 'hardcoded' | 'runtime-input') {
+    let binding: NumberParameter['binding'];
+    if (next === 'hardcoded') {
+      binding = { mode: 'hardcoded', value: 0 };
+    } else {
+      binding = { mode: 'runtime-input', defaultValue: 0 };
+    }
+    onChange({ binding });
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface-1 p-2">
+      <label className={labelCls}>Binding</label>
+      <select
+        disabled={!canEdit}
+        value={mode}
+        onChange={(e) => setMode(e.target.value as 'hardcoded' | 'runtime-input')}
+        className={inputCls}
+      >
+        <option value="hardcoded">Hardcoded number</option>
+        <option value="runtime-input">User types at run time</option>
+      </select>
+      <div>
+        <label className={labelCls}>
+          {mode === 'hardcoded' ? 'Value' : 'Default value'}
+        </label>
+        <input
+          type="number"
+          disabled={!canEdit}
+          value={
+            mode === 'hardcoded'
+              ? parameter.binding.value
+              : (parameter.binding as Extract<NumberParameter['binding'], { mode: 'runtime-input' }>).defaultValue
+          }
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            if (mode === 'hardcoded') {
+              onChange({ binding: { mode: 'hardcoded', value: n } });
+            } else {
+              onChange({ binding: { mode: 'runtime-input', defaultValue: n } });
+            }
+          }}
+          className={inputCls}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TextBindingEditor({
+  parameter,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  parameter: TextParameter;
+  canEdit: boolean;
+  onChange: (next: Partial<ToolParameter>) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  const mode = parameter.binding.mode;
+  function setMode(next: 'hardcoded' | 'runtime-input') {
+    let binding: TextParameter['binding'];
+    if (next === 'hardcoded') {
+      binding = { mode: 'hardcoded', value: '' };
+    } else {
+      binding = { mode: 'runtime-input' };
+    }
+    onChange({ binding });
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface-1 p-2">
+      <label className={labelCls}>Binding</label>
+      <select
+        disabled={!canEdit}
+        value={mode}
+        onChange={(e) => setMode(e.target.value as 'hardcoded' | 'runtime-input')}
+        className={inputCls}
+      >
+        <option value="hardcoded">Hardcoded text</option>
+        <option value="runtime-input">User types at run time</option>
+      </select>
+      <div>
+        <label className={labelCls}>
+          {mode === 'hardcoded' ? 'Value' : 'Default value'}
+        </label>
+        <input
+          type="text"
+          disabled={!canEdit}
+          value={
+            mode === 'hardcoded'
+              ? parameter.binding.value
+              : ((parameter.binding as Extract<TextParameter['binding'], { mode: 'runtime-input' }>).defaultValue ?? '')
+          }
+          onChange={(e) => {
+            const v = e.target.value;
+            if (mode === 'hardcoded') {
+              onChange({ binding: { mode: 'hardcoded', value: v } });
+            } else {
+              onChange({ binding: { mode: 'runtime-input', ...(v ? { defaultValue: v } : {}) } });
+            }
+          }}
+          className={inputCls}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---- Pipeline -------------------------------------------------------------
+
+function PipelineSection({
+  pipeline,
+  parameters,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  pipeline: ToolStep[];
+  parameters: ToolParameter[];
+  canEdit: boolean;
+  onChange: (next: ToolStep[]) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  function addStep(kind: ToolStep['tool']) {
+    if (kind === 'spatial-filter') {
+      onChange([
+        ...pipeline,
+        {
+          tool: 'spatial-filter',
+          params: {
+            otherSource: { kind: 'data_layer', itemId: '' },
+            predicate: { kind: 'fixed', value: 'intersects' },
+          },
+        },
+      ]);
+    }
+  }
+  function update(index: number, next: ToolStep) {
+    onChange(pipeline.map((s, i) => (i === index ? next : s)));
+  }
+  function remove(index: number) {
+    onChange(pipeline.filter((_, i) => i !== index));
+  }
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-ink-0">Pipeline</h3>
+          <p className="text-[11px] text-muted">
+            Ordered steps that run when the recipe executes.  Each
+            step&apos;s output feeds the next.
+          </p>
+        </div>
+        {canEdit ? (
+          <select
+            value=""
+            onChange={(e) => {
+              if (e.target.value) {
+                addStep(e.target.value as ToolStep['tool']);
+                e.target.value = '';
+              }
+            }}
+            className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs text-ink-0"
+          >
+            <option value="">+ Add step</option>
+            <option value="spatial-filter">Spatial filter</option>
+          </select>
+        ) : null}
+      </div>
+      {pipeline.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border bg-surface-2 px-3 py-4 text-center text-[11px] text-muted">
+          No steps yet.  Add a Spatial filter to build a
+          Select-By-Location-style recipe.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {pipeline.map((step, i) => (
+            <StepCard
+              key={`${step.tool}-${i}`}
+              step={step}
+              parameters={parameters}
+              canEdit={canEdit}
+              onChange={(next) => update(i, next)}
+              onRemove={() => remove(i)}
+              labelCls={labelCls}
+              inputCls={inputCls}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StepCard({
+  step,
+  parameters,
+  canEdit,
+  onChange,
+  onRemove,
+  labelCls,
+  inputCls,
+}: {
+  step: ToolStep;
+  parameters: ToolParameter[];
+  canEdit: boolean;
+  onChange: (next: ToolStep) => void;
+  onRemove: () => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface-2 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-mono text-[11px] uppercase tracking-wide text-muted">
+          {step.tool}
+        </span>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded-md border border-border bg-surface-1 p-1 text-rose-700 hover:bg-rose-50"
+            title="Remove step"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+      {step.tool === 'spatial-filter' ? (
+        <SpatialFilterStepEditor
+          step={step}
+          parameters={parameters}
+          canEdit={canEdit}
+          onChange={onChange}
+          labelCls={labelCls}
+          inputCls={inputCls}
+        />
+      ) : (
+        <p className="text-[11px] text-muted">
+          {step.tool} editing is not yet wired into the recipe
+          designer.  Edit the JSON via the API if you need it
+          before the editor lands.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SpatialFilterStepEditor({
+  step,
+  parameters,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  step: Extract<ToolStep, { tool: 'spatial-filter' }>;
+  parameters: ToolParameter[];
+  canEdit: boolean;
+  onChange: (next: ToolStep) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  const featureSourceParams = parameters.filter(
+    (p): p is FeatureSourceParameter => p.kind === 'feature-source',
+  );
+  const predicateParams = parameters.filter(
+    (p): p is PredicateParameter => p.kind === 'predicate',
+  );
+  const distanceParams = parameters.filter(
+    (p): p is DistanceParameter => p.kind === 'distance',
+  );
+
+  const otherSource = step.params.otherSource;
+  const predicate = step.params.predicate;
+  const distance = step.params.distance;
+
+  function patch(patch: Partial<typeof step.params>) {
+    onChange({
+      tool: 'spatial-filter',
+      params: { ...step.params, ...patch },
+    });
+  }
+
+  // ---- other-source row -------------------------------------------------
+  const otherSourceKind =
+    otherSource.kind === 'parameter' ? 'parameter' : 'data_layer';
+
+  // ---- predicate row ----------------------------------------------------
+  const predicateKind = predicate.kind === 'parameter' ? 'parameter' : 'fixed';
+
+  // ---- distance row -----------------------------------------------------
+  const distanceKind =
+    !distance ? undefined : distance.kind === 'parameter' ? 'parameter' : 'fixed';
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className={labelCls}>Other source (filter against)</label>
+        <div className="mt-1 flex gap-2">
+          <select
+            disabled={!canEdit}
+            value={otherSourceKind}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next === 'parameter') {
+                patch({
+                  otherSource: {
+                    kind: 'parameter',
+                    name: featureSourceParams[0]?.name ?? '',
+                  },
+                });
+              } else {
+                patch({ otherSource: { kind: 'data_layer', itemId: '' } });
+              }
+            }}
+            className="rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+          >
+            <option value="data_layer">Pick a layer</option>
+            <option value="parameter">Use a parameter</option>
+          </select>
+          {otherSource.kind === 'parameter' ? (
+            <select
+              disabled={!canEdit}
+              value={otherSource.name}
+              onChange={(e) => patch({ otherSource: { kind: 'parameter', name: e.target.value } })}
+              className="flex-1 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+            >
+              <option value="">(pick a parameter)</option>
+              {featureSourceParams.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.label} — {p.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={(otherSource as { itemId?: string }).itemId ?? ''}
+              onChange={(e) =>
+                patch({
+                  otherSource: {
+                    kind: 'data_layer',
+                    itemId: e.target.value.trim(),
+                  },
+                })
+              }
+              placeholder="data_layer item id"
+              className={`${inputCls} flex-1 font-mono`}
+            />
+          )}
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>Predicate</label>
+        <div className="mt-1 flex gap-2">
+          <select
+            disabled={!canEdit}
+            value={predicateKind}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next === 'parameter') {
+                patch({
+                  predicate: {
+                    kind: 'parameter',
+                    name: predicateParams[0]?.name ?? '',
+                  },
+                });
+              } else {
+                patch({ predicate: { kind: 'fixed', value: 'intersects' } });
+              }
+            }}
+            className="rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+          >
+            <option value="fixed">Hardcoded</option>
+            <option value="parameter">Use a parameter</option>
+          </select>
+          {predicate.kind === 'parameter' ? (
+            <select
+              disabled={!canEdit}
+              value={predicate.name}
+              onChange={(e) => patch({ predicate: { kind: 'parameter', name: e.target.value } })}
+              className="flex-1 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+            >
+              <option value="">(pick a parameter)</option>
+              {predicateParams.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.label} — {p.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              disabled={!canEdit}
+              value={predicate.value}
+              onChange={(e) => patch({ predicate: { kind: 'fixed', value: e.target.value as SpatialPredicate } })}
+              className="flex-1 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+            >
+              {PREDICATES.map((p) => (
+                <option key={p} value={p}>
+                  {PREDICATE_LABELS[p]}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>Distance (only used when predicate is &quot;near&quot;)</label>
+        <div className="mt-1 flex gap-2">
+          <select
+            disabled={!canEdit}
+            value={distanceKind ?? 'none'}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next === 'none') {
+                // exactOptionalPropertyTypes: we can't set distance
+                // to undefined; rebuild the step without the key.
+                const { distance: _unused, ...rest } = step.params;
+                onChange({ tool: 'spatial-filter', params: rest });
+              } else if (next === 'parameter') {
+                patch({
+                  distance: {
+                    kind: 'parameter',
+                    name: distanceParams[0]?.name ?? '',
+                  },
+                });
+              } else {
+                patch({ distance: { kind: 'fixed', meters: 100 } });
+              }
+            }}
+            className="rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+          >
+            <option value="none">No distance</option>
+            <option value="fixed">Hardcoded meters</option>
+            <option value="parameter">Use a parameter</option>
+          </select>
+          {distance && distance.kind === 'parameter' ? (
+            <select
+              disabled={!canEdit}
+              value={distance.name}
+              onChange={(e) => patch({ distance: { kind: 'parameter', name: e.target.value } })}
+              className="flex-1 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-sm"
+            >
+              <option value="">(pick a parameter)</option>
+              {distanceParams.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.label} — {p.name}
+                </option>
+              ))}
+            </select>
+          ) : distance && distance.kind === 'fixed' ? (
+            <input
+              type="number"
+              disabled={!canEdit}
+              min={0}
+              value={distance.meters}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (!Number.isFinite(n)) return;
+                patch({ distance: { kind: 'fixed', meters: n } });
+              }}
+              className={`${inputCls} flex-1`}
+            />
+          ) : (
+            <div className="flex-1" />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Output ---------------------------------------------------------------
+
+function OutputSection({
+  output,
+  parameters,
+  canEdit,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  output: ToolOutput;
+  parameters: ToolParameter[];
+  canEdit: boolean;
+  onChange: (next: ToolOutput) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  const featureSourceParams = parameters.filter(
+    (p): p is FeatureSourceParameter => p.kind === 'feature-source',
+  );
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-medium text-ink-0">Output</h3>
+      <p className="text-[11px] text-muted">
+        What happens when the recipe finishes.  Selection updates the
+        host map&apos;s selection state on the chosen target layer.
+      </p>
+      <div>
+        <label className={labelCls}>Sink</label>
+        <select
+          disabled={!canEdit}
+          value={output.kind}
+          onChange={(e) => {
+            const next = e.target.value as ToolOutput['kind'];
+            if (next === 'selection') {
+              onChange({ kind: 'selection', targetParameterRef: featureSourceParams[0]?.name ?? '' });
+            } else if (next === 'derived-layer') {
+              onChange({ kind: 'derived-layer', titleTemplate: 'Result of {{toolName}}' });
+            } else {
+              onChange({ kind: 'data-layer', titleTemplate: 'Result of {{toolName}}' });
+            }
+          }}
+          className={inputCls}
+        >
+          <option value="selection">Selection (transient)</option>
+          <option value="derived-layer" disabled>
+            Derived layer — coming soon
+          </option>
+          <option value="data-layer" disabled>
+            Data layer (materialise) — coming soon
+          </option>
+        </select>
+      </div>
+      {output.kind === 'selection' ? (
+        <div>
+          <label className={labelCls}>Target layer parameter</label>
+          <select
+            disabled={!canEdit}
+            value={output.targetParameterRef}
+            onChange={(e) =>
+              onChange({ kind: 'selection', targetParameterRef: e.target.value })
+            }
+            className={inputCls}
+          >
+            <option value="">(pick a feature-source parameter)</option>
+            {featureSourceParams.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.label} — {p.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-muted">
+            Selection is applied on this parameter&apos;s layer.  Only
+            feature-source parameters appear in the list because
+            other kinds don&apos;t identify a layer.
+          </p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// ---- Helpers --------------------------------------------------------------
+
+function nextParamName(existing: ToolParameter[], kind: ToolParameter['kind']): string {
+  const base = paramNameBase(kind);
+  const taken = new Set(existing.map((p) => p.name));
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}_${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}_${Date.now()}`;
+}
+
+function paramNameBase(kind: ToolParameter['kind']): string {
+  switch (kind) {
+    case 'feature-source':
+      return 'layer';
+    case 'predicate':
+      return 'predicate';
+    case 'distance':
+      return 'distance';
+    case 'number':
+      return 'number';
+    case 'text':
+      return 'text';
+  }
+}
+
+function paramSeed(kind: ToolParameter['kind'], name: string): ToolParameter {
+  switch (kind) {
+    case 'feature-source':
+      return {
+        kind: 'feature-source',
+        name,
+        label: 'Feature source',
+        binding: { mode: 'runtime-host' },
+      };
+    case 'predicate':
+      return {
+        kind: 'predicate',
+        name,
+        label: 'Predicate',
+        binding: { mode: 'runtime-pick', defaultValue: 'intersects' },
+      };
+    case 'distance':
+      return {
+        kind: 'distance',
+        name,
+        label: 'Distance (m)',
+        binding: { mode: 'runtime-input', defaultMeters: 100 },
+      };
+    case 'number':
+      return {
+        kind: 'number',
+        name,
+        label: 'Number',
+        binding: { mode: 'runtime-input', defaultValue: 0 },
+      };
+    case 'text':
+      return {
+        kind: 'text',
+        name,
+        label: 'Text',
+        binding: { mode: 'runtime-input' },
+      };
+  }
+}
