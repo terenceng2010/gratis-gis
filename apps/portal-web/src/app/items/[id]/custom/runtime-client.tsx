@@ -59,7 +59,12 @@ import type {
   PanelAnchor,
   PanelArrangement,
   PrintTemplateData,
+  RecipeAction,
 } from '@gratis-gis/shared-types';
+import {
+  RecipeRunPanel,
+  type HostLayerOption,
+} from './recipe-run-panel.js';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { customBasemapToData } from '@/lib/custom-basemap';
 import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
@@ -3743,13 +3748,20 @@ function ToolButtonRender({
             targetItemId: string;
             layerKey: string;
             format: 'csv' | 'xlsx';
-          };
+          }
+        | RecipeActionShape;
     } | null;
   };
+  const ctx = useContext(CustomMapsContext);
   const [tool, setTool] = useState<ToolItem | null>(null);
   const [status, setStatus] = useState<'loading' | 'ok' | 'missing'>(
     toolId ? 'loading' : 'missing',
   );
+  // Recipe runtime panel.  Opens when the user clicks a tool whose
+  // action is a recipe; closes after the runner returns + the host
+  // selection has been applied.  Local state lives on the button
+  // because each button independently triggers its own run.
+  const [recipePanelOpen, setRecipePanelOpen] = useState(false);
   useEffect(() => {
     if (!toolId) {
       setStatus('missing');
@@ -3781,6 +3793,10 @@ function ToolButtonRender({
   const runTool = () => {
     const action = tool?.data?.action;
     if (!action) return;
+    if (action.kind === 'recipe') {
+      setRecipePanelOpen(true);
+      return;
+    }
     if (action.kind === 'open-item') {
       const view = action.view ? `?view=${encodeURIComponent(action.view)}` : '';
       const href = `/items/${action.targetItemId}${view}`;
@@ -3872,8 +3888,124 @@ function ToolButtonRender({
       >
         {visibleText}
       </button>
+      {recipePanelOpen && tool && tool.data?.action?.kind === 'recipe' && toolId ? (
+        (() => {
+          const bbox = firstMapBbox(ctx);
+          return (
+            <RecipeRunPanel
+              toolId={toolId}
+              toolTitle={tool.title}
+              recipe={tool.data.action as RecipeAction}
+              hostLayers={buildHostLayerOptions(ctx)}
+              {...(bbox ? { hostBbox: bbox } : {})}
+              onClose={() => setRecipePanelOpen(false)}
+              onResult={(result) => applyRecipeSelection(ctx, result)}
+            />
+          );
+        })()
+      ) : null}
     </div>
   );
+}
+
+/**
+ * Local typedef for the recipe-action shape the runtime sees on the
+ * wire.  Mirrors the shared-types RecipeAction at the fields the
+ * runtime panel and the selection applier consume.  Kept narrow so
+ * a stale tool with a future field doesn't crash the runtime.
+ */
+type RecipeActionShape = {
+  kind: 'recipe';
+  recipeVersion?: number;
+  parameters?: unknown[];
+  pipeline?: unknown[];
+  output?: { kind?: string; targetParameterRef?: string };
+  selectionLimit?: number;
+};
+
+/**
+ * Collect host-app layer options for the recipe runtime panel: one
+ * entry per resolved app target, augmented with the current
+ * selection on that layer (collected across every mounted Map
+ * widget) and a sample bbox from one of the maps that hosts it.
+ */
+function buildHostLayerOptions(
+  ctx: CustomMapsCtx | null,
+): HostLayerOption[] {
+  if (!ctx) return [];
+  const layers: HostLayerOption[] = [];
+  for (const target of ctx.resolvedTargets) {
+    const mapLayerId = target.mapLayer.id;
+    // Union the per-map selections for this MapLayer across every
+    // Map widget that has it.
+    const selected = new Set<string | number>();
+    for (const state of Object.values(ctx.states)) {
+      const ids = state.selection[mapLayerId];
+      if (ids) for (const x of ids) selected.add(x);
+    }
+    // First map's bbox is sufficient for "use current view"; if
+    // there are multiple maps we don't try to merge.
+    const mapInstance = Object.values(ctx.maps).find((m) => m) ?? null;
+    let mapBbox: [number, number, number, number] | undefined;
+    if (mapInstance) {
+      const b = mapInstance.getBounds();
+      mapBbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    }
+    layers.push({
+      mapLayerId,
+      itemId: target.dataLayerId,
+      layerKey: target.layerKey,
+      title: target.title,
+      ...(selected.size > 0 ? { selectedIds: Array.from(selected) } : {}),
+      ...(mapBbox ? { mapBbox } : {}),
+    });
+  }
+  return layers;
+}
+
+/**
+ * Convenience getter for the host's "current view" bbox; first map
+ * wins.  Used as a fallback for the recipe panel's runtime-draw UI
+ * when the resolvedTarget doesn't carry a per-layer bbox.
+ */
+function firstMapBbox(
+  ctx: CustomMapsCtx | null,
+): [number, number, number, number] | null {
+  if (!ctx) return null;
+  const m = Object.values(ctx.maps).find((x) => x);
+  if (!m) return null;
+  const b = m.getBounds();
+  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+}
+
+/**
+ * Apply a recipe runner's selection result to every Map widget
+ * that has the target layer.  The result identifies the layer by
+ * (itemId, layerKey); we match each MapLayer in each MapState
+ * against that and replace its selection slot with the new
+ * featureIds set.
+ */
+function applyRecipeSelection(
+  ctx: CustomMapsCtx | null,
+  result: { output: { kind: 'selection'; layer: { itemId: string; layerKey?: string }; featureIds: Array<string | number> } },
+): void {
+  if (!ctx) return;
+  const { itemId, layerKey } = result.output.layer;
+  for (const [mapWidgetId, state] of Object.entries(ctx.states)) {
+    for (const ml of state.mapData.layers) {
+      if (ml.source.kind !== 'data-layer') continue;
+      if (ml.source.itemId !== itemId) continue;
+      if ((ml.source.layerKey ?? undefined) !== (layerKey ?? undefined)) continue;
+      // Match -- replace selection on that layer for this map.
+      ctx.update(mapWidgetId, (cur) => ({
+        ...cur,
+        selection: {
+          ...cur.selection,
+          [ml.id]: new Set(result.output.featureIds),
+        },
+      }));
+    }
+  }
 }
 
 function DividerWidgetRender({ widget }: { widget: CustomWidget }) {
