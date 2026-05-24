@@ -13,6 +13,7 @@ import {
   MessageSquarePlus,
   RefreshCw,
   Smartphone,
+  Sparkles,
   Users,
   Wrench,
   type LucideIcon,
@@ -24,6 +25,7 @@ import {
   getItemTypeTileClasses,
   hasRuntime,
 } from '@/lib/item-type-icon';
+import type { WhatsNewEntry } from '@/lib/whats-new';
 
 /**
  * Public landing page for unauthenticated visitors. Renders outside
@@ -86,12 +88,20 @@ interface Props {
    * just don't get prompted to sign in again.
    */
   isAuthenticated?: boolean;
+  /**
+   * Recent user-visible updates parsed from
+   * docs/changelog/user-visible.md.  Empty or omitted to suppress
+   * the "What's new" card (e.g. on first deploy before any entries
+   * exist).
+   */
+  whatsNew?: WhatsNewEntry[];
 }
 
 export function PublicLanding({
   data,
   forceProjectSection,
   isAuthenticated,
+  whatsNew,
 }: Props) {
   const { org, items: rawItems } = data;
   // Filter to items that actually have an anonymous-accessible
@@ -161,6 +171,10 @@ export function PublicLanding({
         <ProjectAboutSection />
       ) : null}
 
+      {whatsNew && whatsNew.length > 0 ? (
+        <WhatsNewSection entries={whatsNew} />
+      ) : null}
+
       {org.showPublicItems ? (
         <section className="mx-auto w-full max-w-6xl flex-1 px-6 py-12">
           <div className="mb-6">
@@ -220,6 +234,70 @@ export function PublicLanding({
       </footer>
     </div>
   );
+}
+
+/**
+ * "What's new" card on the landing page.  Driven by entries parsed
+ * from docs/changelog/user-visible.md at server-render time.  The
+ * source is plain-English on purpose -- if an entry reads like a
+ * release note ("Refactored the SymbolService") it doesn't belong
+ * here.  See docs/changelog/user-visible.md for the format and the
+ * tone we keep.
+ */
+function WhatsNewSection({ entries }: { entries: WhatsNewEntry[] }) {
+  return (
+    <section className="mx-auto w-full max-w-6xl px-6 pt-10">
+      <div className="rounded-lg border border-border bg-surface-1 p-6 shadow-card">
+        <div className="mb-4 flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-base font-semibold tracking-tight text-ink-0">
+            What&apos;s new
+          </h2>
+        </div>
+        <ul className="space-y-4">
+          {entries.map((e) => (
+            <li
+              key={`${e.date}-${e.name}`}
+              className="border-l-2 border-accent/40 pl-4"
+            >
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <time
+                  dateTime={e.date}
+                  className="font-mono text-[11px] uppercase tracking-wide text-muted"
+                >
+                  {formatChangelogDate(e.date)}
+                </time>
+                <span className="text-sm font-medium text-ink-0">
+                  {e.name}
+                </span>
+              </div>
+              <p className="mt-0.5 text-sm leading-snug text-muted">
+                {e.description}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Render the YYYY-MM-DD heading date in a friendlier short form
+ * (e.g. "May 24, 2026").  We do this in-place because the landing
+ * page is a server component; bringing in a date-formatting library
+ * for one line would be overkill.  Falls back to the raw string if
+ * the input doesn't parse, so a malformed entry still renders.
+ */
+function formatChangelogDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 }
 
 /**

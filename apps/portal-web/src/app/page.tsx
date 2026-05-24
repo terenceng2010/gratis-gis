@@ -2,6 +2,7 @@
 import { getServerSession } from 'next-auth';
 import type { ItemType } from '@gratis-gis/shared-types';
 import { authOptions } from '@/lib/auth';
+import { loadWhatsNewEntries } from '@/lib/whats-new';
 import { PublicLanding } from './public-landing';
 
 export default async function HomePage(
@@ -27,10 +28,16 @@ export default async function HomePage(
   // NEXT_PUBLIC_PROJECT_LANDING build flag (useful for layout
   // checks on prod before flipping the per-tenant flag).
   const previewProject = searchParams?.preview === 'project';
-  const data = await loadLandingData();
+  const [data, whatsNew] = await Promise.all([
+    loadLandingData(),
+    // Cap at 5 entries so the landing card stays compact; the
+    // markdown file can carry more for future-proofing.
+    loadWhatsNewEntries(5),
+  ]);
   return (
     <PublicLanding
       data={data}
+      whatsNew={whatsNew}
       forceProjectSection={previewProject}
       isAuthenticated={!!session}
     />
