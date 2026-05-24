@@ -379,3 +379,116 @@ export function emptyRecipeAction(): RecipeAction {
 export function isRecipeAction(action: ToolAction): action is RecipeAction {
   return action.kind === 'recipe';
 }
+
+/**
+ * Catalog of starter recipe templates.  Each entry is a small
+ * factory the tool designer surfaces as a "Start from template"
+ * option so authors can stamp out a working recipe without
+ * hand-wiring every parameter.  The user can edit anything after
+ * stamping; the template is just a head start.
+ *
+ * Add a template by appending an entry to RECIPE_TEMPLATES.  Each
+ * template returns a fresh RecipeAction blob (defensive cloning so
+ * future edits don't leak across stamps).
+ */
+export interface RecipeTemplate {
+  /** Stable id used as the picker's option key. */
+  id: string;
+  /** Human-readable label for the picker. */
+  label: string;
+  /** Short description shown under the label. */
+  description: string;
+  /** Factory: returns a fresh RecipeAction the editor can adopt. */
+  build(): RecipeAction;
+}
+
+/**
+ * Select-By-Location template.  The canonical recipe we ship as a
+ * proof of concept: pick a target layer, pick an AOI (drawn or from
+ * the current selection), pick a predicate, optionally a distance,
+ * and the runtime updates the target layer's selection with the
+ * matching feature ids.
+ *
+ * Parameter slots:
+ *   target:    runtime-host  -- the host app maps a real layer to
+ *                               this slot (or the user picks one).
+ *   aoi:       runtime-draw  -- the user draws (or pastes) a
+ *                               geometry at run time.  Polygon by
+ *                               default; the constraint can be
+ *                               relaxed by the author after
+ *                               stamping.
+ *   predicate: runtime-pick  -- defaults to 'intersects'; the full
+ *                               five-way set is allowed.
+ *   distance:  runtime-input -- only used when predicate='near';
+ *                               default 100 m.
+ */
+const SELECT_BY_LOCATION: RecipeTemplate = {
+  id: 'select-by-location',
+  label: 'Select By Location',
+  description:
+    'Select features in one layer based on a spatial relationship to another geometry. Mirrors the classic GIS workflow.',
+  build(): RecipeAction {
+    return {
+      kind: 'recipe',
+      recipeVersion: 1,
+      parameters: [
+        {
+          kind: 'feature-source',
+          name: 'target',
+          label: 'Target layer',
+          hint: 'The layer features are selected from.',
+          required: true,
+          geometryType: 'any',
+          binding: { mode: 'runtime-host' },
+        },
+        {
+          kind: 'feature-source',
+          name: 'aoi',
+          label: 'Area of interest',
+          hint: 'Draw a shape (or use the current map view) to define the selection geometry.',
+          required: true,
+          geometryType: 'polygon',
+          binding: { mode: 'runtime-draw' },
+        },
+        {
+          kind: 'predicate',
+          name: 'predicate',
+          label: 'Spatial relationship',
+          binding: {
+            mode: 'runtime-pick',
+            defaultValue: 'intersects',
+            allowed: ['intersects', 'within', 'contains', 'touches', 'near'],
+          },
+        },
+        {
+          kind: 'distance',
+          name: 'distance',
+          label: 'Distance (meters)',
+          hint: "Only used when the predicate is 'near'.",
+          binding: { mode: 'runtime-input', defaultMeters: 100 },
+        },
+      ],
+      pipeline: [
+        {
+          tool: 'spatial-filter',
+          params: {
+            otherSource: { kind: 'parameter', name: 'aoi' },
+            predicate: { kind: 'parameter', name: 'predicate' },
+            distance: { kind: 'parameter', name: 'distance' },
+          },
+        },
+      ],
+      output: { kind: 'selection', targetParameterRef: 'target' },
+      selectionLimit: DEFAULT_TOOL_SELECTION_LIMIT,
+    };
+  },
+};
+
+export const RECIPE_TEMPLATES: RecipeTemplate[] = [SELECT_BY_LOCATION];
+
+/** Convenience accessor for the canonical Select-By-Location
+ *  template.  Useful for tests + the new-item wizard's "stamp out
+ *  a working starter" path. */
+export function selectByLocationRecipe(): RecipeAction {
+  return SELECT_BY_LOCATION.build();
+}

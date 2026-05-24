@@ -22,7 +22,7 @@
  * within the file when one section's UI is non-trivial.
  */
 
-import { Trash2, Plus } from 'lucide-react';
+import { Trash2, Plus, Sparkles } from 'lucide-react';
 import type {
   DistanceParameter,
   FeatureSourceParameter,
@@ -35,7 +35,10 @@ import type {
   ToolParameter,
   ToolStep,
 } from '@gratis-gis/shared-types';
-import { DEFAULT_TOOL_SELECTION_LIMIT } from '@gratis-gis/shared-types';
+import {
+  DEFAULT_TOOL_SELECTION_LIMIT,
+  RECIPE_TEMPLATES,
+} from '@gratis-gis/shared-types';
 
 const PREDICATE_LABELS: Record<SpatialPredicate, string> = {
   intersects: 'Intersects',
@@ -75,6 +78,13 @@ export function RecipeEditor({ recipe, canEdit, onChange }: Props) {
     onChange({ ...recipe, output: next });
   }
 
+  // A recipe is "empty" when it has no parameters AND no pipeline
+  // steps -- the state right after the author switches the action
+  // kind to recipe.  We only offer the "Start from template" path
+  // in that state so a half-built custom recipe isn't accidentally
+  // wiped by the picker.
+  const isEmpty = recipe.parameters.length === 0 && recipe.pipeline.length === 0;
+
   return (
     <div className="space-y-5">
       <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
@@ -83,6 +93,32 @@ export function RecipeEditor({ recipe, canEdit, onChange }: Props) {
         executes the pipeline, and the output fires (e.g. updates the
         host map&apos;s selection).
       </p>
+
+      {isEmpty && canEdit && RECIPE_TEMPLATES.length > 0 ? (
+        <div className="space-y-2 rounded-md border border-accent/30 bg-accent/5 p-3">
+          <div className="flex items-center gap-2 text-sm text-ink-0">
+            <Sparkles className="h-4 w-4 text-accent" />
+            <span className="font-medium">Start from a template</span>
+          </div>
+          <p className="text-[11px] text-muted">
+            Stamp out a working recipe in one click.  You can edit
+            anything afterward.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {RECIPE_TEMPLATES.map((tpl) => (
+              <button
+                key={tpl.id}
+                type="button"
+                onClick={() => onChange(tpl.build())}
+                className="rounded-md border border-border bg-surface-0 px-3 py-2 text-left text-xs hover:border-accent hover:bg-surface-1"
+              >
+                <div className="font-medium text-ink-0">{tpl.label}</div>
+                <div className="text-[10px] text-muted">{tpl.description}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <ParametersSection
         parameters={recipe.parameters}
