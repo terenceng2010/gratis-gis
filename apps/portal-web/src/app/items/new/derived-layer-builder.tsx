@@ -903,6 +903,7 @@ const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   'calculate-field': 'Calculate field from expression',
   aggregate: 'Group by + aggregate',
   'spatial-join': 'Spatial join (from another layer)',
+  'spatial-filter': 'Spatial filter (by another layer)',
   contour: 'Contour from points',
 };
 
@@ -930,6 +931,8 @@ const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
     'Collapse rows into one per group with count / sum / avg / min / max aggregations. Geometry is unioned per group.',
   'spatial-join':
     "Join attributes (or a count) from another data layer onto each upstream row using a spatial predicate: within / intersects / nearest.",
+  'spatial-filter':
+    'Keep upstream rows whose geometry satisfies a predicate (intersects / within / contains / touches / near) against another layer.',
   contour:
     'Interpolate contour lines from a point layer with a numeric field (elevation, water level, sample reading). Output is line features tagged with the contour level.',
 };
@@ -990,6 +993,13 @@ const TOOL_GROUPS: ToolGroup[] = [
       'Derive a surface (or its isolines) from a sparse set of point measurements.',
     tools: ['contour'],
   },
+  // Note: `spatial-join` and `spatial-filter` are valid ToolStep
+  // members but are intentionally absent from this picker.  Both need
+  // an "other layer" picker UI in the step editor before they're
+  // useful from the derived_layer wizard; the recipe-action path on
+  // tool items consumes them through the tool designer instead.  Add
+  // both back here once the layer-picker step editor lands so the
+  // derived_layer and tool-recipe vocabularies stay in sync.
 ];
 
 /**

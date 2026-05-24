@@ -11,18 +11,37 @@
  *
  * v1 actions are URL-shaped on purpose. "Navigate the user to
  * somewhere" covers a lot of "show me the thing" workflows and
- * needs no execution backend.  Later actions (run a derived-layer
- * pipeline, trigger a print job) can land additively without
- * changing the shape of existing tools.
+ * needs no execution backend.
+ *
+ * v2 adds the `recipe` action kind: a parameterized on-demand action
+ * that reuses the derived_layer ToolStep vocabulary.  Authors define
+ * named parameter slots (an AOI, a target layer, a predicate, a
+ * distance) with binding modes (hardcoded, resolved from the host
+ * app, drawn at runtime, picked at runtime).  At run time the recipe
+ * runner resolves the parameters, substitutes them into the pipeline,
+ * compiles to PostGIS, and either updates the host app's selection or
+ * creates a derived_layer / data_layer item from the result.
+ *
+ * See docs/tool-items-v2.md for the full design.
  */
+
+import type {
+  SpatialPredicate,
+  ToolStep,
+} from './derived-layer';
 
 /**
  * What the tool does when triggered.  Discriminated on `kind`.
+ *
+ * The first three are v1 navigation/export shapes.  `recipe` is the
+ * v2 parameterized-action shape; it carries its own sub-schema for
+ * parameters + pipeline + output.
  */
 export type ToolAction =
   | OpenItemAction
   | OpenUrlAction
-  | ExportLayerAction;
+  | ExportLayerAction
+  | RecipeAction;
 
 /**
  * Open another portal item in the same browser tab.  Resolves to
@@ -79,15 +98,226 @@ export interface ExportLayerAction {
   format: 'csv' | 'xlsx';
 }
 
+// ---- Recipe action (v2) ----------------------------------------------------
+
+/**
+ * Geometry types accepted by a feature-source parameter.  `'any'`
+ * relaxes the constraint -- some tools (e.g. Select By Location)
+ * work on a point, line, or polygon AOI interchangeably.
+ */
+export type ParameterGeometryType = 'point' | 'line' | 'polygon' | 'any';
+
+/**
+ * Reference to a feature source used as a parameter value.  Used
+ * both as a hardcoded binding default and as the run-time payload
+ * shape when the binding is `runtime-host` or `runtime-selection`.
+ */
+export interface FeatureSourceValue {
+  /**
+   * `data_layer`: the source is a portal data_layer (the typical
+   *               case for layers the host app already maps).
+   * `derived_layer`: the source is a portal derived_layer.
+   * `inline-geojson`: the source is an inline GeoJSON Feature or
+   *               FeatureCollection supplied at run time (used by
+   *               `runtime-draw` parameters).
+   */
+  kind: 'data_layer' | 'derived_layer' | 'inline-geojson';
+  /** Layer item id; absent for `inline-geojson`. */
+  itemId?: string;
+  /** Sublayer key for v3 multi-layer data_layers. */
+  layerKey?: string;
+  /** Inline GeoJSON for `inline-geojson`. */
+  geojson?: unknown;
+  /** Optional subset of feature ids to constrain the source to. */
+  featureIds?: Array<string | number>;
+}
+
+/**
+ * Feature-source parameter -- typically the AOI, a target layer, or
+ * a "filter by" layer for a spatial-filter step.
+ *
+ * Binding modes:
+ *   - `hardcoded`:        the layer is baked into the tool.  Use when
+ *                         the tool is meant to operate against one
+ *                         specific layer (e.g. "Find addresses inside
+ *                         the OSM buildings layer").
+ *   - `runtime-host`:     resolved from the host app's available
+ *                         layers at run time.  The Button widget can
+ *                         pre-bind this to a specific layer; if
+ *                         unbound, the runtime parameter UI prompts.
+ *   - `runtime-draw`:     user draws a geometry interactively at run
+ *                         time (point, line, polygon).
+ *   - `runtime-selection`: use the current host map selection as the
+ *                         feature source.
+ */
+export interface FeatureSourceParameter {
+  kind: 'feature-source';
+  /** Slot name; referenced from step params as `{ kind: 'parameter', name }`. */
+  name: string;
+  /** Human label shown in the runtime UI and the tool designer. */
+  label: string;
+  /** Optional short blurb shown under the label. */
+  hint?: string;
+  /** Whether the parameter must be resolved before the tool can run. */
+  required?: boolean;
+  /** Geometry type constraint.  Defaults to 'any'. */
+  geometryType?: ParameterGeometryType;
+  binding:
+    | { mode: 'hardcoded'; value: FeatureSourceValue }
+    | { mode: 'runtime-host'; defaultValue?: FeatureSourceValue }
+    | { mode: 'runtime-draw' }
+    | { mode: 'runtime-selection' };
+}
+
+/**
+ * Predicate parameter -- usually drives a spatial-filter step.
+ *
+ * Binding modes:
+ *   - `hardcoded`: the predicate is baked into the tool.
+ *   - `runtime-pick`: end-user picks at run time (with optional
+ *                     `allowed` set narrowing the chip strip).
+ */
+export interface PredicateParameter {
+  kind: 'predicate';
+  name: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  binding:
+    | { mode: 'hardcoded'; value: SpatialPredicate }
+    | {
+        mode: 'runtime-pick';
+        defaultValue: SpatialPredicate;
+        /** Subset of predicates the runtime picker exposes; omitted
+         *  means all of them. */
+        allowed?: SpatialPredicate[];
+      };
+}
+
+/**
+ * Distance parameter, always in meters internally.  Wizard surfaces
+ * a unit toggle; the saved value normalises to meters.
+ *
+ * Binding modes:
+ *   - `hardcoded`: fixed meters value.
+ *   - `runtime-input`: user types a number at run time.
+ */
+export interface DistanceParameter {
+  kind: 'distance';
+  name: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  binding:
+    | { mode: 'hardcoded'; meters: number }
+    | {
+        mode: 'runtime-input';
+        defaultMeters: number;
+        minMeters?: number;
+        maxMeters?: number;
+      };
+}
+
+/** Plain-number parameter (no unit semantics). */
+export interface NumberParameter {
+  kind: 'number';
+  name: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  binding:
+    | { mode: 'hardcoded'; value: number }
+    | {
+        mode: 'runtime-input';
+        defaultValue: number;
+        min?: number;
+        max?: number;
+      };
+}
+
+/** Free-text parameter -- e.g. a SQL where-clause snippet or a title. */
+export interface TextParameter {
+  kind: 'text';
+  name: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  binding:
+    | { mode: 'hardcoded'; value: string }
+    | { mode: 'runtime-input'; defaultValue?: string };
+}
+
+/**
+ * Discriminated union of every tool-recipe parameter kind.  Adding a
+ * new parameter kind means extending the union, the runtime UI's
+ * prompt switch, and the recipe runner's substitution map.
+ */
+export type ToolParameter =
+  | FeatureSourceParameter
+  | PredicateParameter
+  | DistanceParameter
+  | NumberParameter
+  | TextParameter;
+
+/**
+ * What happens with the pipeline's output when the tool finishes.
+ *
+ *   - `selection`:    update the host app's selection state on the
+ *                     layer referenced by `targetParameterRef` to
+ *                     the set of feature ids produced by the
+ *                     pipeline.  No new persistent item is created.
+ *   - `derived-layer`: create (or upsert) a derived_layer item whose
+ *                     recipe is the resolved pipeline.  The output is
+ *                     a live lens that recomputes on every read.
+ *   - `data-layer`:   materialise the result into a new v3
+ *                     data_layer item -- a snapshot, not a lens.
+ *                     Deferred for v2.1; the type is in the union so
+ *                     the rest of the schema can be stable.
+ */
+export type ToolOutput =
+  | { kind: 'selection'; targetParameterRef: string }
+  | { kind: 'derived-layer'; titleTemplate: string }
+  | { kind: 'data-layer'; titleTemplate: string };
+
+/**
+ * The v2 recipe action.  Carries everything the runner needs to
+ * resolve a tool invocation: the parameter schema, the pipeline that
+ * consumes them, and the output sink.
+ *
+ * Steps inside `pipeline` may reference parameters via
+ * `{ kind: 'parameter', name: '<paramName>' }` shapes in their
+ * source / predicate / distance fields.  The recipe runner walks the
+ * pipeline at run time and replaces each parameter reference with the
+ * resolved value before handing the (now derived_layer-shaped)
+ * pipeline to the existing SQL compiler.
+ */
+export interface RecipeAction {
+  kind: 'recipe';
+  /** Schema version inside the recipe action; bumped on incompat. */
+  recipeVersion: 1;
+  parameters: ToolParameter[];
+  pipeline: ToolStep[];
+  output: ToolOutput;
+  /**
+   * Hard cap on rows returned for `output.kind === 'selection'`. The
+   * runtime warns the user when truncation occurs.  Mirrors the
+   * features-page cap so big-data layers degrade gracefully rather
+   * than freezing the browser.
+   */
+  selectionLimit?: number;
+}
+
 /**
  * Stored data shape for a `tool` item.  Item core fields (id,
  * title, description, owner, sharing) live on the item table; this
  * is the `data` blob.
  */
 export interface ToolItemData {
-  /** Schema version.  Bumped whenever the action shape changes
+  /** Schema version.  Bumped whenever the data shape changes
    *  incompatibly so the runtime can refuse stale tool configs
-   *  cleanly. */
+   *  cleanly.  v1 only had navigation actions; v2 added the recipe
+   *  action kind.  Existing v1 tools deserialize fine under v2
+   *  because v2 is purely additive at the union level. */
   schemaVersion: 1;
   /** The thing the tool does on trigger. */
   action: ToolAction;
@@ -109,4 +339,43 @@ export function emptyToolData(): ToolItemData {
     schemaVersion: 1,
     action: { kind: 'open-url', url: '', newTab: true },
   };
+}
+
+/**
+ * Default selection cap for recipe runs.  Mirrors features-page so
+ * the parcel-style "1.4M rows" case can't melt the browser.  The
+ * recipe runner reports `truncated: true` when the cap is reached.
+ */
+export const DEFAULT_TOOL_SELECTION_LIMIT = 5000;
+
+/**
+ * Returns a freshly-stubbed recipe action.  Used by the tool
+ * designer when the author switches the action kind to "recipe" and
+ * by the "new tool from template" path when seeding a starter.
+ *
+ * The default is intentionally empty:
+ *   - no parameters
+ *   - no pipeline
+ *   - selection output bound to no parameter (invalid until the
+ *     author wires one up)
+ *
+ * The designer prompts the author to fill these in; the save-time
+ * validator rejects an empty pipeline so a half-finished recipe
+ * doesn't silently no-op at runtime.
+ */
+export function emptyRecipeAction(): RecipeAction {
+  return {
+    kind: 'recipe',
+    recipeVersion: 1,
+    parameters: [],
+    pipeline: [],
+    output: { kind: 'selection', targetParameterRef: '' },
+    selectionLimit: DEFAULT_TOOL_SELECTION_LIMIT,
+  };
+}
+
+/** Type guard for the recipe action kind.  Useful where we need to
+ *  branch on action without exhaustive switches. */
+export function isRecipeAction(action: ToolAction): action is RecipeAction {
+  return action.kind === 'recipe';
 }

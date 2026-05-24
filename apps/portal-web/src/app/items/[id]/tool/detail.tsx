@@ -174,6 +174,23 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
             Open in a new tab
           </label>
         </div>
+      ) : data.action.kind === 'recipe' ? (
+        // Recipe action surface is built out in a follow-up commit
+        // (tool designer UI, task #78).  For now the detail page
+        // shows a placeholder so the page renders cleanly when a
+        // recipe-action tool is loaded -- usually one stamped out by
+        // the new-item wizard's "Select By Location" template once
+        // that lands.
+        <div className="space-y-3 rounded-md border border-dashed border-border bg-surface-2 p-3 text-xs text-muted">
+          <p>
+            This is a recipe-action tool.  The visual designer for
+            recipes lands in the next commit; for now you can still
+            view the saved recipe shape below.
+          </p>
+          <pre className="overflow-x-auto rounded bg-surface-0 p-2 font-mono text-[10px] text-ink-1">
+            {JSON.stringify(data.action, null, 2)}
+          </pre>
+        </div>
       ) : data.action.kind === 'open-item' ? (
         <div className="space-y-3">
           <div>

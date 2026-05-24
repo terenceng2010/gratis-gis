@@ -492,10 +492,102 @@ export interface ContourStep {
 }
 
 /**
+ * Spatial predicates supported across the recipe vocabulary.
+ *
+ *  - intersects: any shared point between left and right (the classic
+ *                overlay; covers touches, within, contains, equal)
+ *  - within:     left.geom is fully inside right.geom
+ *  - contains:   left.geom fully contains right.geom (inverse of within)
+ *  - touches:    left and right share only boundary (no interior overlap)
+ *  - near:       left.geom is within `distance` meters of right.geom
+ *                (compiled via ST_DWithin on geography)
+ *
+ * Shared by `spatial-filter` here in the derived_layer vocabulary and
+ * by `PredicateParameter` in the tool recipe layer.  Adding a
+ * predicate means extending this union and teaching every SQL emitter
+ * that consumes it; SpatialJoinStep predates this union and keeps its
+ * narrower set ('within' | 'intersects' | 'nearest') for historical
+ * reasons -- joining and filtering have subtly different semantics
+ * for "near" (join picks the closest right row; filter keeps any
+ * left row near any right row), so they are intentionally different
+ * vocabularies.
+ */
+export type SpatialPredicate =
+  | 'intersects'
+  | 'within'
+  | 'contains'
+  | 'touches'
+  | 'near';
+
+/**
+ * Reference to a step's "other source" -- either a hardcoded
+ * data_layer reference (the only form valid in a saved derived_layer)
+ * or a tool-recipe parameter reference resolved at run time.
+ *
+ * Steps that allow a parameter reference are usable inside a
+ * tool recipe; the derived_layer save-time validator rejects any
+ * `{ kind: 'parameter' }` shape because derived_layers have no
+ * parameters of their own.
+ */
+export type SourceRef =
+  | { kind: 'data_layer'; itemId: string; layerKey?: string }
+  | { kind: 'parameter'; name: string };
+
+/** Distance reference: a fixed meters value or a parameter resolved at run time. */
+export type DistanceRef =
+  | { kind: 'fixed'; meters: number }
+  | { kind: 'parameter'; name: string };
+
+/** Predicate reference: a literal predicate or a parameter resolved at run time. */
+export type PredicateRef =
+  | { kind: 'fixed'; value: SpatialPredicate }
+  | { kind: 'parameter'; name: string };
+
+/**
+ * Spatial-filter step. Keeps upstream rows whose geometry satisfies a
+ * predicate against `otherSource`. Output schema = upstream schema
+ * (no attribute decoration -- pair with spatial-join for that). Output
+ * geometry = upstream geometry passed through unchanged.
+ *
+ * Compiles to a WHERE clause:
+ *   - intersects: ST_Intersects(left.geom, right.geom)
+ *   - within:     ST_Within(left.geom, right.geom)
+ *   - contains:   ST_Contains(left.geom, right.geom)
+ *   - touches:    ST_Touches(left.geom, right.geom)
+ *   - near:       ST_DWithin(left.geom::geography,
+ *                            right.geom::geography,
+ *                            distanceMeters)
+ *
+ * When `otherSource.kind === 'data_layer'` the right side is a
+ * subquery against the referenced data_layer.  When it's
+ * `'parameter'`, the tool recipe runner substitutes an inline
+ * geometry (a drawn AOI) before SQL compilation.
+ *
+ * `distance` is required when the (resolved) predicate is 'near' and
+ * ignored otherwise. The save-time validator rejects 'near' with no
+ * distance.  Inside a derived_layer (no parameters), `otherSource`
+ * and `predicate` and `distance` must all be `{ kind: 'fixed' }` /
+ * `{ kind: 'data_layer' }`.
+ */
+export interface SpatialFilterStep {
+  tool: 'spatial-filter';
+  params: {
+    otherSource: SourceRef;
+    predicate: PredicateRef;
+    distance?: DistanceRef;
+  };
+}
+
+/**
  * Discriminated union of every available tool step. Adding a new tool
  * means adding a member here, a generator file in
  * apps/portal-api/src/derived-layers/tools/, and a wizard step in
  * apps/portal-web. No schema migration required.
+ *
+ * The same union is the step vocabulary for both derived_layer
+ * pipelines and tool-recipe pipelines; steps that allow parameter
+ * refs (like spatial-filter) restrict those refs to the tool path
+ * via save-time validation, not via separate types.
  */
 export type ToolStep =
   | BufferStep
@@ -515,6 +607,7 @@ export type ToolStep =
   | CalculateFieldStep
   | AggregateStep
   | SpatialJoinStep
+  | SpatialFilterStep
   | ContourStep;
 
 /**
@@ -688,6 +781,19 @@ export const DEFAULT_SPATIAL_JOIN_STEP: SpatialJoinStep = {
     attrPrefix: 'joined_',
   },
 };
+export const DEFAULT_SPATIAL_FILTER_STEP: SpatialFilterStep = {
+  tool: 'spatial-filter',
+  // Defaults match the most common Select-By-Location workflow:
+  // "keep features in this layer that intersect <something>".
+  // The wizard / tool designer fills in the otherSource shape; an
+  // empty data_layer itemId fails save-time validation, prompting
+  // the user to pick one (or in tool recipes, swap to a parameter
+  // reference).
+  params: {
+    otherSource: { kind: 'data_layer', itemId: '' },
+    predicate: { kind: 'fixed', value: 'intersects' },
+  },
+};
 export const DEFAULT_AGGREGATE_STEP: AggregateStep = {
   tool: 'aggregate',
   // No groupBy + a count(*) aggregation: equivalent to the legacy
@@ -724,6 +830,7 @@ export const DEFAULT_STEPS: Record<ToolStep['tool'], ToolStep> = {
   'calculate-field': DEFAULT_CALCULATE_FIELD_STEP,
   aggregate: DEFAULT_AGGREGATE_STEP,
   'spatial-join': DEFAULT_SPATIAL_JOIN_STEP,
+  'spatial-filter': DEFAULT_SPATIAL_FILTER_STEP,
   contour: DEFAULT_CONTOUR_STEP,
 };
 
