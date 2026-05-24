@@ -55,6 +55,11 @@ export class ToolsController {
     const request: ToolRunRequest = {
       parameters: (body.parameters ?? {}) as ToolRunRequest['parameters'],
     };
-    return this.runner.runSelection(user, toolId, request);
+    // run() branches internally on the recipe's output sink: a
+    // selection-output recipe lands the old shape; an
+    // osm-features-overlay recipe lands the new shape.  The wire
+    // contract is the same `parameters` envelope; only the
+    // response shape differs.
+    return this.runner.run(user, toolId, request);
   }
 }

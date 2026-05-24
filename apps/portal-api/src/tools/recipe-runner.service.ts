@@ -8,6 +8,7 @@ import {
 import type {
   DistanceRef,
   FeatureSourceValue,
+  OsmTagFilter,
   PredicateRef,
   RecipeAction,
   SourceRef,
@@ -26,6 +27,8 @@ import { ItemsService } from '../items/items.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { getGeneratorForStep } from '../derived-layers/tools/registry.js';
+import { OsmService } from '../osm/osm.service.js';
+import type { OsmGeoJsonFeature } from '../osm/osm-to-geojson.js';
 
 /**
  * Per-parameter resolved value: the runtime-supplied input merged
@@ -38,17 +41,30 @@ export type ResolvedValue =
   | { kind: 'predicate'; value: SpatialPredicate }
   | { kind: 'distance'; meters: number }
   | { kind: 'number'; value: number }
-  | { kind: 'text'; value: string };
+  | { kind: 'text'; value: string }
+  | {
+      kind: 'osm-feature';
+      presetIds: string[];
+      tagFilters?: OsmTagFilter[];
+    };
 
 /**
  * Untrusted shape coming off the wire under `parameters[name]`.
- * The runner translates it to a ResolvedValue or rejects it.
+ * The runner translates it to a ResolvedValue or rejects it.  OSM
+ * inputs carry the user's runtime picks (which preset ids + which
+ * tag filters); hardcoded osm-feature parameters resolve from
+ * their binding without an input row.
  */
 export type ToolRunInput =
   | FeatureSourceValue
   | SpatialPredicate
   | number
-  | string;
+  | string
+  | {
+      kind: 'osm-feature-input';
+      presetIds: string[];
+      tagFilters?: OsmTagFilter[];
+    };
 
 export interface ToolRunRequest {
   parameters: Record<string, ToolRunInput>;
@@ -68,6 +84,30 @@ export interface ToolSelectionResult {
     truncated: boolean;
   };
 }
+
+export interface ToolOsmOverlayResult {
+  output: {
+    kind: 'osm-features-overlay';
+    /** GeoJSON features (Points / LineStrings / Polygons /
+     *  MultiPolygons) the host map should render as a transient
+     *  overlay.  Always carries the OSM attribution string the UI
+     *  must surface alongside the rendered features (ODbL). */
+    features: OsmGeoJsonFeature[];
+    /** © OpenStreetMap contributors string the runtime surfaces
+     *  next to the overlay. */
+    attribution: string;
+    /** Total fetched count (pre any post-filter steps).  Matches
+     *  `features.length` in v1 since the pipeline either keeps or
+     *  drops features, no post-fetch attribute decoration yet. */
+    featureCount: number;
+    /** True when the underlying Overpass response hit the
+     *  per-query cap.  UI banner so the user knows to tighten the
+     *  AOI / filters. */
+    truncated: boolean;
+  };
+}
+
+export type ToolRunResult = ToolSelectionResult | ToolOsmOverlayResult;
 
 /**
  * Tool recipe runner (#90).  Resolves runtime parameter inputs,
@@ -91,7 +131,30 @@ export class RecipeRunnerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly items: ItemsService,
+    private readonly osm: OsmService,
   ) {}
+
+  /**
+   * Top-level entry point used by the controller.  Loads the tool,
+   * runs the recipe, and branches on the output sink to produce
+   * either a selection update or an OSM-features overlay response.
+   */
+  async run(
+    user: AuthUser,
+    toolId: string,
+    request: ToolRunRequest,
+  ): Promise<ToolRunResult> {
+    const { recipe } = await this.loadRecipe(user, toolId);
+    if (recipe.output.kind === 'selection') {
+      return this.runSelectionInternal(user, toolId, recipe, request);
+    }
+    if (recipe.output.kind === 'osm-features-overlay') {
+      return this.runOsmOverlayInternal(recipe, request);
+    }
+    throw new BadRequestException(
+      `Tool ${toolId} has an unsupported output sink: ${recipe.output.kind}`,
+    );
+  }
 
   /**
    * Run a tool recipe on behalf of `user`.  Loads the tool item
@@ -100,12 +163,21 @@ export class RecipeRunnerService {
    * exist or the caller can't read it.  Throws BadRequestException
    * if the recipe shape is invalid or the request payload doesn't
    * satisfy a required parameter.
+   *
+   * Kept exported (alongside the new `run` entry point) for the
+   * existing controller path; new callers should prefer `run()`
+   * which auto-branches on the output sink.
    */
-  async runSelection(
+  /**
+   * Load the tool item via the ACL-gated items service and return
+   * its recipe action.  Throws when the item isn't a tool or doesn't
+   * have a recipe action; the caller doesn't have to care about
+   * which.
+   */
+  private async loadRecipe(
     user: AuthUser,
     toolId: string,
-    request: ToolRunRequest,
-  ): Promise<ToolSelectionResult> {
+  ): Promise<{ recipe: RecipeAction }> {
     const tool = await this.items.get(user, toolId);
     if (tool.type !== 'tool') {
       throw new BadRequestException(`Item ${toolId} is not a tool`);
@@ -116,11 +188,25 @@ export class RecipeRunnerService {
         `Tool ${toolId} does not have a recipe action`,
       );
     }
-    const recipe: RecipeAction = data.action;
+    return { recipe: data.action };
+  }
+
+  async runSelection(
+    user: AuthUser,
+    toolId: string,
+    request: ToolRunRequest,
+  ): Promise<ToolSelectionResult> {
+    const { recipe } = await this.loadRecipe(user, toolId);
+    return this.runSelectionInternal(user, toolId, recipe, request);
+  }
+
+  private async runSelectionInternal(
+    user: AuthUser,
+    toolId: string,
+    recipe: RecipeAction,
+    request: ToolRunRequest,
+  ): Promise<ToolSelectionResult> {
     if (recipe.output.kind !== 'selection') {
-      // v1: only selection sinks are wired.  Derived-layer and
-      // data-layer outputs land in follow-up commits; the type
-      // surface allows them so the rest of the schema is stable.
       throw new BadRequestException(
         `Tool ${toolId} has an unsupported output sink: ${recipe.output.kind}`,
       );
@@ -266,6 +352,115 @@ export class RecipeRunnerService {
       },
     };
   }
+
+  /**
+   * OSM-features-overlay output path (#OSM).  Returns the OSM
+   * features Overpass produces for a bbox derived from the
+   * recipe's AOI parameter, plus the user's chosen presets +
+   * tag filters.  v1 returns ALL features inside the bbox; finer
+   * spatial filtering (distance, contains, etc.) lands in wave 2
+   * when the spatial-filter generator gains a transient-scope
+   * source kind that consumes the OSM scope.
+   */
+  private async runOsmOverlayInternal(
+    recipe: RecipeAction,
+    request: ToolRunRequest,
+  ): Promise<ToolOsmOverlayResult> {
+    if (recipe.output.kind !== 'osm-features-overlay') {
+      throw new BadRequestException(
+        `runOsmOverlayInternal called with the wrong output kind: ${recipe.output.kind}`,
+      );
+    }
+    const resolved = resolveParameters(recipe.parameters, request.parameters);
+
+    if (!recipe.sourceParameterRef) {
+      throw new BadRequestException(
+        'osm-features-overlay output requires recipe.sourceParameterRef pointing at an osm-feature parameter',
+      );
+    }
+    const sourceVal = resolved.get(recipe.sourceParameterRef);
+    if (!sourceVal || sourceVal.kind !== 'osm-feature') {
+      throw new BadRequestException(
+        `Recipe sourceParameterRef '${recipe.sourceParameterRef}' must resolve to an osm-feature parameter`,
+      );
+    }
+
+    if (!recipe.aoiParameterRef) {
+      throw new BadRequestException(
+        'osm-features-overlay output requires recipe.aoiParameterRef pointing at the area-of-interest parameter',
+      );
+    }
+    const aoiVal = resolved.get(recipe.aoiParameterRef);
+    if (!aoiVal || aoiVal.kind !== 'feature-source') {
+      throw new BadRequestException(
+        `Recipe aoiParameterRef '${recipe.aoiParameterRef}' must resolve to a feature-source parameter`,
+      );
+    }
+    // Compute the AOI's bbox.  v1 supports inline-geojson AOIs (the
+    // user drew on the map) directly.  data_layer / runtime-selection
+    // AOIs need a PostGIS ST_Envelope read; queued for wave 2 with
+    // the spatial-filter integration.
+    const bbox = await this.computeAoiBbox(aoiVal.value);
+    if (!bbox) {
+      throw new BadRequestException(
+        `Could not compute a bbox from AOI parameter '${recipe.aoiParameterRef}'.  v1 only supports inline-geojson AOIs (drawn on the map).  Layer / selection AOIs land in wave 2.`,
+      );
+    }
+
+    // Optional distance buffer: when the recipe declares a distance
+    // parameter, pad the bbox by that amount before the Overpass
+    // call so features just outside the AOI but within distance are
+    // still returned.  The cheap conversion (meters → degrees at
+    // 1deg ≈ 111km) over-pads slightly at high latitudes; acceptable
+    // for the v1 "show me things near my parcel" use case.
+    const distance = findDistanceParam(recipe.parameters, resolved);
+    const padDegrees = distance ? distance / 111_000 : 0;
+    const paddedBbox: [number, number, number, number] = [
+      bbox[0] - padDegrees,
+      bbox[1] - padDegrees,
+      bbox[2] + padDegrees,
+      bbox[3] + padDegrees,
+    ];
+
+    const result = await this.osm.resolve({
+      presetIds: sourceVal.presetIds,
+      ...(sourceVal.tagFilters && sourceVal.tagFilters.length > 0
+        ? { tagFilters: sourceVal.tagFilters }
+        : {}),
+      bbox: paddedBbox,
+    });
+
+    return {
+      output: {
+        kind: 'osm-features-overlay',
+        features: result.features,
+        attribution: result.attribution,
+        featureCount: result.featureCount,
+        truncated: false, // wave 2 surface when Overpass actually hit the cap
+      },
+    };
+  }
+
+  /**
+   * Compute the bounding box of an AOI feature-source value.
+   *
+   * v1 supports inline-geojson AOIs (drawn polygons / rectangles
+   * etc).  Layer / selection AOIs need a PostGIS hop; queued for
+   * wave 2 alongside the spatial-filter integration.  Returns null
+   * when the bbox can't be computed.
+   */
+  private async computeAoiBbox(
+    value: FeatureSourceValue,
+  ): Promise<[number, number, number, number] | null> {
+    if (value.kind === 'inline-geojson' && value.geojson) {
+      return bboxOfGeoJson(value.geojson);
+    }
+    // TODO (wave 2): for data_layer / derived_layer AOIs, compute
+    // bbox via ST_Extent(geom) WHERE entity = ANY(featureIds) OR
+    // the whole layer when featureIds is empty.  For now we refuse
+    // so the user knows what's supported.
+    return null;
+  }
 }
 
 // ----------------------------------------------------------------------
@@ -314,7 +509,90 @@ function resolveOne(
       return resolveNumberParam(param, provided);
     case 'text':
       return resolveTextParam(param, provided);
+    case 'osm-feature':
+      return resolveOsmFeatureParam(param, provided);
   }
+}
+
+function resolveOsmFeatureParam(
+  param: Extract<ToolParameter, { kind: 'osm-feature' }>,
+  provided: ToolRunInput | undefined,
+): ResolvedValue | undefined {
+  // Hardcoded binding: ignore whatever the client sent and use the
+  // baked-in preset / filter set.  This is what a "Find pharmacies
+  // near my facility" tool with no user discretion looks like.
+  if (param.binding.mode === 'hardcoded') {
+    return {
+      kind: 'osm-feature',
+      presetIds: param.binding.presetIds,
+      ...(param.binding.tagFilters && param.binding.tagFilters.length > 0
+        ? { tagFilters: param.binding.tagFilters }
+        : {}),
+    };
+  }
+  // runtime-pick: client sent {kind:'osm-feature-input', presetIds, tagFilters}.
+  // Fall back to defaults when omitted.
+  if (
+    provided !== undefined &&
+    typeof provided === 'object' &&
+    provided !== null &&
+    'kind' in provided &&
+    (provided as { kind?: string }).kind === 'osm-feature-input'
+  ) {
+    const input = provided as {
+      kind: 'osm-feature-input';
+      presetIds?: string[];
+      tagFilters?: OsmTagFilter[];
+    };
+    if (!Array.isArray(input.presetIds) || input.presetIds.length === 0) {
+      throw new BadRequestException(
+        `Parameter '${param.name}': presetIds must be a non-empty array`,
+      );
+    }
+    if (
+      param.binding.allowedPresetIds &&
+      param.binding.allowedPresetIds.length > 0
+    ) {
+      for (const id of input.presetIds) {
+        if (!param.binding.allowedPresetIds.includes(id)) {
+          throw new BadRequestException(
+            `Parameter '${param.name}': preset '${id}' is not in the allowed list`,
+          );
+        }
+      }
+    }
+    if (
+      input.tagFilters &&
+      input.tagFilters.length > 0 &&
+      param.binding.allowCustomTagFilters === false
+    ) {
+      throw new BadRequestException(
+        `Parameter '${param.name}' does not allow custom tag filters`,
+      );
+    }
+    return {
+      kind: 'osm-feature',
+      presetIds: input.presetIds,
+      ...(input.tagFilters && input.tagFilters.length > 0
+        ? { tagFilters: input.tagFilters }
+        : {}),
+    };
+  }
+  // No input + runtime-pick: fall through to the binding defaults.
+  if (
+    param.binding.defaultPresetIds &&
+    param.binding.defaultPresetIds.length > 0
+  ) {
+    return {
+      kind: 'osm-feature',
+      presetIds: param.binding.defaultPresetIds,
+      ...(param.binding.defaultTagFilters &&
+      param.binding.defaultTagFilters.length > 0
+        ? { tagFilters: param.binding.defaultTagFilters }
+        : {}),
+    };
+  }
+  return undefined;
 }
 
 function resolveFeatureSource(
@@ -578,4 +856,76 @@ function substituteDistanceRef(
     );
   }
   return { kind: 'fixed', meters: value.meters };
+}
+
+/**
+ * Find the first distance parameter the recipe declares and look
+ * up its resolved meters value.  Used by the osm-overlay runner to
+ * pad the AOI bbox so features just outside the AOI are still in
+ * scope.  Returns null when the recipe has no distance parameter,
+ * or has one that didn't resolve (optional + no default + no
+ * input).
+ */
+function findDistanceParam(
+  declarations: ToolParameter[],
+  resolved: Map<string, ResolvedValue>,
+): number | null {
+  for (const p of declarations) {
+    if (p.kind !== 'distance') continue;
+    const v = resolved.get(p.name);
+    if (v && v.kind === 'distance') return v.meters;
+  }
+  return null;
+}
+
+/**
+ * Compute the axis-aligned bbox of a GeoJSON value.  Accepts a
+ * bare Geometry, a Feature, or a FeatureCollection.  Returns null
+ * when the shape has no coordinates (e.g. an empty
+ * GeometryCollection).
+ */
+function bboxOfGeoJson(
+  geojson: unknown,
+): [number, number, number, number] | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const visit = (coord: unknown): void => {
+    if (Array.isArray(coord)) {
+      if (typeof coord[0] === 'number' && typeof coord[1] === 'number') {
+        if (coord[0] < minX) minX = coord[0];
+        if (coord[1] < minY) minY = coord[1];
+        if (coord[0] > maxX) maxX = coord[0];
+        if (coord[1] > maxY) maxY = coord[1];
+      } else {
+        for (const c of coord) visit(c);
+      }
+    }
+  };
+  function walk(node: unknown): void {
+    if (!node || typeof node !== 'object') return;
+    const n = node as Record<string, unknown>;
+    if (n.type === 'FeatureCollection' && Array.isArray(n.features)) {
+      for (const f of n.features) walk(f);
+      return;
+    }
+    if (n.type === 'Feature') {
+      walk(n.geometry);
+      return;
+    }
+    if (Array.isArray(n.coordinates)) {
+      visit(n.coordinates);
+    }
+  }
+  walk(geojson);
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null;
+  }
+  return [minX, minY, maxX, maxY];
 }

@@ -2,6 +2,7 @@
 import { Module } from '@nestjs/common';
 
 import { ItemsModule } from '../items/items.module.js';
+import { OsmModule } from '../osm/osm.module.js';
 import { PrismaModule } from '../prisma/prisma.module.js';
 import { RecipeRunnerService } from './recipe-runner.service.js';
 import { ToolsController } from './tools.controller.js';
@@ -15,7 +16,7 @@ import { ToolsController } from './tools.controller.js';
  * on PrismaModule for the raw SQL hop.
  */
 @Module({
-  imports: [ItemsModule, PrismaModule],
+  imports: [ItemsModule, PrismaModule, OsmModule],
   controllers: [ToolsController],
   providers: [RecipeRunnerService],
 })

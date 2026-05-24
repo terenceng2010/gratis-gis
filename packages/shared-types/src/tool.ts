@@ -381,6 +381,37 @@ export interface RecipeAction {
   pipeline: ToolStep[];
   output: ToolOutput;
   /**
+   * Parameter ref that provides the pipeline's input rows.  When
+   * omitted, defaults to `output.targetParameterRef` for selection
+   * output (preserving the v1 behaviour).  Must be set for output
+   * sinks where the "source layer" isn't on the output:
+   *
+   *   - `osm-features-overlay`: point at the osm-feature parameter
+   *     whose query the pipeline filters / annotates.
+   *   - `derived-layer` / `data-layer` (future): the parameter
+   *     whose data is the recipe's input.
+   *
+   * Valid parameter kinds:
+   *   - `feature-source`: pipeline reads from a data_layer (current
+   *     behaviour for selection output).
+   *   - `osm-feature`: pipeline reads from the OSM-feature
+   *     parameter's transient scope materialised by the recipe
+   *     runner.
+   */
+  sourceParameterRef?: string;
+  /**
+   * For OSM-driven output sinks: the parameter whose resolved
+   * geometry provides the area of interest.  The recipe runner
+   * uses its bbox (padded by any distance step in the pipeline) to
+   * bound the Overpass call so we don't fetch the whole continent
+   * when the user only cares about features near their parcel.
+   *
+   * Required when `output.kind === 'osm-features-overlay'` and the
+   * pipeline references an osm-feature parameter; ignored
+   * otherwise.
+   */
+  aoiParameterRef?: string;
+  /**
    * Hard cap on rows returned for `output.kind === 'selection'`. The
    * runtime warns the user when truncation occurs.  Mirrors the
    * features-page cap so big-data layers degrade gracefully rather
