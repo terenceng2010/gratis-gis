@@ -420,6 +420,16 @@ function ParameterBindingEditor({
           inputCls={inputCls}
         />
       );
+    case 'osm-feature':
+      // OSM parameter authoring UI lands in the recipe-editor
+      // commit (#91).  Placeholder keeps the dispatch exhaustive
+      // without crashing if a recipe arrives with an osm-feature
+      // parameter authored elsewhere.
+      return (
+        <div className="rounded-md border border-dashed border-border bg-surface-2 p-2 text-[11px] text-muted">
+          OSM-feature parameter editor lands in the next commit.
+        </div>
+      );
   }
 }
 
@@ -1321,6 +1331,8 @@ function paramNameBase(kind: ToolParameter['kind']): string {
       return 'number';
     case 'text':
       return 'text';
+    case 'osm-feature':
+      return 'osm';
   }
 }
 
@@ -1332,6 +1344,13 @@ function paramSeed(kind: ToolParameter['kind'], name: string): ToolParameter {
         name,
         label: 'Feature source',
         binding: { mode: 'runtime-host' },
+      };
+    case 'osm-feature':
+      return {
+        kind: 'osm-feature',
+        name,
+        label: 'OSM features',
+        binding: { mode: 'runtime-pick', allowCustomTagFilters: true },
       };
     case 'predicate':
       return {

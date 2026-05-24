@@ -3216,18 +3216,14 @@ function SpatialFilterStepEditor({
   params,
   onChange,
 }: {
-  params: {
-    otherSource:
-      | { kind: 'data_layer'; itemId: string; layerKey?: string }
-      | { kind: 'parameter'; name: string }
-      | { kind: 'inline-geometry'; geometry: unknown };
-    predicate:
-      | { kind: 'fixed'; value: 'intersects' | 'within' | 'contains' | 'touches' | 'near' }
-      | { kind: 'parameter'; name: string };
-    distance?:
-      | { kind: 'fixed'; meters: number }
-      | { kind: 'parameter'; name: string };
-  };
+  // Mirrors the underlying SpatialFilterStep params shape; we
+  // import the union via shared-types to stay in lockstep when new
+  // SourceRef / Ref variants land (e.g. the osm-query variant).
+  // The wizard surface only edits the resolved `data_layer` shape;
+  // unsupported variants fall back to an empty data_layer when the
+  // user opens the editor, which is the safest "narrow my way out"
+  // for v1.
+  params: import('@gratis-gis/shared-types').SpatialFilterStep['params'];
   onChange: (next: typeof params) => void;
 }) {
   // The wizard only supports the resolved-by-default shape; the

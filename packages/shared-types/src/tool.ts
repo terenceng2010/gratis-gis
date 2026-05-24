@@ -248,6 +248,77 @@ export interface TextParameter {
 }
 
 /**
+ * Tag filter on an OSM query.  v1 supports literal-equals matches
+ * only; contains / regex are queued for wave 3 once we have a
+ * frequency-weighted autocomplete catalog to make them useful.
+ */
+export interface OsmTagFilter {
+  key: string;
+  value: string;
+  op?: 'equals' | 'contains' | 'regex';
+}
+
+/**
+ * OpenStreetMap feature parameter (#OSM).
+ *
+ * Lets a recipe consume OSM data on demand: at run time the recipe
+ * runner builds an Overpass query from the parameter's preset ids +
+ * tag filters, hits the configured Overpass endpoint, converts the
+ * result to GeoJSON, and writes it into a transient observation-log
+ * scope so downstream steps (spatial-filter, spatial-join) can read
+ * it like any other source.
+ *
+ * The author chooses one of two binding modes:
+ *
+ *   - `hardcoded`:    the tool is dedicated to one specific OSM
+ *                     lookup ("Find pharmacies near my facility").
+ *                     User just provides AOI + distance at runtime.
+ *   - `runtime-pick`: the user picks at runtime which presets to
+ *                     query and (optionally) what tag filters to
+ *                     add.  This is the flexible guided-query mode
+ *                     that powers "Show me Citgo gas stations within
+ *                     1 mile of my parcel": the user multi-selects
+ *                     "Gas stations" + types `brand=Citgo`.
+ *
+ * For `runtime-pick` the author can narrow what the user sees via
+ * an `allowedCategories` whitelist (e.g. only let users pick from
+ * `amenity` + `shop` categories), an `allowedPresetIds` explicit
+ * subset, and an `allowCustomTagFilters` switch (off when the
+ * author wants a strictly guided experience with no free-text
+ * filters).  Empty / omitted means "any preset / any filter".
+ */
+export interface OsmFeatureParameter {
+  kind: 'osm-feature';
+  name: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  binding:
+    | {
+        mode: 'hardcoded';
+        /** One or more preset ids from the catalog; queries are a
+         *  union across all of them. */
+        presetIds: string[];
+        tagFilters?: OsmTagFilter[];
+      }
+    | {
+        mode: 'runtime-pick';
+        defaultPresetIds?: string[];
+        defaultTagFilters?: OsmTagFilter[];
+        /** Top-level OSM tag-key categories the picker is allowed
+         *  to surface (e.g. ['amenity', 'shop']).  Empty / omitted
+         *  means no restriction. */
+        allowedCategories?: string[];
+        /** Explicit subset of preset ids the picker may surface.
+         *  Empty / omitted means no restriction. */
+        allowedPresetIds?: string[];
+        /** When false, the runtime tag-filter editor is hidden;
+         *  the user can only choose presets.  Defaults to true. */
+        allowCustomTagFilters?: boolean;
+      };
+}
+
+/**
  * Discriminated union of every tool-recipe parameter kind.  Adding a
  * new parameter kind means extending the union, the runtime UI's
  * prompt switch, and the recipe runner's substitution map.
@@ -257,25 +328,36 @@ export type ToolParameter =
   | PredicateParameter
   | DistanceParameter
   | NumberParameter
-  | TextParameter;
+  | TextParameter
+  | OsmFeatureParameter;
 
 /**
  * What happens with the pipeline's output when the tool finishes.
  *
- *   - `selection`:    update the host app's selection state on the
- *                     layer referenced by `targetParameterRef` to
- *                     the set of feature ids produced by the
- *                     pipeline.  No new persistent item is created.
- *   - `derived-layer`: create (or upsert) a derived_layer item whose
- *                     recipe is the resolved pipeline.  The output is
- *                     a live lens that recomputes on every read.
- *   - `data-layer`:   materialise the result into a new v3
- *                     data_layer item -- a snapshot, not a lens.
- *                     Deferred for v2.1; the type is in the union so
- *                     the rest of the schema can be stable.
+ *   - `selection`:           update the host app's selection state on
+ *                            the layer referenced by
+ *                            `targetParameterRef` to the set of
+ *                            feature ids produced by the pipeline.
+ *                            No new persistent item is created.
+ *   - `osm-features-overlay`: render the pipeline output as a
+ *                            transient overlay on the host map(s),
+ *                            with ODbL attribution baked in.  The
+ *                            user gets a "Save as data layer" button
+ *                            to materialise the overlay into a real
+ *                            data_layer when they want to keep it.
+ *                            Output features are not associated with
+ *                            any pre-existing layer.
+ *   - `derived-layer`:       create (or upsert) a derived_layer item
+ *                            whose recipe is the resolved pipeline.
+ *                            Live lens that recomputes on every
+ *                            read.  Deferred to wave 2.
+ *   - `data-layer`:          materialise the result into a new v3
+ *                            data_layer item -- a snapshot, not a
+ *                            lens.  Deferred to wave 2+.
  */
 export type ToolOutput =
   | { kind: 'selection'; targetParameterRef: string }
+  | { kind: 'osm-features-overlay' }
   | { kind: 'derived-layer'; titleTemplate: string }
   | { kind: 'data-layer'; titleTemplate: string };
 

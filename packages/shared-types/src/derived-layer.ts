@@ -560,7 +560,30 @@ export type SourceRef =
       kind: 'inline-geometry';
       geometry: unknown;
     }
-  | { kind: 'parameter'; name: string };
+  | { kind: 'parameter'; name: string }
+  | {
+      /**
+       * Live OpenStreetMap query, materialised into a transient
+       * observation-log scope by the recipe runner.  Only valid
+       * post-resolution (a tool recipe that has an OSM-feature
+       * parameter resolves to this shape; derived_layer recipes
+       * reject this kind via save-time validation in v1 -- adding
+       * persistent OSM-backed derived_layers is the wave-3 work).
+       *
+       * `presetIds` references entries in the OSM preset catalog
+       * (apps/portal-web/content/osm/preset-catalog.json); the
+       * adapter expands them to Overpass QL clauses (a union of
+       * the per-preset tag combinations across the declared
+       * geometries).  `tagFilters` are ANDed onto every clause.
+       * `bboxPaddingMeters` lets a recipe step's distance grow
+       * the AOI's bbox before the Overpass call, ensuring features
+       * near the AOI's edge are pulled.
+       */
+      kind: 'osm-query';
+      presetIds: string[];
+      tagFilters?: Array<{ key: string; value: string; op?: 'equals' | 'contains' | 'regex' }>;
+      bboxPaddingMeters?: number;
+    };
 
 /** Distance reference: a fixed meters value or a parameter resolved at run time. */
 export type DistanceRef =

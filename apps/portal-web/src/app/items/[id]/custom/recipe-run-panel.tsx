@@ -391,6 +391,18 @@ function ParamInputRow({
           onChange={onChange}
         />
       );
+    case 'osm-feature':
+      // OSM runtime panel input lands in the OSM-runtime-panel
+      // commit (#92).  Placeholder keeps the dispatch exhaustive
+      // so a tool with an OSM parameter authored elsewhere doesn't
+      // crash the panel; the user sees "coming soon" and the
+      // recipe runner refuses to execute (the resolver rejects an
+      // unsupplied osm-feature value).
+      return (
+        <div className="rounded-md border border-dashed border-border bg-surface-2 p-2 text-[11px] text-muted">
+          OSM-feature input lands in the next commit.
+        </div>
+      );
   }
 }
 
@@ -740,6 +752,8 @@ function isInteractiveParam(p: ToolParameter): boolean {
     case 'number':
     case 'text':
       return p.binding.mode === 'runtime-input';
+    case 'osm-feature':
+      return p.binding.mode === 'runtime-pick';
   }
 }
 
