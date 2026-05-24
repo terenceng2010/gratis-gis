@@ -75,6 +75,7 @@ import { PickMapDialog } from '../editor/pick-map-dialog';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import { Container } from './themed-containers';
+import { ToolPicker } from './tool-picker.js';
 
 /**
  * #22: summary of one theme item, served from the parent server
@@ -4250,18 +4251,14 @@ function ButtonWidgetConfig({
           </select>
         </Field>
       ) : (
-        // #90: tool picker.  Reuses the generic item picker pattern
-        // (paste / pick the tool item id).  A future iteration will
-        // replace this with a real combobox over the user's
-        // accessible tool items.
+        // #90: real tool picker -- combobox over accessible tool
+        // items + "+ New tool" inline modal for stamping out a
+        // starter recipe without leaving the app designer.
         <Field label="Tool">
-          <input
-            type="text"
-            value={config.toolId ?? ''}
-            disabled={!canEdit}
-            placeholder="tool item id"
-            onChange={(e) => onChangeConfig({ toolId: e.target.value.trim() })}
-            className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 font-mono text-xs focus:border-ink-1 focus:outline-none"
+          <ToolPicker
+            selectedId={config.toolId ?? ''}
+            canEdit={canEdit}
+            onSelect={(id) => onChangeConfig({ toolId: id })}
           />
         </Field>
       )}
