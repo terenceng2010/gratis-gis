@@ -1281,3 +1281,49 @@ model MapIconUpload {
   @@map("map_icon_upload")
 }
 
+/// Cache layer for OpenStreetMap Overpass queries (#OSM).  Each
+/// row is one hashed (presetIds, tagFilters, bbox, endpoint)
+/// tuple.  The features themselves live in the shared
+/// observation-log table under the `scope` written here, so the
+/// recipe runner can read them via the same SQL path it uses for
+/// data_layer sources.  Rows expire by TTL; a nightly job scrubs
+/// the cache row plus its observation-log tail.
+model OsmQueryCache {
+  /// Stable hash of (presetIds, tagFilters, bbox rounded to ~10m,
+  /// endpoint).  Primary key so a flurry of identical queries
+  /// within TTL collapse to a single Overpass hit.
+  hash         String   @id
+  /// observation-log scope key the converted features were
+  /// written to.  Shape: `osm:<hash>`.
+  scope        String
+  /// Preset ids that were unioned in the query.  Stored for
+  /// diagnostics + the cache-scrub job's eligibility check.
+  presetIds    String[] @map("preset_ids")
+  /// Tag filters applied on top of the presets.  JSONB so the
+  /// shape can evolve (op support beyond equals lands later)
+  /// without a column-level migration.
+  tagFilters   Json?    @map("tag_filters")
+  /// Original bbox (4-tuple as a JSON array).
+  bbox         Json
+  /// How many features the Overpass response landed.  Mostly a
+  /// diagnostic; the cap is enforced upstream by the QL builder.
+  featureCount Int      @map("feature_count")
+  /// Overpass endpoint the query was sent to.  Different endpoints
+  /// can yield different feature sets, so the cache key includes
+  /// it, and we surface it here for debugging cross-endpoint
+  /// drift.
+  endpoint     String
+  /// When the Overpass call returned.  Drives the cache hit / miss
+  /// decision: a row is fresh until `expires_at`.
+  fetchedAt    DateTime @default(now()) @map("fetched_at")
+  /// Hard expiry; the scrub job deletes rows whose `expires_at` is
+  /// older than now() + a small grace window.
+  expiresAt    DateTime @map("expires_at")
+
+  /// Cleanup index: scrub job runs `WHERE expires_at < now()`.
+  @@index([expiresAt], map: "osm_query_cache_expires_at_idx")
+  /// Diagnostic index: "which queries touched this preset
+  /// recently" is a useful operator question.
+  @@index([presetIds], map: "osm_query_cache_presets_idx", type: Gin)
+  @@map("osm_query_cache")
+}
