@@ -3898,6 +3898,7 @@ function ToolButtonRender({
               recipe={tool.data.action as RecipeAction}
               hostLayers={buildHostLayerOptions(ctx)}
               {...(bbox ? { hostBbox: bbox } : {})}
+              getDrawMap={() => firstMapInstance(ctx)}
               onClose={() => setRecipePanelOpen(false)}
               onResult={(result) => applyRecipeSelection(ctx, result)}
             />
@@ -3976,6 +3977,19 @@ function firstMapBbox(
   if (!m) return null;
   const b = m.getBounds();
   return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+}
+
+/**
+ * Convenience getter for the host's first mounted MapLibre instance.
+ * The recipe panel's "Draw on map" affordance attaches to this map;
+ * a multi-map app could later expose a picker, but for v1 the first
+ * map wins (typical apps have exactly one).
+ */
+function firstMapInstance(
+  ctx: CustomMapsCtx | null,
+): maplibregl.Map | null {
+  if (!ctx) return null;
+  return Object.values(ctx.maps).find((x) => x) ?? null;
 }
 
 /**

@@ -41,7 +41,8 @@
 
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, Pencil, X } from 'lucide-react';
+import type maplibregl from 'maplibre-gl';
 import type {
   DistanceParameter,
   FeatureSourceParameter,
@@ -53,6 +54,11 @@ import type {
   TextParameter,
   ToolParameter,
 } from '@gratis-gis/shared-types';
+
+import {
+  MapDrawingOverlay,
+  type DrawableGeometryType,
+} from './map-drawing-overlay.js';
 
 const PREDICATE_LABELS: Record<SpatialPredicate, string> = {
   intersects: 'Intersects',
@@ -100,6 +106,13 @@ interface Props {
    *  separately from hostLayers so a runtime-draw param without a
    *  matching layer can still grab a bbox. */
   hostBbox?: [number, number, number, number];
+  /** Resolver for the host's MapLibre instance the freehand-draw
+   *  affordance attaches to.  Returns null when no map is mounted;
+   *  the panel falls back to the bbox / paste-GeoJSON path in that
+   *  case.  A function (rather than a captured value) so the panel
+   *  always grabs the live instance at the moment the user clicks
+   *  Draw -- the map may have re-mounted since the panel opened. */
+  getDrawMap?: () => maplibregl.Map | null;
   onClose: () => void;
   onResult: (result: RecipeRunResult) => void;
 }
@@ -110,6 +123,7 @@ export function RecipeRunPanel({
   recipe,
   hostLayers,
   hostBbox,
+  getDrawMap,
   onClose,
   onResult,
 }: Props) {
@@ -129,8 +143,38 @@ export function RecipeRunPanel({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // When non-null, the panel collapses to a thin banner and lets
+  // the user click on the host map to draw an AOI for the named
+  // parameter.  The `mapInstance` is captured up front (at the
+  // moment the user hits the Draw button) so React state churn
+  // doesn't cause the drawing overlay to re-mount mid-interaction.
+  const [drawing, setDrawing] = useState<{
+    paramName: string;
+    geometryType: DrawableGeometryType;
+    mapInstance: maplibregl.Map;
+  } | null>(null);
+
   function patch(name: string, next: unknown) {
     setValues((v) => ({ ...v, [name]: next }));
+  }
+
+  /** Called by FeatureSourceInput when the user clicks "Draw on
+   *  map" for a runtime-draw parameter.  Falls back silently if no
+   *  map is available -- the input keeps its bbox + paste-GeoJSON
+   *  affordances as the recovery path. */
+  function startDrawing(paramName: string, geometryType: DrawableGeometryType) {
+    const m = getDrawMap?.();
+    if (!m) return;
+    setDrawing({ paramName, geometryType, mapInstance: m });
+  }
+
+  function finishDrawing(geometry: GeoJSON.Geometry) {
+    if (!drawing) return;
+    patch(drawing.paramName, { kind: 'inline-geojson', geojson: geometry });
+    setDrawing(null);
+  }
+  function cancelDrawing() {
+    setDrawing(null);
   }
 
   async function run(): Promise<void> {
@@ -160,6 +204,47 @@ export function RecipeRunPanel({
     } finally {
       setRunning(false);
     }
+  }
+
+  // When drawing, the modal collapses to a thin top banner so the
+  // user can see and click the map.  The dim-overlay backdrop also
+  // drops away so canvas events can reach the map.  Cancel + a
+  // "what to do" hint stay visible in the banner; finishing the
+  // draw flips us back to the full modal with the AOI captured.
+  if (drawing) {
+    const drawBanner = (
+      <>
+        <MapDrawingOverlay
+          map={drawing.mapInstance}
+          geometryType={drawing.geometryType}
+          onComplete={finishDrawing}
+          onCancel={cancelDrawing}
+        />
+        <div
+          className="pointer-events-none fixed inset-x-0 top-4 z-[1000] flex justify-center"
+          aria-live="polite"
+        >
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border bg-surface-0/95 px-4 py-2 text-xs shadow-raised backdrop-blur">
+            <Pencil className="h-3.5 w-3.5 text-accent" />
+            <span className="text-ink-0">
+              {drawing.geometryType === 'point'
+                ? 'Click on the map to drop a point.'
+                : drawing.geometryType === 'line'
+                  ? 'Click to add vertices; double-click to finish the line.'
+                  : 'Click to add vertices; double-click to close the polygon.'}
+            </span>
+            <button
+              type="button"
+              onClick={cancelDrawing}
+              className="rounded-md border border-border bg-surface-1 px-2 py-0.5 text-[11px] text-ink-1 hover:bg-surface-2"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </>
+    );
+    return createPortal(drawBanner, document.body);
   }
 
   const modal = (
@@ -207,6 +292,7 @@ export function RecipeRunPanel({
                 onChange={(v) => patch(p.name, v)}
                 hostLayers={hostLayers}
                 {...(hostBbox ? { hostBbox } : {})}
+                {...(getDrawMap ? { onStartDraw: startDrawing } : {})}
               />
             ))
           )}
@@ -252,12 +338,14 @@ function ParamInputRow({
   onChange,
   hostLayers,
   hostBbox,
+  onStartDraw,
 }: {
   parameter: ToolParameter;
   value: unknown;
   onChange: (next: unknown) => void;
   hostLayers: HostLayerOption[];
   hostBbox?: [number, number, number, number];
+  onStartDraw?: (paramName: string, geometryType: DrawableGeometryType) => void;
 }) {
   switch (parameter.kind) {
     case 'feature-source':
@@ -268,6 +356,7 @@ function ParamInputRow({
           onChange={onChange}
           hostLayers={hostLayers}
           {...(hostBbox ? { hostBbox } : {})}
+          {...(onStartDraw ? { onStartDraw } : {})}
         />
       );
     case 'predicate':
@@ -311,12 +400,14 @@ function FeatureSourceInput({
   onChange,
   hostLayers,
   hostBbox,
+  onStartDraw,
 }: {
   parameter: FeatureSourceParameter;
   value: FeatureSourceValue | undefined;
   onChange: (next: FeatureSourceValue) => void;
   hostLayers: HostLayerOption[];
   hostBbox?: [number, number, number, number];
+  onStartDraw?: (paramName: string, geometryType: DrawableGeometryType) => void;
 }) {
   const mode = parameter.binding.mode;
   // Filter host layers to the parameter's geometry type if specified.
@@ -368,14 +459,35 @@ function FeatureSourceInput({
       };
       onChange({ kind: 'inline-geojson', geojson: polygon });
     }
+    // Translate the parameter's declared geometry type into the
+    // narrower set the drawing overlay understands.  'any' falls
+    // back to polygon because that's the most common AOI shape and
+    // both line + point AOIs are degenerate cases for almost every
+    // spatial-filter predicate.
+    const drawGeometryType: DrawableGeometryType =
+      parameter.geometryType === 'point'
+        ? 'point'
+        : parameter.geometryType === 'line'
+          ? 'line'
+          : 'polygon';
     return (
       <div className="space-y-2">
         <Label parameter={parameter} />
         <p className="text-[11px] text-muted">
-          Use the current map view as a rectangle, or paste GeoJSON
-          (a Feature, FeatureCollection of one, or a bare Geometry).
+          Draw an area on the map, snap the current view as a
+          rectangle, or paste GeoJSON.
         </p>
         <div className="flex flex-wrap gap-2">
+          {onStartDraw ? (
+            <button
+              type="button"
+              onClick={() => onStartDraw(parameter.name, drawGeometryType)}
+              className="inline-flex items-center gap-1 rounded-md border border-accent bg-accent/5 px-2 py-1 text-[11px] text-ink-0 hover:bg-accent/10"
+            >
+              <Pencil className="h-3 w-3 text-accent" />
+              Draw on map
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={useBboxAsRectangle}
