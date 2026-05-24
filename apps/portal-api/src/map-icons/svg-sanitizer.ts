@@ -117,7 +117,9 @@ export function sanitizeSvg(input: string): string | null {
   // Reject UTF-16 BOMs / unusual chars that could be used to
   // smuggle past the regex layer. (Inputs come from a form
   // upload; we treat exotic characters as suspicious.)
-  if (/\x00/.test(src)) return null;
+  // Use indexOf with a String.fromCharCode literal rather than a
+  // regex so we don't trip ESLint's no-control-regex rule.
+  if (src.indexOf(String.fromCharCode(0)) !== -1) return null;
 
   // Token-by-token walk. We rebuild the SVG from the parsed
   // tokens rather than try to filter the source string in
