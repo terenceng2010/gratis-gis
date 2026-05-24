@@ -993,13 +993,12 @@ const TOOL_GROUPS: ToolGroup[] = [
       'Derive a surface (or its isolines) from a sparse set of point measurements.',
     tools: ['contour'],
   },
-  // Note: `spatial-join` and `spatial-filter` are valid ToolStep
-  // members but are intentionally absent from this picker.  Both need
-  // an "other layer" picker UI in the step editor before they're
-  // useful from the derived_layer wizard; the recipe-action path on
-  // tool items consumes them through the tool designer instead.  Add
-  // both back here once the layer-picker step editor lands so the
-  // derived_layer and tool-recipe vocabularies stay in sync.
+  {
+    label: 'Compare with another layer',
+    description:
+      'Decorate or filter the upstream rows using a second data layer.',
+    tools: ['spatial-join', 'spatial-filter'],
+  },
 ];
 
 /**
@@ -1225,6 +1224,11 @@ function StepCard({
         <SpatialJoinStepEditor
           params={step.params}
           onChange={(params) => onChange({ tool: 'spatial-join', params })}
+        />
+      ) : step.tool === 'spatial-filter' ? (
+        <SpatialFilterStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'spatial-filter', params })}
         />
       ) : step.tool === 'contour' ? (
         <ContourStepEditor
@@ -1687,6 +1691,132 @@ function ToolToolbox({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Reusable data_layer picker for step editors that take an "other
+ * source" parameter (spatial-join, spatial-filter, ...).  Combobox
+ * over the user's accessible data_layer items + a free-text
+ * sublayer-key input below it.  v3 data_layer items have multiple
+ * sublayers and the sublayer key lives on the URL of the layer's
+ * detail page; a real per-layer sublayer dropdown is a follow-up
+ * once we expose layer schemas in the item-list payload.
+ *
+ * Fetches the list once on mount and caches it locally.  When a
+ * widget references an itemId the user can't read (deleted or
+ * sharing changed since the recipe was saved), it stays in the
+ * select as "(unknown layer · <id-prefix>)" so editing doesn't
+ * silently drop the binding.
+ */
+function DataLayerPicker({
+  itemId,
+  layerKey,
+  onChange,
+  label = 'Other layer',
+  hint,
+}: {
+  itemId: string;
+  layerKey: string | undefined;
+  onChange: (next: { itemId: string; layerKey?: string }) => void;
+  label?: string;
+  hint?: string;
+}) {
+  const [available, setAvailable] = useState<
+    Array<{ id: string; title: string }> | null
+  >(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/portal/items?type=data_layer', {
+          cache: 'no-store',
+        });
+        if (!res.ok) {
+          if (!cancelled) setAvailable([]);
+          return;
+        }
+        const rows = (await res.json()) as Array<{
+          id: string;
+          title: string;
+        }>;
+        if (!cancelled) {
+          setAvailable(
+            rows
+              .map((r) => ({ id: r.id, title: r.title }))
+              .sort((a, b) => a.title.localeCompare(b.title)),
+          );
+        }
+      } catch {
+        if (!cancelled) setAvailable([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const knownItem = available?.find((x) => x.id === itemId);
+
+  return (
+    <div className="space-y-2">
+      <label className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          {label}
+        </span>
+        <select
+          value={itemId}
+          disabled={available === null}
+          onChange={(e) =>
+            onChange({
+              itemId: e.target.value,
+              ...(layerKey ? { layerKey } : {}),
+            })
+          }
+          className="h-9 rounded-md border border-border bg-surface-1 px-3 text-xs focus:border-accent focus:outline-none"
+        >
+          {available === null ? (
+            <option value="">Loading…</option>
+          ) : (
+            <>
+              <option value="">(pick a data layer)</option>
+              {available.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.title}
+                </option>
+              ))}
+              {itemId && !knownItem ? (
+                <option value={itemId} key="__unknown">
+                  (unknown layer · {itemId.slice(0, 8)}…)
+                </option>
+              ) : null}
+            </>
+          )}
+        </select>
+        {hint ? (
+          <span className="text-[11px] text-muted">{hint}</span>
+        ) : null}
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[11px] uppercase tracking-wide text-muted">
+          Sublayer key (optional)
+        </span>
+        <input
+          type="text"
+          value={layerKey ?? ''}
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            onChange({ itemId, ...(v ? { layerKey: v } : {}) });
+          }}
+          placeholder="leave blank for the default sublayer"
+          className="h-9 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
+        />
+        <span className="text-[11px] text-muted">
+          Only needed when the layer has multiple sublayers; visible
+          on the data layer&apos;s detail page.
+        </span>
+      </label>
     </div>
   );
 }
@@ -2928,60 +3058,18 @@ function SpatialJoinStepEditor({
   const attrsText = (params.attrsToKeep ?? []).join(', ');
   return (
     <div className="space-y-3">
-      <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wide text-muted">
-          Other source (data layer item id)
-        </span>
-        <input
-          type="text"
-          value={params.otherSource.itemId}
-          onChange={(e) =>
-            onChange({
-              ...params,
-              otherSource: {
-                kind: 'data_layer',
-                itemId: e.target.value.trim(),
-              },
-            })
-          }
-          placeholder="00000000-0000-0000-0000-000000000000"
-          className="h-9 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
-        />
-        <span className="text-[11px] text-muted">
-          UUID of the data_layer to join in.  Find it in the URL of
-          the layer&apos;s detail page.  Full picker UI is queued as
-          a follow-up; for now paste the id.
-        </span>
-      </label>
-
-      <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wide text-muted">
-          Sublayer key (optional)
-        </span>
-        <input
-          type="text"
-          value={params.otherSource.layerKey ?? ''}
-          onChange={(e) => {
-            const next = { ...params };
-            const v = e.target.value.trim();
-            if (v) {
-              next.otherSource = {
-                kind: 'data_layer',
-                itemId: params.otherSource.itemId,
-                layerKey: v,
-              };
-            } else {
-              next.otherSource = {
-                kind: 'data_layer',
-                itemId: params.otherSource.itemId,
-              };
-            }
-            onChange(next);
-          }}
-          placeholder="leave blank for the default sublayer"
-          className="h-9 rounded-md border border-border bg-surface-1 px-3 font-mono text-xs focus:border-accent focus:outline-none"
-        />
-      </label>
+      <DataLayerPicker
+        itemId={params.otherSource.itemId}
+        layerKey={params.otherSource.layerKey}
+        onChange={(next) =>
+          onChange({
+            ...params,
+            otherSource: { kind: 'data_layer', ...next },
+          })
+        }
+        label="Other source"
+        hint="The layer whose features to join in.  Limited to data layers you can read."
+      />
 
       <div>
         <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
@@ -3111,6 +3199,146 @@ function SpatialJoinStepEditor({
           .
         </span>
       </label>
+    </div>
+  );
+}
+
+/**
+ * Spatial-filter step editor inside the derived_layer wizard
+ * (#90).  Lighter than spatial-join because filter steps don't
+ * decorate the upstream schema -- the editor only collects an
+ * other-source layer, a predicate, and (for predicate='near') a
+ * distance.  Inside derived_layer recipes the otherSource is
+ * always a hardcoded data_layer; parameter refs aren't allowed
+ * (those live in tool recipes via the recipe-editor surface).
+ */
+function SpatialFilterStepEditor({
+  params,
+  onChange,
+}: {
+  params: {
+    otherSource:
+      | { kind: 'data_layer'; itemId: string; layerKey?: string }
+      | { kind: 'parameter'; name: string }
+      | { kind: 'inline-geometry'; geometry: unknown };
+    predicate:
+      | { kind: 'fixed'; value: 'intersects' | 'within' | 'contains' | 'touches' | 'near' }
+      | { kind: 'parameter'; name: string };
+    distance?:
+      | { kind: 'fixed'; meters: number }
+      | { kind: 'parameter'; name: string };
+  };
+  onChange: (next: typeof params) => void;
+}) {
+  // The wizard only supports the resolved-by-default shape; the
+  // backend save-time validator rejects unresolved refs from a
+  // derived_layer save anyway, so narrow at the editor level too.
+  const dataLayerSource =
+    params.otherSource.kind === 'data_layer'
+      ? params.otherSource
+      : { kind: 'data_layer' as const, itemId: '' };
+  const fixedPredicate =
+    params.predicate.kind === 'fixed' ? params.predicate.value : 'intersects';
+  const fixedDistanceMeters =
+    params.distance && params.distance.kind === 'fixed'
+      ? params.distance.meters
+      : undefined;
+
+  const setOther = (next: { itemId: string; layerKey?: string }) =>
+    onChange({
+      ...params,
+      otherSource: { kind: 'data_layer', ...next },
+    });
+
+  const setPredicate = (
+    p: 'intersects' | 'within' | 'contains' | 'touches' | 'near',
+  ) => {
+    const base = { ...params, predicate: { kind: 'fixed' as const, value: p } };
+    if (p === 'near') {
+      // Seed a distance when the user picks near and we don't have one;
+      // leaves existing distances untouched so the value persists across
+      // predicate toggles.
+      if (!params.distance) {
+        return onChange({
+          ...base,
+          distance: { kind: 'fixed', meters: 100 },
+        });
+      }
+    } else {
+      // Drop distance when switching away from near; it's ignored by
+      // the SQL emitter for other predicates and saved-shape lint will
+      // strip it anyway, but we keep the persisted recipe tidy.
+      const { distance: _unused, ...rest } = base;
+      return onChange(rest);
+    }
+    onChange(base);
+  };
+
+  const setDistanceMeters = (m: number) => {
+    if (!Number.isFinite(m) || m < 0) return;
+    onChange({ ...params, distance: { kind: 'fixed', meters: m } });
+  };
+
+  return (
+    <div className="space-y-3">
+      <DataLayerPicker
+        itemId={dataLayerSource.itemId}
+        layerKey={dataLayerSource.layerKey}
+        onChange={setOther}
+        label="Filter against"
+        hint="The layer whose features the upstream rows are tested against."
+      />
+
+      <div>
+        <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
+          Predicate
+        </p>
+        <div className="grid grid-cols-5 gap-2" role="radiogroup">
+          {(['intersects', 'within', 'contains', 'touches', 'near'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="radio"
+              aria-checked={fixedPredicate === p}
+              onClick={() => setPredicate(p)}
+              className={`flex items-center justify-center rounded-md border p-2 text-xs capitalize transition-colors ${
+                fixedPredicate === p
+                  ? 'border-accent bg-accent/5 text-ink-0 ring-2 ring-accent/30'
+                  : 'border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-[11px] text-muted">
+          {fixedPredicate === 'intersects'
+            ? 'Keep upstream rows whose geometry shares any space with a feature in the other layer.'
+            : fixedPredicate === 'within'
+              ? 'Keep upstream rows whose geometry is fully inside a feature in the other layer.'
+              : fixedPredicate === 'contains'
+                ? 'Keep upstream rows whose geometry fully contains a feature in the other layer.'
+                : fixedPredicate === 'touches'
+                  ? 'Keep upstream rows whose geometry only shares a boundary with a feature in the other layer.'
+                  : 'Keep upstream rows within the chosen distance of any feature in the other layer.'}
+        </p>
+      </div>
+
+      {fixedPredicate === 'near' ? (
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            Distance (meters)
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={1_000_000}
+            value={fixedDistanceMeters ?? 100}
+            onChange={(e) => setDistanceMeters(Number(e.target.value))}
+            className="h-9 w-40 rounded-md border border-border bg-surface-1 px-3 text-xs focus:border-accent focus:outline-none"
+          />
+        </label>
+      ) : null}
     </div>
   );
 }
