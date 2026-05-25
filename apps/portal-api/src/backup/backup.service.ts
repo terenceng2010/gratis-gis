@@ -18,9 +18,9 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as tar from 'tar';
 
 import { PrismaService } from '../prisma/prisma.service.js';
+import { createTarGz } from './tar-cli.js';
 
 export type ScheduleMode = 'off' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
@@ -517,18 +517,17 @@ export class BackupService implements OnModuleInit {
         'utf8',
       );
 
-      // 4. Seal the archive. tar.c streams directly to gzip + file,
-      //    so at no point do we hold the entire archive in memory.
-      //    cwd/stage root means the paths inside the tar are relative
-      //    (postgres/..., minio/..., manifest.json): portable.
-      await tar.c(
-        {
-          gzip: true,
-          file: finalPath,
-          cwd: stageDir,
-        },
-        ['postgres', 'minio', 'manifest.json'],
-      );
+      // 4. Seal the archive. We shell out to the system tar so we
+      //    don't carry the npm `tar` dep (#47). tar streams gzip-
+      //    compressed bytes directly to `finalPath`, so at no point
+      //    do we hold the entire archive in memory. cwd/stage root
+      //    means the paths inside the tar are relative (postgres/...,
+      //    minio/..., manifest.json): portable across hosts.
+      await createTarGz(finalPath, stageDir, [
+        'postgres',
+        'minio',
+        'manifest.json',
+      ]);
 
       const stat = await fs.stat(finalPath);
       await this.prisma.backupRun.update({

@@ -38,7 +38,6 @@
     "@nestjs/throttler": "6.5.0",
     "@prisma/client": "^5.20.0",
     "@types/cron": "2.4.0",
-    "@types/tar": "^7.0.87",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cron": "3.5.0",
@@ -51,8 +50,7 @@
     "pg-copy-streams": "^7.0.0",
     "pmtiles": "^3.0.7",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
-    "tar": "^7.5.13"
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.21",

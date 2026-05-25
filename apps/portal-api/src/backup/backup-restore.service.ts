@@ -17,11 +17,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as tar from 'tar';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { BackupService } from './backup.service.js';
 import { MaintenanceModeService } from './maintenance-mode.service.js';
+import { extractTarGz, readTarEntry } from './tar-cli.js';
 
 /**
  * What sits inside every archive the backup service writes.
@@ -170,8 +170,9 @@ export class BackupRestoreService {
     };
 
     try {
-      // 1. Extract the archive into a staging dir.
-      await tar.x({ file: archivePath, cwd: stageDir });
+      // 1. Extract the archive into a staging dir. We shell out to
+      //    the system tar so we don't carry the npm `tar` dep (#47).
+      await extractTarGz(archivePath, stageDir);
 
       const manifest = await this.readStagedManifest(stageDir);
       if (manifest.version !== 1) {
@@ -228,25 +229,19 @@ export class BackupRestoreService {
 
   /** Read the manifest without extracting the whole archive. */
   private async extractManifest(archivePath: string): Promise<ArchiveManifest> {
-    let raw: string | null = null;
-    await tar.t({
-      file: archivePath,
-      filter: (p) => p === 'manifest.json',
-      onReadEntry: (entry) => {
-        const chunks: Buffer[] = [];
-        entry.on('data', (c: Buffer) => chunks.push(c));
-        entry.on('end', () => {
-          raw = Buffer.concat(chunks).toString('utf8');
-        });
-      },
-    });
-    if (!raw) {
+    // Pull just the manifest.json entry's bytes via `tar -xzO`,
+    // which writes the selected entry to stdout and skips
+    // everything else. Cheaper than extracting the full archive
+    // when all we need is the version + database name to decide
+    // whether the archive is even compatible.
+    const buf = await readTarEntry(archivePath, 'manifest.json');
+    if (!buf) {
       throw new NotFoundException(
         'Archive is missing manifest.json; it may not be a GratisGIS backup.',
       );
     }
     try {
-      return JSON.parse(raw) as ArchiveManifest;
+      return JSON.parse(buf.toString('utf8')) as ArchiveManifest;
     } catch {
       throw new BadRequestException(
         'Archive manifest.json is not valid JSON.',

@@ -110,9 +110,6 @@ importers:
       '@types/cron':
         specifier: 2.4.0
         version: 2.4.0
-      '@types/tar':
-        specifier: ^7.0.87
-        version: 7.0.87
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
@@ -152,9 +149,6 @@ importers:
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
-      tar:
-        specifier: ^7.5.13
-        version: 7.5.13
     devDependencies:
       '@nestjs/cli':
         specifier: ^11.0.21
@@ -2087,10 +2081,6 @@ packages:
 
   '@types/supercluster@7.1.3':
     resolution: {integrity: sha512-Z0pOY34GDFl3Q6hUFYf3HkTwKEE02e7QgtJppBt+beEAxnyOpJua+voGFvxINBHa06GwLFFym7gRPY2SiKIfIA==}
-
-  '@types/tar@7.0.87':
-    resolution: {integrity: sha512-3IxNBV8LeY5oi2ZFpvAhOtW1+mHswkzM7BuisVrwJgPv67GBO2rkLPQlEKtzfHuLdhDDczhkCZeT+RuizMay4A==}
-    deprecated: This is a stub types definition. tar provides its own type definitions, so you do not need this installed.
 
   '@types/use-sync-external-store@0.0.6':
     resolution: {integrity: sha512-zFDAD+tlpf2r4asuHEj0XH6pY6i0g5NeAHPn+15wk3BV6JA69eERFXC1gyGThDkVa1zCyKr5jox1+2LbV/AMLg==}
@@ -7663,10 +7653,6 @@ snapshots:
   '@types/supercluster@7.1.3':
     dependencies:
       '@types/geojson': 7946.0.16
-
-  '@types/tar@7.0.87':
-    dependencies:
-      tar: 7.5.13
 
   '@types/use-sync-external-store@0.0.6': {}
 
