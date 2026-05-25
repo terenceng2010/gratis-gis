@@ -30,7 +30,7 @@ import {
   type ToolItemData,
 } from '@gratis-gis/shared-types';
 
-import { RecipeEditor } from './recipe-editor.js';
+import { RecipeEditor } from './recipe-editor';
 
 interface Props {
   itemId: string;

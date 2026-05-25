@@ -75,7 +75,7 @@ import { PickMapDialog } from '../editor/pick-map-dialog';
 import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import { Container } from './themed-containers';
-import { ToolPicker } from './tool-picker.js';
+import { ToolPicker } from './tool-picker';
 
 /**
  * #22: summary of one theme item, served from the parent server

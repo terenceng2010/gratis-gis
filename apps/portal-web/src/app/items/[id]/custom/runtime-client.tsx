@@ -64,11 +64,11 @@ import type {
 import {
   RecipeRunPanel,
   type HostLayerOption,
-} from './recipe-run-panel.js';
+} from './recipe-run-panel';
 import {
   OsmOverlayLayer,
   type OsmOverlayFeature,
-} from './osm-overlay-layer.js';
+} from './osm-overlay-layer';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { customBasemapToData } from '@/lib/custom-basemap';
 import { exportFeatures, type ExportFormat } from '@/lib/layer-export';

@@ -60,7 +60,7 @@ import type {
 import {
   MapDrawingOverlay,
   type DrawableGeometryType,
-} from './map-drawing-overlay.js';
+} from './map-drawing-overlay';
 
 const PREDICATE_LABELS: Record<SpatialPredicate, string> = {
   intersects: 'Intersects',
