@@ -90,14 +90,33 @@ export interface HostLayerOption {
   mapBbox?: [number, number, number, number];
 }
 
-export interface RecipeRunResult {
-  output: {
-    kind: 'selection';
-    layer: { itemId: string; layerKey?: string };
-    featureIds: Array<string | number>;
-    truncated: boolean;
-  };
-}
+/**
+ * Wire-shape returned by POST /api/portal/tools/:id/run.  Two
+ * variants today; future output sinks add more.
+ */
+export type RecipeRunResult =
+  | {
+      output: {
+        kind: 'selection';
+        layer: { itemId: string; layerKey?: string };
+        featureIds: Array<string | number>;
+        truncated: boolean;
+      };
+    }
+  | {
+      output: {
+        kind: 'osm-features-overlay';
+        features: Array<{
+          type: 'Feature';
+          id: string;
+          properties: Record<string, unknown>;
+          geometry: unknown;
+        }>;
+        attribution: string;
+        featureCount: number;
+        truncated: boolean;
+      };
+    };
 
 interface Props {
   toolId: string;

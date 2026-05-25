@@ -65,6 +65,10 @@ import {
   RecipeRunPanel,
   type HostLayerOption,
 } from './recipe-run-panel.js';
+import {
+  OsmOverlayLayer,
+  type OsmOverlayFeature,
+} from './osm-overlay-layer.js';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { customBasemapToData } from '@/lib/custom-basemap';
 import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
@@ -3762,6 +3766,17 @@ function ToolButtonRender({
   // selection has been applied.  Local state lives on the button
   // because each button independently triggers its own run.
   const [recipePanelOpen, setRecipePanelOpen] = useState(false);
+  // Active OSM overlay produced by the latest tool run, if any.
+  // Reset on a fresh run; stays mounted on the host map until the
+  // user dismisses it via the attribution chip's close button or
+  // re-runs the tool.
+  const [osmOverlay, setOsmOverlay] = useState<{
+    id: string;
+    features: OsmOverlayFeature[];
+    attribution: string;
+    featureCount: number;
+    truncated: boolean;
+  } | null>(null);
   useEffect(() => {
     if (!toolId) {
       setStatus('missing');
@@ -3900,12 +3915,100 @@ function ToolButtonRender({
               {...(bbox ? { hostBbox: bbox } : {})}
               getDrawMap={() => firstMapInstance(ctx)}
               onClose={() => setRecipePanelOpen(false)}
-              onResult={(result) => applyRecipeSelection(ctx, result)}
+              onResult={(result) => {
+                if (result.output.kind === 'selection') {
+                  applyRecipeSelection(ctx, {
+                    output: result.output,
+                  });
+                } else if (result.output.kind === 'osm-features-overlay') {
+                  setOsmOverlay({
+                    // Stable id keyed on the toolId so successive runs
+                    // of the same tool replace the prior overlay rather
+                    // than stacking; different tools each get their
+                    // own overlay slot.
+                    id: `tool-${toolId}`,
+                    features: result.output.features as OsmOverlayFeature[],
+                    attribution: result.output.attribution,
+                    featureCount: result.output.featureCount,
+                    truncated: result.output.truncated,
+                  });
+                }
+              }}
             />
           );
         })()
       ) : null}
+      {osmOverlay && ctx ? (
+        (() => {
+          const m = firstMapInstance(ctx);
+          if (!m) return null;
+          return (
+            <>
+              <OsmOverlayLayer
+                id={osmOverlay.id}
+                map={m}
+                features={osmOverlay.features}
+              />
+              <OsmAttributionChip
+                attribution={osmOverlay.attribution}
+                featureCount={osmOverlay.featureCount}
+                truncated={osmOverlay.truncated}
+                onDismiss={() => setOsmOverlay(null)}
+              />
+            </>
+          );
+        })()
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Bottom-right ODbL attribution chip for the OSM overlay (#OSM).
+ * ODbL requires "© OpenStreetMap contributors" on any view that
+ * displays OSM-derived features; this chip satisfies the
+ * requirement while also giving the user a one-click way to
+ * dismiss the overlay.  Fixed-position so it stays put when the
+ * map panes scroll.
+ */
+function OsmAttributionChip({
+  attribution,
+  featureCount,
+  truncated,
+  onDismiss,
+}: {
+  attribution: string;
+  featureCount: number;
+  truncated: boolean;
+  onDismiss: () => void;
+}) {
+  return createPortal(
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[900] flex justify-end">
+      <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-surface-0/95 px-3 py-1.5 text-[11px] shadow-raised backdrop-blur">
+        <span className="text-ink-0">
+          {featureCount} OSM feature{featureCount === 1 ? '' : 's'}
+          {truncated ? ' (truncated)' : ''}
+        </span>
+        <span className="text-muted">·</span>
+        <a
+          href="https://www.openstreetmap.org/copyright"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-muted underline hover:text-ink-1"
+        >
+          {attribution}
+        </a>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="rounded-md border border-border bg-surface-1 px-1.5 text-[10px] text-muted hover:text-ink-1"
+          aria-label="Dismiss OSM overlay"
+        >
+          ×
+        </button>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
