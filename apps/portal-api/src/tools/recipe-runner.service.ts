@@ -24,6 +24,7 @@ import {
   dataLayerSourceSqlFragment,
 } from '../engine/data-layer.js';
 import { ItemsService } from '../items/items.service.js';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
 import { getGeneratorForStep } from '../derived-layers/tools/registry.js';
@@ -467,10 +468,16 @@ export class RecipeRunnerService {
   /**
    * Compute the bounding box of an AOI feature-source value.
    *
-   * v1 supports inline-geojson AOIs (drawn polygons / rectangles
-   * etc).  Layer / selection AOIs need a PostGIS hop; queued for
-   * wave 2 alongside the spatial-filter integration.  Returns null
-   * when the bbox can't be computed.
+   * Inline GeoJSON (drawn polygons / rectangles) is computed in
+   * memory. Layer / selection AOIs reach into the observation log
+   * via PostGIS's ST_Extent and the per-layer scope produced by
+   * dataLayerScope. featureIds (when supplied) narrow the extent to
+   * the selected subset; an empty / absent list covers the whole
+   * layer.
+   *
+   * Returns null only when the source isn't usable (no item id, no
+   * geometry, layer empty), so callers can surface a sensible "your
+   * AOI is empty" error instead of a silent zero-area query.
    */
   private async computeAoiBbox(
     value: FeatureSourceValue,
@@ -478,10 +485,74 @@ export class RecipeRunnerService {
     if (value.kind === 'inline-geojson' && value.geojson) {
       return bboxOfGeoJson(value.geojson);
     }
-    // TODO (wave 2): for data_layer / derived_layer AOIs, compute
-    // bbox via ST_Extent(geom) WHERE entity = ANY(featureIds) OR
-    // the whole layer when featureIds is empty.  For now we refuse
-    // so the user knows what's supported.
+    if (
+      (value.kind === 'data_layer' || value.kind === 'derived_layer') &&
+      value.itemId &&
+      value.layerKey
+    ) {
+      const scope = dataLayerScope(value.itemId, value.layerKey);
+      // Read the latest-truth bbox over the observation log: a row
+      // is "current" when its entity has no later observation, the
+      // observation is a create / update (not a delete), and its
+      // valid_from / valid_to window covers now. DISTINCT ON keeps
+      // one row per entity. ST_Extent returns a box2d we then split
+      // into the lat/lng pair the OSM resolver expects.
+      const ids =
+        value.featureIds && value.featureIds.length > 0
+          ? value.featureIds.map((id) => String(id))
+          : null;
+      type ExtentRow = { extent: string | null };
+      const rows: ExtentRow[] = ids
+        ? await this.prisma.$queryRaw<ExtentRow[]>(
+            // Use ANY(... uuid[]) so a featureIds array of 100k
+            // still binds in a single param; IN (...) would be
+            // node-by-node-bound.
+            Prisma.sql`
+              SELECT ST_Extent(latest.geom)::text AS extent
+              FROM (
+                SELECT DISTINCT ON (entity) entity, geom, kind
+                FROM observation
+                WHERE scope = ${scope}
+                  AND valid_from <= now()
+                  AND (valid_to IS NULL OR valid_to > now())
+                  AND entity = ANY(${ids}::uuid[])
+                ORDER BY entity, valid_from DESC, tx_time DESC
+              ) latest
+              WHERE latest.kind != 'delete' AND latest.geom IS NOT NULL
+            `,
+          )
+        : await this.prisma.$queryRaw<ExtentRow[]>(
+            Prisma.sql`
+              SELECT ST_Extent(latest.geom)::text AS extent
+              FROM (
+                SELECT DISTINCT ON (entity) entity, geom, kind
+                FROM observation
+                WHERE scope = ${scope}
+                  AND valid_from <= now()
+                  AND (valid_to IS NULL OR valid_to > now())
+                ORDER BY entity, valid_from DESC, tx_time DESC
+              ) latest
+              WHERE latest.kind != 'delete' AND latest.geom IS NOT NULL
+            `,
+          );
+      const extent = rows[0]?.extent;
+      if (!extent) return null;
+      // PostGIS returns the BOX(2D) literal as "BOX(minx miny,maxx maxy)".
+      // Parse with a non-capturing-friendly regex; values are
+      // floating-point with optional minus signs.
+      const m = extent.match(
+        /BOX\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)/,
+      );
+      if (!m) return null;
+      const minX = Number(m[1]);
+      const minY = Number(m[2]);
+      const maxX = Number(m[3]);
+      const maxY = Number(m[4]);
+      if (![minX, minY, maxX, maxY].every((v) => Number.isFinite(v))) {
+        return null;
+      }
+      return [minX, minY, maxX, maxY];
+    }
     return null;
   }
 }
