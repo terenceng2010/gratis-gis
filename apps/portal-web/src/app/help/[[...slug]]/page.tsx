@@ -137,8 +137,9 @@ function DocView({
       ) : null}
       <div
         // Body is server-rendered from trusted in-repo markdown,
-        // not user input.  `marked` HTML-escapes user-typed
-        // content inside the markdown by default; safe to inject.
+        // not user input.  Our vendored renderer HTML-escapes
+        // everything that isn't part of the supported subset, so
+        // the output is safe to inject.
         dangerouslySetInnerHTML={{ __html: doc.html }}
       />
       {related.length > 0 ? (

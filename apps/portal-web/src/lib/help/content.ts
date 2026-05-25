@@ -29,7 +29,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { load as yamlLoad } from 'js-yaml';
-import { marked } from 'marked';
+import { renderMarkdown } from '../markdown';
 
 /**
  * Split a help-doc file into its YAML frontmatter and markdown body.
@@ -185,14 +185,6 @@ function resolveHelpRoot(): string {
 
 const HELP_ROOT = resolveHelpRoot();
 
-// Configure marked with stable heading ids so in-page anchors
-// stay consistent across builds, and so we can extract the same
-// ids from the raw markdown for the TOC.
-marked.use({
-  gfm: true,
-  breaks: false,
-});
-
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -326,7 +318,7 @@ async function walk(
     );
     const slug = segments.join('/');
     const id = fm.id ?? baseName;
-    const html = await marked.parse(parsed.content);
+    const html = renderMarkdown(parsed.content);
     const headings = extractHeadings(parsed.content);
     out.push({
       slug,

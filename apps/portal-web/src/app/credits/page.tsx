@@ -131,10 +131,6 @@ const STACK: StackRow[] = [
     projects: [{ label: 'lucide-react', href: 'https://lucide.dev/' }],
   },
   {
-    layer: 'Markdown',
-    projects: [{ label: 'marked', href: 'https://marked.js.org/' }],
-  },
-  {
     layer: 'Styling',
     projects: [{ label: 'Tailwind CSS', href: 'https://tailwindcss.com/' }],
   },
