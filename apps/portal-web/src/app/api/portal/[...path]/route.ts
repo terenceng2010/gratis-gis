@@ -131,6 +131,16 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   if (/^items\/[^/]+\/proxy(\/.*)?$/.test(suffix)) {
     return `public/${suffix}`;
   }
+  // OSM preset catalog (#OSM).  The recipe editor + runtime
+  // panel fetch this from the browser on first render so users
+  // can pick OSM presets at design / run time.  Catalog is the
+  // ISC-licensed iD tagging schema -- open data, anon-safe to
+  // serve.  Passthrough rather than rewrite because portal-api
+  // already mounts the route at /api/public/osm/presets to match
+  // the prefix every client uses.
+  if (suffix === 'public/osm/presets') {
+    return suffix;
+  }
   // Anonymous file-item / attachment fetch. A publicly-shared
   // web-app embedding a logo or a file-item points its <img src>
   // at /api/portal/storage/private/<kind>/<key>. portal-api's
