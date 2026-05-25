@@ -39,7 +39,7 @@
  * carry into the request payload silently.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, Pencil, X } from 'lucide-react';
 import type maplibregl from 'maplibre-gl';
@@ -48,6 +48,8 @@ import type {
   FeatureSourceParameter,
   FeatureSourceValue,
   NumberParameter,
+  OsmFeatureParameter,
+  OsmTagFilter,
   PredicateParameter,
   RecipeAction,
   SpatialPredicate,
@@ -392,16 +394,14 @@ function ParamInputRow({
         />
       );
     case 'osm-feature':
-      // OSM runtime panel input lands in the OSM-runtime-panel
-      // commit (#92).  Placeholder keeps the dispatch exhaustive
-      // so a tool with an OSM parameter authored elsewhere doesn't
-      // crash the panel; the user sees "coming soon" and the
-      // recipe runner refuses to execute (the resolver rejects an
-      // unsupplied osm-feature value).
       return (
-        <div className="rounded-md border border-dashed border-border bg-surface-2 p-2 text-[11px] text-muted">
-          OSM-feature input lands in the next commit.
-        </div>
+        <OsmFeatureInput
+          parameter={parameter}
+          value={value as
+            | { kind: 'osm-feature-input'; presetIds: string[]; tagFilters?: OsmTagFilter[] }
+            | undefined}
+          onChange={onChange}
+        />
       );
   }
 }
@@ -712,6 +712,266 @@ function TextInput({
   );
 }
 
+/**
+ * OSM-feature parameter runtime input (#OSM).  Renders only when
+ * the binding is runtime-pick (hardcoded osm-feature parameters
+ * are silent at runtime).  Two stacked controls:
+ *
+ *   1. Preset multi-select: search + chip-add over the vendored
+ *      iD catalog.  Respects the parameter's allowedPresetIds /
+ *      allowedCategories restrictions.  Lazy-loads the catalog
+ *      from the public endpoint with `force-cache` so the picker
+ *      is cheap to open.
+ *
+ *   2. Tag-filter rows: only shown when allowCustomTagFilters !=
+ *      false.  Add / remove key=value rows; values are free text.
+ *      Per the design, equals is the only op in v1.
+ *
+ * The component owns the `{kind: 'osm-feature-input', ...}` shape
+ * the backend recipe runner expects; the parent panel forwards it
+ * to the API verbatim.
+ */
+function OsmFeatureInput({
+  parameter,
+  value,
+  onChange,
+}: {
+  parameter: OsmFeatureParameter;
+  value: { kind: 'osm-feature-input'; presetIds: string[]; tagFilters?: OsmTagFilter[] } | undefined;
+  onChange: (next: { kind: 'osm-feature-input'; presetIds: string[]; tagFilters?: OsmTagFilter[] }) => void;
+}) {
+  if (parameter.binding.mode !== 'runtime-pick') return null;
+  const allowFilters = parameter.binding.allowCustomTagFilters !== false;
+  const allowedPresetIds = parameter.binding.allowedPresetIds;
+  const presetIds = value?.presetIds ?? parameter.binding.defaultPresetIds ?? [];
+  const tagFilters = value?.tagFilters ?? parameter.binding.defaultTagFilters ?? [];
+
+  function setPresets(next: string[]) {
+    onChange({
+      kind: 'osm-feature-input',
+      presetIds: next,
+      ...(tagFilters.length > 0 ? { tagFilters } : {}),
+    });
+  }
+  function setTagFilters(next: OsmTagFilter[]) {
+    onChange({
+      kind: 'osm-feature-input',
+      presetIds,
+      ...(next.length > 0 ? { tagFilters: next } : {}),
+    });
+  }
+
+  return (
+    <div className="space-y-2">
+      <Label parameter={parameter} />
+      <OsmPresetMultiSelectRuntime
+        selected={presetIds}
+        onChange={setPresets}
+        {...(allowedPresetIds && allowedPresetIds.length > 0
+          ? { allowedPresetIds }
+          : {})}
+      />
+      {allowFilters ? (
+        <div>
+          <label className="block text-[10px] font-medium uppercase tracking-wide text-muted">
+            Filters (optional)
+          </label>
+          <p className="mb-1 text-[10px] text-muted">
+            Narrow the result, e.g. <code>brand = Citgo</code> or
+            <code className="ml-1">cuisine = pizza</code>.
+          </p>
+          <OsmTagFilterRowsRuntime
+            filters={tagFilters}
+            onChange={setTagFilters}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OsmPresetMultiSelectRuntime({
+  selected,
+  onChange,
+  allowedPresetIds,
+}: {
+  selected: string[];
+  onChange: (next: string[]) => void;
+  allowedPresetIds?: string[];
+}) {
+  const [catalog, setCatalog] = useState<
+    Array<{ id: string; label: string; category: string; terms?: string[] }> | null
+  >(null);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/portal/public/osm/presets', {
+          cache: 'force-cache',
+        });
+        if (!res.ok) {
+          if (!cancelled) setCatalog([]);
+          return;
+        }
+        const body = (await res.json()) as {
+          presets: Array<{ id: string; label: string; category: string; terms?: string[] }>;
+        };
+        if (!cancelled) setCatalog(body.presets ?? []);
+      } catch {
+        if (!cancelled) setCatalog([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const matches = useMemo(() => {
+    if (!catalog) return [];
+    const allowedSet = allowedPresetIds && allowedPresetIds.length > 0
+      ? new Set(allowedPresetIds)
+      : null;
+    const q = query.trim().toLowerCase();
+    if (!q && allowedSet) {
+      // No query but an allowlist exists: show the allowed entries
+      // immediately so the user knows what they can pick from.
+      return catalog
+        .filter((p) => allowedSet.has(p.id) && !selected.includes(p.id))
+        .slice(0, 50);
+    }
+    if (q.length < 2) return [];
+    const sel = new Set(selected);
+    const hits: typeof catalog = [];
+    for (const p of catalog) {
+      if (sel.has(p.id)) continue;
+      if (allowedSet && !allowedSet.has(p.id)) continue;
+      const hay =
+        `${p.label} ${p.id} ${p.category} ${(p.terms ?? []).join(' ')}`.toLowerCase();
+      if (hay.includes(q)) {
+        hits.push(p);
+        if (hits.length >= 20) break;
+      }
+    }
+    return hits;
+  }, [catalog, query, selected, allowedPresetIds]);
+
+  return (
+    <div className="space-y-1.5">
+      {selected.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((id) => {
+            const p = catalog?.find((x) => x.id === id);
+            return (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-0 px-2 py-0.5 text-[11px]"
+              >
+                {p?.label ?? id}
+                <button
+                  type="button"
+                  onClick={() => onChange(selected.filter((x) => x !== id))}
+                  className="text-muted hover:text-rose-700"
+                  aria-label={`Remove ${p?.label ?? id}`}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={
+          catalog === null
+            ? 'Loading OSM catalog…'
+            : 'Type to search (e.g. "gas", "restaurant", "school")'
+        }
+        className={inputCls}
+      />
+      {matches.length > 0 ? (
+        <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-surface-0">
+          {matches.map((p) => (
+            <button
+              type="button"
+              key={p.id}
+              onClick={() => {
+                onChange([...selected, p.id]);
+                setQuery('');
+              }}
+              className="block w-full px-2 py-1 text-left text-xs hover:bg-surface-2"
+            >
+              <span className="font-medium text-ink-0">{p.label}</span>
+              <span className="ml-2 text-[10px] text-muted">{p.category}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OsmTagFilterRowsRuntime({
+  filters,
+  onChange,
+}: {
+  filters: OsmTagFilter[];
+  onChange: (next: OsmTagFilter[]) => void;
+}) {
+  function set(index: number, patch: Partial<OsmTagFilter>) {
+    onChange(filters.map((f, i) => (i === index ? { ...f, ...patch } : f)));
+  }
+  function add() {
+    onChange([...filters, { key: '', value: '' }]);
+  }
+  function remove(index: number) {
+    onChange(filters.filter((_, i) => i !== index));
+  }
+  return (
+    <div className="space-y-1.5">
+      {filters.map((f, i) => (
+        <div key={i} className="flex gap-1.5">
+          <input
+            type="text"
+            value={f.key}
+            onChange={(e) => set(i, { key: e.target.value.trim() })}
+            placeholder="key"
+            list="osm-common-tag-keys"
+            className={`${inputCls} flex-1 font-mono text-xs`}
+          />
+          <span className="self-center text-muted">=</span>
+          <input
+            type="text"
+            value={f.value}
+            onChange={(e) => set(i, { value: e.target.value })}
+            placeholder="value"
+            className={`${inputCls} flex-1 font-mono text-xs`}
+          />
+          <button
+            type="button"
+            onClick={() => remove(i)}
+            className="rounded-md border border-border bg-surface-1 px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+            aria-label="Remove filter"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={add}
+        className="inline-flex items-center gap-1 rounded-md border border-dashed border-border bg-surface-2 px-2 py-1 text-[11px] text-ink-1 hover:bg-surface-1"
+      >
+        + Add filter
+      </button>
+    </div>
+  );
+}
+
 function Label({ parameter }: { parameter: ToolParameter }) {
   return (
     <label className="block text-[11px] font-medium text-ink-1">
@@ -814,6 +1074,22 @@ function seedValues(
     } else if (p.kind === 'text') {
       if (p.binding.mode === 'runtime-input' && p.binding.defaultValue !== undefined)
         out[p.name] = p.binding.defaultValue;
+    } else if (p.kind === 'osm-feature') {
+      // Seed the runtime panel's staged value with the binding's
+      // defaults so a "click Run with defaults" flow works for
+      // recipes whose author pre-filled the preset / filter set.
+      if (p.binding.mode === 'runtime-pick') {
+        const defaults = {
+          kind: 'osm-feature-input' as const,
+          presetIds: p.binding.defaultPresetIds ?? [],
+          ...(p.binding.defaultTagFilters && p.binding.defaultTagFilters.length > 0
+            ? { tagFilters: p.binding.defaultTagFilters }
+            : {}),
+        };
+        if (defaults.presetIds.length > 0 || ('tagFilters' in defaults && defaults.tagFilters)) {
+          out[p.name] = defaults;
+        }
+      }
     }
   }
   // Avoid the unused-var warning when hostBbox is supplied but no
