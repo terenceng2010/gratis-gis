@@ -114,10 +114,15 @@ export class CopyWriter {
       if (msg.type === 'encoded') slot.resolve(msg.lines);
       else slot.reject(new Error(msg.message));
     });
-    this.encoder.on('error', (err) => {
+    this.encoder.on('error', (err: unknown) => {
       // Fail every in-flight request; the worker is unrecoverable.
+      // @types/node 25 tightened Worker.on('error') to typed-unknown;
+      // wrap non-Error rejections so each slot resolves with the
+      // shape its Promise consumers expect.
+      const reason =
+        err instanceof Error ? err : new Error(String(err));
       for (const [id, slot] of this.pending) {
-        slot.reject(err);
+        slot.reject(reason);
         this.pending.delete(id);
       }
     });
