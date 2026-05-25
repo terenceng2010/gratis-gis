@@ -12,6 +12,13 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-24 — Query OpenStreetMap from your tools
+Build tools that ask OpenStreetMap for things in the real world.
+Pick "Gas stations" or "Restaurants" (or any of ~1,600 other
+categories), draw an area on the map, optionally add a filter
+like "brand = Citgo", and matching features show up on top of
+your map with proper attribution. No coding required.
+
 ## 2026-05-24 — Custom tools for web apps
 Build your own buttons inside a web app that run on-demand actions on
 the map. A "Select By Location" starter is ready to drop in: click it,
