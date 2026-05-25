@@ -15,6 +15,7 @@ import type { Request, Response } from 'express';
 import { Public } from '../auth/public.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { DataLayerFeaturesService } from '../data-layer/features.service.js';
+import { loadOsmPresetCatalog } from '../osm/preset-catalog.js';
 import {
   TileCacheOverloadError,
   matchesIfNoneMatch,
@@ -183,6 +184,26 @@ export class PublicController {
    * the same model AGOL uses (you must publicly share each
    * dependency for an anonymous link to render fully).
    */
+  /**
+   * Serve the vendored iD OSM preset catalog (#OSM).  Anonymous-
+   * readable because the catalog itself is open data (the iD
+   * tagging schema is ISC-licensed); the actual OSM features it
+   * describes carry ODbL and our UI surfaces attribution
+   * separately.  Long-cached because the catalog only changes
+   * when an operator runs scripts/sync-osm-presets.mjs.
+   */
+  @Public()
+  @Get('osm/presets')
+  async osmPresets(@Res() res: Response) {
+    const catalog = await loadOsmPresetCatalog();
+    // 24h cache, immutable per-request body (the response only
+    // changes after a sync + redeploy).  The browser-side OSM
+    // picker requests with `cache: 'force-cache'` to coalesce
+    // multiple recipe-editor opens into one download.
+    res.setHeader('cache-control', 'public, max-age=86400, immutable');
+    res.json(catalog);
+  }
+
   @Public()
   @Get('items/:id')
   async item(@Param('id') id: string) {
