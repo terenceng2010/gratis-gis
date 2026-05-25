@@ -46,6 +46,8 @@ export type ResolvedValue =
       kind: 'osm-feature';
       presetIds: string[];
       tagFilters?: OsmTagFilter[];
+      /** #101: per-recipe TTL override in minutes (0 = always fresh). */
+      ttlMinutes?: number;
     };
 
 /**
@@ -64,6 +66,8 @@ export type ToolRunInput =
       kind: 'osm-feature-input';
       presetIds: string[];
       tagFilters?: OsmTagFilter[];
+      /** #101: per-recipe TTL override in minutes (0 = always fresh). */
+      ttlMinutes?: number;
     };
 
 export interface ToolRunRequest {
@@ -422,12 +426,24 @@ export class RecipeRunnerService {
       bbox[3] + padDegrees,
     ];
 
+    // #101: per-recipe TTL override. Clamped to a sane range so a
+    // typo in the recipe (e.g. 999999) can't permanently pin a stale
+    // scope. 0 means "always fresh" (skip the cache); we map that to
+    // ttlMs=0 which the resolver treats as "never cache hit, always
+    // refetch + overwrite the cache row with a fresh expiresAt".
+    let ttlMs: number | undefined;
+    if (typeof sourceVal.ttlMinutes === 'number' && Number.isFinite(sourceVal.ttlMinutes)) {
+      const minutes = Math.max(0, Math.min(7 * 24 * 60, sourceVal.ttlMinutes));
+      ttlMs = minutes * 60 * 1000;
+    }
+
     const result = await this.osm.resolve({
       presetIds: sourceVal.presetIds,
       ...(sourceVal.tagFilters && sourceVal.tagFilters.length > 0
         ? { tagFilters: sourceVal.tagFilters }
         : {}),
       bbox: paddedBbox,
+      ...(ttlMs !== undefined ? { ttlMs } : {}),
     });
 
     return {
@@ -528,6 +544,9 @@ function resolveOsmFeatureParam(
       ...(param.binding.tagFilters && param.binding.tagFilters.length > 0
         ? { tagFilters: param.binding.tagFilters }
         : {}),
+      ...(typeof param.ttlMinutes === 'number'
+        ? { ttlMinutes: param.ttlMinutes }
+        : {}),
     };
   }
   // runtime-pick: client sent {kind:'osm-feature-input', presetIds, tagFilters}.
@@ -576,6 +595,14 @@ function resolveOsmFeatureParam(
       ...(input.tagFilters && input.tagFilters.length > 0
         ? { tagFilters: input.tagFilters }
         : {}),
+      // The recipe author's TTL setting wins over any runtime
+      // ttlMinutes the client tried to set: the recipe is the
+      // contract; clients can't override caching behavior just by
+      // POSTing a different number. (If we wanted user-tunable
+      // freshness we'd surface it as a separate parameter.)
+      ...(typeof param.ttlMinutes === 'number'
+        ? { ttlMinutes: param.ttlMinutes }
+        : {}),
     };
   }
   // No input + runtime-pick: fall through to the binding defaults.
@@ -589,6 +616,9 @@ function resolveOsmFeatureParam(
       ...(param.binding.defaultTagFilters &&
       param.binding.defaultTagFilters.length > 0
         ? { tagFilters: param.binding.defaultTagFilters }
+        : {}),
+      ...(typeof param.ttlMinutes === 'number'
+        ? { ttlMinutes: param.ttlMinutes }
         : {}),
     };
   }

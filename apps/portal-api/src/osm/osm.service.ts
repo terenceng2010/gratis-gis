@@ -83,10 +83,13 @@ export class OsmService {
 
     const hash = hashQuery(input, endpoint);
 
-    // Cache lookup.
-    const cached = await this.prisma.osmQueryCache.findUnique({
-      where: { hash },
-    });
+    // #101: a recipe author can request ttlMs=0 to mean "always
+    // fresh" -- skip the cache hit entirely. The cache row itself
+    // still gets upserted on miss so concurrent callers within the
+    // same Overpass response window see a single materialisation.
+    const cached = ttlMs > 0
+      ? await this.prisma.osmQueryCache.findUnique({ where: { hash } })
+      : null;
     if (cached && cached.expiresAt.getTime() > Date.now()) {
       // Fresh.  Skip Overpass; pull features out of the
       // observation log via the engine read path.

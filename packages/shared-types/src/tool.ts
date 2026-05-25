@@ -304,6 +304,15 @@ export interface OsmFeatureParameter {
   label: string;
   hint?: string;
   required?: boolean;
+  /**
+   * #101: per-recipe Overpass cache TTL in minutes. Caller-visible
+   * shape: 0 means "always fresh" (skip the cache), unset means
+   * "use the engine default" (currently 1 hour), and a number means
+   * "use the cache for this many minutes." The recipe runner clamps
+   * this to a sane upper bound so a typo can't permanently pin
+   * stale data.
+   */
+  ttlMinutes?: number;
   binding:
     | {
         mode: 'hardcoded';

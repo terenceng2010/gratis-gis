@@ -583,6 +583,15 @@ export type SourceRef =
       presetIds: string[];
       tagFilters?: Array<{ key: string; value: string; op?: 'equals' | 'contains' | 'regex' }>;
       bboxPaddingMeters?: number;
+      /**
+       * #101: per-recipe cache TTL in minutes. When set, overrides
+       * the engine default (60 minutes). 0 means "always fresh"
+       * (skip the cache entirely); a large value lets a recipe
+       * that hits historical / slow-changing data avoid re-fetching
+       * for a day or more. The adapter caps this server-side so a
+       * runaway value can't permanently pin a stale scope.
+       */
+      ttlMinutes?: number;
     };
 
 /** Distance reference: a fixed meters value or a parameter resolved at run time. */
