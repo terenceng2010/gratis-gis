@@ -56,7 +56,8 @@ interface Props {
 // names on cleanup even if a prior teardown was interrupted.
 const SRC_ID = '__recipe-draw-source';
 const LAYER_FILL = '__recipe-draw-fill';
-const LAYER_LINE = '__recipe-draw-line';
+const LAYER_LINE_COMMITTED = '__recipe-draw-line-committed';
+const LAYER_LINE_PREVIEW = '__recipe-draw-line-preview';
 const LAYER_POINTS = '__recipe-draw-points';
 
 export function MapDrawingOverlay({
@@ -117,23 +118,44 @@ export function MapDrawingOverlay({
         },
       });
     }
-    if (!map.getLayer(LAYER_LINE)) {
+    // Committed outline: solid stroke over the rings the user has
+    // clicked.  Filtered to features whose `preview` property is
+    // false (or absent).
+    if (!map.getLayer(LAYER_LINE_COMMITTED)) {
       map.addLayer({
-        id: LAYER_LINE,
+        id: LAYER_LINE_COMMITTED,
         type: 'line',
         source: SRC_ID,
-        filter: ['in', ['geometry-type'], ['literal', ['LineString', 'Polygon']]],
+        filter: [
+          'all',
+          ['in', ['geometry-type'], ['literal', ['LineString', 'Polygon']]],
+          ['!=', ['get', 'preview'], true],
+        ],
         paint: {
           'line-color': '#3b82f6',
           'line-width': 2,
-          // The preview-to-cursor segment renders dashed by feeding
-          // the 'dash' property on a per-feature basis in
-          // refreshSource; static layers can't switch dash patterns
-          // on the fly without two layers, so we use the same paint
-          // and accept that the preview also reads dashed during
-          // committed strokes -- a small visual cost for one layer
-          // less to manage.
-          'line-dasharray': ['case', ['==', ['get', 'preview'], true], ['literal', [2, 2]], ['literal', [1]]],
+        },
+      });
+    }
+    // Preview segment: dashed stroke from the last committed vertex
+    // to the cursor (plus the closing edge for polygons).  Split
+    // into its own layer because MapLibre rejects data expressions
+    // on `line-dasharray`; each layer paints with a static dash
+    // pattern and a filter discriminates by the `preview` property.
+    if (!map.getLayer(LAYER_LINE_PREVIEW)) {
+      map.addLayer({
+        id: LAYER_LINE_PREVIEW,
+        type: 'line',
+        source: SRC_ID,
+        filter: [
+          'all',
+          ['==', ['geometry-type'], 'LineString'],
+          ['==', ['get', 'preview'], true],
+        ],
+        paint: {
+          'line-color': '#3b82f6',
+          'line-width': 2,
+          'line-dasharray': [2, 2],
         },
       });
     }
@@ -253,7 +275,7 @@ export function MapDrawingOverlay({
 
       // Tear down layers + source.  Wrapped in try/catch because a
       // map style swap mid-draw could have removed them already.
-      for (const id of [LAYER_FILL, LAYER_LINE, LAYER_POINTS]) {
+      for (const id of [LAYER_FILL, LAYER_LINE_COMMITTED, LAYER_LINE_PREVIEW, LAYER_POINTS]) {
         try {
           if (map.getLayer(id)) map.removeLayer(id);
         } catch {

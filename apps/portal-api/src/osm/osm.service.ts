@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { uuidv7 } from '@gratis-gis/engine';
 
 import { EngineService } from '../engine/engine.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -166,17 +165,24 @@ export class OsmService {
    * that the cache scrub job tears down when the cache row
    * expires.
    *
-   * We delete any prior observations under this scope before the
-   * write so a re-resolution under the same hash (which can only
-   * happen if the cache expired but the same query is being
-   * re-run) doesn't leave stale features behind.
+   * The observation table is huge in prod (multi-million-row
+   * data_layer scopes share the partition set), and a
+   * `DELETE WHERE scope = $1` on a brand-new scope would still
+   * scan partitions and bump into the per-request
+   * statement_timeout (#OSM hotfix 2026-05-25).  Skip the
+   * defensive clean-up; rely on the read path's
+   * `DISTINCT ON (entity) ORDER BY valid_from DESC, tx_time DESC`
+   * to ensure the latest observation wins.  Re-resolutions
+   * under the same hash mint fresh UUIDv7 entity ids, so any
+   * leftover rows from an expired-and-re-fetched scope sort
+   * older and fall out naturally; the (future) scrub job that
+   * trims expired cache rows is responsible for reclaiming the
+   * storage.
    */
   private async writeFeaturesToScope(
     scope: string,
     features: OsmGeoJsonFeature[],
   ): Promise<void> {
-    // Defensive clean-up: drop any prior observations.
-    await this.prisma.$executeRaw`DELETE FROM observation WHERE scope = ${scope}`;
     if (features.length === 0) return;
 
     // The osm-bot principal carries every OSM-derived observation.
@@ -187,7 +193,14 @@ export class OsmService {
     const now = new Date();
 
     for (const feat of features) {
-      const entity = uuidv7();
+      // Deterministic entity id derived from (scope, feature.id).
+      // Same OSM feature in the same scope across two resolves -> same
+      // entity -> the read path's `DISTINCT ON (entity) ORDER BY
+      // valid_from DESC` keeps the newer observation.  Different OSM
+      // features -> different entity -> both surface.  Without this,
+      // a re-resolve after TTL expiry would double-count features
+      // because UUIDv7 mints a fresh id every time.
+      const entity = osmEntityIdFor(scope, String(feat.id ?? ''));
       await this.engine.write({
         scope,
         entity,
@@ -258,4 +271,21 @@ function hashQuery(input: OsmSourceResolveInput, endpoint: string): string {
     e: endpoint,
   });
   return createHash('sha256').update(tuple).digest('hex').slice(0, 32);
+}
+
+/**
+ * Deterministic entity id for an OSM feature inside a scope.  The
+ * id only has to pass the engine's UUID shape check (8-4-4-4-12
+ * hex); we don't need real v5 namespace semantics.  Hashing
+ * (scope, featureId) and formatting as a UUID-shaped string gives
+ * us "same OSM feature in same scope = same entity" which the
+ * read path's DISTINCT ON resolves to a single latest row.
+ */
+function osmEntityIdFor(scope: string, featureId: string): string {
+  const hex = createHash('sha256')
+    .update(scope)
+    .update(':')
+    .update(featureId)
+    .digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
