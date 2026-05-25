@@ -103,7 +103,14 @@ export class HousekeepingCronService implements OnApplicationBootstrap {
       );
       return;
     }
-    this.scheduler.addCronJob(HousekeepingCronService.JOB_NAME, job);
+    // cron@4 dropped the `.running` property that @nestjs/schedule's
+    // CronJob<null, null> type still requires; addCronJob's runtime
+    // path only reads `.fireOnTick`, which v4 keeps. Cast to bridge
+    // the type gap until @nestjs/schedule catches up to cron@4.
+    this.scheduler.addCronJob(
+      HousekeepingCronService.JOB_NAME,
+      job as unknown as Parameters<typeof this.scheduler.addCronJob>[1],
+    );
     job.start();
     this.log.log(
       `Scheduled housekeeping registered: ${cfg.scheduleSummary} (${expr})`,

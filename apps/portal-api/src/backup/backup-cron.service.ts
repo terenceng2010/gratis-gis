@@ -97,7 +97,13 @@ export class BackupCronService implements OnApplicationBootstrap {
       );
       return;
     }
-    this.scheduler.addCronJob(BackupCronService.JOB_NAME, job);
+    // cron@4 dropped `.running`; @nestjs/schedule's typing still
+    // expects it. addCronJob only touches `.fireOnTick` at runtime
+    // (which v4 keeps). Cast to bridge the type gap.
+    this.scheduler.addCronJob(
+      BackupCronService.JOB_NAME,
+      job as unknown as Parameters<typeof this.scheduler.addCronJob>[1],
+    );
     job.start();
     this.log.log(
       `Scheduled backup registered: ${cfg.scheduleSummary} (${expr})`,
