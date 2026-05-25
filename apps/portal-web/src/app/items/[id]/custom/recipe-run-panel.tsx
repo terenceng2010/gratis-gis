@@ -345,11 +345,70 @@ export function RecipeRunPanel({
           </button>
         </div>
       </div>
+      {/* Shared <datalist> the OSM tag-filter rows reference via
+          list="osm-common-tag-keys".  Lives once at the modal root
+          so multiple filter rows share the same hint set without
+          re-rendering it per-row. */}
+      <datalist id="osm-common-tag-keys">
+        {OSM_COMMON_TAG_KEYS.map((k) => (
+          <option key={k} value={k} />
+        ))}
+      </datalist>
     </div>
   );
 
   return createPortal(modal, document.body);
 }
+
+/**
+ * Top-of-funnel OSM tag keys for the runtime tag-filter editor's
+ * autocomplete hint set.  Not exhaustive -- the long tail is in
+ * the wiki -- but covers the keys 90% of "Show me X with brand /
+ * cuisine / operator Y" workflows need.  Kept short on purpose;
+ * the input is still free-text, so power users can type any key.
+ */
+const OSM_COMMON_TAG_KEYS = [
+  // identity / branding
+  'name',
+  'brand',
+  'operator',
+  'ref',
+  'website',
+  // domain hints
+  'cuisine',
+  'capacity',
+  'fuel',
+  'tourism',
+  'shop',
+  'amenity',
+  'sport',
+  'religion',
+  // address
+  'addr:city',
+  'addr:state',
+  'addr:postcode',
+  'addr:housenumber',
+  'addr:street',
+  // hours + access
+  'opening_hours',
+  'fee',
+  'access',
+  'wheelchair',
+  // building / feature physical
+  'building',
+  'building:levels',
+  'surface',
+  'lanes',
+  // identity / xref
+  'wikipedia',
+  'wikidata',
+  'phone',
+  // boolean-style
+  'drive_through',
+  'takeaway',
+  'delivery',
+  'internet_access',
+] as const;
 
 // ---- Per-parameter input rows --------------------------------------------
 

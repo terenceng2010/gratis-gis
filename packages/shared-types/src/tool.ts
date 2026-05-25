@@ -597,7 +597,79 @@ const SELECT_BY_LOCATION: RecipeTemplate = {
   },
 };
 
-export const RECIPE_TEMPLATES: RecipeTemplate[] = [SELECT_BY_LOCATION];
+/**
+ * Find-OSM-features-near-selection template (#OSM).  Stamps out a
+ * working "Show me [user-picked OSM features] within [N] miles of
+ * my [drawn AOI / parcel]" tool.  The runtime renders matching
+ * features as an overlay on the host map with the required ODbL
+ * attribution.
+ *
+ * Parameter slots:
+ *   aoi:      runtime-draw  -- the user draws their area of
+ *                              interest on the map at run time.
+ *   osm:      runtime-pick  -- the user picks from the iD preset
+ *                              catalog and optionally adds tag
+ *                              filters (brand=Citgo, etc.).
+ *   distance: runtime-input -- meters; default 1609 (~1 mile)
+ *                              so the bbox padding feels right
+ *                              for the canonical "things near
+ *                              this parcel" framing.
+ *
+ * Pipeline is empty in v1; the recipe runner returns every OSM
+ * feature inside the AOI's padded bbox.  Wave 2 will add a
+ * spatial-filter step over a transient scope so tighter "exactly
+ * within X distance" filtering becomes possible.
+ */
+const FIND_OSM_NEAR: RecipeTemplate = {
+  id: 'find-osm-near',
+  label: 'Find OSM features near my area',
+  description:
+    'Draw an area on the map; pick which OpenStreetMap features to show (gas stations, restaurants, schools, ...); optionally add tag filters (brand, cuisine, ...). Matching features appear on the host map.',
+  build(): RecipeAction {
+    return {
+      kind: 'recipe',
+      recipeVersion: 1,
+      parameters: [
+        {
+          kind: 'feature-source',
+          name: 'aoi',
+          label: 'Area of interest',
+          hint: 'Draw a shape on the map; OSM features within (and just outside) this area will show up.',
+          required: true,
+          geometryType: 'polygon',
+          binding: { mode: 'runtime-draw' },
+        },
+        {
+          kind: 'osm-feature',
+          name: 'osm',
+          label: 'What to look for',
+          hint: 'Pick one or more kinds of OpenStreetMap feature.  Optional filters narrow it further.',
+          required: true,
+          binding: {
+            mode: 'runtime-pick',
+            allowCustomTagFilters: true,
+          },
+        },
+        {
+          kind: 'distance',
+          name: 'distance',
+          label: 'Search radius (meters)',
+          hint: 'Pad the area of interest before the OSM query.  1609 m ≈ 1 mile.',
+          binding: { mode: 'runtime-input', defaultMeters: 1609 },
+        },
+      ],
+      pipeline: [],
+      output: { kind: 'osm-features-overlay' },
+      sourceParameterRef: 'osm',
+      aoiParameterRef: 'aoi',
+    };
+  },
+};
+
+export const RECIPE_TEMPLATES: RecipeTemplate[] = [
+  SELECT_BY_LOCATION,
+  FIND_OSM_NEAR,
+];
 
 /** Convenience accessor for the canonical Select-By-Location
  *  template.  Useful for tests + the new-item wizard's "stamp out
