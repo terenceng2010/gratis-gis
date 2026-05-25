@@ -10,7 +10,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { XMLParser } from 'fast-xml-parser';
+import {
+  parseXml as parseXmlVendored,
+  type XmlElement as VendoredXmlElement,
+  type XmlValue as VendoredXmlValue,
+} from './xml-walker';
 
 import { AdminGuard } from './admin.guard.js';
 import {
@@ -562,40 +566,22 @@ export interface BasemapProbeResult {
 // ----------------------------------------------------------------
 
 /**
- * Loose typing for a parsed XML node. fast-xml-parser returns a
- * plain object tree where each element is either a string (for
- * text-only elements), an XmlElement (one child of each name), or
- * an array of XmlElement / strings (when an element has siblings
- * with the same name). Attribute values land under keys prefixed
- * with `@_`.
+ * Loose typing for a parsed XML node. Mirrors what the vendored
+ * walker (./xml-walker) returns: each element is either a string
+ * (text-only elements), an XmlElement (one child of each name), or
+ * an array of XmlElement / strings (siblings with the same name).
+ * Attribute values land under keys prefixed with `@_`, and mixed
+ * content (attributes + text) appears as `#text: '...'`. Namespace
+ * prefixes (`ows:`, `wmts:`, `xlink:`, etc.) are stripped so every
+ * server's variant of <ows:Title> / <wmts:Title> / <Title> lands at
+ * the same key.
  */
-type XmlValue = string | number | boolean | XmlElement | XmlValue[];
-interface XmlElement {
-  [key: string]: XmlValue | undefined;
-}
-
-const xmlParser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  // Strip namespace prefixes (ows:, wmts:, xlink:, etc) so every
-  // server's variant of <ows:Title> / <wmts:Title> / <Title>
-  // lands at the same key in the parsed object tree.
-  removeNSPrefix: true,
-  // Keep all values as strings; the spec defines XML types per
-  // element and we'd rather parse explicitly than rely on the
-  // library's type guessing.
-  parseAttributeValue: false,
-  parseTagValue: false,
-  trimValues: true,
-});
+type XmlValue = VendoredXmlValue;
+type XmlElement = VendoredXmlElement;
 
 function parseXml(xml: string): XmlElement {
   try {
-    const result = xmlParser.parse(xml) as unknown;
-    if (typeof result !== 'object' || result === null) {
-      throw new Error('Parser returned non-object root.');
-    }
-    return result as XmlElement;
+    return parseXmlVendored(xml);
   } catch (err) {
     throw new Error(
       `Could not parse XML: ${err instanceof Error ? err.message : String(err)}`,

@@ -122,9 +122,6 @@ importers:
       cron:
         specifier: 3.5.0
         version: 3.5.0
-      fast-xml-parser:
-        specifier: ^5.7.0
-        version: 5.7.3
       gdal-async:
         specifier: ^3.9.2
         version: 3.12.3
