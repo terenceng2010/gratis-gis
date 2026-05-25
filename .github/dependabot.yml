@@ -114,6 +114,14 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Action majors occasionally change input shapes (upload-artifact
+    # v5 broke same-name merging, build-push-action v7 bumped the
+    # minimum Buildx). Roll majors via a focused CI pass when the
+    # rest of the workflow is being touched anyway, not via
+    # auto-Dependabot.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # Docker base images for portal-api
   - package-ecosystem: "docker"
