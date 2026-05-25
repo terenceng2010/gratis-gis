@@ -126,6 +126,19 @@ export interface ListFeaturesArgs {
    */
   parentFkFilter?: { column: string; parentId: string };
   /**
+   * Time-attribute window filter (#58). Restricts the result to
+   * features whose `attrs->>{field}` falls inside [from, to]. Either
+   * bound is optional for open-ended windows. The field is expected
+   * to hold ISO-8601 timestamps; non-ISO-shaped values are skipped
+   * via a regex guard before the timestamptz cast so a single
+   * malformed row can't 500 the whole query.
+   *
+   * Caller is responsible for validating that `column` is a real
+   * date / datetime field on the layer schema (the v3 controller
+   * does this).
+   */
+  timeFilter?: { column: string; from?: string; to?: string };
+  /**
    * Set when the layer was provisioned without a geometry column
    * (the related-records pattern). Skips every spatial filter so
    * non-spatial layers pass through cleanly.
@@ -513,6 +526,33 @@ export class DataLayerEngine {
       currentFilters.push(
         Prisma.sql`AND attrs->>${col} = ${args.parentFkFilter.parentId}`,
       );
+    }
+
+    if (args.timeFilter !== undefined) {
+      // Same sanitize / interpolation discipline as parentFkFilter:
+      // the column is validated against the layer schema upstream
+      // and the value is rendered into the SQL string via the
+      // sanitizeJsonbKey helper (PostgreSQL doesn't bind JSONB key
+      // operators through $params).
+      //
+      // The regex guard `~` filters to ISO-8601-shaped strings
+      // before the ::timestamptz cast so a single malformed row
+      // (`attrs->>field = "n/a"`) can't 500 the whole query. The
+      // pattern matches `YYYY-MM-DD` plus an optional time tail; any
+      // value that doesn't start with a date drops to NULL via the
+      // CASE expression and naturally fails the comparison.
+      const col = sanitizeJsonbKey(args.timeFilter.column);
+      const dateRe = '^[0-9]{4}-[0-9]{2}-[0-9]{2}';
+      if (args.timeFilter.from !== undefined) {
+        currentFilters.push(
+          Prisma.sql`AND (CASE WHEN attrs->>${col} ~ ${dateRe} THEN (attrs->>${col})::timestamptz END) >= ${args.timeFilter.from}::timestamptz`,
+        );
+      }
+      if (args.timeFilter.to !== undefined) {
+        currentFilters.push(
+          Prisma.sql`AND (CASE WHEN attrs->>${col} ~ ${dateRe} THEN (attrs->>${col})::timestamptz END) <= ${args.timeFilter.to}::timestamptz`,
+        );
+      }
     }
 
     interface FeatureRow {

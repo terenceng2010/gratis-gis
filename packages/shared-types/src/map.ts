@@ -228,6 +228,14 @@ export interface MapLayer {
    */
   filter: MapLayerFilter | null;
   /**
+   * Optional time-attribute window (#58). Null / undefined means the
+   * layer carries every feature regardless of time. Drives the
+   * server-side `?timeField=&timeFrom=&timeTo=` query params on
+   * data_layer reads; the time-slider widget (#57) animates this
+   * field at runtime by mutating from / to in place.
+   */
+  timeFilter?: MapLayerTimeFilter | null;
+  /**
    * Optional per-layer geographic clip (#34). UUID of a geo_boundary
    * item whose geometry intersects every rendered feature. Reuses
    * the same boundary library admins build for share geo limits and
@@ -342,6 +350,28 @@ export type MapLayerRenderer =
       field: string;
       stops: number[];
       colors: string[];
+    }
+  /**
+   * #59: time-bins classification. Each feature's `field` attribute
+   * is parsed as a timestamp and dropped into one of `bins` based
+   * on which boundary it falls between. `boundaries` is N ISO-8601
+   * timestamps in ascending order; `bins` has exactly N+1 entries
+   * mirroring class-breaks' colors[] shape: bin[0] is "before
+   * boundaries[0]", bin[N] is ">= boundaries[N-1]". Out-of-range
+   * (null, non-ISO, undated) values fall to `defaultColor`.
+   *
+   * Distinct from class-breaks so the editor can render a date
+   * picker per stop and so the canvas can do the timestamp parse
+   * client-side (MapLibre's expressions can't ::cast strings to
+   * dates, but they can string-compare ISO-8601 lexically because
+   * the canonical Z-suffix form preserves order).
+   */
+  | {
+      kind: 'time-bins';
+      field: string;
+      boundaries: string[];
+      bins: { color: string; label?: string }[];
+      defaultColor: string;
     };
 
 export interface MapUniqueValueCategory {
@@ -396,6 +426,26 @@ export interface MapLayerFilterClause {
 export interface MapLayerFilter {
   combinator: 'all' | 'any';
   clauses: MapLayerFilterClause[];
+}
+
+/**
+ * Time-attribute filter (#58). Restricts a layer's features to those
+ * whose `field` attribute (a date or datetime column) falls inside
+ * the [from, to] window. Either bound is optional for open-ended
+ * windows. Stored alongside MapLayerFilter so a layer can carry
+ * both a content filter and a time scope independently.
+ *
+ * Bounds are ISO-8601 strings. The renderer / engine reads them
+ * straight; the time-slider widget (#57) updates them at runtime.
+ */
+export interface MapLayerTimeFilter {
+  /** Attribute column to scope. Must reference a date / datetime
+   *  field declared on the layer schema. */
+  field: string;
+  /** Inclusive lower bound (ISO-8601). Omit for open-ended below. */
+  from?: string;
+  /** Inclusive upper bound (ISO-8601). Omit for open-ended above. */
+  to?: string;
 }
 
 /**

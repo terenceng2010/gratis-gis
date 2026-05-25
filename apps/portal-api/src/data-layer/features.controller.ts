@@ -130,6 +130,14 @@ export class DataLayerFeaturesController {
     // layer scan -- on a 1.4M-parcel dataset that's the symptom
     // the user just hit: popup stuck on "Loading...".
     @Query('entity') entity?: string,
+    // #58: time-attribute window filter. When `timeField` is set,
+    // the engine narrows the result to rows whose attribute falls
+    // in [timeFrom, timeTo]. Either bound is optional; only the
+    // ones provided are applied. The field is validated against
+    // the layer schema before reaching the engine.
+    @Query('timeField') timeField?: string,
+    @Query('timeFrom') timeFrom?: string,
+    @Query('timeTo') timeTo?: string,
   ) {
     const { geoLimit, rowScope, isTable, layer } = await this.assertV3Layer(
       user,
@@ -145,6 +153,7 @@ export class DataLayerFeaturesController {
       ownRowsOnly?: { userId: string };
       isTable?: boolean;
       parentFkFilter?: { column: string; parentId: string };
+      timeFilter?: { column: string; from?: string; to?: string };
       entity?: string;
     } = {};
     if (isTable) opts.isTable = true;
@@ -200,6 +209,36 @@ export class DataLayerFeaturesController {
         // rationale as the regex case.
       } else {
         opts.parentFkFilter = { column: parentFk, parentId };
+      }
+    }
+    // #58: time-attribute window filter. Validate the column the
+    // same way parentFk does: identifier-safe regex AND the field
+    // is declared on the layer's schema. Either bound is allowed
+    // to be omitted (open-ended window). Empty strings degrade to
+    // "not set" so a slider that hasn't dragged its handle yet
+    // doesn't accidentally constrain the result.
+    if (timeField) {
+      const safeFrom = typeof timeFrom === 'string' && timeFrom.length > 0
+        ? timeFrom
+        : undefined;
+      const safeTo = typeof timeTo === 'string' && timeTo.length > 0
+        ? timeTo
+        : undefined;
+      const haveBound = safeFrom !== undefined || safeTo !== undefined;
+      if (haveBound) {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(timeField)) {
+          // Silently drop. Same rationale as the parentFk path:
+          // the runtime should fall back to "no filter" rather
+          // than 400ing a request from a slider widget.
+        } else if (!schemaHasField(layer, timeField)) {
+          // Field not on this layer; drop.
+        } else {
+          opts.timeFilter = {
+            column: timeField,
+            ...(safeFrom !== undefined ? { from: safeFrom } : {}),
+            ...(safeTo !== undefined ? { to: safeTo } : {}),
+          };
+        }
       }
     }
     return this.v3.listFeatures(itemId, layerId, opts);

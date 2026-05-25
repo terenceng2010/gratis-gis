@@ -2920,6 +2920,37 @@ function rendererColor(
     return stepExpr;
   }
 
+  // time-bins (#59). MapLibre's `step` only accepts a numeric input,
+  // so we build a `case` chain that compares the field's string
+  // value against each ISO-8601 boundary. ISO-8601 with consistent
+  // zero-padding sorts lexically the same as chronologically, so
+  // a plain `<` comparison gives the right binning. Features
+  // missing the field, or holding a value that isn't a string,
+  // drop to `defaultColor` via the leading guard.
+  if (r.kind === 'time-bins') {
+    const validShape =
+      r.field &&
+      r.boundaries.length > 0 &&
+      r.bins.length === r.boundaries.length + 1;
+    if (!validShape) return fallback;
+    const prop = ['get', r.field];
+    const caseExpr: unknown[] = ['case'];
+    // Guard: only apply binning to features whose field is a
+    // non-empty string. Missing / wrong-type values fall through
+    // to defaultColor.
+    caseExpr.push(['!', ['has', r.field]]);
+    caseExpr.push(r.defaultColor);
+    caseExpr.push(['!=', ['typeof', prop], 'string']);
+    caseExpr.push(r.defaultColor);
+    for (let i = 0; i < r.boundaries.length; i += 1) {
+      caseExpr.push(['<', prop, r.boundaries[i]!]);
+      caseExpr.push(r.bins[i]!.color);
+    }
+    // Final value: >= last boundary.
+    caseExpr.push(r.bins[r.boundaries.length]!.color);
+    return caseExpr;
+  }
+
   return fallback;
 }
 
