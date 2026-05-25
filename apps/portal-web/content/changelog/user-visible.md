@@ -34,10 +34,6 @@ Pull layers, maps, and files over from AGO with live progress
 feedback and a cancel button. Large org migrations no longer time
 out silently.
 
-## 2026-05-20 — Edit your data from QGIS
-A free QGIS plugin connects to a GratisGIS portal so you can edit
-features straight from QGIS the way you would any other layer.
-
 ## 2026-05-13 — Designer-driven thumbnails
 Item thumbnails are built from a small visual designer you can
 re-open and tweak any time. Renaming or changing colors regenerates
