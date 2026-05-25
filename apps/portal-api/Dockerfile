@@ -139,6 +139,13 @@ COPY --from=build --chown=app:app /out /app
 # from this image.
 COPY --from=build --chown=app:app /repo/apps/portal-api/prisma /app/prisma
 
+# Vendored OSM preset catalog (#OSM).  Lives under portal-web's
+# content/ tree so the Next.js standalone build traces it for the
+# web tier; the portal-api also needs it (OsmService loads it to
+# build Overpass QL clauses), so copy the same file in here under
+# a path the preset-catalog resolver looks for.
+COPY --from=build --chown=app:app /repo/apps/portal-web/content/osm /app/apps/portal-web/content/osm
+
 # BackupService writes archives to BACKUP_DIR (default ./backups), and
 # that has to be a writable path for the non-root `app` user. Pre-create
 # it with the right ownership so a volume mount onto this path inherits
