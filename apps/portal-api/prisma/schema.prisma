@@ -208,6 +208,13 @@ model Organization {
   /// null renders all public items in the org, newest-first.
   landingFeaturedItemIds String[] @default([]) @map("landing_featured_item_ids") @db.Uuid
 
+  /// #103: per-org override for the Overpass endpoint OsmService
+  /// dials when an osm-query SourceRef resolves. Null = use the
+  /// GRATIS_GIS_OSM_OVERPASS_ENDPOINT env-var (which itself falls
+  /// back to overpass-api.de). Lets an org point at a self-hosted
+  /// Overpass without rebuilding the image.
+  osmOverpassEndpoint String? @map("osm_overpass_endpoint")
+
   users                 User[]
   groups                Group[]
   items                 Item[]

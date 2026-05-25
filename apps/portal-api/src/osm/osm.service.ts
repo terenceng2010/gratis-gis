@@ -22,8 +22,16 @@ export interface OsmSourceResolveInput {
   presetIds: string[];
   tagFilters?: Array<{ key: string; value: string; op?: 'equals' | 'contains' | 'regex' }>;
   bbox: [number, number, number, number];
-  /** Override endpoint; falls back to the environment default. */
+  /** Override endpoint; falls back to the org setting, then env, then default. */
   endpoint?: string;
+  /**
+   * #103: org context. When set and `endpoint` is not, OsmService
+   * looks up the organisation row and uses its
+   * `osmOverpassEndpoint` field (if non-null) before falling back
+   * to the env-var. Lets a self-hosted org point at its own
+   * Overpass without rebuilding the image.
+   */
+  orgId?: string;
   /** Override TTL (ms); falls back to 1h. */
   ttlMs?: number;
   /** Override max features; falls back to 50000. */
@@ -77,7 +85,31 @@ export class OsmService {
     if (!input.presetIds || input.presetIds.length === 0) {
       throw new Error('OsmService.resolve: presetIds must not be empty');
     }
-    const endpoint = input.endpoint ?? process.env.GRATIS_GIS_OSM_OVERPASS_ENDPOINT ?? DEFAULT_ENDPOINT;
+    // #103: endpoint resolution order is explicit input override
+    // -> per-org setting -> env-var -> hardcoded default. Each tier
+    // is consulted only when the previous one is unset, so an org
+    // running a private Overpass mirror gets it without breaking
+    // recipes that pre-date the feature.
+    let endpoint = input.endpoint;
+    if (!endpoint && input.orgId) {
+      try {
+        const org = await this.prisma.organization.findUnique({
+          where: { id: input.orgId },
+          select: { osmOverpassEndpoint: true },
+        });
+        if (org?.osmOverpassEndpoint) {
+          endpoint = org.osmOverpassEndpoint;
+        }
+      } catch (err) {
+        // Org lookup failures should not block a resolution; the
+        // upstream cron / health checks surface the org row issue
+        // separately. Fall through to the env / default endpoint.
+        this.logger.warn(
+          `Per-org Overpass endpoint lookup failed for org ${input.orgId}: ${err instanceof Error ? err.message : String(err)}. Falling back to env / default.`,
+        );
+      }
+    }
+    endpoint = endpoint ?? process.env.GRATIS_GIS_OSM_OVERPASS_ENDPOINT ?? DEFAULT_ENDPOINT;
     const ttlMs = input.ttlMs ?? DEFAULT_TTL_MS;
     const maxFeatures = input.maxFeatures ?? 50000;
 

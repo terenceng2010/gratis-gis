@@ -7,6 +7,7 @@ import { AdminUsersController } from './admin-users.controller.js';
 import { AdminBasemapProbeController } from './admin-basemap-probe.controller.js';
 import { AdminBrandingController } from './admin-branding.controller.js';
 import { AdminCapabilitiesController } from './admin-capabilities.controller.js';
+import { AdminIntegrationsController } from './admin-integrations.controller.js';
 import { AdminGuard } from './admin.guard.js';
 import { HousekeepingController } from './housekeeping.controller.js';
 import { HousekeepingService } from './housekeeping.service.js';
@@ -49,6 +50,7 @@ import { FieldQueueAdminController } from '../field-queue/field-queue-admin.cont
     AdminBasemapProbeController,
     AdminBrandingController,
     AdminCapabilitiesController,
+    AdminIntegrationsController,
     HousekeepingController,
     NotificationsAdminController,
     FieldQueueAdminController,

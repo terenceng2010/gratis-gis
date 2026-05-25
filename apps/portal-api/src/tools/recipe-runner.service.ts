@@ -153,7 +153,9 @@ export class RecipeRunnerService {
       return this.runSelectionInternal(user, toolId, recipe, request);
     }
     if (recipe.output.kind === 'osm-features-overlay') {
-      return this.runOsmOverlayInternal(recipe, request);
+      // #103: thread the running user's orgId so OsmService can
+      // look up the per-org Overpass endpoint override.
+      return this.runOsmOverlayInternal(recipe, request, user);
     }
     throw new BadRequestException(
       `Tool ${toolId} has an unsupported output sink: ${recipe.output.kind}`,
@@ -369,6 +371,7 @@ export class RecipeRunnerService {
   private async runOsmOverlayInternal(
     recipe: RecipeAction,
     request: ToolRunRequest,
+    user: AuthUser,
   ): Promise<ToolOsmOverlayResult> {
     if (recipe.output.kind !== 'osm-features-overlay') {
       throw new BadRequestException(
@@ -444,6 +447,10 @@ export class RecipeRunnerService {
         : {}),
       bbox: paddedBbox,
       ...(ttlMs !== undefined ? { ttlMs } : {}),
+      // #103: per-org Overpass endpoint lookup happens inside
+      // OsmService when orgId is supplied. The user is the running
+      // principal so their org is the one whose setting wins.
+      ...(user.orgId ? { orgId: user.orgId } : {}),
     });
 
     return {
