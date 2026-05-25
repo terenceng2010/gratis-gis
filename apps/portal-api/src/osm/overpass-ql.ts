@@ -63,9 +63,14 @@ export interface OverpassQlInput {
 export function escapeOverpassTagValue(raw: string): string {
   // Reject control + line terminators.  The QL spec disallows
   // them inside quoted strings and an injection attempt would
-  // need one to break out.
-  if (/[\x00-\x1f]/.test(raw)) {
-    throw new Error('OSM tag value contains control characters');
+  // need one to break out.  Charcode check rather than a regex
+  // with literal control escapes so ESLint's no-control-regex
+  // doesn't flag the guard.
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    if (c < 0x20) {
+      throw new Error('OSM tag value contains control characters');
+    }
   }
   return raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -75,7 +80,7 @@ export function escapeOverpassTagValue(raw: string): string {
  *  escape to defend the QL generator against future schema
  *  weirdness. */
 export function escapeOverpassTagKey(raw: string): string {
-  if (!/^[a-zA-Z0-9_:.\-]+$/.test(raw)) {
+  if (!/^[a-zA-Z0-9_:.-]+$/.test(raw)) {
     throw new Error(`OSM tag key contains unsupported characters: ${raw}`);
   }
   return raw;
