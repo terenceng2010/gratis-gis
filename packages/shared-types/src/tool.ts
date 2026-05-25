@@ -25,6 +25,7 @@
  * See docs/tool-items-v2.md for the full design.
  */
 
+import type { LengthUnit } from './length';
 import type {
   SpatialPredicate,
   ToolStep,
@@ -208,6 +209,16 @@ export interface DistanceParameter {
   label: string;
   hint?: string;
   required?: boolean;
+  /**
+   * Display unit for the user-facing input.  Storage is always
+   * meters (so the recipe runner doesn't have to think about
+   * units); this field controls only how the author + end-user
+   * SEE the distance in the parameter editor + runtime panel.
+   * Defaults to `meters` when omitted, preserving the v1 shape.
+   * The runtime panel still lets the end-user pick a different
+   * unit per run from a small dropdown next to the number input.
+   */
+  unit?: LengthUnit;
   binding:
     | { mode: 'hardcoded'; meters: number }
     | {
@@ -653,9 +664,10 @@ const FIND_OSM_NEAR: RecipeTemplate = {
         {
           kind: 'distance',
           name: 'distance',
-          label: 'Search radius (meters)',
-          hint: 'Pad the area of interest before the OSM query.  1609 m ≈ 1 mile.',
-          binding: { mode: 'runtime-input', defaultMeters: 1609 },
+          label: 'Search radius',
+          hint: 'Pad the area of interest before the OSM query.  Change units on the input if you prefer feet, kilometers, etc.',
+          unit: 'miles',
+          binding: { mode: 'runtime-input', defaultMeters: 1609.344 },
         },
       ],
       pipeline: [],

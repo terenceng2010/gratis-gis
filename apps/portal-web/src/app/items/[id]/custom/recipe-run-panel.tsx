@@ -47,6 +47,7 @@ import type {
   DistanceParameter,
   FeatureSourceParameter,
   FeatureSourceValue,
+  LengthUnit,
   NumberParameter,
   OsmFeatureParameter,
   OsmTagFilter,
@@ -55,6 +56,11 @@ import type {
   SpatialPredicate,
   TextParameter,
   ToolParameter,
+} from '@gratis-gis/shared-types';
+import {
+  LENGTH_UNITS,
+  METERS_PER_UNIT,
+  UNIT_LABELS,
 } from '@gratis-gis/shared-types';
 
 import {
@@ -712,26 +718,51 @@ function DistanceInput({
   value: number | undefined;
   onChange: (next: number) => void;
 }) {
+  // Display unit defaults to whatever the author saved on the
+  // parameter (meters for legacy recipes); the user can flip the
+  // unit on the input at run time and we convert back to meters
+  // before emitting `onChange`.  Local state survives across
+  // renders so a unit pick doesn't bounce back to the default.
+  const [unit, setUnit] = useState<LengthUnit>(parameter.unit ?? 'meters');
   if (parameter.binding.mode !== 'runtime-input') return null;
-  const current = value ?? parameter.binding.defaultMeters;
+  const factor = METERS_PER_UNIT[unit];
+  const meters = value ?? parameter.binding.defaultMeters;
+  const display = meters / factor;
+  const minDisplay =
+    parameter.binding.minMeters !== undefined
+      ? parameter.binding.minMeters / factor
+      : 0;
+  const maxDisplay =
+    parameter.binding.maxMeters !== undefined
+      ? parameter.binding.maxMeters / factor
+      : undefined;
   return (
     <div className="space-y-1">
       <Label parameter={parameter} />
       <div className="flex items-center gap-2">
         <input
           type="number"
-          min={parameter.binding.minMeters ?? 0}
-          {...(parameter.binding.maxMeters !== undefined
-            ? { max: parameter.binding.maxMeters }
-            : {})}
-          value={current}
+          min={minDisplay}
+          step="any"
+          {...(maxDisplay !== undefined ? { max: maxDisplay } : {})}
+          value={Number.isFinite(display) ? display : 0}
           onChange={(e) => {
             const n = Number(e.target.value);
-            if (Number.isFinite(n)) onChange(n);
+            if (Number.isFinite(n)) onChange(n * factor);
           }}
           className={`${inputCls} flex-1`}
         />
-        <span className="text-[11px] text-muted">meters</span>
+        <select
+          value={unit}
+          onChange={(e) => setUnit(e.target.value as LengthUnit)}
+          className="rounded-md border border-border bg-surface-0 px-2 py-1.5 text-sm"
+        >
+          {LENGTH_UNITS.map((u) => (
+            <option key={u} value={u}>
+              {UNIT_LABELS[u]}
+            </option>
+          ))}
+        </select>
       </div>
     </div>
   );

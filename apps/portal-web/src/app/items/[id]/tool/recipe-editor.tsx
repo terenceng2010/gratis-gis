@@ -27,6 +27,7 @@ import { Trash2, Plus, Sparkles } from 'lucide-react';
 import type {
   DistanceParameter,
   FeatureSourceParameter,
+  LengthUnit,
   NumberParameter,
   PredicateParameter,
   RecipeAction,
@@ -38,7 +39,10 @@ import type {
 } from '@gratis-gis/shared-types';
 import {
   DEFAULT_TOOL_SELECTION_LIMIT,
+  LENGTH_UNITS,
+  METERS_PER_UNIT,
   RECIPE_TEMPLATES,
+  UNIT_LABELS,
 } from '@gratis-gis/shared-types';
 
 const PREDICATE_LABELS: Record<SpatialPredicate, string> = {
@@ -282,7 +286,7 @@ function ParameterCard({
         <div className="flex-1 space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className={labelCls}>Slug</label>
+              <label className={labelCls}>ID</label>
               <input
                 type="text"
                 disabled={!canEdit}
@@ -293,6 +297,12 @@ function ParameterCard({
                 placeholder="aoi"
                 className={`${inputCls} font-mono`}
               />
+              <p className="mt-0.5 text-[10px] text-muted">
+                Internal name.  Auto-filled when you add the
+                parameter; change it only if another part of the
+                recipe (like the pipeline step&apos;s pickers) needs
+                to point at it.
+              </p>
             </div>
             <div>
               <label className={labelCls}>Label</label>
@@ -671,6 +681,17 @@ function DistanceBindingEditor({
   inputCls: string;
 }) {
   const mode = parameter.binding.mode;
+  // Display unit; defaults to meters when the parameter doesn't
+  // carry one (older recipes saved before this field existed).
+  const unit: LengthUnit = parameter.unit ?? 'meters';
+  const factor = METERS_PER_UNIT[unit];
+
+  // Convert stored meters into the chosen unit for display.
+  const displayValue =
+    mode === 'hardcoded'
+      ? parameter.binding.meters / factor
+      : (parameter.binding as Extract<DistanceParameter['binding'], { mode: 'runtime-input' }>).defaultMeters / factor;
+
   function setMode(next: 'hardcoded' | 'runtime-input') {
     let binding: DistanceParameter['binding'];
     if (next === 'hardcoded') {
@@ -679,6 +700,27 @@ function DistanceBindingEditor({
       binding = { mode: 'runtime-input', defaultMeters: 100 };
     }
     onChange({ binding });
+  }
+  function setUnit(next: LengthUnit) {
+    // Storage stays in meters; only the display unit changes.
+    onChange({ unit: next });
+  }
+  function setDisplayValue(raw: number) {
+    if (!Number.isFinite(raw) || raw < 0) return;
+    const meters = raw * factor;
+    if (mode === 'hardcoded') {
+      onChange({ binding: { mode: 'hardcoded', meters } });
+    } else {
+      const cur = parameter.binding as Extract<DistanceParameter['binding'], { mode: 'runtime-input' }>;
+      onChange({
+        binding: {
+          mode: 'runtime-input',
+          defaultMeters: meters,
+          ...(cur.minMeters !== undefined ? { minMeters: cur.minMeters } : {}),
+          ...(cur.maxMeters !== undefined ? { maxMeters: cur.maxMeters } : {}),
+        },
+      });
+    }
   }
   return (
     <div className="space-y-2 rounded-md border border-border bg-surface-1 p-2">
@@ -689,41 +731,42 @@ function DistanceBindingEditor({
         onChange={(e) => setMode(e.target.value as 'hardcoded' | 'runtime-input')}
         className={inputCls}
       >
-        <option value="hardcoded">Hardcoded meters</option>
+        <option value="hardcoded">Hardcoded value</option>
         <option value="runtime-input">User types at run time</option>
       </select>
       <div>
         <label className={labelCls}>
-          {mode === 'hardcoded' ? 'Meters' : 'Default meters'}
+          {mode === 'hardcoded' ? 'Distance' : 'Default distance'}
         </label>
-        <input
-          type="number"
-          disabled={!canEdit}
-          min={0}
-          value={
-            mode === 'hardcoded'
-              ? parameter.binding.meters
-              : (parameter.binding as Extract<DistanceParameter['binding'], { mode: 'runtime-input' }>).defaultMeters
-          }
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (!Number.isFinite(n)) return;
-            if (mode === 'hardcoded') {
-              onChange({ binding: { mode: 'hardcoded', meters: n } });
-            } else {
-              const cur = parameter.binding as Extract<DistanceParameter['binding'], { mode: 'runtime-input' }>;
-              onChange({
-                binding: {
-                  mode: 'runtime-input',
-                  defaultMeters: n,
-                  ...(cur.minMeters !== undefined ? { minMeters: cur.minMeters } : {}),
-                  ...(cur.maxMeters !== undefined ? { maxMeters: cur.maxMeters } : {}),
-                },
-              });
-            }
-          }}
-          className={inputCls}
-        />
+        <div className="mt-1 flex gap-2">
+          <input
+            type="number"
+            disabled={!canEdit}
+            min={0}
+            step="any"
+            value={Number.isFinite(displayValue) ? displayValue : 0}
+            onChange={(e) => setDisplayValue(Number(e.target.value))}
+            className={`${inputCls} flex-1`}
+          />
+          <select
+            disabled={!canEdit}
+            value={unit}
+            onChange={(e) => setUnit(e.target.value as LengthUnit)}
+            className="rounded-md border border-border bg-surface-0 px-2 py-1.5 text-sm"
+          >
+            {LENGTH_UNITS.map((u) => (
+              <option key={u} value={u}>
+                {UNIT_LABELS[u]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="mt-1 text-[10px] text-muted">
+          Stored internally in meters so the recipe runner doesn&apos;t
+          have to convert; you only see + edit in the unit picked
+          here.  The end-user can still flip to a different unit at
+          run time.
+        </p>
       </div>
     </div>
   );
