@@ -1,7 +1,7 @@
 # GratisGIS Postgres image. Extends postgis/postgis with pg_partman
 # so the engine's `observation` table can be range-partitioned by
 # `tx_time` (see ROADMAP Phase 8 + the engine pivot doc). The base
-# image already ships PostgreSQL 16 + PostGIS 3.4 + the PostgreSQL
+# image already ships PostgreSQL 16 + PostGIS 3.5 + the PostgreSQL
 # Global Development Group's apt repository, so `apt-get install`
 # resolves the PG16-targeted partman package directly.
 #
@@ -9,6 +9,12 @@
 # image: this keeps the upstream chain short (postgres -> postgis ->
 # us) and lets us track postgis security updates without a second
 # maintainer in the loop.
+#
+# Postgres 17 bump: pinned to 16-3.5 pending a coordinated prod
+# pg_upgrade window. Bumping to 17 here without the upgrade plan
+# would break prod on next deploy (PG16 data dir is unreadable by
+# the PG17 binary). See docs/handoff/postgres-17-upgrade.md (TBD)
+# for the migration steps.
 FROM postgis/postgis:16-3.5
 
 RUN apt-get update \
