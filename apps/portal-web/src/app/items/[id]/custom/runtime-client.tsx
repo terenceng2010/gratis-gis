@@ -5443,6 +5443,19 @@ function TimeSliderWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'time-slider') return null;
   const cfg = widget.config;
   const { at, setAt } = useContext(AppTimeContext);
+  // #57: animated playback. The runtime tracks play / pause and a
+  // multiplier; when playing, an interval advances the slider by
+  // one `stepDays` step each tick. Tick rate is 1 second per step
+  // at 1x speed, halved at 2x, quartered at 5x, and so on. Reaching
+  // the max date loops back to min unless `loop === false`, in
+  // which case playback pauses.
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  // The animation effect mutates `at` via setAt; we read the
+  // bounds from the resolved cfg + max/min computed below. Re-
+  // creating the interval on each play / speed / bound change is
+  // fine: setInterval cleanup runs the moment any dep changes.
+  const playableCfg = cfg.playable !== false; // default true
 
   // Resolve the date bounds.  maxDate defaults to today; minDate
   // defaults to one year before today.  Both are local YYYY-MM-DD
@@ -5534,6 +5547,49 @@ function TimeSliderWidgetRender({ widget }: { widget: CustomWidget }) {
     publish(`${y}-${m}-${day}`);
   }
 
+  // #57: playback effect. When `playing` is true, an interval
+  // advances the slider one step every (1000 / speed) ms. Reaching
+  // the max position loops back to 0 (or pauses if endBehavior ===
+  // 'pause'). Pausing the user (setPlaying(false)) cancels the
+  // interval; changing speed, bounds, or step recreates it so the
+  // new cadence takes effect immediately.
+  const speedOptions = useMemo(() => {
+    const raw = cfg.speedOptions ?? [1, 2, 5, 10];
+    return raw
+      .filter((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)
+      .map((n) => Math.min(1000, Math.max(0.25, n)));
+  }, [cfg.speedOptions]);
+  const endBehavior = cfg.endBehavior ?? 'loop';
+  useEffect(() => {
+    if (!playing) return;
+    if (mode === 'calendar') return; // calendar mode has nothing to animate
+    if (sliderMax <= 0) return;
+    const intervalMs = Math.max(50, Math.floor(1000 / speed));
+    const handle = setInterval(() => {
+      // Compute the next slider position from the current `at`
+      // (read fresh each tick via closure on `sliderValue` would
+      // capture stale values; we instead derive from `at` via
+      // the same convention the slider uses). The setAt call
+      // publishes ISO; the next tick reads the publish via the
+      // re-render's closure on `at` and `sliderValue`.
+      const next = sliderValue + 1;
+      if (next > sliderMax) {
+        if (endBehavior === 'loop') {
+          onSliderChange(0);
+        } else {
+          setPlaying(false);
+        }
+        return;
+      }
+      onSliderChange(next);
+    }, intervalMs);
+    return () => clearInterval(handle);
+    // sliderValue + setAt are intentionally inside the closure
+    // each effect re-run; cfg / mode / sliderMax / endBehavior /
+    // speed are the dep set that should restart the interval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, speed, sliderMax, mode, endBehavior, sliderValue]);
+
   return (
     <div className="flex h-full w-full items-center gap-3 rounded-md border border-border bg-surface-1 px-3 py-2 text-xs">
       <Clock className="h-4 w-4 shrink-0 text-muted" />
@@ -5562,6 +5618,31 @@ function TimeSliderWidgetRender({ widget }: { widget: CustomWidget }) {
         </>
       ) : (
         <>
+          {playableCfg ? (
+            <button
+              type="button"
+              onClick={() => setPlaying((p) => !p)}
+              className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md border border-border bg-surface-0 text-ink-1 hover:bg-surface-2"
+              aria-label={playing ? 'Pause' : 'Play'}
+              title={playing ? 'Pause' : 'Play'}
+            >
+              {/* Inline play / pause glyphs to avoid extra icon
+                  imports. The current icon stable is lucide; both
+                  Play and Pause are there, but keeping triangles
+                  small + filled here is lighter than wiring up a
+                  conditional import. */}
+              {playing ? (
+                <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
+                  <rect x="3" y="3" width="3" height="10" fill="currentColor" />
+                  <rect x="10" y="3" width="3" height="10" fill="currentColor" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
+                  <path d="M4 3l9 5-9 5z" fill="currentColor" />
+                </svg>
+              )}
+            </button>
+          ) : null}
           <span className="shrink-0 tabular-nums text-muted">{minDate}</span>
           <input
             type="range"
@@ -5577,6 +5658,21 @@ function TimeSliderWidgetRender({ widget }: { widget: CustomWidget }) {
           <span className="shrink-0 min-w-[5.5rem] text-right font-medium tabular-nums text-ink-0">
             {at ? currentDateStr : 'Now'}
           </span>
+          {playableCfg && speedOptions.length > 1 ? (
+            <select
+              value={speed}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+              className="shrink-0 h-6 rounded-md border border-border bg-surface-0 px-1 text-xs text-ink-1 focus:border-accent focus:outline-none"
+              aria-label="Playback speed"
+              title="Playback speed"
+            >
+              {speedOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}x
+                </option>
+              ))}
+            </select>
+          ) : null}
           {at ? (
             <button
               type="button"

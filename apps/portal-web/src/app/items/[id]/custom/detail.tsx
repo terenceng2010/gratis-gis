@@ -4725,6 +4725,10 @@ function TimeSliderWidgetConfigEditor({
     maxDate?: string;
     stepDays?: number;
     label?: string;
+    // #57: animated playback options.
+    playable?: boolean;
+    endBehavior?: 'loop' | 'pause';
+    speedOptions?: number[];
   };
   canEdit: boolean;
   onChangeConfig: (patch: Record<string, unknown>) => void;
@@ -4780,6 +4784,42 @@ function TimeSliderWidgetConfigEditor({
             disabled={!canEdit}
             onChange={(v) => onChangeConfig({ stepDays: v })}
           />
+        </Field>
+      ) : null}
+      {config.mode !== 'calendar' ? (
+        <Field
+          label="Animated playback"
+          hint="Show a play / pause button and a speed selector so viewers can scrub through the range automatically."
+        >
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={config.playable !== false}
+              disabled={!canEdit}
+              onChange={(e) => onChangeConfig({ playable: e.target.checked })}
+            />
+            <span>Show play / pause + speed controls</span>
+          </label>
+        </Field>
+      ) : null}
+      {config.mode !== 'calendar' && config.playable !== false ? (
+        <Field
+          label="At end of range"
+          hint="What playback does when it reaches the latest date."
+        >
+          <select
+            value={config.endBehavior ?? 'loop'}
+            disabled={!canEdit}
+            onChange={(e) =>
+              onChangeConfig({
+                endBehavior: e.target.value === 'pause' ? 'pause' : 'loop',
+              })
+            }
+            className="h-9 w-full rounded-md border border-border bg-surface-0 px-2 text-sm focus:border-accent focus:outline-none"
+          >
+            <option value="loop">Loop back to start</option>
+            <option value="pause">Pause at the end</option>
+          </select>
         </Field>
       ) : null}
     </div>

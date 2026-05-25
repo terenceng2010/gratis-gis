@@ -408,6 +408,28 @@ export interface TimeSliderWidgetConfig {
   stepDays?: number;
   /** Optional label override; default 'Time'. */
   label?: string;
+  /**
+   * #57: animated playback. When true (default), the runtime
+   * renders a play / pause button and a speed selector alongside
+   * the slider. Tick rate at 1x is one `stepDays` step per
+   * second; higher speeds proportionally shorten the interval.
+   * Only applies in mode='date' (the calendar mode is a single
+   * date picker and has no continuous play semantics).
+   */
+  playable?: boolean;
+  /**
+   * #57: behavior when playback reaches `maxDate`. `loop` rewinds
+   * to `minDate` and continues; `pause` stops at the end and the
+   * user has to hit play again. Defaults to `loop`.
+   */
+  endBehavior?: 'loop' | 'pause';
+  /**
+   * #57: available playback multipliers shown in the speed
+   * selector. The runtime caps to a sane range; bigger numbers
+   * play faster. Defaults to [1, 2, 5, 10]. The user-visible label
+   * is `${n}x`.
+   */
+  speedOptions?: number[];
 }
 
 /**
