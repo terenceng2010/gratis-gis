@@ -9,12 +9,10 @@
 # - All PRs are assigned to palavido-dev so they don't sit unowned.
 # - Docker scanning lists each Dockerfile path explicitly because
 #   Dependabot doesn't recurse on its own.
-#
-# Things to confirm before merging:
-# - Reviewer handle palavido-dev is correct.
-# - Day of week for runs (currently monday).
-# - Whether you want major-version bumps grouped or split out (split
-#   here, since majors usually need manual review).
+# - No ignore rules: this is a single-developer project that values
+#   being on the current line over avoiding work. Majors get their
+#   own PR (per the grouping below) so they can be reviewed and
+#   merged manually; we don't auto-pin away from the upgrade.
 
 version: 2
 
@@ -46,49 +44,6 @@ updates:
           - "minor"
           - "patch"
       # Major bumps get their own PR so they're easier to review.
-    # Pin majors that need real review / migration work. Each entry
-    # explains why we're not auto-tracking the major. Remove the
-    # entry (or relax the version-spec) when we're ready to do the
-    # upgrade work.
-    ignore:
-      # Node 22 is the current LTS we ship on; types should track
-      # the engine, not race ahead.
-      - dependency-name: "@types/node"
-        update-types: ["version-update:semver-major"]
-      # Prisma 6.x and 7.x both have breaking changes (RawType,
-      # schema-engine relocation). Stay on 5 until we have a
-      # dedicated upgrade window.
-      - dependency-name: "prisma"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@prisma/client"
-        update-types: ["version-update:semver-major"]
-      # MapLibre 5 dropped GL 1 backends and changed several
-      # source / layer types; the map-canvas surface needs a real
-      # audit before we take this.
-      - dependency-name: "maplibre-gl"
-        update-types: ["version-update:semver-major"]
-      # TypeScript 6 is too fresh; stay on 5.x.
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
-      # cron 4 dropped CommonJS in favour of ESM-only; the schedule
-      # services would need an import rewrite. Defer.
-      - dependency-name: "cron"
-        update-types: ["version-update:semver-major"]
-      # Jest 30 needs a Vitest-or-stay-pinned decision. Defer.
-      - dependency-name: "jest"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@types/jest"
-        update-types: ["version-update:semver-major"]
-      # eslint-config-next must move in lockstep with the Next.js
-      # major. We're on Next 15; track the config to match.
-      - dependency-name: "eslint-config-next"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "next"
-        update-types: ["version-update:semver-major"]
-      # jwks-rsa 4 changed the cache API. Defer until we revisit
-      # the JWT verification path.
-      - dependency-name: "jwks-rsa"
-        update-types: ["version-update:semver-major"]
 
   # GitHub Actions workflows
   - package-ecosystem: "github-actions"
@@ -114,14 +69,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # Action majors occasionally change input shapes (upload-artifact
-    # v5 broke same-name merging, build-push-action v7 bumped the
-    # minimum Buildx). Roll majors via a focused CI pass when the
-    # rest of the workflow is being touched anyway, not via
-    # auto-Dependabot.
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
 
   # Docker base images for portal-api
   - package-ecosystem: "docker"
@@ -144,12 +91,6 @@ updates:
       docker-api:
         patterns:
           - "*"
-    # Node 22 LTS is what we build against. A jump to 24 / 26 needs
-    # a coordinated runtime change (gdal-async prebuilt binaries,
-    # `engines` in every workspace, prod box update).
-    ignore:
-      - dependency-name: "node"
-        update-types: ["version-update:semver-major"]
 
   # Docker base images for portal-web
   - package-ecosystem: "docker"
@@ -172,11 +113,6 @@ updates:
       docker-web:
         patterns:
           - "*"
-    # See portal-api block: Node major bumps are coordinated, not
-    # auto-merged.
-    ignore:
-      - dependency-name: "node"
-        update-types: ["version-update:semver-major"]
 
   # Docker base image for the custom postgres image under infra/
   - package-ecosystem: "docker"
@@ -200,9 +136,3 @@ updates:
       docker-infra:
         patterns:
           - "*"
-    # A Postgres major (16 -> 17) is a data migration, not a base-
-    # image bump. Pin until we're ready to schedule a pg_upgrade
-    # against prod.
-    ignore:
-      - dependency-name: "postgis/postgis"
-        update-types: ["version-update:semver-major"]

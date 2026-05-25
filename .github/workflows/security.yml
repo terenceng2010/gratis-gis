@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
@@ -79,7 +79,7 @@ jobs:
 
       - name: Upload audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pnpm-audit
           path: audit.json
@@ -134,7 +134,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build ${{ matrix.image.name }} image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           # Build context is the monorepo root; the per-app
           # Dockerfile copies pnpm-workspace.yaml + packages + apps
