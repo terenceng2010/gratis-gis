@@ -3953,6 +3953,7 @@ function ToolButtonRender({
                 attribution={osmOverlay.attribution}
                 featureCount={osmOverlay.featureCount}
                 truncated={osmOverlay.truncated}
+                features={osmOverlay.features}
                 onDismiss={() => setOsmOverlay(null)}
               />
             </>
@@ -3975,13 +3976,66 @@ function OsmAttributionChip({
   attribution,
   featureCount,
   truncated,
+  features,
   onDismiss,
 }: {
   attribution: string;
   featureCount: number;
   truncated: boolean;
+  /** Source features the overlay is currently displaying. Carried
+   *  on the chip so the "Save as layer" button can POST them
+   *  without re-fetching. */
+  features: OsmOverlayFeature[];
   onDismiss: () => void;
 }) {
+  // #102: save-as-layer state machine. The button cycles through
+  // four states: idle (default), saving (POST in-flight), saved
+  // (success, shows a link to the new item), error (red text + a
+  // retry option). All transient; closing the chip resets everything.
+  const [saveState, setSaveState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'saving' }
+    | { kind: 'saved'; itemId: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+
+  async function onSaveClick() {
+    if (features.length === 0) return;
+    // Prompt for a title. The browser's window.prompt is a
+    // deliberate choice: the chip lives on top of the map and a
+    // full modal would obscure context. If we later grow the chip
+    // into a tray we can replace this with an inline input.
+    const defaultTitle = `OSM overlay (${new Date().toLocaleString()})`;
+    const title = window.prompt(
+      'Save these features as a new data layer. Choose a name:',
+      defaultTitle,
+    );
+    if (!title || title.trim().length === 0) return;
+    setSaveState({ kind: 'saving' });
+    try {
+      const res = await fetch('/api/portal/osm/save-as-data-layer', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: `Saved from OSM overlay. ${attribution}`,
+          features,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const json = (await res.json()) as { itemId: string };
+      setSaveState({ kind: 'saved', itemId: json.itemId });
+    } catch (err) {
+      setSaveState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return createPortal(
     <div className="pointer-events-none fixed bottom-4 right-4 z-[900] flex justify-end">
       <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-surface-0/95 px-3 py-1.5 text-[11px] shadow-raised backdrop-blur">
@@ -3998,6 +4052,47 @@ function OsmAttributionChip({
         >
           {attribution}
         </a>
+        {/* #102: save-as-layer affordance. Renders differently per
+            state so the user always knows what just happened. */}
+        {saveState.kind === 'idle' ? (
+          <button
+            type="button"
+            onClick={onSaveClick}
+            className="rounded-md border border-border bg-surface-1 px-2 text-[10px] font-medium text-ink-1 hover:bg-surface-2"
+            aria-label="Save these features as a data layer"
+            title="Save these features as a data layer"
+          >
+            Save as layer
+          </button>
+        ) : null}
+        {saveState.kind === 'saving' ? (
+          <span className="text-muted">Saving…</span>
+        ) : null}
+        {saveState.kind === 'saved' ? (
+          <a
+            href={`/items/${saveState.itemId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-md border border-accent/40 bg-accent/10 px-2 text-[10px] font-medium text-accent hover:bg-accent/20"
+          >
+            Saved — open layer
+          </a>
+        ) : null}
+        {saveState.kind === 'error' ? (
+          <>
+            <span className="text-rose-600" title={saveState.message}>
+              Save failed
+            </span>
+            <button
+              type="button"
+              onClick={() => setSaveState({ kind: 'idle' })}
+              className="rounded-md border border-border bg-surface-1 px-1.5 text-[10px] text-muted hover:text-ink-1"
+              aria-label="Retry save"
+            >
+              Retry
+            </button>
+          </>
+        ) : null}
         <button
           type="button"
           onClick={onDismiss}
