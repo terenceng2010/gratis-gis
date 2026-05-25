@@ -5,11 +5,18 @@
     "rootDir": "src",
     "noEmit": false,
     "module": "CommonJS",
-    "moduleResolution": "Node",
+    // TS 6 dropped the legacy "Node" alias; "node10" is the same
+    // behaviour explicitly named. We keep shared-types on the
+    // CommonJS / classic resolver because its dist is consumed by
+    // the portal-api (CJS via Nest) as well as portal-web (Next/
+    // ESM via Bundler resolution); the classic node10 resolver
+    // happens to produce a dist that satisfies both.
+    "moduleResolution": "node10",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "incremental": false
+    "incremental": false,
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"]
 }

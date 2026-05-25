@@ -2,7 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "module": "CommonJS",
-    "moduleResolution": "Node",
+    // TS 6 renamed "Node" to "node10" and deprecated the old alias
+    // (per https://aka.ms/ts6). Keeping the classic resolver because
+    // Nest emits CJS and the runtime imports use the node10 lookup
+    // tree; cutting over to "nodenext" is a separate migration.
+    "moduleResolution": "node10",
+    "ignoreDeprecations": "6.0",
     "outDir": "./dist",
     "rootDir": "./src",
     "experimentalDecorators": true,

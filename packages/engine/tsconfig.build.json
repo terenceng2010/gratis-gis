@@ -5,11 +5,19 @@
     "rootDir": "src",
     "noEmit": false,
     "module": "CommonJS",
-    "moduleResolution": "Node",
+    // TS 6 dropped the legacy "Node" alias; "node10" is the same
+    // behaviour explicitly named. Engine is the only package that
+    // emits CommonJS so we keep it on the classic resolver.
+    "moduleResolution": "node10",
+    "types": ["node"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "incremental": false
+    "incremental": false,
+    // Suppress TS 6's deprecation warning for moduleResolution=node10;
+    // node10 is still functional in TS 6 and we'll cut over when we
+    // migrate the engine package to ESM output.
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"]
 }
