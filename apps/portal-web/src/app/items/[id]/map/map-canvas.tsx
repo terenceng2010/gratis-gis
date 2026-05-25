@@ -535,7 +535,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
       // live map exactly as the user sees it, no off-screen
       // re-render needed.  Documented in the MapLibre FAQ as the
       // recommended toggle when you need toDataURL snapshots.
-      preserveDrawingBuffer: true,
+      // MapLibre 5 moved this option onto `canvasContextAttributes`
+      // alongside the rest of the WebGL context flags.
+      canvasContextAttributes: { preserveDrawingBuffer: true },
       // #115 P12: tile fetches (data_layer MVT) go through the
       // same-origin /api/portal/ BFF and need the Keycloak session
       // cookie to authenticate. MapLibre's tile worker does NOT
