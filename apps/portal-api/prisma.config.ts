@@ -10,9 +10,29 @@
 // invoke `pnpm prisma migrate dev` from the repo root or from
 // inside apps/portal-api without surprises.
 
-import 'dotenv/config';
 import path from 'node:path';
+import fs from 'node:fs';
 import { defineConfig } from 'prisma/config';
+
+// In local dev, load DATABASE_URL from .env if present. Don't
+// require dotenv as a dep -- it's a dev-only convenience; runtime
+// (container) env-vars come from docker compose. We parse .env
+// inline so the production image, which prunes devDeps, doesn't
+// crash on a missing `dotenv/config` module at every entrypoint
+// invocation of `prisma migrate deploy`.
+const envPath = path.resolve(process.cwd(), '.env');
+if (fs.existsSync(envPath) && !process.env.DATABASE_URL) {
+  const text = fs.readFileSync(envPath, 'utf8');
+  for (const line of text.split('\n')) {
+    const m = line.match(/^DATABASE_URL=(.*)$/);
+    if (m) {
+      // Strip optional surrounding quotes.
+      const v = (m[1] ?? '').trim().replace(/^["']|["']$/g, '');
+      if (v) process.env.DATABASE_URL = v;
+      break;
+    }
+  }
+}
 
 // DATABASE_URL is read at config-load time but not required for
 // every Prisma operation. `prisma generate` only emits the client
