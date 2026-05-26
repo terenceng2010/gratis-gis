@@ -12,9 +12,10 @@ FROM node:26-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 # See apps/portal-api/Dockerfile for the rationale on this block:
-# corepack enable + delete bundled npm CLI + apt-get upgrade. Keeps
-# Trivy noise down and picks up base OS patches.
-RUN corepack enable \
+# install pnpm via npm (Node 25+ dropped bundled corepack) + delete
+# bundled npm CLI + apt-get upgrade. Keeps Trivy noise down and
+# picks up base OS patches.
+RUN npm install -g pnpm@9.12.0 \
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 

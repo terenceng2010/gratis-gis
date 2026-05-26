@@ -15,17 +15,23 @@ FROM node:26-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 # Three things in one RUN to keep the layer count tight:
-#  1. corepack enable: we use pnpm via corepack, never npm.
-#  2. Remove the bundled npm CLI. The node:*-bookworm-slim image ships
-#     npm with its own bundled cross-spawn / glob / minimatch / tar
-#     under /usr/local/lib/node_modules/npm/node_modules, and those
+#  1. Install pnpm via npm (the version is pinned to match the
+#     packageManager field in root package.json so workspace
+#     resolution stays consistent). Node 25 dropped the bundled
+#     corepack, so we install pnpm directly rather than going
+#     through `corepack enable`.
+#  2. Remove the bundled npm CLI after pnpm is in place. The
+#     node:*-bookworm-slim image ships npm with its own bundled
+#     cross-spawn / glob / minimatch / tar under
+#     /usr/local/lib/node_modules/npm/node_modules, and those
 #     vendored copies lag the upstream patched versions by months.
-#     Trivy reports CVEs against those bundled deps. We don't use npm,
-#     so deleting it removes ~25 noisy HIGH findings outright. corepack
-#     stays so pnpm still works.
-#  3. apt-get upgrade picks up base-image OS patches (libcap, systemd,
-#     etc.) without waiting for a fresh node:* image rebuild.
-RUN corepack enable \
+#     Trivy reports CVEs against those bundled deps. We don't use
+#     npm at runtime, so deleting it removes ~25 noisy HIGH
+#     findings outright.
+#  3. apt-get upgrade picks up base-image OS patches (libcap,
+#     systemd, etc.) without waiting for a fresh node:* image
+#     rebuild.
+RUN npm install -g pnpm@9.12.0 \
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 
