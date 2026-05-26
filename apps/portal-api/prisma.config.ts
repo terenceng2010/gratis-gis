@@ -14,19 +14,23 @@ import 'dotenv/config';
 import path from 'node:path';
 import { defineConfig } from 'prisma/config';
 
+// DATABASE_URL is read at config-load time but not required for
+// every Prisma operation. `prisma generate` only emits the client
+// from the schema and never touches the database; `migrate`,
+// `pull`, `push`, etc. do need it and Prisma will surface its own
+// "no database URL" error at those touchpoints. By passing
+// `undefined` here when DATABASE_URL is absent we let `generate`
+// succeed (which matters during the Docker build phase where the
+// container has no DB connection yet) while the runtime + migrate
+// paths still fail loudly if the env-var is missing later.
 const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error(
-    'DATABASE_URL is not set. Prisma 7 needs the connection string in the environment for migrate / pull / push commands.',
-  );
-}
 
 export default defineConfig({
   schema: path.join('prisma', 'schema.prisma'),
   migrations: {
     path: path.join('prisma', 'migrations'),
   },
-  datasource: {
-    url: databaseUrl,
-  },
+  ...(databaseUrl
+    ? { datasource: { url: databaseUrl } }
+    : {}),
 });
