@@ -3,12 +3,13 @@
 #   - build: pnpm install + next build (output: standalone) at the
 #     repo root so workspace deps (shared-types, ui, form-schema)
 #     resolve. Next's tracer collects the runtime subset.
-#   - runtime: node:26-slim with the standalone server, public assets,
-#     and prebuilt static chunks. Tiny image, no pnpm or build chain.
+#   - runtime: node:22-LTS-slim with the standalone server, public
+#     assets, and prebuilt static chunks. Tiny image, no pnpm or
+#     build chain.
 #
 # Built from the repo root:  docker build -f apps/portal-web/Dockerfile .
 
-FROM node:26-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 # See apps/portal-api/Dockerfile for the rationale on this block:
