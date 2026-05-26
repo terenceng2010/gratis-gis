@@ -6,9 +6,13 @@ generator client {
   previewFeatures = ["postgresqlExtensions"]
 }
 
+// Prisma 7 moved the connection URL out of the schema and into
+// `prisma.config.ts` (for the CLI / migrate workflow) plus a
+// Driver Adapter wired into the PrismaClient constructor (for the
+// app runtime). The datasource block still declares the provider
+// and the Postgres extensions we need, just without `url`.
 datasource db {
   provider   = "postgresql"
-  url        = env("DATABASE_URL")
   extensions = [postgis, uuidOssp(map: "uuid-ossp"), pgcrypto, pg_trgm]
 }
 
