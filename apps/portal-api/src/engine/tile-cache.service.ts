@@ -62,6 +62,17 @@ export class TileCacheService {
    *  leaves room for non-tile traffic. */
   private readonly maxConcurrentComputes: number;
 
+  /** Wall-clock cap on a single compute callback. The DB's
+   *  statement_timeout is 30s; this is a few seconds past that
+   *  so a legitimate-but-slow query can still finish, while a
+   *  truly hung promise (driver bug, dead connection the client
+   *  didn't notice) cannot pin an activeComputes slot forever.
+   *  Without this safety net, observed once post-Prisma-7
+   *  driver-adapter migration: enough hung slots accumulated to
+   *  permanently saturate the cap, and every subsequent tile
+   *  request 503'd until a manual portal-api restart. */
+  private readonly computeTimeoutMs: number;
+
   /** Map insertion order is LRU order in V8: we delete + re-set
    *  on hit to move the entry to the most-recently-used end. */
   private readonly entries = new Map<string, CacheEntry>();
@@ -90,6 +101,10 @@ export class TileCacheService {
     this.maxConcurrentComputes = parseIntEnv(
       'TILE_CACHE_MAX_CONCURRENT',
       8,
+    );
+    this.computeTimeoutMs = parseIntEnv(
+      'TILE_CACHE_COMPUTE_TIMEOUT_MS',
+      35_000,
     );
   }
 
@@ -213,7 +228,33 @@ export class TileCacheService {
     this.activeComputes += 1;
     const promise: Promise<CacheHit> = (async () => {
       try {
-        const buf = await compute();
+        // Wall-clock timeout safety net. Without this, a Prisma
+        // query that never resolves AND never rejects (observed
+        // once post-Prisma-7 driver-adapter migration: a hung
+        // connection that the driver didn't surface as an error)
+        // would pin the activeComputes slot forever. After enough
+        // hung slots accumulate, the cap saturates permanently and
+        // every subsequent tile request 503s. The DB's
+        // statement_timeout is 30s, so this 35s ceiling is a few
+        // seconds past the longest legitimate compute and far
+        // shorter than "forever". On timeout we throw so the
+        // finally below decrements the counter; the caller maps
+        // the rejection to a 503 just like any other compute
+        // failure.
+        const buf = await Promise.race<Buffer>([
+          compute(),
+          new Promise<Buffer>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `tile compute exceeded ${this.computeTimeoutMs}ms`,
+                  ),
+                ),
+              this.computeTimeoutMs,
+            ),
+          ),
+        ]);
         const etag = this.set(key, buf);
         return { buf, etag };
       } finally {
