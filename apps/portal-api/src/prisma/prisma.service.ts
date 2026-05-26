@@ -25,8 +25,22 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         'DATABASE_URL must be set before PrismaService can construct its adapter.',
       );
     }
+    // Pool sizing. The Prisma 7 driver adapter delegates to
+    // `pg.Pool`, whose default `max` is 10. That worked for the
+    // pre-MVT request pattern (1-2 queries per /items/* request),
+    // but every MVT tile request runs assertV3Layer (item lookup
+    // + share check + auth upsert -- 5-8 queries) and MapLibre
+    // fires 20-40 tile requests at once on a pan/zoom. With max=10
+    // per replica that queues 100+ queries on 20 connections and
+    // each tile waits ~half a second just for a pool slot, before
+    // any actual compute starts. Bumping to 25 cuts the queue
+    // depth to ~2x, and Postgres' max_connections=100 still has
+    // plenty of headroom (2 replicas * 25 + worker + pg_tileserv
+    // + 1-2 admin = ~55-60 peak). Override via DB_POOL_MAX if a
+    // future per-tenant deploy needs to tune.
+    const poolMax = Number(process.env.DB_POOL_MAX ?? 25);
     super({
-      adapter: new PrismaPg({ connectionString: url }),
+      adapter: new PrismaPg({ connectionString: url, max: poolMax }),
     });
   }
 
