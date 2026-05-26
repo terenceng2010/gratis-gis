@@ -3932,6 +3932,30 @@ function ToolButtonRender({
                     featureCount: result.output.featureCount,
                     truncated: result.output.truncated,
                   });
+                  // #141 wave A: zoom the host map to the bbox of the
+                  // returned features so the user sees where the matches
+                  // actually landed. Skips if there are zero results
+                  // (the chip's "No matches" state surfaces that case)
+                  // or if the map instance isn't available yet.
+                  if (result.output.features.length > 0) {
+                    const m = firstMapInstance(ctx);
+                    if (m) {
+                      const bb = bboxOfFeatures(result.output.features);
+                      if (bb) {
+                        m.fitBounds(bb, {
+                          padding: 60,
+                          // 60ms shorter than MapLibre's default 1000ms
+                          // so the camera arrives shortly after the
+                          // overlay appears, not seconds later.
+                          duration: 600,
+                          // Don't zoom past z17 on a single-point
+                          // result; otherwise the user lands at z22+
+                          // on a postage-stamp view and loses context.
+                          maxZoom: 17,
+                        });
+                      }
+                    }
+                  }
                 }
               }}
             />
@@ -4036,11 +4060,47 @@ function OsmAttributionChip({
     }
   }
 
+  // #141 wave A: zero-result chip variant.  When the query ran
+  // successfully but returned no features, surface that explicitly
+  // instead of silently showing a "0 features" chip that reads like
+  // a normal result.  The amber styling matches the public-testing
+  // banner so the visual language is consistent for "heads up, this
+  // is informational, not an error."
+  if (featureCount === 0) {
+    return createPortal(
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[900] flex justify-end">
+        <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] shadow-raised">
+          <span className="font-medium text-amber-900">
+            No matches in this area
+          </span>
+          <span className="text-amber-700">·</span>
+          <a
+            href="https://www.openstreetmap.org/copyright"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-amber-700 underline hover:text-amber-900"
+          >
+            {attribution}
+          </a>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="rounded-md border border-amber-300 bg-amber-100 px-1.5 text-[10px] text-amber-900 hover:bg-amber-200"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
   return createPortal(
     <div className="pointer-events-none fixed bottom-4 right-4 z-[900] flex justify-end">
       <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-surface-0/95 px-3 py-1.5 text-[11px] shadow-raised backdrop-blur">
         <span className="text-ink-0">
-          {featureCount} OSM feature{featureCount === 1 ? '' : 's'}
+          Found {featureCount} OSM feature{featureCount === 1 ? '' : 's'}
           {truncated ? ' (truncated)' : ''}
         </span>
         <span className="text-muted">·</span>
@@ -4188,6 +4248,58 @@ function firstMapInstance(
 ): maplibregl.Map | null {
   if (!ctx) return null;
   return Object.values(ctx.maps).find((x) => x) ?? null;
+}
+
+/**
+ * Compute a [west, south, east, north] bbox over a feature
+ * collection. Walks every coordinate so it works regardless of
+ * geometry type (point, line, polygon, multi*).  Returns null
+ * when the input is empty or when no geometry yields a real
+ * coordinate (defensive: a malformed feature shouldn't crash
+ * the fly-to). The result is shaped for maplibregl.Map.fitBounds.
+ *
+ * Used by #141 (OSM result handling) to zoom the host map to
+ * the extent of a recipe's OSM features.
+ */
+function bboxOfFeatures(
+  features: readonly { geometry: unknown }[],
+): [[number, number], [number, number]] | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let count = 0;
+  const visit = (coord: unknown): void => {
+    if (
+      Array.isArray(coord) &&
+      coord.length >= 2 &&
+      typeof coord[0] === 'number' &&
+      typeof coord[1] === 'number'
+    ) {
+      const x = coord[0];
+      const y = coord[1];
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        count += 1;
+      }
+      return;
+    }
+    if (Array.isArray(coord)) {
+      for (const c of coord) visit(c);
+    }
+  };
+  for (const f of features) {
+    const g = f.geometry as { coordinates?: unknown } | null | undefined;
+    if (g && 'coordinates' in g) visit(g.coordinates);
+  }
+  if (count === 0) return null;
+  return [
+    [minX, minY],
+    [maxX, maxY],
+  ];
 }
 
 /**
