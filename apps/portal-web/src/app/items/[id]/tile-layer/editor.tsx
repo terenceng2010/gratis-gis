@@ -5,7 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import cogProtocol from '@geomatico/maplibre-cog-protocol';
+import { cogProtocol } from '@geomatico/maplibre-cog-protocol';
 import {
   Check,
   Copy,

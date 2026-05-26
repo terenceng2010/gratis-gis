@@ -2,7 +2,10 @@
 import type { StyleSpecification } from 'maplibre-gl';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import cogProtocol from '@geomatico/maplibre-cog-protocol';
+// maplibre-cog-protocol 0.8 (the maplibre-gl@5 build) switched from
+// a default export to a named export; the function itself is the
+// same shape.
+import { cogProtocol } from '@geomatico/maplibre-cog-protocol';
 import type { BasemapData } from '@gratis-gis/shared-types';
 
 // Register the pmtiles:// AND cog:// protocols with MapLibre
