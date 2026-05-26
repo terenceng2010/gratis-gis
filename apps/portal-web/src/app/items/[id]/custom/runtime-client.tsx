@@ -2131,7 +2131,6 @@ function LayerRowKebabMenu({
   onPatchLayerStyle: (id: string, style: MapLayerStyle) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
   const [symbologyOpen, setSymbologyOpen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -2162,14 +2161,12 @@ function LayerRowKebabMenu({
         !wrapperRef.current.contains(e.target)
       ) {
         setMenuOpen(false);
-        setExportOpen(false);
         setPos(null);
       }
     }
     function onEsc(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         setMenuOpen(false);
-        setExportOpen(false);
         setPos(null);
       }
     }
@@ -2191,7 +2188,6 @@ function LayerRowKebabMenu({
 
   function closeMenu() {
     setMenuOpen(false);
-    setExportOpen(false);
     setPos(null);
   }
 
@@ -2238,64 +2234,53 @@ function LayerRowKebabMenu({
             </button>
           ) : null}
           {canExport ? (
-            <div className="relative">
+            // #145 follow-up: inline the three format choices as
+            // top-level menu items instead of a nested submenu.
+            // The original submenu was nested inside an
+            // overflow:hidden parent (carried over from the
+            // folder-row-menu pattern) which clipped the submenu
+            // invisibly, so clicking Export "did nothing" from the
+            // user's view. Inlining sidesteps the clipping AND
+            // saves a click; the menu's still short enough to read
+            // cleanly without the grouping.
+            <>
               <button
                 type="button"
                 role="menuitem"
-                aria-haspopup="menu"
-                aria-expanded={exportOpen}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setExportOpen((v) => !v);
+                onClick={() => {
+                  closeMenu();
+                  onExportLayer(layer, 'geojson');
                 }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
               >
                 <Download className="h-3.5 w-3.5 text-muted" />
-                <span className="flex-1">Export</span>
-                <ChevronRight className="h-3 w-3 text-muted" />
+                Export as GeoJSON
               </button>
-              {exportOpen ? (
-                <div
-                  role="menu"
-                  className="absolute left-full top-0 ml-px min-w-[140px] overflow-hidden rounded-md border border-border bg-surface-1 py-1 shadow-raised"
-                >
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      closeMenu();
-                      onExportLayer(layer, 'geojson');
-                    }}
-                    className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
-                  >
-                    GeoJSON
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      closeMenu();
-                      onExportLayer(layer, 'csv');
-                    }}
-                    className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
-                  >
-                    CSV
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      closeMenu();
-                      onExportLayer(layer, 'xlsx');
-                    }}
-                    className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
-                  >
-                    Excel (.xlsx)
-                  </button>
-                </div>
-              ) : null}
-            </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMenu();
+                  onExportLayer(layer, 'csv');
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+              >
+                <Download className="h-3.5 w-3.5 text-muted" />
+                Export as CSV
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMenu();
+                  onExportLayer(layer, 'xlsx');
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+              >
+                <Download className="h-3.5 w-3.5 text-muted" />
+                Export as Excel (.xlsx)
+              </button>
+            </>
           ) : null}
           {canSymbology ? (
             <button
