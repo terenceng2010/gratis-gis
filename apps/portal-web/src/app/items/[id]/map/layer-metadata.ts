@@ -428,6 +428,66 @@ export function isTableLayer(
   return metadata.isTable;
 }
 
+/**
+ * Synchronous version of the feature-walking discovery, for callers
+ * that already have a FeatureCollection in memory (e.g. the OSM
+ * tool-run result in the Custom App runtime, or any other inline
+ * source we don't need to fetch). Mirrors what `discoverLayerMetadata`
+ * does for the geojson-inline branch but skips the async fetch path,
+ * so AttributeTable / SearchBar can populate column lists +
+ * filterable distinct values in a useMemo without an effect.
+ *
+ * Bounds: same FEATURE_SAMPLE_CAP and VALUES_PER_FIELD_CAP caps as
+ * the async discovery path, so we don't blow up on a 100k-feature
+ * inline FC.
+ */
+export function metadataFromFeatureCollection(
+  fc: GeoJSON.FeatureCollection | null | undefined,
+): LayerMetadata {
+  if (!fc || !Array.isArray(fc.features)) return EMPTY;
+  const features = fc.features.slice(0, FEATURE_SAMPLE_CAP);
+  const fieldSet = new Set<string>();
+  const valuesByField: Record<string, Set<string>> = {};
+  const geometryTypes = new Set<GeometryFamily>();
+  for (const f of features) {
+    const fam = geometryFamily(f.geometry?.type);
+    if (fam) geometryTypes.add(fam);
+    const props = (f.properties ?? {}) as Record<string, unknown>;
+    for (const key of Object.keys(props)) {
+      fieldSet.add(key);
+      const v = props[key];
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'object') continue;
+      const s = String(v);
+      let set = valuesByField[key];
+      if (!set) {
+        set = new Set();
+        valuesByField[key] = set;
+      }
+      if (set.size < VALUES_PER_FIELD_CAP) set.add(s);
+    }
+  }
+  const fields = [...fieldSet].sort();
+  const sampleProperties =
+    (features.find(
+      (f) => f.properties && Object.keys(f.properties).length > 0,
+    )?.properties as Record<string, unknown> | undefined) ?? null;
+  return {
+    fields,
+    valuesByField: Object.fromEntries(
+      Object.entries(valuesByField).map(([k, set]) => [k, [...set].sort()]),
+    ),
+    sampleProperties,
+    featureCollection: fc,
+    geometryTypes,
+    // Inline FC with no geometry = table. Inline FC with at least
+    // one geometry sample = spatial layer.
+    isTable: geometryTypes.size === 0 && fc.features.length > 0,
+    error: null,
+    loading: false,
+  };
+}
+
 function geometryFamily(type?: string): GeometryFamily | null {
   switch (type) {
     case 'Point':

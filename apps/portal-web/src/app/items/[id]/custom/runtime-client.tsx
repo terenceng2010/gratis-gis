@@ -86,7 +86,10 @@ import { BasemapPreview } from '@/components/basemap-preview';
 import type { SelectToolMode } from '../map/select-tool';
 import { AttributeTable } from '../map/attribute-table';
 import { AttributeForm } from '../editor/attribute-form';
-import type { LayerMetadata } from '../map/layer-metadata';
+import {
+  metadataFromFeatureCollection,
+  type LayerMetadata,
+} from '../map/layer-metadata';
 import { SearchBar } from '../map/search-bar';
 import { AppBarContext, Container } from './themed-containers';
 import {
@@ -3162,12 +3165,27 @@ function AttributeTableWidgetRender({ widget }: { widget: CustomWidget }) {
   }, [ctx, cfg.targetIndex]);
 
   // Metadata is normally populated by the map canvas as it loads
-  // each layer's features. The Custom App runtime doesn't carry an
-  // equivalent populated map yet, but AttributeTable tolerates an
-  // empty record (it just falls back to behavior that doesn't need
-  // geometryType-aware features). Server-paged mode for v3 layers
-  // doesn't depend on metadata at all.
-  const metadata = useMemo<Record<string, LayerMetadata>>(() => ({}), []);
+  // each layer's features. The Custom App runtime doesn't fetch
+  // ahead for v3 data_layers (server-paged mode doesn't need it),
+  // but inline FeatureCollections (the OSM tool-run path, #141)
+  // need it -- without metadata, AttributeTable shows zero columns
+  // even though the rows ARE populated. Walk each geojson-inline
+  // layer in-place and build a minimal LayerMetadata; that gives
+  // the table its column list, sample properties, and per-field
+  // distinct values for filtering. v3 data_layers stay on the
+  // server-paged path; arcgis-rest still falls back to the empty
+  // metadata behavior (those don't surface in Custom Apps with
+  // AttributeTable widgets yet).
+  const metadata = useMemo<Record<string, LayerMetadata>>(() => {
+    const out: Record<string, LayerMetadata> = {};
+    for (const l of layers) {
+      if (l.source.kind === 'geojson-inline') {
+        const fc = l.source.geojson as GeoJSON.FeatureCollection | null;
+        if (fc) out[l.id] = metadataFromFeatureCollection(fc);
+      }
+    }
+    return out;
+  }, [layers]);
 
   // featuresByLayer is the client-side feature cache the non-v3
   // sources rely on. v3 data_layer sublayers server-page by
