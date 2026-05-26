@@ -1264,8 +1264,20 @@ export class DataLayerEngine {
         COALESCE(ST_AsMVT(visible_features, 'features', 4096, 'geom'), '\\x'::bytea) AS mvt
       FROM visible_features
     `;
+    // Prisma 7's @prisma/adapter-pg returns Postgres `bytea` values
+    // as Uint8Array, not Buffer. The previous `raw instanceof Buffer`
+    // check was true under Prisma 6's Rust engine (which mapped bytea
+    // straight to Buffer) but false under the driver adapter, which
+    // silently dropped every successful tile to Buffer.alloc(0) and
+    // surfaced as "MVT 200 with empty body, map shows no parcels."
+    // Accept any Uint8Array (Buffer is itself a Uint8Array subclass
+    // so this covers both adapters) and wrap with Buffer.from() so
+    // downstream code that expects Buffer-shaped APIs keeps working.
     const raw = rows[0]?.mvt;
-    return raw instanceof Buffer ? raw : Buffer.alloc(0);
+    if (raw instanceof Uint8Array) {
+      return Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    }
+    return Buffer.alloc(0);
   }
 
   /**
