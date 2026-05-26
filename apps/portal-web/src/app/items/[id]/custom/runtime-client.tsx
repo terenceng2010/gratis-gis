@@ -4068,7 +4068,10 @@ function OsmAttributionChip({
   // is informational, not an error."
   if (featureCount === 0) {
     return createPortal(
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[900] flex justify-end">
+      // #141 follow-up: chip lives at the top of the map area
+      // (top-center) so users notice the result state. Originally
+      // bottom-right; testers reported almost missing it.
+      <div className="pointer-events-none fixed left-0 right-0 top-20 z-[900] flex justify-center">
         <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] shadow-raised">
           <span className="font-medium text-amber-900">
             No matches in this area
@@ -4097,7 +4100,9 @@ function OsmAttributionChip({
   }
 
   return createPortal(
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[900] flex justify-end">
+    // #141 follow-up: top-center placement so the result chip is
+    // immediately visible. Bottom-right was easy to miss.
+    <div className="pointer-events-none fixed left-0 right-0 top-20 z-[900] flex justify-center">
       <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-surface-0/95 px-3 py-1.5 text-[11px] shadow-raised backdrop-blur">
         <span className="text-ink-0">
           Found {featureCount} OSM feature{featureCount === 1 ? '' : 's'}
