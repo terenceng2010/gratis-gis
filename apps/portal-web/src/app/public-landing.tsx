@@ -330,14 +330,14 @@ function ProjectAboutSection() {
             Open source GIS portal
           </p>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink-0 sm:text-3xl">
-            An open-source alternative to commercial GIS portals
+            An open-source, self-hosted GIS portal
           </h2>
           <p className="mt-2 text-sm text-muted sm:text-base">
-            GratisGIS is a free, self-hosted portal for publishing
-            datasets, web maps, forms, and dashboards. Built on open
-            components (PostGIS, MapLibre, Keycloak) so a small org can
-            stand up their own GIS portal with no commercial licenses,
-            no per-seat fees, and no token meters.
+            GratisGIS is a portal for publishing datasets, web maps,
+            forms, and dashboards on your own infrastructure. Built on
+            open components (PostGIS, MapLibre, Keycloak). No license
+            fees; your only cost is the hardware (or cloud bill) you
+            choose to run it on.
           </p>
         </div>
 
@@ -355,25 +355,28 @@ function ProjectAboutSection() {
           <FeatureTile
             icon={Globe}
             title="Standards-friendly + ArcGIS-friendly"
-            body="OGC API Features, Tiles, Styles, and Records; CSW 2.0.2 catalog; Schema.org JSON-LD; WMS / WFS service references; plus Esri WebMap JSON export so portal maps open natively in ArcGIS Pro, AGO, QGIS, and kepler.gl."
+            body="OGC API Features, Tiles, Styles, and Records; CSW 2.0.2 catalog; Schema.org JSON-LD; WMS / WFS service references; plus Esri WebMap JSON export so portal maps open in ArcGIS Pro, ArcGIS Online, QGIS, and kepler.gl."
           />
           <FeatureTile
             icon={Wrench}
             title="Built for self-hosting"
-            body="Docker compose, single-command deploy. No SaaS lock-in, no per-seat fees, no token meters."
+            body="Docker compose, single-command deploy. Runs on a $20/month VPS or your existing infrastructure. No SaaS lock-in."
           />
         </ul>
 
-        {/* #255: "problems we solve" section. The four tiles above
-            position the project; this row calls out concrete pain
-            points the user has hit on commercial portals. Each tile
-            is one specific failure mode + how GratisGIS handles it. */}
+        {/* #255: section that follows the four positioning tiles
+            above with concrete operational features the portal ships
+            with by default (housekeeping, sync, notifications, share
+            granularity). Originally framed as "problems we set out to
+            fix on commercial portals"; #143 reframed away from the
+            counter-positioning so the section now reads as "this is
+            what GratisGIS gives you out of the box." */}
         <div className="mb-10 max-w-3xl">
           <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-            What we set out to fix
+            Built in, not bolted on
           </p>
           <h3 className="mt-1 text-xl font-semibold tracking-tight text-ink-0 sm:text-2xl">
-            Real problems, addressed by default
+            Operational features the portal ships with
           </h3>
         </div>
         <ul className="mb-12 grid gap-6 sm:grid-cols-2">

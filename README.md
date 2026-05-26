@@ -6,8 +6,9 @@
 [![PostgreSQL + PostGIS](https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-16%20%2F%203-336791?logo=postgresql&logoColor=white)](https://postgis.net/)
 
 A self-hosted, open-source platform for geospatial portals: maps, layers, forms,
-field data collection, dashboards, and reports. Runs on your own infrastructure
-with no per-user fees, no proprietary file formats, and no vendor lock-in.
+field data collection, dashboards, and reports. Runs on your own infrastructure.
+Open file formats throughout (PostGIS, GeoJSON, MVT, OGC API). No license fees;
+your only cost is the hardware (or cloud bill) you choose to run it on.
 
 **Status:** Active development, pre-v1. The portal, web map authoring with
 PostGIS-backed data layers, vector-tile rendering for large datasets,
@@ -244,4 +245,4 @@ owners and appear only where necessary for descriptive interoperability.
 
 ---
 
-> **Gratis** (Latin): *free*. No cost, no lock-in, no per-seat pricing.
+> **Gratis** (Latin): *free*. No license fees; your only cost is the infrastructure you run it on.

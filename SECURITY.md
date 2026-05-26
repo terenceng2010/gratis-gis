@@ -1,8 +1,8 @@
 # Security Policy
 
-GratisGIS is an open source self-hosted alternative to ArcGIS Online. We
-take security seriously and want to work with the community to keep the
-project safe for everyone who runs it.
+GratisGIS is an open-source, self-hosted GIS portal. We take security
+seriously and want to work with the community to keep the project safe
+for everyone who runs it.
 
 ## Reporting a vulnerability
 

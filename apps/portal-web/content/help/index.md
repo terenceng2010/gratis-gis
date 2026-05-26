@@ -5,10 +5,11 @@ summary: Documentation for the open-source GratisGIS portal. Find what you need,
 order: 0
 ---
 
-GratisGIS is an open-source self-hosted alternative to ArcGIS Online.
-This documentation is organized one concept per page: when you want to
-know how Buffer works, the Buffer page shows you how to Buffer. Not
-how to dissolve, then centroid, then buffer.
+GratisGIS is an open-source, self-hosted GIS portal for publishing
+datasets, web maps, forms, and dashboards. This documentation is
+organized one concept per page: when you want to know how Buffer
+works, the Buffer page shows you how to Buffer. Not how to dissolve,
+then centroid, then buffer.
 
 ## How to use this site
 
