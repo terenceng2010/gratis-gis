@@ -2116,16 +2116,32 @@ function SearchWidgetRender({ widget }: { widget: CustomWidget }) {
     };
   }, [boundMapInstance]);
 
-  // Local feature cache is intentionally empty: v3 data layers
-  // don't pre-warm in the Custom App runtime (mirrors the
-  // AttributeTable widget), ArcGIS REST layers are queried
-  // server-side via SearchBar's searchArcgisLayers path, and the
-  // geocoder paths don't read the cache at all.  Pre-warming for
-  // legacy GeoJSON sources can come later when those re-enter the
-  // Custom App flow.
+  // Local feature cache: v3 data layers don't pre-warm in the
+  // Custom App runtime, ArcGIS REST layers are queried server-
+  // side via SearchBar's searchArcgisLayers path, and the
+  // geocoder paths don't read the cache at all.  We DO populate
+  // it for `geojson-inline` sources so SearchBar can match against
+  // OSM tool-run results (#141) and any other inline layer.
   const featuresByLayer = useMemo<
     Record<string, GeoJSON.FeatureCollection | null>
-  >(() => ({}), []);
+  >(() => {
+    const out: Record<string, GeoJSON.FeatureCollection | null> = {};
+    const ls = boundMapState?.mapData.layers ?? [];
+    for (const l of ls) {
+      if (l.source.kind === 'geojson-inline') {
+        const fc = l.source.geojson as GeoJSON.FeatureCollection | null;
+        if (
+          fc &&
+          typeof fc === 'object' &&
+          'type' in fc &&
+          fc.type === 'FeatureCollection'
+        ) {
+          out[l.id] = fc;
+        }
+      }
+    }
+    return out;
+  }, [boundMapState]);
 
   if (!boundMapState || !mapWidgetId) {
     return (
@@ -3153,14 +3169,36 @@ function AttributeTableWidgetRender({ widget }: { widget: CustomWidget }) {
   // doesn't depend on metadata at all.
   const metadata = useMemo<Record<string, LayerMetadata>>(() => ({}), []);
 
-  // featuresByLayer is the client-side feature cache the legacy
-  // (non-v3) sources rely on. We don't pre-warm it: for v3 data
-  // layers (the modern case), the AttributeTable server-pages by
-  // mapBbox automatically. Legacy sources would need a fetch here;
-  // unblocking that path is filed as a follow-up.
+  // featuresByLayer is the client-side feature cache the non-v3
+  // sources rely on. v3 data_layer sublayers server-page by
+  // mapBbox automatically and never touch this cache. We DO have
+  // to populate it for `geojson-inline` layers though: the OSM
+  // tool-run result (#141) lands as a geojson-inline MapLayer
+  // with the full FeatureCollection right on the source, and
+  // without this projection the AttributeTable widget shows 0
+  // rows even though the features render fine on the map.
+  // arcgis-rest / geojson-url sources still aren't pre-warmed; if
+  // a Custom App ever hosts one of those AND wires it to an
+  // AttributeTable, we'll need a fetch here.
   const featuresByLayer = useMemo<
     Record<string, GeoJSON.FeatureCollection | null>
-  >(() => ({}), []);
+  >(() => {
+    const out: Record<string, GeoJSON.FeatureCollection | null> = {};
+    for (const l of layers) {
+      if (l.source.kind === 'geojson-inline') {
+        const fc = l.source.geojson as GeoJSON.FeatureCollection | null;
+        if (
+          fc &&
+          typeof fc === 'object' &&
+          'type' in fc &&
+          fc.type === 'FeatureCollection'
+        ) {
+          out[l.id] = fc;
+        }
+      }
+    }
+    return out;
+  }, [layers]);
 
   const onZoomTo = useCallback(
     (bbox: [number, number, number, number]) => {
