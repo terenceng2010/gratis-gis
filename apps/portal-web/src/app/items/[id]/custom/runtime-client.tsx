@@ -32,6 +32,7 @@ import {
   Map as MapIcon,
   MoreVertical,
   MousePointer2,
+  Palette,
   Pencil,
   Pentagon,
   Plus,
@@ -59,6 +60,7 @@ import type {
   Item,
   MapData,
   MapLayer,
+  MapLayerStyle,
   PanelAnchor,
   PanelArrangement,
   PrintTemplateData,
@@ -95,8 +97,10 @@ import { AttributeTable } from '../map/attribute-table';
 import { AttributeForm } from '../editor/attribute-form';
 import {
   metadataFromFeatureCollection,
+  type GeometryFamily,
   type LayerMetadata,
 } from '../map/layer-metadata';
+import { StyleEditor } from '../map/style-editor';
 import { SearchBar } from '../map/search-bar';
 import { AppBarContext, Container } from './themed-containers';
 import {
@@ -1675,6 +1679,28 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
     [layers, update],
   );
 
+  // Session-only style patch. The bound map's mapData is already a
+  // React-state copy that never persists back to the underlying map
+  // item: ctx.update mutates the in-memory snapshot only. So passing
+  // a style patch through update() satisfies the #145 "session-only"
+  // constraint by construction -- nothing leaks back to the saved
+  // map. A page reload resets the style to whatever the map item
+  // ships with, which is the intended behavior.
+  const onPatchLayerStyle = useCallback(
+    (id: string, style: MapLayerStyle) => {
+      update((cur) => ({
+        ...cur,
+        mapData: {
+          ...cur.mapData,
+          layers: (cur.mapData.layers ?? []).map((l) =>
+            l.id === id ? { ...l, style } : l,
+          ),
+        },
+      }));
+    },
+    [update],
+  );
+
   // Trigger a client-side download of the layer's features in the
   // chosen format. Currently scoped to inline-FC layers; data-layer
   // / arcgis-rest sources would need a fetch path that we can add
@@ -1797,6 +1823,7 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
               onZoomToLayer={onZoomToLayer}
               onRemoveLayer={onRemoveLayer}
               onExportLayer={onExportLayer}
+              onPatchLayerStyle={onPatchLayerStyle}
             />
           ))}
         </ul>
@@ -1974,6 +2001,7 @@ function LayerListRow({
   onZoomToLayer,
   onRemoveLayer,
   onExportLayer,
+  onPatchLayerStyle,
 }: {
   layer: MapLayer;
   childrenByParent: Map<string, MapLayer[]>;
@@ -1984,6 +2012,7 @@ function LayerListRow({
   onZoomToLayer: (layer: MapLayer) => void;
   onRemoveLayer: (id: string) => void;
   onExportLayer: (layer: MapLayer, format: ExportFormat) => void;
+  onPatchLayerStyle: (id: string, style: MapLayerStyle) => void;
 }) {
   const isGroup = layer.source.kind === 'group';
   const children = isGroup ? childrenByParent.get(layer.id) ?? [] : [];
@@ -2044,6 +2073,7 @@ function LayerListRow({
             onZoomToLayer={onZoomToLayer}
             onRemoveLayer={onRemoveLayer}
             onExportLayer={onExportLayer}
+            onPatchLayerStyle={onPatchLayerStyle}
           />
         ) : null}
       </div>
@@ -2060,6 +2090,7 @@ function LayerListRow({
               onZoomToLayer={onZoomToLayer}
               onRemoveLayer={onRemoveLayer}
               onExportLayer={onExportLayer}
+              onPatchLayerStyle={onPatchLayerStyle}
             />
           ))}
         </ul>
@@ -2091,26 +2122,36 @@ function LayerRowKebabMenu({
   onZoomToLayer,
   onRemoveLayer,
   onExportLayer,
+  onPatchLayerStyle,
 }: {
   layer: MapLayer;
   onZoomToLayer: (layer: MapLayer) => void;
   onRemoveLayer: (id: string) => void;
   onExportLayer: (layer: MapLayer, format: ExportFormat) => void;
+  onPatchLayerStyle: (id: string, style: MapLayerStyle) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
+  const [symbologyOpen, setSymbologyOpen] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const wrapperRef = useRef<HTMLSpanElement | null>(null);
 
-  // Eligibility per-action. Wave-1 scope keeps Zoom + Export to
-  // inline FCs; data_layer / arcgis-rest extent + export are
-  // follow-ups since they need a fetch path. Properties is always
-  // shown (it's static).
+  // Eligibility per-action. Inline FCs get the full set; non-inline
+  // (data-layer, arcgis-rest, wms, etc) get Symbology + Properties
+  // since those don't need a feature fetch.  Zoom-to-extent and
+  // Export for non-inline sources are filed as follow-ups (need a
+  // server-side bbox / paginated feature fetch path).
   const isInline = layer.source.kind === 'geojson-inline';
   const canZoom = isInline;
   const canExport = isInline;
   const canRemove = isInline;
+  // Symbology is available for every leaf layer regardless of
+  // source kind -- StyleEditor is pure (value, onChange) and the
+  // session-only contract means the bound map's mapData stays
+  // private to this runtime instance.  Group layers are caught at
+  // the LayerListRow level (kebab is hidden for groups).
+  const canSymbology = true;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -2256,6 +2297,20 @@ function LayerRowKebabMenu({
               ) : null}
             </div>
           ) : null}
+          {canSymbology ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                closeMenu();
+                setSymbologyOpen(true);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+            >
+              <Palette className="h-3.5 w-3.5 text-muted" />
+              Symbology...
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"
@@ -2294,7 +2349,116 @@ function LayerRowKebabMenu({
           onClose={() => setPropsOpen(false)}
         />
       ) : null}
+      {symbologyOpen ? (
+        <SessionSymbologyDialog
+          layer={layer}
+          onPatchStyle={(style) => onPatchLayerStyle(layer.id, style)}
+          onClose={() => setSymbologyOpen(false)}
+        />
+      ) : null}
     </span>
+  );
+}
+
+/**
+ * #145 wave 2: session-only symbology editor.  Wraps the existing
+ * StyleEditor in a modal and routes its onChange through the bound
+ * map's update() (via onPatchStyle) so every keystroke / color tweak
+ * applies to the in-memory snapshot only.  No POST back to the map
+ * item.  A page reload resets the style; "Reset" snaps to whatever
+ * the layer's style was when the dialog opened so the user can
+ * recover from a bad experiment without losing their place.
+ *
+ * Geometry-family inference: for an inline FeatureCollection we can
+ * derive the families synchronously from the features. For other
+ * source kinds we pass undefined so StyleEditor shows all three
+ * sections (point / line / polygon); harmless when the layer only
+ * really uses one but means the user sees more controls than
+ * strictly necessary. Could be tightened later by hoisting the
+ * AttributeTable widget's metadata into the runtime ctx.
+ */
+function SessionSymbologyDialog({
+  layer,
+  onPatchStyle,
+  onClose,
+}: {
+  layer: MapLayer;
+  onPatchStyle: (style: MapLayerStyle) => void;
+  onClose: () => void;
+}) {
+  // Snapshot the original style on open so Reset can restore it.
+  // structuredClone keeps the snapshot independent of any later
+  // mutations; we never want Reset to roll back to a CURRENT value.
+  const originalRef = useRef<MapLayerStyle>(structuredClone(layer.style));
+
+  // Geometry families: derive from inline FC when available so
+  // StyleEditor only shows the relevant section(s); fall back to
+  // "show everything" for opaque source kinds.
+  const geometryTypes = useMemo<Set<GeometryFamily> | undefined>(() => {
+    if (layer.source.kind === 'geojson-inline') {
+      const fc = layer.source.geojson as GeoJSON.FeatureCollection | null;
+      if (fc) return metadataFromFeatureCollection(fc).geometryTypes;
+    }
+    return undefined;
+  }, [layer.source]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Symbology for ${layer.title}`}
+      onClick={onClose}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay"
+      >
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-ink-0">
+              Symbology
+            </h3>
+            <p className="truncate text-[11px] text-muted">{layer.title}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="border-b border-border bg-amber-50 px-4 py-2 text-[11px] text-amber-900">
+          Changes apply to this session only. Refresh the page to
+          reset to the saved style.
+        </p>
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          <StyleEditor
+            value={layer.style}
+            onChange={onPatchStyle}
+            {...(geometryTypes ? { geometryTypes } : {})}
+          />
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <button
+            type="button"
+            onClick={() => onPatchStyle(structuredClone(originalRef.current))}
+            className="rounded-md border border-border bg-surface-0 px-3 py-1.5 text-xs font-medium text-ink-1 hover:bg-surface-2"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground shadow-card hover:opacity-90"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
