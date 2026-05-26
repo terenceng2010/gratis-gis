@@ -62,6 +62,16 @@ import type {
   RecipeAction,
 } from '@gratis-gis/shared-types';
 import {
+  DEFAULT_LAYER_ACCESS,
+  DEFAULT_LAYER_INTERACTIONS,
+  DEFAULT_LAYER_LABELS,
+  DEFAULT_LAYER_POPUP,
+  DEFAULT_LAYER_RENDERER,
+  DEFAULT_LAYER_SCALE,
+  DEFAULT_LAYER_SEARCH,
+  DEFAULT_LAYER_STYLE,
+} from '@gratis-gis/shared-types';
+import {
   RecipeRunPanel,
   type HostLayerOption,
 } from './recipe-run-panel';
@@ -3772,6 +3782,11 @@ function ToolButtonRender({
   // re-runs the tool.
   const [osmOverlay, setOsmOverlay] = useState<{
     id: string;
+    /** MapLayer id pushed into every map's state by
+     *  pushOsmResultLayerToAllMaps. Used by the chip's dismiss
+     *  button to clean up both the layer entry AND the chip in
+     *  one click. */
+    layerId: string;
     features: OsmOverlayFeature[];
     attribution: string;
     featureCount: number;
@@ -3921,12 +3936,30 @@ function ToolButtonRender({
                     output: result.output,
                   });
                 } else if (result.output.kind === 'osm-features-overlay') {
+                  // #141 wave B: push the result as a real MapLayer
+                  // into every Map widget's state so the LayerList,
+                  // attribute table, popups, and standard styling /
+                  // delete controls all pick it up automatically.
+                  // The attribution chip stays mounted alongside for
+                  // the ODbL credit + Save-as-layer + result count;
+                  // it no longer drives the rendering itself.
+                  if (ctx && result.output.features.length > 0) {
+                    const newLayer = buildOsmResultLayer({
+                      toolId,
+                      toolTitle: tool?.title ?? 'OSM',
+                      features: result.output.features,
+                    });
+                    pushOsmResultLayerToAllMaps(ctx, newLayer);
+                  }
                   setOsmOverlay({
                     // Stable id keyed on the toolId so successive runs
                     // of the same tool replace the prior overlay rather
                     // than stacking; different tools each get their
-                    // own overlay slot.
+                    // own overlay slot. Mirrors the layer id used
+                    // inside the host MapData so dismiss can clean
+                    // both up in one shot.
                     id: `tool-${toolId}`,
+                    layerId: `osm-result/${toolId}`,
                     features: result.output.features as OsmOverlayFeature[],
                     attribution: result.output.attribution,
                     featureCount: result.output.featureCount,
@@ -3963,26 +3996,28 @@ function ToolButtonRender({
         })()
       ) : null}
       {osmOverlay && ctx ? (
-        (() => {
-          const m = firstMapInstance(ctx);
-          if (!m) return null;
-          return (
-            <>
-              <OsmOverlayLayer
-                id={osmOverlay.id}
-                map={m}
-                features={osmOverlay.features}
-              />
-              <OsmAttributionChip
-                attribution={osmOverlay.attribution}
-                featureCount={osmOverlay.featureCount}
-                truncated={osmOverlay.truncated}
-                features={osmOverlay.features}
-                onDismiss={() => setOsmOverlay(null)}
-              />
-            </>
-          );
-        })()
+        // #141 wave B: the feature rendering itself now lives in the
+        // host MapData.layers via the geojson-inline MapLayer the
+        // tool-run handler pushed in. MapCanvas renders it through
+        // the standard geojson path so LayerList / Legend /
+        // AttributeTable pick it up automatically. The chip remains
+        // mounted as a top-of-map summary -- result count, ODbL
+        // attribution, Save-as-layer, and a Dismiss that nukes both
+        // the chip and the layer in one click.
+        <OsmAttributionChip
+          attribution={osmOverlay.attribution}
+          featureCount={osmOverlay.featureCount}
+          truncated={osmOverlay.truncated}
+          features={osmOverlay.features}
+          onDismiss={() => {
+            // Pull the layer out of every map's state so the user
+            // doesn't have to also delete it from the LayerList.
+            // A LayerList delete still works for the manual path;
+            // this is just the chip's one-click cleanup.
+            removeLayerFromAllMaps(ctx, osmOverlay.layerId);
+            setOsmOverlay(null);
+          }}
+        />
       ) : null}
     </div>
   );
@@ -4253,6 +4288,150 @@ function firstMapInstance(
 ): maplibregl.Map | null {
   if (!ctx) return null;
   return Object.values(ctx.maps).find((x) => x) ?? null;
+}
+
+/**
+ * #141 wave B: build a MapLayer descriptor for an OSM tool-run
+ * result.  The resulting layer uses the `geojson-inline` source
+ * kind so MapCanvas renders it through its standard geojson path
+ * and LayerList / Legend / AttributeTable pick it up without any
+ * special-casing.  Standard delete / toggle / restyle controls
+ * therefore work for free.
+ *
+ * Style defaults to a distinct purple-accent so OSM results read
+ * as "not part of the user's own data."  Popup is enabled so a
+ * click on a feature opens a standard popup (the popup body
+ * resolves whatever field the user later configures; for now the
+ * title template falls back to `name`).  The id is stable per
+ * toolId so a re-run of the same tool replaces the prior layer
+ * rather than stacking duplicates.
+ */
+function buildOsmResultLayer(args: {
+  toolId: string;
+  toolTitle: string;
+  features: readonly { type: 'Feature'; id: string; properties: Record<string, unknown>; geometry: unknown }[];
+}): MapLayer {
+  // Deterministic id keyed on toolId so a re-run replaces the
+  // prior layer rather than stacking. Caller is responsible for
+  // removing this entry from layers[] before pushing the new one
+  // when re-running.
+  const id = `osm-result/${args.toolId}`;
+  const fc = {
+    type: 'FeatureCollection' as const,
+    features: args.features as unknown as GeoJSON.Feature[],
+  };
+  const popup: MapLayer['popup'] = {
+    ...structuredClone(DEFAULT_LAYER_POPUP),
+    enabled: true,
+    // Default title template uses the OSM-canonical `name` tag; the
+    // popup renderer falls back to the layer title when the field
+    // is missing. The picked-mode field list calls out the OSM tags
+    // a user is most likely to care about; the popup renderer hides
+    // rows whose field is absent from a given feature, so unnamed
+    // or address-less features still produce a clean popup.
+    mode: 'picked',
+    titleTemplate: '{{name}}',
+    fields: [
+      'name',
+      'operator',
+      'website',
+      'phone',
+      'opening_hours',
+      'addr:full',
+      'addr:street',
+      'addr:city',
+    ],
+  };
+  // Purple-ish accent so OSM results read as distinct from
+  // PostGIS-backed data layers.  Same color the standalone
+  // OsmOverlayLayer used so users who saw OSM results in wave A
+  // get a consistent visual identity.
+  const OSM_COLOR = '#7c3aed';
+  const style: MapLayer['style'] = {
+    ...structuredClone(DEFAULT_LAYER_STYLE),
+    polygon: {
+      ...structuredClone(DEFAULT_LAYER_STYLE.polygon),
+      fillColor: OSM_COLOR,
+      fillOpacity: 0.2,
+      strokeColor: OSM_COLOR,
+      strokeWidth: 2,
+    },
+    line: {
+      ...structuredClone(DEFAULT_LAYER_STYLE.line),
+      color: OSM_COLOR,
+      width: 2,
+    },
+    point: {
+      ...structuredClone(DEFAULT_LAYER_STYLE.point),
+      color: OSM_COLOR,
+      strokeColor: '#ffffff',
+      strokeWidth: 1.5,
+      radius: 6,
+    },
+  };
+  return {
+    id,
+    title: `${args.toolTitle} (OSM, ${args.features.length})`,
+    visible: true,
+    opacity: 1,
+    source: { kind: 'geojson-inline', geojson: fc },
+    style,
+    renderer: structuredClone(DEFAULT_LAYER_RENDERER),
+    popup,
+    interactions: structuredClone(DEFAULT_LAYER_INTERACTIONS),
+    labels: structuredClone(DEFAULT_LAYER_LABELS),
+    search: structuredClone(DEFAULT_LAYER_SEARCH),
+    scale: structuredClone(DEFAULT_LAYER_SCALE),
+    access: structuredClone(DEFAULT_LAYER_ACCESS),
+    filter: null,
+  };
+}
+
+/**
+ * Push an OSM result MapLayer into every Map widget's state. If a
+ * prior layer with the same id (same toolId) already exists, it
+ * gets replaced rather than duplicated. Idempotent.
+ */
+function pushOsmResultLayerToAllMaps(
+  ctx: CustomMapsCtx,
+  newLayer: MapLayer,
+): void {
+  for (const mapWidgetId of Object.keys(ctx.states)) {
+    ctx.update(mapWidgetId, (cur) => {
+      const existing = cur.mapData.layers ?? [];
+      // Drop any prior entry with the same id so a re-run replaces
+      // the previous result instead of stacking.
+      const withoutPrior = existing.filter((l) => l.id !== newLayer.id);
+      return {
+        ...cur,
+        mapData: {
+          ...cur.mapData,
+          layers: [...withoutPrior, newLayer],
+        },
+      };
+    });
+  }
+}
+
+/**
+ * Remove the OSM result MapLayer (matched by id) from every Map
+ * widget's state. Used when the user dismisses the attribution
+ * chip; clears both the rendered features and the LayerList entry
+ * in one shot.
+ */
+function removeLayerFromAllMaps(
+  ctx: CustomMapsCtx,
+  layerId: string,
+): void {
+  for (const mapWidgetId of Object.keys(ctx.states)) {
+    ctx.update(mapWidgetId, (cur) => ({
+      ...cur,
+      mapData: {
+        ...cur.mapData,
+        layers: (cur.mapData.layers ?? []).filter((l) => l.id !== layerId),
+      },
+    }));
+  }
 }
 
 /**
