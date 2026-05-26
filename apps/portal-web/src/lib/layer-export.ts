@@ -40,7 +40,7 @@ export interface ExportFieldHint {
   label?: string;
 }
 
-export type ExportFormat = 'csv' | 'xlsx';
+export type ExportFormat = 'csv' | 'xlsx' | 'geojson';
 
 interface ExportOptions {
   /** Filename root without extension. */
@@ -242,10 +242,58 @@ function sanitizeSheetName(name: string): string {
   return name.replace(/[\\/?*[\]:]/g, '_');
 }
 
+/**
+ * GeoJSON export. Round-trips full geometry (unlike CSV / XLSX,
+ * which strip or WKT-encode it). The natural download format for
+ * spatial features: opens directly in QGIS, ArcGIS Pro, GitHub,
+ * Geojson.io, leaflet, etc.
+ *
+ * Strips the synthetic id (it's stable within the source but not
+ * meaningful outside) only when it's missing or numeric;
+ * string-shaped ids (e.g. OSM osm:hash) are preserved as `id`.
+ * Properties go through unchanged.
+ */
+export function exportFeaturesToGeoJson(
+  features: ExportFeature[],
+  opts: ExportOptions,
+): void {
+  const fc = {
+    type: 'FeatureCollection' as const,
+    features: features.map((f) => {
+      // The GeoJSON Feature type requires `geometry: Geometry` (not
+      // null), but features with null geometry are valid per the
+      // GeoJSON spec and we may encounter them in attribute-only
+      // tables. Build the object first and let JSON.stringify emit
+      // `null` when the geometry is absent; the runtime shape is
+      // what consumers actually parse.
+      const out: Record<string, unknown> = {
+        type: 'Feature',
+        geometry: (f.geometry as GeoJSON.Geometry | null) ?? null,
+        properties: f.properties ?? null,
+      };
+      if (typeof f.id === 'string' && f.id.length > 0) out.id = f.id;
+      return out;
+    }),
+  };
+  const blob = new Blob([JSON.stringify(fc, null, 2)], {
+    type: 'application/geo+json',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${opts.filename}.geojson`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoke on the next tick so Chrome / Firefox have a moment to
+  // actually kick off the save dialog before the URL gets torn down.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 /** Dispatch to the right writer based on format. Returns a
- *  promise because the XLSX writer is async (#51); CSV completes
- *  synchronously inside the same call so callers that fire-and-
- *  forget can still ignore the promise. */
+ *  promise because the XLSX writer is async (#51); CSV and GeoJSON
+ *  complete synchronously inside the same call so callers that
+ *  fire-and-forget can still ignore the promise. */
 export function exportFeatures(
   features: ExportFeature[],
   format: ExportFormat,
@@ -253,6 +301,10 @@ export function exportFeatures(
 ): Promise<void> {
   if (format === 'csv') {
     exportFeaturesToCsv(features, opts);
+    return Promise.resolve();
+  }
+  if (format === 'geojson') {
+    exportFeaturesToGeoJson(features, opts);
     return Promise.resolve();
   }
   return exportFeaturesToXlsx(features, opts);

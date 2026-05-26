@@ -23,12 +23,14 @@ import {
   Crosshair as CrosshairIcon,
   Download,
   Image as ImageIcon,
+  Info as InfoIcon,
   Layers as LayersIcon,
   Lasso,
   ListTree,
   Loader2,
   Locate as LocateIcon,
   Map as MapIcon,
+  MoreVertical,
   MousePointer2,
   Pencil,
   Pentagon,
@@ -40,6 +42,7 @@ import {
   Trash2,
   Type as TypeIcon,
   X as XIcon,
+  ZoomIn as ZoomInIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import maplibregl from 'maplibre-gl';
@@ -81,7 +84,11 @@ import {
 } from './osm-overlay-layer';
 import type { CustomBasemap } from '@/lib/custom-basemap';
 import { customBasemapToData } from '@/lib/custom-basemap';
-import { exportFeatures, type ExportFormat } from '@/lib/layer-export';
+import {
+  exportFeatures,
+  type ExportFeature,
+  type ExportFormat,
+} from '@/lib/layer-export';
 import { BasemapPreview } from '@/components/basemap-preview';
 import type { SelectToolMode } from '../map/select-tool';
 import { AttributeTable } from '../map/attribute-table';
@@ -1621,9 +1628,88 @@ function MapWidgetRender({ widget }: { widget: CustomWidget }) {
 
 function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
   if (widget.config.kind !== 'layer-list') return null;
-  const { state, update } = useBoundMap(widget.config.mapWidgetId);
+  const { state, update, flyTo } = useBoundMap(widget.config.mapWidgetId);
   const allowToggle = widget.config.allowToggle !== false;
   const layers = state?.mapData.layers ?? [];
+
+  // #145: kebab-menu action handlers. All session-scoped: changes
+  // never persist back to the underlying map item, which is what
+  // the runtime requires for anonymous-viewer support and for the
+  // shared-map-item case where one viewer's restyle shouldn't
+  // affect everyone else.
+
+  // Zoom to layer extent. For inline FCs we can compute the bbox
+  // locally; for other source kinds we'd need a server query, so
+  // we silently no-op until that path is wired.
+  const onZoomToLayer = useCallback(
+    (layer: MapLayer) => {
+      if (layer.source.kind !== 'geojson-inline') return;
+      const fc = layer.source.geojson as GeoJSON.FeatureCollection | null;
+      if (!fc || !Array.isArray(fc.features) || fc.features.length === 0) return;
+      const bb = bboxOfFeatures(fc.features);
+      if (!bb) return;
+      // bboxOfFeatures returns [[w,s],[e,n]]; flyTo expects flat
+      // [w,s,e,n]. Unpack accordingly.
+      flyTo([bb[0][0], bb[0][1], bb[1][0], bb[1][1]]);
+    },
+    [flyTo],
+  );
+
+  // Remove the layer from the bound map's state. Only allowed for
+  // ephemeral layers (geojson-inline today; future arcgis-rest /
+  // wms layers added at runtime could also qualify). The kebab UI
+  // already hides Remove for non-ephemeral layers; this is a
+  // belt-and-suspenders guard.
+  const onRemoveLayer = useCallback(
+    (id: string) => {
+      const target = layers.find((l) => l.id === id);
+      if (!target || target.source.kind !== 'geojson-inline') return;
+      update((cur) => ({
+        ...cur,
+        mapData: {
+          ...cur.mapData,
+          layers: (cur.mapData.layers ?? []).filter((l) => l.id !== id),
+        },
+      }));
+    },
+    [layers, update],
+  );
+
+  // Trigger a client-side download of the layer's features in the
+  // chosen format. Currently scoped to inline-FC layers; data-layer
+  // / arcgis-rest sources would need a fetch path that we can add
+  // when needed.
+  const onExportLayer = useCallback(
+    (layer: MapLayer, format: ExportFormat) => {
+      if (layer.source.kind !== 'geojson-inline') return;
+      const fc = layer.source.geojson as GeoJSON.FeatureCollection | null;
+      if (!fc || !Array.isArray(fc.features)) return;
+      // Filename: layer title scrubbed for filesystem safety. Empty
+      // results in a short fallback so the user still gets a file.
+      const safe =
+        layer.title
+          .replace(/[^A-Za-z0-9._-]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 80) || 'layer';
+      // GeoJSON.Feature['id'] is string | number | undefined; the
+      // exporter's ExportFeature uses an optional `id?: string` with
+      // exactOptionalPropertyTypes (no undefined values allowed).
+      // Conditionally spread the id only when it's a string.
+      const normalised: ExportFeature[] = fc.features.map((f) => ({
+        ...(typeof f.id === 'string' && f.id ? { id: f.id } : {}),
+        geometry: f.geometry,
+        properties: f.properties,
+      }));
+      void exportFeatures(normalised, format, {
+        filename: safe,
+        // Schema-declared fields don't exist for an inline FC. The
+        // exporter falls back to first-seen property iteration order
+        // which is the right shape for OSM tag bags.
+        includeGeometryWkt: format === 'xlsx',
+      });
+    },
+    [],
+  );
 
   // #112: layer groups (source.kind === 'group') were rendering
   // as siblings of their children instead of as parent rows that
@@ -1708,6 +1794,9 @@ function LayerListWidgetRender({ widget }: { widget: CustomWidget }) {
               allowToggle={allowToggle}
               depth={0}
               onToggle={toggleVisible}
+              onZoomToLayer={onZoomToLayer}
+              onRemoveLayer={onRemoveLayer}
+              onExportLayer={onExportLayer}
             />
           ))}
         </ul>
@@ -1882,12 +1971,19 @@ function LayerListRow({
   allowToggle,
   depth,
   onToggle,
+  onZoomToLayer,
+  onRemoveLayer,
+  onExportLayer,
 }: {
   layer: MapLayer;
   childrenByParent: Map<string, MapLayer[]>;
   allowToggle: boolean;
   depth: number;
   onToggle: (id: string, next: boolean) => void;
+  /** #145: kebab-menu action handlers. All session-scoped. */
+  onZoomToLayer: (layer: MapLayer) => void;
+  onRemoveLayer: (id: string) => void;
+  onExportLayer: (layer: MapLayer, format: ExportFormat) => void;
 }) {
   const isGroup = layer.source.kind === 'group';
   const children = isGroup ? childrenByParent.get(layer.id) ?? [] : [];
@@ -1898,7 +1994,7 @@ function LayerListRow({
   return (
     <li>
       <div
-        className="flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
+        className="group flex items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface-2"
         style={{ paddingLeft: `${6 + indent}px` }}
       >
         {isGroup ? (
@@ -1939,6 +2035,17 @@ function LayerListRow({
         >
           {layer.title}
         </span>
+        {/* #145: kebab menu. Hidden on groups (no actions make sense
+            on a pure UI container) and otherwise appears on row
+            hover to keep the panel quiet at rest. */}
+        {!isGroup ? (
+          <LayerRowKebabMenu
+            layer={layer}
+            onZoomToLayer={onZoomToLayer}
+            onRemoveLayer={onRemoveLayer}
+            onExportLayer={onExportLayer}
+          />
+        ) : null}
       </div>
       {isGroup && open && children.length > 0 ? (
         <ul className="space-y-0.5">
@@ -1950,12 +2057,342 @@ function LayerListRow({
               allowToggle={allowToggle}
               depth={depth + 1}
               onToggle={onToggle}
+              onZoomToLayer={onZoomToLayer}
+              onRemoveLayer={onRemoveLayer}
+              onExportLayer={onExportLayer}
             />
           ))}
         </ul>
       ) : null}
     </li>
   );
+}
+
+/**
+ * #145: per-row kebab menu in the LayerList. Sits at the trailing
+ * edge of each row, fades in on hover so the panel reads quiet at
+ * rest. Click opens a small popover at the button's bottom-right.
+ *
+ * Items (only shown for actions that make sense for the layer's
+ * source kind):
+ *   - Zoom to layer extent (geojson-inline only for v1; data-layer
+ *     extent needs a server query that hasn't been wired here yet)
+ *   - Export -> submenu: GeoJSON / CSV / XLSX (inline only)
+ *   - Properties (always available; small dialog with source kind,
+ *     feature count, visibility, opacity)
+ *   - Remove from map (ephemeral layers only; geojson-inline today)
+ *
+ * Closes on outside click and Escape. The popover is fixed-position
+ * relative to the viewport so it doesn't get clipped by the
+ * LayerList widget's overflow:hidden.
+ */
+function LayerRowKebabMenu({
+  layer,
+  onZoomToLayer,
+  onRemoveLayer,
+  onExportLayer,
+}: {
+  layer: MapLayer;
+  onZoomToLayer: (layer: MapLayer) => void;
+  onRemoveLayer: (id: string) => void;
+  onExportLayer: (layer: MapLayer, format: ExportFormat) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [propsOpen, setPropsOpen] = useState(false);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const wrapperRef = useRef<HTMLSpanElement | null>(null);
+
+  // Eligibility per-action. Wave-1 scope keeps Zoom + Export to
+  // inline FCs; data_layer / arcgis-rest extent + export are
+  // follow-ups since they need a fetch path. Properties is always
+  // shown (it's static).
+  const isInline = layer.source.kind === 'geojson-inline';
+  const canZoom = isInline;
+  const canExport = isInline;
+  const canRemove = isInline;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (
+        wrapperRef.current &&
+        e.target instanceof Node &&
+        !wrapperRef.current.contains(e.target)
+      ) {
+        setMenuOpen(false);
+        setExportOpen(false);
+        setPos(null);
+      }
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setMenuOpen(false);
+        setExportOpen(false);
+        setPos(null);
+      }
+    }
+    window.addEventListener('mousedown', onDocClick);
+    window.addEventListener('keydown', onEsc);
+    return () => {
+      window.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('keydown', onEsc);
+    };
+  }, [menuOpen]);
+
+  function openMenu(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+    setPos({ x: rect.right, y: rect.bottom });
+    setMenuOpen(true);
+  }
+
+  function closeMenu() {
+    setMenuOpen(false);
+    setExportOpen(false);
+    setPos(null);
+  }
+
+  return (
+    <span ref={wrapperRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={openMenu}
+        aria-label={`Actions for ${layer.title}`}
+        title="More actions"
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface-1 hover:text-ink-1"
+      >
+        <MoreVertical className="h-3.5 w-3.5" />
+      </button>
+
+      {menuOpen && pos ? (
+        <div
+          role="menu"
+          aria-label={`Actions for ${layer.title}`}
+          style={{
+            position: 'fixed',
+            left: pos.x,
+            top: pos.y,
+            zIndex: 50,
+            // Right-edge align: menu opens to the LEFT of the button
+            // so a kebab at the right edge of a narrow LayerList
+            // doesn't overflow the viewport.
+            transform: 'translateX(-100%)',
+          }}
+          className="min-w-[180px] overflow-hidden rounded-md border border-border bg-surface-1 py-1 text-xs shadow-raised"
+        >
+          {canZoom ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                closeMenu();
+                onZoomToLayer(layer);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+            >
+              <ZoomInIcon className="h-3.5 w-3.5 text-muted" />
+              Zoom to layer
+            </button>
+          ) : null}
+          {canExport ? (
+            <div className="relative">
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={exportOpen}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setExportOpen((v) => !v);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+              >
+                <Download className="h-3.5 w-3.5 text-muted" />
+                <span className="flex-1">Export</span>
+                <ChevronRight className="h-3 w-3 text-muted" />
+              </button>
+              {exportOpen ? (
+                <div
+                  role="menu"
+                  className="absolute left-full top-0 ml-px min-w-[140px] overflow-hidden rounded-md border border-border bg-surface-1 py-1 shadow-raised"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      onExportLayer(layer, 'geojson');
+                    }}
+                    className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+                  >
+                    GeoJSON
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      onExportLayer(layer, 'csv');
+                    }}
+                    className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+                  >
+                    CSV
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      onExportLayer(layer, 'xlsx');
+                    }}
+                    className="block w-full px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+                  >
+                    Excel (.xlsx)
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closeMenu();
+              setPropsOpen(true);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-ink-1 hover:bg-surface-2"
+          >
+            <InfoIcon className="h-3.5 w-3.5 text-muted" />
+            Properties
+          </button>
+          {canRemove ? (
+            <>
+              <div className="my-1 border-t border-border" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMenu();
+                  onRemoveLayer(layer.id);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-danger hover:bg-danger/5"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Remove from map
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {propsOpen ? (
+        <LayerPropertiesDialog
+          layer={layer}
+          onClose={() => setPropsOpen(false)}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Read-only properties dialog for a runtime layer (#145). Shows
+ * the title, source description, feature count when an inline FC
+ * is available, current visibility + opacity, and a one-line
+ * "session only" disclaimer so the user knows changes from this
+ * menu's symbology editor (when it lands) won't leak back to the
+ * underlying map item.
+ */
+function LayerPropertiesDialog({
+  layer,
+  onClose,
+}: {
+  layer: MapLayer;
+  onClose: () => void;
+}) {
+  const featureCount =
+    layer.source.kind === 'geojson-inline'
+      ? (layer.source.geojson as GeoJSON.FeatureCollection | null)?.features
+          ?.length ?? 0
+      : null;
+  const sourceLabel = describeSourceKind(layer.source.kind);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${layer.title} properties`}
+      onClick={onClose}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm overflow-hidden rounded-lg border border-border bg-surface-1 shadow-overlay"
+      >
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <h3 className="text-sm font-semibold text-ink-0">
+            {layer.title}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted hover:bg-surface-2"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        </div>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 px-4 py-3 text-xs">
+          <dt className="text-muted">Source</dt>
+          <dd className="text-ink-1">{sourceLabel}</dd>
+          {featureCount !== null ? (
+            <>
+              <dt className="text-muted">Features</dt>
+              <dd className="text-ink-1">
+                {featureCount.toLocaleString()}
+              </dd>
+            </>
+          ) : null}
+          <dt className="text-muted">Visible</dt>
+          <dd className="text-ink-1">
+            {layer.visible === false ? 'No' : 'Yes'}
+          </dd>
+          <dt className="text-muted">Opacity</dt>
+          <dd className="text-ink-1">
+            {Math.round(((layer.opacity ?? 1) as number) * 100)}%
+          </dd>
+        </dl>
+        <p className="border-t border-border bg-surface-0 px-4 py-2 text-[11px] italic text-muted">
+          Properties shown here are session-only. Refreshing the
+          page resets them.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Human-readable label for a MapLayerSource['kind']. */
+function describeSourceKind(kind: string): string {
+  switch (kind) {
+    case 'data-layer':
+      return 'Portal data layer';
+    case 'geojson-inline':
+      return 'In-memory features';
+    case 'geojson-url':
+      return 'GeoJSON URL';
+    case 'arcgis-rest':
+      return 'ArcGIS REST service';
+    case 'wms-service':
+      return 'WMS service';
+    case 'wfs-service':
+      return 'WFS service';
+    case 'group':
+      return 'Layer group';
+    default:
+      return kind;
+  }
 }
 
 // ---- Legend widget ---------------------------------------------------------
