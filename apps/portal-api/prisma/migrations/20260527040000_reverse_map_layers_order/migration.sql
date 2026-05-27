@@ -25,7 +25,10 @@
 -- the order again and break maps. Prisma's migrate-history table
 -- protects against that, and we never run migrations twice.
 
-UPDATE "Item"
+-- Note: Prisma's `model Item` maps to the lowercase `item` table via
+-- @@map("item") in schema.prisma.  The first version of this
+-- migration used "Item" and tripped 42P01 on prod.
+UPDATE item
 SET data_json = jsonb_set(
   data_json,
   '{layers}',
