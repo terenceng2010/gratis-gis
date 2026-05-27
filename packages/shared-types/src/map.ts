@@ -139,6 +139,16 @@ export interface MapData {
   zoom: number;
   bearing: number;
   pitch: number;
+  /**
+   * Ordered list of operational layers. Index 0 is the TOP of the
+   * render stack (drawn on top of everything below it) and the TOP
+   * of the LayerList display. The runtime's syncOverlays iterates
+   * this array in reverse to add MapLibre layers in the right
+   * stacking order. Matches the universal layered-graphics
+   * convention (QGIS, ArcGIS, Photoshop, Figma) and Esri's WebMap
+   * `operationalLayers` spec ("lowest indexed layer rendered on
+   * top"), so WebMap JSON round-trips with no index reversal.
+   */
   layers: MapLayer[];
   search: MapSearchConfig;
 }

@@ -2169,7 +2169,19 @@ function syncOverlays(
   }
   hoveredRef.current = null;
 
-  for (const layer of layers) {
+  // Layer-ordering convention: array[0] = top of render stack (the
+  // layer the user sees ON TOP of the map) = top of the LayerList.
+  // MapLibre stacks each new layer ABOVE the previous one, so we
+  // iterate the array in REVERSE here: the last element added to
+  // MapLibre wins the top of the stack, and that's array[0].
+  // This matches the universal layered-graphics mental model
+  // (QGIS, ArcGIS, Photoshop, Figma -- top of layer list = drawn
+  // on top) and Esri's WebMap operationalLayers spec
+  // (https://developers.arcgis.com/web-map-specification/objects/operationalLayers/
+  // "lowest indexed layer rendered on top"), so importing /
+  // exporting WebMap JSON is a direct mapping with no reversal.
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer = layers[i]!;
     if (!layer.visible) continue;
     const sourceId = `gg:${layer.id}`;
     const data = sourceData(layer, mapClipBoundaryId);

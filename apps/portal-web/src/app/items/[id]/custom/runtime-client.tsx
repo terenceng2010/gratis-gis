@@ -5149,16 +5149,11 @@ function pushOsmResultLayerToAllMaps(
       // the previous result instead of stacking.
       const withoutPrior = existing.filter((l) => l.id !== newLayer.id);
       // Prepend the result so the just-run tool's output appears at
-      // the TOP of the LayerList where the user is looking for it,
-      // rather than buried at the bottom under their saved layers.
-      // syncOverlays iterates the array in order to add MapLibre
-      // layers, which means prepending moves the new layer to the
-      // bottom of the render stack; for OSM points (the common case
-      // -- schools, gas stations, parks, etc.) the small markers
-      // with white stroke remain visible against polygon layers
-      // above them.  Polygon OSM results may be partly obscured by
-      // opaque fill layers above; users can drag-reorder or toggle
-      // those layers if needed.
+      // the TOP of the LayerList where the user is looking for it.
+      // Under the array[0] = top-of-render-stack convention, this
+      // also draws the new layer ON TOP of every existing layer --
+      // the result is visible no matter what saved layers the user
+      // had loaded underneath.
       return {
         ...cur,
         mapData: {
