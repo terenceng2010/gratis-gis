@@ -636,6 +636,24 @@ export interface MapLayerStyle {
      * JPEG / etc.) since those can't be meaningfully SDF-encoded.
      */
     iconTint: boolean;
+    /**
+     * #146: optional background shape rendered BENEATH the icon for
+     * the AGO / Google-Maps "marker with icon" look. The renderer
+     * emits an extra MapLibre circle layer underneath the symbol
+     * layer when this is set, painted in backgroundFill +
+     * backgroundStrokeColor at backgroundStrokeWidth pixels. Default
+     * `'none'` so existing layers don't change appearance.
+     *
+     * Only meaningful when symbol is 'icon'; ignored for plain
+     * circles (which already act as their own colored marker).
+     */
+    backgroundShape?: 'none' | 'circle' | 'rounded-square';
+    /** Fill color for the background shape. Hex or rgba. */
+    backgroundFill?: string;
+    /** Outline color for the background shape. Hex or rgba. */
+    backgroundStrokeColor?: string;
+    /** Outline width in pixels. */
+    backgroundStrokeWidth?: number;
   };
   line: {
     color: string;
@@ -801,6 +819,10 @@ export const DEFAULT_LAYER_STYLE: MapLayerStyle = {
     iconName: '',
     iconSize: 1,
     iconTint: true,
+    backgroundShape: 'none',
+    backgroundFill: '#ffffff',
+    backgroundStrokeColor: '#111827',
+    backgroundStrokeWidth: 1.5,
   },
   line: {
     color: '#6366f1',

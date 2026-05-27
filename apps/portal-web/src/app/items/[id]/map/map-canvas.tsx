@@ -2588,6 +2588,49 @@ function syncOverlays(
     const preferredId = useSdf ? sdfId : plainId;
     const iconReady = wantsIcon && m.hasImage(preferredId);
     if (iconReady) {
+      // #146: optional background shape behind the icon. Renders as
+      // a circle layer beneath the icon symbol so the icon reads
+      // clearly against busy basemaps (AGO / Google Maps "marker
+      // with icon" pattern). Skipped when backgroundShape is 'none'
+      // (the default) so existing layers don't change appearance.
+      // 'rounded-square' currently falls through to the circle path
+      // because MapLibre's GL renderer doesn't expose a true rounded-
+      // rect primitive; the underlying circle, sized generously,
+      // reads acceptably as a "soft pill" until we add a sprite-bake
+      // path that composes the icon + a real rounded-rect.
+      const bgShape = s.point.backgroundShape ?? 'none';
+      if (bgShape !== 'none') {
+        const bgFill = s.point.backgroundFill ?? '#ffffff';
+        const bgStroke = s.point.backgroundStrokeColor ?? '#111827';
+        const bgWidth = typeof s.point.backgroundStrokeWidth === 'number'
+          ? s.point.backgroundStrokeWidth
+          : 1.5;
+        // Size the background ~14px (lucide icon at iconSize=1 is
+        // 24px tall but renders to about 14-18px effective on the
+        // map). Scale with iconSize so a bigger icon gets a bigger
+        // background.
+        const bgRadius = 11 * s.point.iconSize;
+        m.addLayer({
+          id: `gg:${layer.id}-icon-bg`,
+          type: 'circle',
+          source: sourceId,
+          ...sourceLayerProp,
+          minzoom,
+          maxzoom,
+          filter: combineFilter(
+            ['==', ['geometry-type'], 'Point'],
+            layer.filter,
+          ),
+          paint: {
+            'circle-color': bgFill,
+            'circle-radius': zoomScaleNumber(bgRadius) as unknown as number,
+            'circle-stroke-color': bgStroke,
+            'circle-stroke-width': bgWidth,
+            'circle-opacity': op,
+            'circle-stroke-opacity': op,
+          },
+        });
+      }
       // Selection halo under the icon. Rendered as a separate circle
       // layer so it reads through whatever the symbol shows on top
       // works for both SDF and plain icon variants.

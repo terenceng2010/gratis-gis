@@ -220,6 +220,72 @@ export function StyleEditor({ value, onChange, geometryTypes }: Props) {
                 Un-tick if you want the icon to stay in its shipped
                 color.
               </p>
+
+              {/* #146: background shape behind the icon. AGO /
+                  Google-Maps "marker with icon" pattern. Defaults
+                  to 'none' so existing layers don't change look. */}
+              <div className="mt-4 border-t border-border pt-3">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  Background
+                </p>
+                <div className="space-y-3">
+                  <label className="block text-xs">
+                    <span className="text-muted">Shape</span>
+                    <select
+                      value={value.point.backgroundShape ?? 'none'}
+                      onChange={(e) =>
+                        patch('point', {
+                          backgroundShape: e.target.value as
+                            | 'none'
+                            | 'circle'
+                            | 'rounded-square',
+                        })
+                      }
+                      className="mt-1 w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-xs"
+                    >
+                      <option value="none">None</option>
+                      <option value="circle">Circle</option>
+                      <option value="rounded-square">Rounded square</option>
+                    </select>
+                  </label>
+                  {(value.point.backgroundShape ?? 'none') !== 'none' ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Color
+                        label="Fill"
+                        value={value.point.backgroundFill ?? '#ffffff'}
+                        onChange={(c) =>
+                          patch('point', { backgroundFill: c })
+                        }
+                      />
+                      <Color
+                        label="Outline"
+                        value={value.point.backgroundStrokeColor ?? '#111827'}
+                        onChange={(c) =>
+                          patch('point', { backgroundStrokeColor: c })
+                        }
+                      />
+                      <Slider
+                        label="Outline width"
+                        min={0}
+                        max={6}
+                        step={0.5}
+                        value={value.point.backgroundStrokeWidth ?? 1.5}
+                        onChange={(n) =>
+                          patch('point', { backgroundStrokeWidth: n })
+                        }
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                {(value.point.backgroundShape ?? 'none') ===
+                'rounded-square' ? (
+                  <p className="mt-2 text-[11px] text-muted">
+                    Rounded square renders as a soft pill until the
+                    sprite-bake renderer ships; appearance is close
+                    but the corners read as fully circular.
+                  </p>
+                ) : null}
+              </div>
             </>
           ) : (
             <div className="grid grid-cols-2 gap-2">
