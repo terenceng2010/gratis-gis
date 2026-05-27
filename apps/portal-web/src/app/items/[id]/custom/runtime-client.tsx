@@ -4498,7 +4498,8 @@ function ToolButtonRender({
             layerKey: string;
             format: 'csv' | 'xlsx';
           }
-        | RecipeActionShape;
+        | RecipeActionShape
+        | RelationalActionShape;
     } | null;
   };
   const ctx = useContext(CustomMapsContext);
@@ -4558,7 +4559,9 @@ function ToolButtonRender({
   const runTool = () => {
     const action = tool?.data?.action;
     if (!action) return;
-    if (action.kind === 'recipe') {
+    if (action.kind === 'recipe' || action.kind === 'osm-relational-query') {
+      // Both kinds collect parameters in the same panel; the
+      // backend dispatches on action.kind once we POST.
       setRecipePanelOpen(true);
       return;
     }
@@ -4684,14 +4687,22 @@ function ToolButtonRender({
           <span className={labelClass}>{visibleText}</span>
         ) : null}
       </button>
-      {recipePanelOpen && tool && tool.data?.action?.kind === 'recipe' && toolId ? (
+      {recipePanelOpen &&
+      tool &&
+      (tool.data?.action?.kind === 'recipe' ||
+        tool.data?.action?.kind === 'osm-relational-query') &&
+      toolId ? (
         (() => {
           const bbox = firstMapBbox(ctx);
           return (
             <RecipeRunPanel
               toolId={toolId}
               toolTitle={tool.title}
-              recipe={tool.data.action as RecipeAction}
+              recipe={
+                tool.data.action as
+                  | RecipeAction
+                  | import('@gratis-gis/shared-types').OsmRelationalQueryAction
+              }
               hostLayers={buildHostLayerOptions(ctx)}
               {...(bbox ? { hostBbox: bbox } : {})}
               getDrawMap={() => firstMapInstance(ctx)}
@@ -4699,6 +4710,21 @@ function ToolButtonRender({
               onResult={(result) => {
                 if (result.output.kind === 'selection') {
                   applyRecipeSelection(ctx, {
+                    output: result.output,
+                  });
+                } else if (result.output.kind === 'osm-relational-result') {
+                  // #142: relational query result handler.  Push
+                  // three MapLayer entries (anchor, supporting,
+                  // buffers) so the user sees the survivors, the
+                  // contributing OSM features, and the search
+                  // radius rings all on the host map at once.
+                  // Camera fits to the anchor's bbox -- the user
+                  // came here for the matches, not the buffer
+                  // outline.
+                  applyRelationalResult({
+                    ctx,
+                    toolId,
+                    toolTitle: tool?.title ?? 'OSM',
                     output: result.output,
                   });
                 } else if (result.output.kind === 'osm-features-overlay') {
@@ -4993,6 +5019,25 @@ type RecipeActionShape = {
 };
 
 /**
+ * Local typedef for the OSM relational-query action shape on the
+ * wire (#142). Mirrors OsmRelationalQueryAction's runtime-visible
+ * fields. Kept narrow so a stale tool with a future field doesn't
+ * crash the runtime; the backend is the source of truth for the
+ * full shape.
+ */
+type RelationalActionShape = {
+  kind: 'osm-relational-query';
+  relationalVersion?: number;
+  anchorPreset?: string;
+  conditions?: Array<{
+    preset?: string;
+    distance?: { value?: number; unit?: string };
+  }>;
+  parameters?: unknown[];
+  aoiParameterRef?: string;
+};
+
+/**
  * Collect host-app layer options for the recipe runtime panel: one
  * entry per resolved app target, augmented with the current
  * selection on that layer (collected across every mounted Map
@@ -5169,6 +5214,238 @@ function buildOsmResultLayer(args: {
     access: structuredClone(DEFAULT_LAYER_ACCESS),
     filter: null,
   };
+}
+
+/**
+ * #142: relational query result handler.  Builds three MapLayer
+ * entries (anchor, supporting, buffers) and pushes them onto every
+ * mounted map, then fits the host map's camera to the anchor's
+ * bbox.  Idempotent: re-running the same tool replaces the prior
+ * three layers rather than stacking.
+ */
+function applyRelationalResult(args: {
+  ctx: CustomMapsCtx | null;
+  toolId: string;
+  toolTitle: string;
+  output: {
+    anchor: {
+      preset: string;
+      presetLabel: string;
+      features: ReadonlyArray<{
+        type: 'Feature';
+        id: string;
+        properties: Record<string, unknown>;
+        geometry: unknown;
+      }>;
+      candidateCount: number;
+    };
+    conditions: ReadonlyArray<{
+      preset: string;
+      presetLabel: string;
+      distanceMeters: number;
+      candidateCount: number;
+    }>;
+    supporting: ReadonlyArray<{
+      type: 'Feature';
+      id: string;
+      properties: Record<string, unknown>;
+      geometry: unknown;
+    }>;
+    buffers: ReadonlyArray<{
+      type: 'Feature';
+      id: string;
+      properties: Record<string, unknown>;
+      geometry: unknown;
+    }>;
+  };
+}): void {
+  const { ctx, toolId, toolTitle, output } = args;
+  if (!ctx) return;
+  // Build a condition-label suffix that titles the result layers
+  // with what the user actually queried (e.g. "School near Park
+  // and Liquor store").
+  const condLabels = output.conditions.map((c) => c.presetLabel);
+  const condSuffix = condLabels.length > 0 ? ` near ${condLabels.join(' and ')}` : '';
+  // Purple accent on anchors matches the OSM identity from #141 so
+  // the user can tell this is OSM data, not a portal data_layer.
+  // Buffers fade to a near-transparent purple ring; supporting
+  // features pick up amber so the eye distinguishes them from
+  // anchors at a glance even though both are OSM-derived.
+  const ANCHOR_COLOR = '#7c3aed';
+  const BUFFER_COLOR = '#7c3aed';
+  const SUPPORTING_COLOR = '#d97706';
+  const anchorLayer: MapLayer = {
+    id: `osm-relational-anchor/${toolId}`,
+    title: `${output.anchor.presetLabel}${condSuffix} (${output.anchor.features.length})`,
+    visible: true,
+    opacity: 1,
+    source: {
+      kind: 'geojson-inline',
+      geojson: {
+        type: 'FeatureCollection',
+        features: output.anchor.features as unknown as GeoJSON.Feature[],
+      },
+    },
+    style: {
+      ...structuredClone(DEFAULT_LAYER_STYLE),
+      polygon: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.polygon),
+        fillColor: ANCHOR_COLOR,
+        fillOpacity: 0.2,
+        strokeColor: ANCHOR_COLOR,
+        strokeWidth: 2,
+      },
+      line: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.line),
+        color: ANCHOR_COLOR,
+        width: 2,
+      },
+      point: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.point),
+        color: ANCHOR_COLOR,
+        strokeColor: '#ffffff',
+        strokeWidth: 1.5,
+        radius: 7,
+      },
+    },
+    renderer: structuredClone(DEFAULT_LAYER_RENDERER),
+    popup: {
+      ...structuredClone(DEFAULT_LAYER_POPUP),
+      enabled: true,
+      mode: 'picked',
+      titleTemplate: '{{name}}',
+      fields: [
+        'name',
+        'operator',
+        'website',
+        'phone',
+        'opening_hours',
+        'addr:full',
+        'addr:street',
+        'addr:city',
+      ],
+    },
+    interactions: structuredClone(DEFAULT_LAYER_INTERACTIONS),
+    labels: structuredClone(DEFAULT_LAYER_LABELS),
+    search: structuredClone(DEFAULT_LAYER_SEARCH),
+    scale: structuredClone(DEFAULT_LAYER_SCALE),
+    access: structuredClone(DEFAULT_LAYER_ACCESS),
+    filter: null,
+  };
+  const supportingLayer: MapLayer = {
+    id: `osm-relational-supporting/${toolId}`,
+    title: `${toolTitle} supporting features (${output.supporting.length})`,
+    visible: true,
+    opacity: 1,
+    source: {
+      kind: 'geojson-inline',
+      geojson: {
+        type: 'FeatureCollection',
+        features: output.supporting as unknown as GeoJSON.Feature[],
+      },
+    },
+    style: {
+      ...structuredClone(DEFAULT_LAYER_STYLE),
+      polygon: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.polygon),
+        fillColor: SUPPORTING_COLOR,
+        fillOpacity: 0.18,
+        strokeColor: SUPPORTING_COLOR,
+        strokeWidth: 1.5,
+      },
+      line: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.line),
+        color: SUPPORTING_COLOR,
+        width: 1.5,
+      },
+      point: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.point),
+        color: SUPPORTING_COLOR,
+        strokeColor: '#ffffff',
+        strokeWidth: 1,
+        radius: 5,
+      },
+    },
+    renderer: structuredClone(DEFAULT_LAYER_RENDERER),
+    popup: {
+      ...structuredClone(DEFAULT_LAYER_POPUP),
+      enabled: true,
+      mode: 'picked',
+      titleTemplate: '{{name}}',
+      fields: ['name', 'operator', 'addr:full', 'addr:street'],
+    },
+    interactions: structuredClone(DEFAULT_LAYER_INTERACTIONS),
+    labels: structuredClone(DEFAULT_LAYER_LABELS),
+    search: structuredClone(DEFAULT_LAYER_SEARCH),
+    scale: structuredClone(DEFAULT_LAYER_SCALE),
+    access: structuredClone(DEFAULT_LAYER_ACCESS),
+    filter: null,
+  };
+  const buffersLayer: MapLayer = {
+    id: `osm-relational-buffers/${toolId}`,
+    title: `${toolTitle} search buffers`,
+    visible: true,
+    opacity: 1,
+    source: {
+      kind: 'geojson-inline',
+      geojson: {
+        type: 'FeatureCollection',
+        features: output.buffers as unknown as GeoJSON.Feature[],
+      },
+    },
+    style: {
+      ...structuredClone(DEFAULT_LAYER_STYLE),
+      polygon: {
+        ...structuredClone(DEFAULT_LAYER_STYLE.polygon),
+        fillColor: BUFFER_COLOR,
+        fillOpacity: 0.08,
+        strokeColor: BUFFER_COLOR,
+        strokeWidth: 1,
+      },
+    },
+    renderer: structuredClone(DEFAULT_LAYER_RENDERER),
+    popup: structuredClone(DEFAULT_LAYER_POPUP),
+    interactions: structuredClone(DEFAULT_LAYER_INTERACTIONS),
+    labels: structuredClone(DEFAULT_LAYER_LABELS),
+    search: structuredClone(DEFAULT_LAYER_SEARCH),
+    scale: structuredClone(DEFAULT_LAYER_SCALE),
+    access: structuredClone(DEFAULT_LAYER_ACCESS),
+    filter: null,
+  };
+  // Push in display-stacking order (top of list first under the
+  // array[0]=top convention): anchor on top, supporting next,
+  // buffers on the bottom so the rings sit underneath the markers
+  // they describe.
+  for (const mapWidgetId of Object.keys(ctx.states)) {
+    ctx.update(mapWidgetId, (cur) => {
+      const prior = cur.mapData.layers ?? [];
+      const drop = new Set([
+        anchorLayer.id,
+        supportingLayer.id,
+        buffersLayer.id,
+      ]);
+      const withoutPrior = prior.filter((l) => !drop.has(l.id));
+      return {
+        ...cur,
+        mapData: {
+          ...cur.mapData,
+          layers: [anchorLayer, supportingLayer, buffersLayer, ...withoutPrior],
+        },
+      };
+    });
+  }
+  // Fit camera to the anchor's bbox so the user sees the matches.
+  if (output.anchor.features.length > 0) {
+    const m = firstMapInstance(ctx);
+    if (m) {
+      const bb = bboxOfFeatures(
+        output.anchor.features as unknown as GeoJSON.Feature[],
+      );
+      if (bb) {
+        m.fitBounds(bb, { padding: 80, duration: 600, maxZoom: 16 });
+      }
+    }
+  }
 }
 
 /**

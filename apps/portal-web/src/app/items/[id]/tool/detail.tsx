@@ -262,7 +262,7 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
             Open in a new tab
           </label>
         </div>
-      ) : (
+      ) : data.action.kind === 'export-layer' ? (
         // Export-layer action.  When the button bound to this tool
         // is clicked, the runtime fetches the configured sublayer's
         // features via the API and triggers a CSV / XLSX download.
@@ -332,6 +332,18 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
               </button>
             </div>
           </div>
+        </div>
+      ) : (
+        // OSM relational query (#142) is editable today only via
+        // the JSON-edit fallback in the action-kind picker above;
+        // the visual builder is queued.  Until that lands, show a
+        // small note so authors know they have a relational tool
+        // selected rather than a half-rendered form.
+        <div className="rounded-md border border-border bg-surface-2 p-3 text-xs text-muted">
+          OSM relational query selected.  Visual builder is on the
+          way; for now edit this tool&apos;s action JSON directly
+          (anchor preset, conditions, AOI parameter) until the
+          designer ships.
         </div>
       )}
 

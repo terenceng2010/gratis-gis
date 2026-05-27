@@ -5,13 +5,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EngineService } from '../engine/engine.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OverpassClient } from './overpass-client.js';
-import { buildOverpassQl } from './overpass-ql.js';
+import { buildOverpassQl, buildRelationalOverpassQl } from './overpass-ql.js';
 import {
   osmToGeoJson,
   type OsmGeoJsonFeature,
   type OsmGeoJsonGeometry,
 } from './osm-to-geojson.js';
-import { getOsmPresets } from './preset-catalog.js';
+import { getOsmPresets, type OsmPreset } from './preset-catalog.js';
 
 /**
  * Resolved input shape for one OSM source resolution.  Mirrors the
@@ -36,6 +36,37 @@ export interface OsmSourceResolveInput {
   ttlMs?: number;
   /** Override max features; falls back to 50000. */
   maxFeatures?: number;
+}
+
+/**
+ * Input shape for the relational query resolver (#142).  Anchor +
+ * conditions + AOI bbox.  No tag-filter knob in v1: relational
+ * tools are "school near park," not "school near park named X."
+ */
+export interface OsmRelationalResolveInput {
+  anchorPresetId: string;
+  conditions: Array<{ presetId: string; distanceMeters: number }>;
+  bbox: [number, number, number, number];
+  endpoint?: string;
+  orgId?: string;
+  maxFeatures?: number;
+}
+
+export interface OsmRelationalResolveResult {
+  anchor: {
+    presetId: string;
+    presetLabel: string;
+    features: OsmGeoJsonFeature[];
+  };
+  conditions: Array<{
+    presetId: string;
+    presetLabel: string;
+    distanceMeters: number;
+    supportingCount: number;
+  }>;
+  supporting: OsmGeoJsonFeature[];
+  attribution: string;
+  featureCount: number;
 }
 
 export interface OsmResolveResult {
@@ -194,6 +225,136 @@ export class OsmService {
   }
 
   /**
+   * Resolve a relational OSM query (#142) in a single Overpass
+   * round-trip via the `around:<set>:<distance>` predicate.
+   * Anchor + per-condition spatial filters + survivor selection +
+   * supporting collection all happen on Overpass's native spatial
+   * index, so we trade N+1 fetches + ST_DWithin for one query.
+   * The reference patterns live in ldodds/osm-queries/tutorial
+   * (around-with-set, radius-search).
+   *
+   * v1 doesn't cache the relational result; the key shape differs
+   * from the per-preset cache, and we'd rather ship a working
+   * surface than build relational cache infrastructure speculatively.
+   */
+  async resolveRelational(
+    input: OsmRelationalResolveInput,
+  ): Promise<OsmRelationalResolveResult> {
+    if (!input.anchorPresetId) {
+      throw new Error('resolveRelational: anchorPresetId is required');
+    }
+    if (!input.conditions || input.conditions.length === 0) {
+      throw new Error('resolveRelational: at least one condition is required');
+    }
+    // Endpoint resolution mirrors resolve(): explicit override ->
+    // per-org setting -> env -> default.
+    let endpoint = input.endpoint;
+    if (!endpoint && input.orgId) {
+      try {
+        const org = await this.prisma.organization.findUnique({
+          where: { id: input.orgId },
+          select: { osmOverpassEndpoint: true },
+        });
+        if (org?.osmOverpassEndpoint) endpoint = org.osmOverpassEndpoint;
+      } catch (err) {
+        this.logger.warn(
+          `resolveRelational: per-org endpoint lookup failed (org ${input.orgId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    endpoint =
+      endpoint ??
+      process.env.GRATIS_GIS_OSM_OVERPASS_ENDPOINT ??
+      DEFAULT_ENDPOINT;
+    const maxFeatures = input.maxFeatures ?? 50000;
+
+    // Resolve preset definitions for the QL builder + the post-fetch
+    // tag-based classifier that buckets each returned feature back
+    // into its source set.
+    const allPresetIds = [
+      input.anchorPresetId,
+      ...input.conditions.map((c) => c.presetId),
+    ];
+    const presets = await getOsmPresets(allPresetIds);
+    const byId = new Map(presets.map((p) => [p.id, p]));
+    const anchorPreset = byId.get(input.anchorPresetId);
+    if (!anchorPreset) {
+      throw new Error(
+        `resolveRelational: anchor preset '${input.anchorPresetId}' not found`,
+      );
+    }
+    const conditionPresets = input.conditions.map((c, i) => {
+      const p = byId.get(c.presetId);
+      if (!p) {
+        throw new Error(
+          `resolveRelational: condition[${i}] preset '${c.presetId}' not found`,
+        );
+      }
+      return { preset: p, distanceMeters: c.distanceMeters };
+    });
+
+    const ql = buildRelationalOverpassQl({
+      anchor: anchorPreset,
+      conditions: conditionPresets,
+      bbox: input.bbox,
+      maxFeatures,
+      timeoutSeconds: 60,
+    });
+    this.logger.log(
+      `OSM resolveRelational: anchor=${input.anchorPresetId} conditions=${input.conditions
+        .map((c) => `${c.presetId}@${c.distanceMeters}m`)
+        .join(',')} bbox=${input.bbox.join(',')}`,
+    );
+
+    const response = await this.client.run({ endpoint, ql });
+    const collection = osmToGeoJson(response);
+
+    // Classify by tag-selector match: Overpass emits all output
+    // statements concatenated without set-membership markers, so
+    // we re-check the preset's tag clauses against each feature
+    // to assign it back to its source set.  Anchor classification
+    // wins ties; conditions are checked in declaration order.
+    const survivingAnchors: OsmGeoJsonFeature[] = [];
+    const supportingByCondition: OsmGeoJsonFeature[][] = input.conditions.map(
+      () => [],
+    );
+    const supportingSeen = new Set<string>();
+    for (const feat of collection.features) {
+      if (featureMatchesPreset(feat, anchorPreset)) {
+        survivingAnchors.push(feat);
+        continue;
+      }
+      for (let i = 0; i < conditionPresets.length; i++) {
+        if (featureMatchesPreset(feat, conditionPresets[i]!.preset)) {
+          const key = `${i}:${feat.id ?? `${i}-${supportingByCondition[i]!.length}`}`;
+          if (!supportingSeen.has(key)) {
+            supportingSeen.add(key);
+            supportingByCondition[i]!.push(feat);
+          }
+          break;
+        }
+      }
+    }
+
+    return {
+      anchor: {
+        presetId: anchorPreset.id,
+        presetLabel: anchorPreset.label,
+        features: survivingAnchors,
+      },
+      conditions: conditionPresets.map((c, i) => ({
+        presetId: c.preset.id,
+        presetLabel: c.preset.label,
+        distanceMeters: c.distanceMeters,
+        supportingCount: supportingByCondition[i]!.length,
+      })),
+      supporting: supportingByCondition.flat(),
+      attribution: ATTRIBUTION,
+      featureCount: collection.features.length,
+    };
+  }
+
+  /**
    * Write a GeoJSON FeatureCollection into the observation log
    * under the given scope.  Each Feature becomes a single
    * `create` observation; the scope is a transient namespace
@@ -306,6 +467,32 @@ function hashQuery(input: OsmSourceResolveInput, endpoint: string): string {
     e: endpoint,
   });
   return createHash('sha256').update(tuple).digest('hex').slice(0, 32);
+}
+
+/**
+ * Tag-based preset classifier (#142).  Returns true when every tag
+ * clause on the preset is satisfied by the feature's properties.
+ * Wildcard values (`*`) match any non-null value for the key, which
+ * matches the iD catalog convention used by the QL builder.
+ *
+ * Used by resolveRelational to bucket Overpass's concatenated
+ * output back into the anchor / supporting groups, since Overpass
+ * doesn't tag features with set membership on output.
+ */
+function featureMatchesPreset(
+  feature: OsmGeoJsonFeature,
+  preset: OsmPreset,
+): boolean {
+  const props = feature.properties ?? {};
+  for (const tag of preset.tags) {
+    const v = props[tag.key];
+    if (tag.value === '*') {
+      if (v == null || v === '') return false;
+    } else {
+      if (v !== tag.value) return false;
+    }
+  }
+  return true;
 }
 
 /**

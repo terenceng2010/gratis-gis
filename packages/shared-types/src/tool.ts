@@ -42,7 +42,8 @@ export type ToolAction =
   | OpenItemAction
   | OpenUrlAction
   | ExportLayerAction
-  | RecipeAction;
+  | RecipeAction
+  | OsmRelationalQueryAction;
 
 /**
  * Open another portal item in the same browser tab.  Resolves to
@@ -511,6 +512,115 @@ export function emptyRecipeAction(): RecipeAction {
  *  branch on action without exhaustive switches. */
 export function isRecipeAction(action: ToolAction): action is RecipeAction {
   return action.kind === 'recipe';
+}
+
+/**
+ * Distance value + unit pair used by the relational query (and any
+ * future surface that needs the same shape).  Mirrors the runtime
+ * distance picker so the user's "0.5 mi" travels through the action
+ * payload without intermediate normalisation.  The recipe runner is
+ * the canonical converter to meters.
+ */
+export interface RelationalDistance {
+  value: number;
+  unit: 'm' | 'km' | 'ft' | 'mi';
+}
+
+/**
+ * Relational OSM query: find every feature of `anchorPreset` that
+ * sits within distance D_i of at least one feature of each
+ * `conditions[i].preset`, all inside the resolved AOI.  The classic
+ * use case is "find me every school within 0.5 miles of a park AND
+ * within 0.5 miles of a liquor store" - shippable as a single tool
+ * the user can re-run per neighbourhood.
+ *
+ * v1 is AND-only across conditions and skips per-condition tag
+ * filters; both are tracked as follow-ups so the schema stays
+ * narrow while we ship the dominant case.  See the spec on issue
+ * #142 for the full design.
+ */
+export interface OsmRelationalQueryAction {
+  kind: 'osm-relational-query';
+  /** Schema version inside the action.  Bumped on incompat. */
+  relationalVersion: 1;
+  /**
+   * Preset id from the iD preset catalog (e.g. 'amenity/school').
+   * Every matching feature returned by Overpass is a candidate; the
+   * relational predicates below filter it down to the survivors.
+   */
+  anchorPreset: string;
+  /**
+   * Optional anchor result cap.  Forwarded to the Overpass call so
+   * a runaway AOI doesn't try to return 50k schools.  Defaults to
+   * the engine's `DEFAULT_OSM_MAX_FEATURES`.
+   */
+  anchorMaxResults?: number;
+  /**
+   * Conditions every surviving anchor must satisfy.  v1 is
+   * AND-only: an anchor is kept iff at least one feature of each
+   * condition's preset lies within `condition.distance` of it.
+   * Empty list = "every anchor inside the AOI" (degenerate; the
+   * caller probably wants a plain OSM query instead).
+   */
+  conditions: Array<{
+    preset: string;
+    distance: RelationalDistance;
+  }>;
+  /**
+   * Reserved for the eventual OR / mixed-operator extension.  v1
+   * accepts only 'and' and ignores anything else.  Kept on the wire
+   * so existing tools deserialise cleanly when OR ships.
+   */
+  combinator?: 'and';
+  /**
+   * Per-recipe Overpass cache TTL override in minutes.  Same
+   * semantics as OsmFeatureParameter.ttlMinutes: 0 means
+   * "always fresh", unset means "engine default", >0 means
+   * "cache for this many minutes" (clamped server-side).
+   */
+  ttlMinutes?: number;
+  /**
+   * Runtime parameters the user fills in.  v1 needs exactly one
+   * FeatureSourceParameter (the AOI); future versions can let the
+   * user pick anchor / condition presets at runtime by promoting
+   * those fields to runtime parameters.
+   */
+  parameters: ToolParameter[];
+  /**
+   * Name of the FeatureSourceParameter that provides the area of
+   * interest.  The runner pads its bbox by the largest condition
+   * distance before the Overpass call so features just outside the
+   * AOI but within distance are still considered for the join.
+   */
+  aoiParameterRef: string;
+}
+
+/** Type guard for the relational-query action kind. */
+export function isOsmRelationalQueryAction(
+  action: ToolAction,
+): action is OsmRelationalQueryAction {
+  return action.kind === 'osm-relational-query';
+}
+
+/**
+ * Returns a freshly-stubbed relational-query action.  Used by the
+ * tool designer when the author switches the action kind to
+ * "OSM relational query" and by the new-tool-from-template path.
+ *
+ * The default is empty enough that the designer's save-time
+ * validator can reject it loudly (no preset chosen, no conditions,
+ * no AOI parameter) instead of silently shipping a broken tool.
+ */
+export function emptyOsmRelationalQueryAction(): OsmRelationalQueryAction {
+  return {
+    kind: 'osm-relational-query',
+    relationalVersion: 1,
+    anchorPreset: '',
+    conditions: [],
+    combinator: 'and',
+    parameters: [],
+    aoiParameterRef: '',
+  };
 }
 
 /**

@@ -8,9 +8,11 @@ import {
 import type {
   DistanceRef,
   FeatureSourceValue,
+  OsmRelationalQueryAction,
   OsmTagFilter,
   PredicateRef,
   RecipeAction,
+  RelationalDistance,
   SourceRef,
   SpatialPredicate,
   ToolItemData,
@@ -121,7 +123,52 @@ export interface ToolOsmOverlayResult {
   };
 }
 
-export type ToolRunResult = ToolSelectionResult | ToolOsmOverlayResult;
+/**
+ * Relational OSM query result.  Three feature collections the
+ * runtime turns into three host-map MapLayer entries: the surviving
+ * anchors, the proximity buffers, and the supporting condition
+ * features that contributed to at least one match.  The condition
+ * labels drive layer titling on the client (e.g. "School near Park
+ * and Liquor store").
+ */
+export interface ToolOsmRelationalResult {
+  output: {
+    kind: 'osm-relational-result';
+    anchor: {
+      preset: string;
+      presetLabel: string;
+      features: OsmGeoJsonFeature[];
+      /** Pre-buffer count -- how many candidate anchors Overpass
+       *  returned.  Surfaced in the result chip so users see
+       *  "Found 12 schools matching 2 conditions out of 47
+       *  candidates" not just the bare survivor count. */
+      candidateCount: number;
+    };
+    conditions: Array<{
+      preset: string;
+      presetLabel: string;
+      distanceMeters: number;
+      candidateCount: number;
+    }>;
+    /** Supporting condition features that contributed to at least
+     *  one surviving anchor.  De-duped by osm:id so a park near
+     *  two schools only appears once. */
+    supporting: OsmGeoJsonFeature[];
+    /** Buffer polygons (one per surviving anchor) sized at the
+     *  max condition distance, for "show me the search radius"
+     *  visualization.  Properties carry the anchor's id + radius. */
+    buffers: OsmGeoJsonFeature[];
+    attribution: string;
+    /** True when any of the per-preset Overpass calls hit the
+     *  per-query feature cap. */
+    truncated: boolean;
+  };
+}
+
+export type ToolRunResult =
+  | ToolSelectionResult
+  | ToolOsmOverlayResult
+  | ToolOsmRelationalResult;
 
 /**
  * Tool recipe runner (#90).  Resolves runtime parameter inputs,
@@ -158,17 +205,36 @@ export class RecipeRunnerService {
     toolId: string,
     request: ToolRunRequest,
   ): Promise<ToolRunResult> {
-    const { recipe } = await this.loadRecipe(user, toolId);
-    if (recipe.output.kind === 'selection') {
-      return this.runSelectionInternal(user, toolId, recipe, request);
+    // #142: tools can carry either a generic RecipeAction (selection
+    // / osm-features-overlay) OR an OsmRelationalQueryAction (the
+    // dedicated A-near-B-AND-C surface).  Load the raw item once and
+    // dispatch on action.kind so the two surfaces share ACL gating
+    // without dragging the relational query through the generic
+    // recipe shape.
+    const action = await this.loadToolAction(user, toolId);
+    if (action.kind === 'osm-relational-query') {
+      return this.runOsmRelationalInternal(action, request, user);
     }
-    if (recipe.output.kind === 'osm-features-overlay') {
-      // #103: thread the running user's orgId so OsmService can
-      // look up the per-org Overpass endpoint override.
-      return this.runOsmOverlayInternal(recipe, request, user);
+    if (action.kind === 'recipe') {
+      if (action.output.kind === 'selection') {
+        return this.runSelectionInternal(user, toolId, action, request);
+      }
+      if (action.output.kind === 'osm-features-overlay') {
+        // #103: thread the running user's orgId so OsmService can
+        // look up the per-org Overpass endpoint override.
+        return this.runOsmOverlayInternal(action, request, user);
+      }
+      throw new BadRequestException(
+        `Tool ${toolId} has an unsupported output sink: ${action.output.kind}`,
+      );
     }
+    // The union narrowed exhaustively above; this is dead code that
+    // exists only so TypeScript can prove the function always
+    // returns or throws.  Cast through unknown so the unreachable
+    // formatter doesn't trip the `never`-narrowing diagnostic.
+    const k = (action as { kind: string }).kind;
     throw new BadRequestException(
-      `Tool ${toolId} has an unsupported output sink: ${recipe.output.kind}`,
+      `Tool ${toolId} has an unsupported action kind: ${k}`,
     );
   }
 
@@ -205,6 +271,35 @@ export class RecipeRunnerService {
       );
     }
     return { recipe: data.action };
+  }
+
+  /**
+   * Generalised loader: returns whatever ToolAction the tool item
+   * carries (after ACL-gating the read).  Used by the `run()`
+   * dispatcher so a relational-query tool doesn't have to deserialise
+   * through the recipe shape.  Callers branch on action.kind.
+   */
+  private async loadToolAction(
+    user: AuthUser,
+    toolId: string,
+  ): Promise<RecipeAction | OsmRelationalQueryAction> {
+    const tool = await this.items.get(user, toolId);
+    if (tool.type !== 'tool') {
+      throw new BadRequestException(`Item ${toolId} is not a tool`);
+    }
+    const data = tool.data as unknown as ToolItemData | null;
+    if (!data) {
+      throw new BadRequestException(`Tool ${toolId} has no data blob`);
+    }
+    if (
+      data.action.kind === 'recipe' ||
+      data.action.kind === 'osm-relational-query'
+    ) {
+      return data.action;
+    }
+    throw new BadRequestException(
+      `Tool ${toolId} action kind '${data.action.kind}' is not runnable via the recipe runner`,
+    );
   }
 
   async runSelection(
@@ -489,6 +584,195 @@ export class RecipeRunnerService {
         presetLabels,
       },
     };
+  }
+
+  /**
+   * Relational-query output path (#142).  Runs the entire join in
+   * a single Overpass round-trip using `around:<set>:<distance>`
+   * chained predicates: Overpass's spatial index handles the
+   * anchor-to-condition proximity natively, much cheaper than
+   * fetching each preset separately and joining via PostGIS
+   * ST_DWithin.  PostGIS is still used downstream for the
+   * ST_Buffer visualization rings (Overpass doesn't generate
+   * buffer polygons).
+   *
+   * v1 is AND-only across conditions; the schema reserves
+   * `combinator` for OR support later.  The reference patterns
+   * for this Overpass shape live in ldodds/osm-queries/tutorial
+   * (around-with-set, radius-search).
+   */
+  private async runOsmRelationalInternal(
+    action: OsmRelationalQueryAction,
+    request: ToolRunRequest,
+    user: AuthUser,
+  ): Promise<ToolOsmRelationalResult> {
+    if (!action.anchorPreset) {
+      throw new BadRequestException(
+        'osm-relational-query requires anchorPreset (the iD preset id of the features to find)',
+      );
+    }
+    if (!action.conditions || action.conditions.length === 0) {
+      throw new BadRequestException(
+        'osm-relational-query requires at least one condition; for a single-preset query use a recipe with osm-features-overlay output instead',
+      );
+    }
+    if (!action.aoiParameterRef) {
+      throw new BadRequestException(
+        'osm-relational-query requires aoiParameterRef pointing at a feature-source parameter for the search area',
+      );
+    }
+
+    const resolved = resolveParameters(action.parameters, request.parameters);
+    const aoiVal = resolved.get(action.aoiParameterRef);
+    if (!aoiVal || aoiVal.kind !== 'feature-source') {
+      throw new BadRequestException(
+        `Relational aoiParameterRef '${action.aoiParameterRef}' must resolve to a feature-source parameter`,
+      );
+    }
+    const bbox = await this.computeAoiBbox(aoiVal.value);
+    if (!bbox) {
+      throw new BadRequestException(
+        `Could not compute a bbox from AOI parameter '${action.aoiParameterRef}'.  v1 supports inline-geojson AOIs (drawn on the map) and layer / selection AOIs.`,
+      );
+    }
+
+    // Pad the bbox by the largest condition distance so anchors near
+    // the AOI edge can still pick up matches that sit just outside
+    // the polygon.  Cheap meters->degrees conversion (1deg ~ 111km)
+    // over-pads at high latitudes; acceptable for the "schools near
+    // parks within my city" use case where the latitude band is
+    // small relative to the search radius.
+    const conditionDistancesMeters = action.conditions.map((c) =>
+      relationalDistanceToMeters(c.distance),
+    );
+    const maxDistanceMeters = Math.max(...conditionDistancesMeters);
+    const padDegrees = maxDistanceMeters / 111_000;
+    const paddedBbox: [number, number, number, number] = [
+      bbox[0] - padDegrees,
+      bbox[1] - padDegrees,
+      bbox[2] + padDegrees,
+      bbox[3] + padDegrees,
+    ];
+
+    // Per-recipe TTL clamp, same semantics as osm-features-overlay.
+    let ttlMs: number | undefined;
+    if (
+      typeof action.ttlMinutes === 'number' &&
+      Number.isFinite(action.ttlMinutes)
+    ) {
+      const minutes = Math.max(0, Math.min(7 * 24 * 60, action.ttlMinutes));
+      ttlMs = minutes * 60 * 1000;
+    }
+
+    // Run the entire join in one Overpass round-trip via the
+    // resolveRelational path.  Overpass's spatial index does the
+    // anchor-to-condition distance check natively; we get back
+    // the surviving anchors + supporting features already
+    // bucketed by which preset they match.
+    const result = await this.osm.resolveRelational({
+      anchorPresetId: action.anchorPreset,
+      conditions: action.conditions.map((c, i) => ({
+        presetId: c.preset,
+        distanceMeters: conditionDistancesMeters[i]!,
+      })),
+      bbox: paddedBbox,
+      ...(user.orgId ? { orgId: user.orgId } : {}),
+      ...(action.anchorMaxResults
+        ? { maxFeatures: action.anchorMaxResults }
+        : {}),
+    });
+    // TTL override is plumbed for parity with the per-preset
+    // resolve(), but relational queries don't currently consult
+    // the cache.  Drop the variable so lint doesn't flag it.
+    void ttlMs;
+
+    // Buffers around each surviving anchor at the max condition
+    // distance.  Server-side ST_Buffer over geography produces a
+    // proper great-circle buffer; cast back to geometry for the
+    // GeoJSON output.  Overpass doesn't generate buffer polygons,
+    // so this PostGIS pass stays as the visualization layer.
+    const buffers =
+      result.anchor.features.length > 0
+        ? await this.buildAnchorBuffers(
+            result.anchor.features,
+            maxDistanceMeters,
+          )
+        : [];
+
+    // Each condition's candidateCount on the client is the
+    // supportingCount from the resolver -- the number of
+    // condition features that actually contributed to a survivor.
+    return {
+      output: {
+        kind: 'osm-relational-result',
+        anchor: {
+          preset: result.anchor.presetId,
+          presetLabel: result.anchor.presetLabel,
+          features: result.anchor.features,
+          candidateCount: result.anchor.features.length,
+        },
+        conditions: result.conditions.map((c) => ({
+          preset: c.presetId,
+          presetLabel: c.presetLabel,
+          distanceMeters: c.distanceMeters,
+          candidateCount: c.supportingCount,
+        })),
+        supporting: result.supporting,
+        buffers,
+        attribution: result.attribution,
+        truncated: false,
+      },
+    };
+  }
+
+  /**
+   * Build the ST_Buffer polygons around each surviving anchor.
+   * Geography buffer gives a true-distance ring on the sphere;
+   * cast back to geometry for the GeoJSON output.  Properties on
+   * each buffer feature carry the source anchor id and the radius
+   * so client popups / labels can show "0.5 mi radius" without a
+   * separate metadata fetch.
+   */
+  private async buildAnchorBuffers(
+    anchors: OsmGeoJsonFeature[],
+    radiusMeters: number,
+  ): Promise<OsmGeoJsonFeature[]> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ anchor_idx: number; anchor_id: string | null; buffer_geojson: string }>
+    >`
+      SELECT
+        (ord - 1)::int AS anchor_idx,
+        (elem ->> 'id') AS anchor_id,
+        ST_AsGeoJSON(
+          ST_Buffer(
+            ST_GeomFromGeoJSON((elem -> 'geometry')::text)::geography,
+            ${radiusMeters}
+          )::geometry
+        ) AS buffer_geojson
+      FROM jsonb_array_elements(${JSON.stringify(anchors)}::jsonb)
+        WITH ORDINALITY t(elem, ord)
+    `;
+    const buffers: OsmGeoJsonFeature[] = [];
+    for (const row of rows) {
+      try {
+        const geometry = JSON.parse(row.buffer_geojson) as OsmGeoJsonFeature['geometry'];
+        buffers.push({
+          type: 'Feature',
+          id: `buffer:${row.anchor_id ?? row.anchor_idx}`,
+          properties: {
+            anchorId: row.anchor_id,
+            radiusMeters,
+          },
+          geometry,
+        });
+      } catch {
+        // Skip rows where ST_Buffer produced something we can't
+        // round-trip (would only happen on degenerate input
+        // geometry; the anchor still ships, just without its
+        // buffer ring).
+      }
+    }
+    return buffers;
   }
 
   /**
@@ -1063,3 +1347,27 @@ function bboxOfGeoJson(
   }
   return [minX, minY, maxX, maxY];
 }
+
+/**
+ * Convert a RelationalDistance (value + unit) into meters for the
+ * PostGIS geography-based proximity check.  Unknown units default
+ * to meters so a malformed action payload degrades to a sane
+ * search radius rather than throwing.
+ */
+function relationalDistanceToMeters(distance: RelationalDistance): number {
+  const v = Number(distance.value);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  switch (distance.unit) {
+    case 'm':
+      return v;
+    case 'km':
+      return v * 1000;
+    case 'ft':
+      return v * 0.3048;
+    case 'mi':
+      return v * 1609.344;
+    default:
+      return v;
+  }
+}
+

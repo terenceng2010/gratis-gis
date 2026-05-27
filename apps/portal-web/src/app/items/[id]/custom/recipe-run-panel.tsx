@@ -50,6 +50,7 @@ import type {
   LengthUnit,
   NumberParameter,
   OsmFeatureParameter,
+  OsmRelationalQueryAction,
   OsmTagFilter,
   PredicateParameter,
   RecipeAction,
@@ -128,12 +129,56 @@ export type RecipeRunResult =
          *  the field. */
         presetLabels?: string[];
       };
+    }
+  | {
+      output: {
+        kind: 'osm-relational-result';
+        anchor: {
+          preset: string;
+          presetLabel: string;
+          features: Array<{
+            type: 'Feature';
+            id: string;
+            properties: Record<string, unknown>;
+            geometry: unknown;
+          }>;
+          candidateCount: number;
+        };
+        conditions: Array<{
+          preset: string;
+          presetLabel: string;
+          distanceMeters: number;
+          candidateCount: number;
+        }>;
+        supporting: Array<{
+          type: 'Feature';
+          id: string;
+          properties: Record<string, unknown>;
+          geometry: unknown;
+        }>;
+        buffers: Array<{
+          type: 'Feature';
+          id: string;
+          properties: Record<string, unknown>;
+          geometry: unknown;
+        }>;
+        attribution: string;
+        truncated: boolean;
+      };
     };
 
 interface Props {
   toolId: string;
   toolTitle: string;
-  recipe: RecipeAction;
+  /**
+   * The tool's action.  The panel only reads `.parameters` from
+   * here, so it accepts either a RecipeAction (selection or
+   * osm-features-overlay output) or an OsmRelationalQueryAction
+   * (#142): both expose the same parameter-array shape and the
+   * backend dispatches on action.kind once the panel POSTs to
+   * /api/portal/tools/:id/run.
+   */
+  recipe: RecipeAction | OsmRelationalQueryAction;
   hostLayers: HostLayerOption[];
   /** Optional bbox of the host's currently-focused map; supplied
    *  separately from hostLayers so a runtime-draw param without a

@@ -174,3 +174,140 @@ export function buildOverpassQl(input: OverpassQlInput): string {
     `out body geom tags;`,
   ].join('\n');
 }
+
+/**
+ * Input shape for the relational query builder (#142).  Anchor +
+ * one or more conditions, each carrying a meters distance for the
+ * Overpass `around:` predicate.  Bbox bounds the anchor scan; the
+ * around-based per-condition filters are bounded by the anchor set
+ * itself, so we don't double up on bbox limits downstream.
+ */
+export interface RelationalOverpassQlInput {
+  anchor: OsmPreset;
+  /** Per-condition: preset + distance threshold in meters. */
+  conditions: Array<{ preset: OsmPreset; distanceMeters: number }>;
+  bbox: [west: number, south: number, east: number, north: number];
+  maxFeatures?: number;
+  /** Per-query Overpass timeout in seconds; defaults to 60.  The
+   *  relational query touches more sets than a flat preset query so
+   *  60s is a more realistic ceiling than buildOverpassQl's 25. */
+  timeoutSeconds?: number;
+}
+
+/**
+ * Build a single Overpass QL query that runs the entire relational
+ * predicate in one round-trip, using Overpass's native `around:set`
+ * filter.  Returns features in THREE labeled output statements:
+ *
+ *   - the surviving anchors (those that have at least one feature
+ *     of every condition within distance),
+ *   - the supporting features for each condition (condition
+ *     features that are within distance of at least one survivor).
+ *
+ * The caller classifies returned features by checking which
+ * preset's tag selector each feature matches.  This is much more
+ * efficient than fetching anchors + conditions separately and
+ * doing per-pair ST_DWithin in PostGIS: Overpass's spatial index
+ * handles the join in one pass on a server purpose-built for it.
+ */
+export function buildRelationalOverpassQl(
+  input: RelationalOverpassQlInput,
+): string {
+  if (!input.anchor) {
+    throw new Error('buildRelationalOverpassQl: anchor preset is required');
+  }
+  if (!input.conditions || input.conditions.length === 0) {
+    throw new Error(
+      'buildRelationalOverpassQl: at least one condition is required (otherwise use buildOverpassQl)',
+    );
+  }
+  const [w, s, e, n] = input.bbox;
+  if (![w, s, e, n].every((x) => Number.isFinite(x))) {
+    throw new Error('buildRelationalOverpassQl: bbox values must be finite numbers');
+  }
+  if (w >= e || s >= n) {
+    throw new Error(
+      `buildRelationalOverpassQl: bbox is degenerate (west=${w} >= east=${e} or south=${s} >= north=${n})`,
+    );
+  }
+  if (w < -180 || e > 180 || s < -90 || n > 90) {
+    throw new Error('buildRelationalOverpassQl: bbox is outside the geographic range');
+  }
+  const timeout = input.timeoutSeconds ?? 60;
+  const maxsize = (input.maxFeatures ?? 50000) * 1024; // rough byte budget
+  const bbox = `(${s},${w},${n},${e})`;
+
+  // Emit the standard "(node|way|relation)<tag-block><filter>" trio
+  // for a preset.  `filterBlock` is whatever bounding filter
+  // applies (bbox for the anchor, `(around.set:distance)` for the
+  // narrowed sets).  Tag block comes from the preset's own tags;
+  // tag filters from the recipe aren't supported in v1 of the
+  // relational surface (the existing OsmFeatureParameter shape
+  // is the place those land for the simple preset query).
+  const stanza = (preset: OsmPreset, filterBlock: string): string => {
+    const tags = combinedTags(preset, undefined);
+    const lines: string[] = [];
+    for (const geom of preset.geometries) {
+      const keyword =
+        geom === 'node' ? 'node' : geom === 'way' ? 'way' : 'relation';
+      lines.push(`    ${keyword}${tags}${filterBlock};`);
+    }
+    return lines.join('\n');
+  };
+
+  // Round distances to integer meters: Overpass accepts decimals,
+  // but integer ensures bit-for-bit reproducibility across cache
+  // hits and keeps the QL terse.
+  const conditionDistances = input.conditions.map((c) =>
+    Math.max(1, Math.round(c.distanceMeters)),
+  );
+
+  const lines: string[] = [];
+  lines.push(`[out:json][timeout:${timeout}][maxsize:${maxsize}];`);
+  // Anchor candidates: presets matching anchor inside the bbox.
+  lines.push(`// Anchor candidates inside the AOI bbox`);
+  lines.push(`(`);
+  lines.push(stanza(input.anchor, bbox));
+  lines.push(`)->.anchors;`);
+  // Per-condition prefilter: condition features within distance of
+  // any anchor candidate.  Narrows the search space before the
+  // survivor check below.
+  for (let i = 0; i < input.conditions.length; i++) {
+    const c = input.conditions[i]!;
+    const d = conditionDistances[i]!;
+    lines.push(`// Condition ${i}: features within ${d}m of any anchor`);
+    lines.push(`(`);
+    lines.push(stanza(c.preset, `(around.anchors:${d})`));
+    lines.push(`)->.cond${i};`);
+  }
+  // Survivor selection: anchors within distance of at least one
+  // feature in EVERY condition set (Overpass ANDs chained around
+  // filters automatically).
+  const survivorFilter = input.conditions
+    .map((_, i) => `(around.cond${i}:${conditionDistances[i]})`)
+    .join('');
+  lines.push(`// Surviving anchors: pass all condition distance checks`);
+  lines.push(`(`);
+  lines.push(stanza(input.anchor, survivorFilter));
+  lines.push(`)->.survivors;`);
+  // Supporting features per condition: those near at least one
+  // surviving anchor.  Re-narrows the prefilter sets to the truly
+  // relevant ones the client will render.
+  for (let i = 0; i < input.conditions.length; i++) {
+    const c = input.conditions[i]!;
+    const d = conditionDistances[i]!;
+    lines.push(`// Supporting features for condition ${i}`);
+    lines.push(`(`);
+    lines.push(stanza(c.preset, `(around.survivors:${d})`));
+    lines.push(`)->.supporting${i};`);
+  }
+  // Single output statement per labeled set so the caller can
+  // distinguish the three groups by either parsing the @id ranges
+  // or (more robustly) re-classifying via tag-selector match
+  // against the preset definitions.
+  lines.push(`.survivors out body geom tags;`);
+  for (let i = 0; i < input.conditions.length; i++) {
+    lines.push(`.supporting${i} out body geom tags;`);
+  }
+  return lines.join('\n');
+}
