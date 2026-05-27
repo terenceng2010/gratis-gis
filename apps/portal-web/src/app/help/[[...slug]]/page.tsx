@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -9,6 +10,47 @@ import {
 } from '@/lib/help/content';
 import { HelpSearchBox } from './search-box';
 import { HelpSidebarNav } from './sidebar-nav';
+
+/**
+ * Per-doc <title> + meta description (#SEO).  Without this every
+ * /help/* URL ships with the root layout's generic "GratisGIS"
+ * title, which makes Google show the same snippet for fifty
+ * different pages and tanks click-through.  Reads the same
+ * frontmatter the page body uses, so authoring one doc covers
+ * both rendering and SEO.
+ */
+export async function generateMetadata(
+  props: { params: Promise<{ slug?: string[] }> },
+): Promise<Metadata> {
+  const params = await props.params;
+  if (!params.slug || params.slug.length === 0) {
+    return {
+      title: 'Help',
+      description:
+        'GratisGIS user guide: getting started, item types, map editing, forms, app builder, admin, and analysis tools.',
+      alternates: { canonical: '/help' },
+    };
+  }
+  const doc = await loadDocBySlug(params.slug);
+  if (!doc) {
+    return {
+      title: 'Help',
+      description: 'GratisGIS user guide.',
+    };
+  }
+  const slugPath = params.slug.join('/');
+  return {
+    title: doc.frontmatter.title,
+    description: doc.frontmatter.summary,
+    alternates: { canonical: `/help/${slugPath}` },
+    openGraph: {
+      title: doc.frontmatter.title,
+      description: doc.frontmatter.summary,
+      type: 'article',
+      url: `/help/${slugPath}`,
+    },
+  };
+}
 
 /**
  * Help system entry point (#118).  Catch-all route under /help

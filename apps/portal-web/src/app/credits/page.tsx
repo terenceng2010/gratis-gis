@@ -14,9 +14,12 @@ import { authOptions } from '@/lib/auth';
  * either page directly from a search engine or a shared link.
  */
 export const metadata: Metadata = {
-  title: 'Built on - GratisGIS',
+  // The root layout applies a "%s · GratisGIS" template; titles
+  // declared here should NOT carry their own GratisGIS suffix or
+  // they double up in the rendered <title>.
+  title: 'Built on',
   description:
-    'The open-source projects GratisGIS is built on, with links to each project.',
+    'The open-source projects GratisGIS is built on, with links to each.',
 };
 
 interface StackRow {

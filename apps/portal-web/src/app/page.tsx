@@ -2,8 +2,59 @@
 import { getServerSession } from 'next-auth';
 import type { ItemType } from '@gratis-gis/shared-types';
 import { authOptions } from '@/lib/auth';
+import { getPortalUrl } from '@/lib/portal-url';
 import { loadWhatsNewEntries } from '@/lib/whats-new';
 import { PublicLanding } from './public-landing';
+
+/**
+ * SoftwareApplication JSON-LD for the landing page (#SEO).  Makes
+ * GratisGIS eligible for Google's software rich-result treatment
+ * (screenshot, free tag, license, repo link in the SERP card).
+ * The payload mirrors the openGraph metadata in layout.tsx so the
+ * search engine has consistent signals across surfaces.  Inlined
+ * here rather than in a shared lib because it's only meaningful on
+ * the apex page; sub-routes shouldn't impersonate the application
+ * description.
+ */
+function landingJsonLd() {
+  const base = getPortalUrl();
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'GratisGIS',
+    description:
+      'Open-source, self-hosted geospatial portal. Web maps, app builder, offline field collection, visual tool builder. Built on PostGIS, MapLibre, and Next.js.',
+    url: base,
+    applicationCategory: 'BusinessApplication',
+    applicationSubCategory: 'Geographic Information System',
+    operatingSystem: 'Web, Linux server',
+    license: 'https://www.gnu.org/licenses/agpl-3.0.html',
+    softwareVersion: 'pre-v1',
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD',
+    },
+    author: {
+      '@type': 'Organization',
+      name: 'GratisGIS contributors',
+      url: 'https://github.com/palavido-dev/gratis-gis',
+    },
+    codeRepository: 'https://github.com/palavido-dev/gratis-gis',
+    programmingLanguage: ['TypeScript', 'SQL'],
+    keywords: [
+      'open source GIS',
+      'self-hosted GIS portal',
+      'web GIS',
+      'PostGIS',
+      'MapLibre',
+      'geospatial portal',
+      'web map server',
+      'offline field data collection',
+      'spatial data sharing',
+    ].join(', '),
+  };
+}
 
 export default async function HomePage(
   props: {
@@ -35,12 +86,24 @@ export default async function HomePage(
     loadWhatsNewEntries(5),
   ]);
   return (
-    <PublicLanding
-      data={data}
-      whatsNew={whatsNew}
-      forceProjectSection={previewProject}
-      isAuthenticated={!!session}
-    />
+    <>
+      {/* JSON-LD ships before the component so crawlers (which often
+          read top-of-DOM before paint) pick it up reliably.  The
+          script tag itself is invisible. */}
+      <script
+        type="application/ld+json"
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(landingJsonLd()),
+        }}
+      />
+      <PublicLanding
+        data={data}
+        whatsNew={whatsNew}
+        forceProjectSection={previewProject}
+        isAuthenticated={!!session}
+      />
+    </>
   );
 }
 
