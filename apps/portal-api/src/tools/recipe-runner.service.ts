@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import type {
   DistanceRef,
@@ -201,27 +202,37 @@ export class RecipeRunnerService {
    * either a selection update or an OSM-features overlay response.
    */
   async run(
-    user: AuthUser,
+    user: AuthUser | null,
     toolId: string,
     request: ToolRunRequest,
   ): Promise<ToolRunResult> {
-    // #142: tools can carry either a generic RecipeAction (selection
-    // / osm-features-overlay) OR an OsmRelationalQueryAction (the
-    // dedicated A-near-B-AND-C surface).  Load the raw item once and
-    // dispatch on action.kind so the two surfaces share ACL gating
-    // without dragging the relational query through the generic
-    // recipe shape.
-    const action = await this.loadToolAction(user, toolId);
+    // Anonymous callers can only reach this surface via @Public()
+    // on the controller.  When user is null we restrict to:
+    //   (1) public-access tool items, and
+    //   (2) action kinds that don't touch the portal's data layers
+    //       (the OSM-only surfaces).
+    // Authenticated callers get the full surface with normal ACL
+    // gating through ItemsService.get().
+    const action = user
+      ? await this.loadToolAction(user, toolId)
+      : await this.loadPublicToolAction(toolId);
     if (action.kind === 'osm-relational-query') {
       return this.runOsmRelationalInternal(action, request, user);
     }
     if (action.kind === 'recipe') {
       if (action.output.kind === 'selection') {
+        if (!user) {
+          throw new UnauthorizedException(
+            'This tool updates a layer selection and requires sign-in.',
+          );
+        }
         return this.runSelectionInternal(user, toolId, action, request);
       }
       if (action.output.kind === 'osm-features-overlay') {
         // #103: thread the running user's orgId so OsmService can
-        // look up the per-org Overpass endpoint override.
+        // look up the per-org Overpass endpoint override.  When
+        // user is null, OsmService falls back to the env / default
+        // Overpass endpoint -- anonymous viewers can still query.
         return this.runOsmOverlayInternal(action, request, user);
       }
       throw new BadRequestException(
@@ -235,6 +246,41 @@ export class RecipeRunnerService {
     const k = (action as { kind: string }).kind;
     throw new BadRequestException(
       `Tool ${toolId} has an unsupported action kind: ${k}`,
+    );
+  }
+
+  /**
+   * Anonymous tool-load path (#149 / #142 / #117 follow-up).
+   * Fetches a tool item directly from Prisma, enforcing
+   * `access='public'` + `deletedAt is null`, and returns its
+   * action.  Bypasses ItemsService.get() because that gate
+   * requires an AuthUser.  Throws NotFoundException for any tool
+   * that isn't a runnable Tool item, isn't public, or has been
+   * trashed -- deliberately indistinguishable so existence of a
+   * private tool can't leak via a 403 vs 404 difference.
+   */
+  private async loadPublicToolAction(
+    toolId: string,
+  ): Promise<RecipeAction | OsmRelationalQueryAction> {
+    const row = await this.prisma.item.findFirst({
+      where: { id: toolId, access: 'public', deletedAt: null, type: 'tool' },
+      select: { data: true },
+    });
+    if (!row) {
+      throw new NotFoundException('Tool not found');
+    }
+    const data = row.data as unknown as ToolItemData | null;
+    if (!data) {
+      throw new BadRequestException(`Tool ${toolId} has no data blob`);
+    }
+    if (
+      data.action.kind === 'recipe' ||
+      data.action.kind === 'osm-relational-query'
+    ) {
+      return data.action;
+    }
+    throw new BadRequestException(
+      `Tool ${toolId} action kind '${data.action.kind}' is not runnable anonymously`,
     );
   }
 
@@ -476,7 +522,7 @@ export class RecipeRunnerService {
   private async runOsmOverlayInternal(
     recipe: RecipeAction,
     request: ToolRunRequest,
-    user: AuthUser,
+    user: AuthUser | null,
   ): Promise<ToolOsmOverlayResult> {
     if (recipe.output.kind !== 'osm-features-overlay') {
       throw new BadRequestException(
@@ -506,6 +552,15 @@ export class RecipeRunnerService {
     if (!aoiVal || aoiVal.kind !== 'feature-source') {
       throw new BadRequestException(
         `Recipe aoiParameterRef '${recipe.aoiParameterRef}' must resolve to a feature-source parameter`,
+      );
+    }
+    // Anonymous callers can only use inline-geojson AOIs (drawn on
+    // the map).  data_layer / derived_layer AOIs would read from a
+    // portal layer whose ACL we can't satisfy without an auth user;
+    // refuse the call rather than silently bypass the gate.
+    if (!user && aoiVal.value.kind !== 'inline-geojson') {
+      throw new UnauthorizedException(
+        'This tool requires sign-in: layer-based AOIs are not available to anonymous viewers. Draw an area on the map instead.',
       );
     }
     // Compute the AOI's bbox.  v1 supports inline-geojson AOIs (the
@@ -555,7 +610,7 @@ export class RecipeRunnerService {
       // #103: per-org Overpass endpoint lookup happens inside
       // OsmService when orgId is supplied. The user is the running
       // principal so their org is the one whose setting wins.
-      ...(user.orgId ? { orgId: user.orgId } : {}),
+      ...(user?.orgId ? { orgId: user.orgId } : {}),
     });
 
     // Resolve human labels for the preset ids that were actually
@@ -604,7 +659,7 @@ export class RecipeRunnerService {
   private async runOsmRelationalInternal(
     action: OsmRelationalQueryAction,
     request: ToolRunRequest,
-    user: AuthUser,
+    user: AuthUser | null,
   ): Promise<ToolOsmRelationalResult> {
     if (!action.anchorPreset) {
       throw new BadRequestException(
@@ -627,6 +682,11 @@ export class RecipeRunnerService {
     if (!aoiVal || aoiVal.kind !== 'feature-source') {
       throw new BadRequestException(
         `Relational aoiParameterRef '${action.aoiParameterRef}' must resolve to a feature-source parameter`,
+      );
+    }
+    if (!user && aoiVal.value.kind !== 'inline-geojson') {
+      throw new UnauthorizedException(
+        'This tool requires sign-in: layer-based AOIs are not available to anonymous viewers. Draw an area on the map instead.',
       );
     }
     const bbox = await this.computeAoiBbox(aoiVal.value);
@@ -676,7 +736,7 @@ export class RecipeRunnerService {
         distanceMeters: conditionDistancesMeters[i]!,
       })),
       bbox: paddedBbox,
-      ...(user.orgId ? { orgId: user.orgId } : {}),
+      ...(user?.orgId ? { orgId: user.orgId } : {}),
       ...(action.anchorMaxResults
         ? { maxFeatures: action.anchorMaxResults }
         : {}),

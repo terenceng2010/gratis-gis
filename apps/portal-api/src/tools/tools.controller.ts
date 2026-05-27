@@ -11,6 +11,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
+import { Public } from '../auth/public.decorator.js';
 import {
   RecipeRunnerService,
   type ToolRunRequest,
@@ -30,14 +31,19 @@ class ToolRunDto {
 
 /**
  * Tool recipe HTTP surface (#90).  POST /api/tools/:id/run executes
- * the tool's recipe against the caller's authorisation and returns
- * the output sink shape (selection feature ids in v1; derived-layer
- * / data-layer outputs land in follow-up commits).
+ * the tool's recipe and returns the output sink shape.
  *
- * The endpoint is gated by the global JwtAuthGuard.  The runner
- * gates on read access to the tool itself AND to the target layer
- * referenced by the output -- a user must hold read on every layer
- * the recipe touches, not just the tool.
+ * The endpoint is `@Public()` so a public Custom Web App can run
+ * an embedded public Tool without a sign-in -- the typical
+ * "self-service OSM query inside a published map viewer" shape.
+ * Authorisation isn't bypassed: the runner short-circuits to
+ * "public only" when no user is present, refuses tool items that
+ * aren't `access='public'`, and refuses recipe sinks that would
+ * touch private data layers (the selection sink, etc.) without
+ * an authenticated principal.
+ *
+ * Authenticated callers still get the full surface: full ACL
+ * gating, all output sinks, layer reads scoped to their session.
  */
 @ApiTags('tools')
 @ApiBearerAuth()
@@ -45,21 +51,22 @@ class ToolRunDto {
 export class ToolsController {
   constructor(private readonly runner: RecipeRunnerService) {}
 
+  @Public()
   @Post(':id/run')
   @HttpCode(200)
   async run(
-    @CurrentUser() user: AuthUser,
+    @CurrentUser() user: AuthUser | null,
     @Param('id') toolId: string,
     @Body() body: ToolRunDto,
   ) {
     const request: ToolRunRequest = {
       parameters: (body.parameters ?? {}) as ToolRunRequest['parameters'],
     };
-    // run() branches internally on the recipe's output sink: a
-    // selection-output recipe lands the old shape; an
-    // osm-features-overlay recipe lands the new shape.  The wire
-    // contract is the same `parameters` envelope; only the
-    // response shape differs.
+    // run() branches on the action kind AND on whether a user is
+    // present.  Anonymous callers can run pure-Overpass tools
+    // (osm-features-overlay, osm-relational-query) bound to inline-
+    // geojson AOIs against public Tool items; everything else
+    // requires auth.
     return this.runner.run(user, toolId, request);
   }
 }

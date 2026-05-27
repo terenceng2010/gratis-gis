@@ -91,21 +91,62 @@ export function escapeOverpassTagKey(raw: string): string {
  * the preset value is the wildcard `"*"` we emit a presence-only
  * clause (`["amenity"]`) -- iD uses `*` to mean "any value for this
  * key".
+ *
+ * The `op` field selects between three Overpass operators:
+ *
+ *   - `equals` (default):    `["key"="value"]` -- exact match.
+ *   - `contains`:            `["key"~"<escaped>",i]` -- case-
+ *                            insensitive substring match.  User
+ *                            input is escaped as a regex literal
+ *                            so a `.` in the search string matches
+ *                            a literal `.`, not "any character."
+ *   - `regex`:               `["key"~"<raw>"]` -- user-supplied
+ *                            regex (case-sensitive).  Caller is
+ *                            responsible for the pattern shape;
+ *                            Overpass's per-query timeout caps any
+ *                            catastrophic-backtracking exposure.
  */
-function tagClause(tag: OsmPresetTag | { key: string; value: string }): string {
+function tagClause(
+  tag:
+    | OsmPresetTag
+    | { key: string; value: string; op?: 'equals' | 'contains' | 'regex' },
+): string {
   const k = escapeOverpassTagKey(tag.key);
   if (tag.value === '*') {
     return `["${k}"]`;
+  }
+  const op = 'op' in tag ? tag.op : undefined;
+  if (op === 'contains') {
+    const escapedLiteral = escapeRegexLiteral(tag.value);
+    const v = escapeOverpassTagValue(escapedLiteral);
+    return `["${k}"~"${v}",i]`;
+  }
+  if (op === 'regex') {
+    const v = escapeOverpassTagValue(tag.value);
+    return `["${k}"~"${v}"]`;
   }
   const v = escapeOverpassTagValue(tag.value);
   return `["${k}"="${v}"]`;
 }
 
 /**
+ * Escape regex metacharacters in a user-supplied literal so the
+ * resulting regex matches the input as a plain substring.  The
+ * set covers the ECMAScript metachar list; Overpass uses POSIX
+ * extended regex on top of which `i` switches case-insensitive.
+ * Backslashes are doubled here too because the QL value escape
+ * step (escapeOverpassTagValue) then doubles them again to satisfy
+ * the QL string-literal grammar.
+ */
+function escapeRegexLiteral(raw: string): string {
+  return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Render the per-stanza tag block: the preset's own tags + the
- * runtime tag filters, all ANDed.  Filters with op !== 'equals'
- * are accepted but ignored in v1 to keep the QL deterministic;
- * a follow-up adds the regex / contains operators.
+ * runtime tag filters, all ANDed.  Filters honor the `equals` /
+ * `contains` / `regex` op selector; see tagClause() for the per-op
+ * Overpass semantics.
  */
 function combinedTags(
   preset: OsmPreset,
@@ -115,8 +156,7 @@ function combinedTags(
   for (const t of preset.tags) parts.push(tagClause(t));
   if (filters) {
     for (const f of filters) {
-      if (f.op && f.op !== 'equals') continue; // v1 equals-only
-      parts.push(tagClause({ key: f.key, value: f.value }));
+      parts.push(tagClause(f));
     }
   }
   return parts.join('');
