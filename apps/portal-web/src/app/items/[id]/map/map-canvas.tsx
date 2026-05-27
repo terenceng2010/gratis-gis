@@ -3121,9 +3121,15 @@ function renderPopupHtml(
   layer: MapLayer,
   props: Record<string, unknown>,
 ): string {
+  // renderTemplate already HTML-escapes interpolated values, so the
+  // template branch is safe to drop in raw.  The fallback branch uses
+  // the layer's display title, which is plain text from the layer
+  // config, so escape it here.  Without this split, the template
+  // branch double-escaped (e.g. "Erickson's" rendered as
+  // "Erickson&#39;s" in the popup heading).
   const title = layer.popup.titleTemplate
     ? renderTemplate(layer.popup.titleTemplate, props)
-    : layer.title;
+    : escapeHtml(layer.title);
 
   // Body shape depends on mode. Template mode passes through author
   // markup with values HTML-escaped; picked / all render as a
@@ -3169,7 +3175,7 @@ function renderPopupHtml(
 
   return `
     <div class="gg-popup">
-      <div class="gg-popup-title">${escapeHtml(title)}</div>
+      <div class="gg-popup-title">${title}</div>
       ${body}
       ${metaFooter}
     </div>

@@ -4401,17 +4401,19 @@ function ToolWidgetRender({ widget }: { widget: CustomWidget }) {
   const v = variant ?? 'primary';
   // Toolbar variant: round pill, icon-only by default with an
   // optional inline label when showLabel is set. Background uses
-  // the accent token at low opacity so the icon reads as
-  // "interactive" against any container chrome.
-  // Standalone variant: same shape as the legacy Button-bound-to-
-  // tool rendering so visual identity stays consistent across the
-  // two surfaces.
+  // the tool item-type color (teal) so the widget reads as a Tool
+  // consistent with the tool item tile on the items list and the
+  // ItemTypeBadge used elsewhere; the accent token (blue) was a
+  // mismatch against the tool's visual identity.
+  // Standalone variant: same teal palette in a more prominent fill
+  // so the button reads as the primary action surface inside the
+  // user's app.
   const className =
     d === 'toolbar'
-      ? `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-accent/10 text-accent hover:bg-accent/20`
+      ? `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-teal-500/10 text-teal-700 hover:bg-teal-500/20`
       : `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
           v === 'primary'
-            ? 'bg-accent text-white hover:opacity-90'
+            ? 'bg-teal-500/90 text-white hover:bg-teal-500'
             : 'border border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
         }`;
   const iconHtml = iconName ? renderIconSvg(iconName) : null;
@@ -4661,6 +4663,10 @@ function ToolButtonRender({
                     const newLayer = buildOsmResultLayer({
                       toolId,
                       toolTitle: tool?.title ?? 'OSM',
+                      ...(result.output.presetLabels &&
+                      result.output.presetLabels.length > 0
+                        ? { presetLabels: result.output.presetLabels }
+                        : {}),
                       features: result.output.features,
                     });
                     pushOsmResultLayerToAllMaps(ctx, newLayer);
@@ -5023,6 +5029,11 @@ function firstMapInstance(
 function buildOsmResultLayer(args: {
   toolId: string;
   toolTitle: string;
+  /** Human-readable preset labels returned by the runner (e.g.
+   *  ["School", "Park"]).  Used to title the LayerList entry with
+   *  what the user actually searched for, falling back to the tool
+   *  title when empty (older runners or recipes with no preset). */
+  presetLabels?: readonly string[];
   features: readonly { type: 'Feature'; id: string; properties: Record<string, unknown>; geometry: unknown }[];
 }): MapLayer {
   // Deterministic id keyed on toolId so a re-run replaces the
@@ -5083,9 +5094,18 @@ function buildOsmResultLayer(args: {
       radius: 6,
     },
   };
+  // Prefer the OSM category label(s) the user searched for over the
+  // generic tool name.  "School, Park (12)" reads cleaner in the
+  // LayerList than "Query OSM Features (OSM, 12)" and tells the user
+  // what's actually on the map.  Falls back to the tool title when
+  // the runner didn't supply labels (older API or no presets matched).
+  const labelPart =
+    args.presetLabels && args.presetLabels.length > 0
+      ? args.presetLabels.join(', ')
+      : args.toolTitle;
   return {
     id,
-    title: `${args.toolTitle} (OSM, ${args.features.length})`,
+    title: `${labelPart} (${args.features.length})`,
     visible: true,
     opacity: 1,
     source: { kind: 'geojson-inline', geojson: fc },

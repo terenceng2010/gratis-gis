@@ -30,6 +30,7 @@ import type { AuthUser } from '../auth/auth-sync.service.js';
 import { getGeneratorForStep } from '../derived-layers/tools/registry.js';
 import { OsmService } from '../osm/osm.service.js';
 import type { OsmGeoJsonFeature } from '../osm/osm-to-geojson.js';
+import { getOsmPreset } from '../osm/preset-catalog.js';
 
 /**
  * Per-parameter resolved value: the runtime-supplied input merged
@@ -109,6 +110,14 @@ export interface ToolOsmOverlayResult {
      *  per-query cap.  UI banner so the user knows to tighten the
      *  AOI / filters. */
     truncated: boolean;
+    /** Human-readable labels of the OSM presets that were actually
+     *  queried (resolved from the catalog at run time so the client
+     *  doesn't need its own copy).  Used by the runtime to title the
+     *  result MapLayer with what the user searched for (e.g.
+     *  "School, Park") instead of the tool's generic name.  Empty
+     *  array when no presets matched the resolver (extremely rare;
+     *  the picker constrains to valid ids). */
+    presetLabels: string[];
   };
 }
 
@@ -454,6 +463,22 @@ export class RecipeRunnerService {
       ...(user.orgId ? { orgId: user.orgId } : {}),
     });
 
+    // Resolve human labels for the preset ids that were actually
+    // queried so the client can title the result layer with the OSM
+    // category the user picked instead of the generic tool name.
+    // Lookups against an unknown id (theoretically possible if the
+    // catalog drifts mid-deploy) skip silently so a single bad id
+    // doesn't poison the title.
+    const presetLabels: string[] = [];
+    for (const id of sourceVal.presetIds) {
+      try {
+        const preset = await getOsmPreset(id);
+        if (preset?.label) presetLabels.push(preset.label);
+      } catch {
+        /* unknown preset id; skip */
+      }
+    }
+
     return {
       output: {
         kind: 'osm-features-overlay',
@@ -461,6 +486,7 @@ export class RecipeRunnerService {
         attribution: result.attribution,
         featureCount: result.featureCount,
         truncated: false, // wave 2 surface when Overpass actually hit the cap
+        presetLabels,
       },
     };
   }

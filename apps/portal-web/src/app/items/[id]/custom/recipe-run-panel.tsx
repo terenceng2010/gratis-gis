@@ -121,6 +121,12 @@ export type RecipeRunResult =
         attribution: string;
         featureCount: number;
         truncated: boolean;
+        /** Human-readable preset labels resolved by the runner (e.g.
+         *  ["School", "Park"]).  Used to title the result MapLayer
+         *  with what was actually searched for.  Optional so the
+         *  type stays back-compat with API responses that predate
+         *  the field. */
+        presetLabels?: string[];
       };
     };
 

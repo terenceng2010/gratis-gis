@@ -4543,7 +4543,7 @@ function ToolWidgetCanvasPreview({
         <span
           className={`pointer-events-none inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium ${
             v === 'primary'
-              ? 'bg-accent text-white'
+              ? 'bg-teal-500/90 text-white'
               : 'border border-border bg-surface-1 text-ink-1'
           }`}
         >
@@ -4562,10 +4562,13 @@ function ToolWidgetCanvasPreview({
     );
   }
   // toolbar variant: icon-only round button (showLabel adds text inline).
+  // Teal palette matches the tool item-type tile used on the items list
+  // and the ItemTypeBadge, keeping the tool's visual identity coherent
+  // across surfaces.
   return (
     <div className="flex flex-1 items-center justify-center p-2">
       <span
-        className="pointer-events-none inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-accent/10 px-2 text-accent"
+        className="pointer-events-none inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-teal-500/10 px-2 text-teal-700"
         style={{ minWidth: '2rem' }}
       >
         {iconHtml ? (
