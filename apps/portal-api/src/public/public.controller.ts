@@ -287,6 +287,15 @@ export class PublicController {
     @Param('layerId') layerId: string,
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
+    // Single-feature lookup by stable entity id.  The MVT-popup
+    // path on the auth'd surface (`features.controller.ts`) calls
+    // /features?entity=<id> after a click to pull full attrs that
+    // the tile doesn't carry; the public surface was silently
+    // ignoring the param and falling back to a full layer scan.
+    // For a 1.4M-feature layer (WV Parcels) that meant every
+    // anonymous popup click stalled on a Loading… spinner for
+    // 20-30s while the server materialised every parcel.
+    @Query('entity') entity?: string,
   ) {
     if (!isUuidShape(itemId)) throw new NotFoundException('Item not found');
     const item = await this.prisma.item.findFirst({
@@ -299,7 +308,11 @@ export class PublicController {
       select: { id: true },
     });
     if (!item) throw new NotFoundException('Item not found');
-    const opts: { bbox?: [number, number, number, number]; at?: string } = {};
+    const opts: {
+      bbox?: [number, number, number, number];
+      at?: string;
+      entity?: string;
+    } = {};
     if (bbox) {
       const parts = bbox.split(',').map(Number);
       if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
@@ -308,6 +321,7 @@ export class PublicController {
       }
     }
     if (at) opts.at = at;
+    if (entity) opts.entity = entity;
     return this.v3.listFeatures(itemId, layerId, opts);
   }
 
@@ -321,8 +335,9 @@ export class PublicController {
     @Param('layerId') layerId: string,
     @Query('bbox') bbox?: string,
     @Query('at') at?: string,
+    @Query('entity') entity?: string,
   ) {
-    return this.layerFeatures(itemId, layerId, bbox, at);
+    return this.layerFeatures(itemId, layerId, bbox, at, entity);
   }
 
   /**
