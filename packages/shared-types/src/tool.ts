@@ -797,9 +797,75 @@ const FIND_OSM_NEAR: RecipeTemplate = {
   },
 };
 
+/**
+ * OSM Name Search starter (#149).  Same osm-features-overlay
+ * output as FIND_OSM_NEAR, but the OSM feature parameter ships
+ * with a pre-stamped `name~"…"` (contains, case-insensitive) tag
+ * filter so the runtime user can type a place name and get every
+ * matching feature back -- the canonical "find every Speedway in
+ * this county" / "what's that building called X" workflow.
+ *
+ * The op selector on the runtime tag-filter UI lets the user
+ * switch to exact match or regex; the stamped default is
+ * contains because that's the lowest-effort happy path for the
+ * dominant use case.
+ */
+const FIND_OSM_BY_NAME: RecipeTemplate = {
+  id: 'find-osm-by-name',
+  label: 'Find OSM features by name',
+  description:
+    "Draw an area on the map; pick what kind of OpenStreetMap feature to look in; type a name (or part of one) and get every match. Handy for 'every Speedway in this county' or 'find the building named Roosevelt Apartments' workflows.",
+  build(): RecipeAction {
+    return {
+      kind: 'recipe',
+      recipeVersion: 1,
+      parameters: [
+        {
+          kind: 'feature-source',
+          name: 'aoi',
+          label: 'Area of interest',
+          hint: 'Draw a shape on the map; the search runs inside (and a small buffer beyond) it.',
+          required: true,
+          geometryType: 'polygon',
+          binding: { mode: 'runtime-draw' },
+        },
+        {
+          kind: 'osm-feature',
+          name: 'osm',
+          label: 'What to look for',
+          hint: 'Pick one or more feature kinds, then type the name (or part of one) in the filter value box.',
+          required: true,
+          binding: {
+            mode: 'runtime-pick',
+            // Default to a name-substring filter so the user only
+            // has to type the value at runtime.  The runtime UI's
+            // op picker lets them switch to exact match or regex
+            // if they want.
+            defaultTagFilters: [{ key: 'name', value: '', op: 'contains' }],
+            allowCustomTagFilters: true,
+          },
+        },
+        {
+          kind: 'distance',
+          name: 'distance',
+          label: 'Search radius',
+          hint: 'Pad the area of interest before the OSM query.  Change units on the input if you prefer feet, kilometers, etc.',
+          unit: 'miles',
+          binding: { mode: 'runtime-input', defaultMeters: 1609.344 },
+        },
+      ],
+      pipeline: [],
+      output: { kind: 'osm-features-overlay' },
+      sourceParameterRef: 'osm',
+      aoiParameterRef: 'aoi',
+    };
+  },
+};
+
 export const RECIPE_TEMPLATES: RecipeTemplate[] = [
   SELECT_BY_LOCATION,
   FIND_OSM_NEAR,
+  FIND_OSM_BY_NAME,
 ];
 
 /** Convenience accessor for the canonical Select-By-Location

@@ -1103,12 +1103,35 @@ function OsmTagFilterRowsRuntime({
             list="osm-common-tag-keys"
             className={`${inputCls} flex-1 font-mono text-xs`}
           />
-          <span className="self-center text-muted">=</span>
+          {/* Op picker (#149).  `=` exact match (default), `~`
+              case-insensitive substring (op='contains'), `~/.../`
+              regex.  Tiny dropdown rather than three radio
+              buttons so the row stays compact; the symbols are
+              the ones Overpass QL itself uses. */}
+          <select
+            value={f.op ?? 'equals'}
+            onChange={(e) => {
+              const op = e.target.value as NonNullable<OsmTagFilter['op']>;
+              set(i, { op });
+            }}
+            aria-label="Match operator"
+            className={`${inputCls} w-16 font-mono text-xs`}
+          >
+            <option value="equals">=</option>
+            <option value="contains">~</option>
+            <option value="regex">~/./</option>
+          </select>
           <input
             type="text"
             value={f.value}
             onChange={(e) => set(i, { value: e.target.value })}
-            placeholder="value"
+            placeholder={
+              f.op === 'contains'
+                ? 'substring'
+                : f.op === 'regex'
+                  ? 'regex'
+                  : 'value'
+            }
             className={`${inputCls} flex-1 font-mono text-xs`}
           />
           <button
