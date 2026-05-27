@@ -25,6 +25,7 @@ import {
   getItemTypeTileClasses,
   hasRuntime,
 } from '@/lib/item-type-icon';
+import { portalUrl } from '@/lib/portal-url';
 import type { WhatsNewEntry } from '@/lib/whats-new';
 
 /**
@@ -62,6 +63,12 @@ interface LandingData {
     thumbnailUrl: string | null;
     updatedAt: string;
     tags: string[];
+    /** Open-data license URL.  Surfaced in the landing's Dataset
+     *  JSON-LD so Google Rich Results / data.gov-style aggregators
+     *  see a license string on every dataset.  Null when the
+     *  author didn't pick one; the JSON-LD omits the field
+     *  entirely in that case. */
+    license?: string | null;
     // Item data payload (added by the public/landing API). Only
     // used by getItemHref / hasRuntime to route templated web_apps
     // to their runtime URL; otherwise unread by the landing.
@@ -690,16 +697,54 @@ function buildLandingJsonLd(
     'wms_service',
     'wfs_service',
   ]);
+  // Google Rich Results requires Dataset descriptions in the 50-5000
+  // character range.  Short author descriptions ("Statewide parcel
+  // data") fail validation as "Invalid string length" and disqualify
+  // the whole Dataset entry from rich-result eligibility. Pad with a
+  // synthesized tail that adds publisher context so the result is
+  // still meaningful, not just keyword stuffing.
+  const padDatasetDescription = (raw: string | null, title: string): string => {
+    const base = (raw && raw.trim().length > 0 ? raw.trim() : title).trim();
+    if (base.length >= 50) return base;
+    const tail = ` Published by ${data.org.name} on the GratisGIS open-source geospatial portal.`;
+    return (base + tail).slice(0, 5000);
+  };
+  const publisher = {
+    '@type': 'Organization',
+    name: data.org.name,
+    url: portalUrl('/'),
+  } as const;
 
   const elements = data.items.map((item, index) => {
     const isDataset = dataLayerLike.has(item.type);
+    const itemAbsoluteUrl = portalUrl(`/items/${item.id}`);
     const node: Record<string, unknown> = {
       '@type': isDataset ? 'Dataset' : 'CreativeWork',
       name: item.title,
-      url: `/items/${item.id}`,
+      // Absolute URL so the JSON-LD is portable across hostnames
+      // (canonical preview, self-host deployments) and unambiguous
+      // for Rich Results validation.
+      url: itemAbsoluteUrl,
       dateModified: item.updatedAt,
     };
-    if (item.description) node.description = item.description;
+    // Dataset: spell out description (padded if too short), creator,
+    // publisher, and license to satisfy Google's Dataset rich-result
+    // spec.  CreativeWork: just attach description / image if present;
+    // Google doesn't validate those nodes the same way.
+    if (isDataset) {
+      node.description = padDatasetDescription(item.description, item.title);
+      // Creator + publisher are both required-recommended fields on
+      // Dataset.  We don't track per-item authorship publicly today,
+      // so the publishing org plays both roles.  When per-item owner
+      // metadata becomes public-safe, swap creator to the owner.
+      node.creator = publisher;
+      node.publisher = publisher;
+      if (item.license && item.license.trim().length > 0) {
+        node.license = item.license.trim();
+      }
+    } else if (item.description) {
+      node.description = item.description;
+    }
     if (item.tags.length > 0) node.keywords = item.tags;
     if (item.thumbnailUrl) node.image = item.thumbnailUrl;
     return {
@@ -714,10 +759,7 @@ function buildLandingJsonLd(
     '@type': 'CollectionPage',
     name: data.org.title,
     ...(data.org.subtitle ? { description: data.org.subtitle } : {}),
-    publisher: {
-      '@type': 'Organization',
-      name: data.org.name,
-    },
+    publisher,
     mainEntity: {
       '@type': 'ItemList',
       numberOfItems: data.items.length,

@@ -460,6 +460,12 @@ export class PublicController {
         thumbnailDesign: true,
         updatedAt: true,
         tags: true,
+        // Open-data license URL when the item carries one. Used
+        // by the landing's Schema.org Dataset JSON-LD (Google Rich
+        // Results flags Datasets without a license as a missing
+        // recommended field, and aggregators like data.gov filter
+        // their crawls to license-bearing rows).
+        license: true,
         // Include the data payload so the landing tile can route a
         // templated web_app (editor / viewer) straight to its
         // runtime URL. Without `data`, getItemHref / isViewerItem
