@@ -4407,20 +4407,22 @@ function ToolWidgetRender({ widget }: { widget: CustomWidget }) {
   // a few hundred lines above.
   const inAppBar = useContext(AppBarContext);
   // Three visual modes:
-  //  1. Toolbar variant inside an app-bar  -> flat header-ink icon
-  //     link, matching ToolWidgetSlot's in-bar treatment. The Tool
+  //  1. Toolbar variant inside an app-bar  -> claim the full slot
+  //     height + min-width with a vertical icon-over-label stack,
+  //     matching ToolWidgetSlot's in-bar geometry exactly.  Tool
   //     reads as a peer of Search / Print / Basemap.
-  //  2. Toolbar variant on the canvas      -> teal pill so the tool
-  //     identity reads against surface-1 / map chrome (the teal
-  //     matches the tool item-type tile on the items list and the
-  //     ItemTypeBadge).
+  //  2. Toolbar variant on the canvas      -> centered teal pill so
+  //     the tool identity reads against surface-1 / map chrome
+  //     (the teal matches the tool item-type tile on the items
+  //     list and the ItemTypeBadge).
   //  3. Standalone variant                 -> primary button shape
-  //     with teal fill, secondary uses neutral surface-1 chrome.
+  //     with teal fill; secondary uses neutral surface-1 chrome.
   let className: string;
-  if (d === 'toolbar') {
-    className = inAppBar
-      ? `inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]`
-      : `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-teal-500/10 text-teal-700 hover:bg-teal-500/20`;
+  if (d === 'toolbar' && inAppBar) {
+    // Vertical stack matching ToolWidgetSlot's in-bar idle state.
+    className = `group/tool flex h-full min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-md px-2.5 py-1.5 transition-colors text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))] disabled:opacity-50`;
+  } else if (d === 'toolbar') {
+    className = `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-teal-500/10 text-teal-700 hover:bg-teal-500/20`;
   } else {
     className = `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
       v === 'primary'
@@ -4430,6 +4432,12 @@ function ToolWidgetRender({ widget }: { widget: CustomWidget }) {
   }
   const iconHtml = iconName ? renderIconSvg(iconName) : null;
   const hideText = d === 'toolbar' && !showLabel;
+  // In-bar tool widgets render edge-to-edge with no outer padding
+  // so they fill the full app-bar height (matching ToolWidgetSlot).
+  // Canvas + standalone variants keep the centered-with-padding
+  // wrapper so the button has breathing room on a surface-1 grid
+  // cell.  Icons inherit larger sizing in-bar (h-5/w-5) so the
+  // stroke weight matches Search / Print / Basemap.
   return (
     <ToolButtonRender
       toolId={toolId}
@@ -4437,6 +4445,7 @@ function ToolWidgetRender({ widget }: { widget: CustomWidget }) {
       className={className}
       {...(iconHtml ? { iconHtml } : {})}
       hideText={hideText}
+      inAppBar={inAppBar}
     />
   );
 }
@@ -4455,6 +4464,7 @@ function ToolButtonRender({
   className,
   iconHtml,
   hideText,
+  inAppBar,
 }: {
   toolId: string | undefined;
   text: string;
@@ -4469,6 +4479,11 @@ function ToolButtonRender({
    *  aria-label from the underlying button.  Default false
    *  keeps the legacy Button rendering. */
   hideText?: boolean;
+  /** When true, render edge-to-edge with no outer padding so the
+   *  button fills the app-bar slot height, matching how Search /
+   *  Print / Basemap claim their slots. Icon sizes up to h-5/w-5
+   *  and an optional label sits beneath it (vertical stack). */
+  inAppBar?: boolean;
 }) {
   type ToolItem = {
     id: string;
@@ -4623,8 +4638,27 @@ function ToolButtonRender({
     text && text !== 'Button' ? text : tool?.title ?? text;
   const disabled = status !== 'ok' || !tool?.data?.action;
 
+  // In-bar: edge-to-edge wrapper that the button fills with h-full,
+  // so the icon-link claims its slot the same way every other
+  // toolbar widget does.  Off-bar: centered with breathing room.
+  const wrapperClass = inAppBar
+    ? 'flex h-full w-full'
+    : 'flex h-full w-full items-center justify-center p-2';
+  // Bigger icons in-bar to match Search / Print / Basemap stroke
+  // weight; smaller in the canvas / standalone pill so the icon
+  // doesn't crowd a tight rounded-full container.
+  const iconSizeClass = inAppBar
+    ? '[&_svg]:h-5 [&_svg]:w-5'
+    : '[&_svg]:h-4 [&_svg]:w-4';
+  // In-bar labels sit BELOW the icon (vertical stack); off-bar they
+  // sit inline next to the icon (horizontal pill).  The container
+  // className already supplies flex-col vs row, so the text node
+  // just needs the right typography for each mode.
+  const labelClass = inAppBar
+    ? 'text-[10px] font-medium leading-none'
+    : '';
   return (
-    <div className="flex h-full w-full items-center justify-center p-2">
+    <div className={wrapperClass}>
       <button
         type="button"
         disabled={disabled}
@@ -4635,16 +4669,20 @@ function ToolButtonRender({
             : tool?.title ?? 'Tool'
         }
         aria-label={hideText ? visibleText : undefined}
-        className={`${className} disabled:cursor-not-allowed disabled:opacity-50`}
+        className={`${className} ${
+          inAppBar ? 'h-full w-full' : ''
+        } disabled:cursor-not-allowed disabled:opacity-50`}
       >
         {iconHtml ? (
           <span
             aria-hidden
             dangerouslySetInnerHTML={{ __html: iconHtml }}
-            className="[&_svg]:h-4 [&_svg]:w-4"
+            className={iconSizeClass}
           />
         ) : null}
-        {!hideText ? <span>{visibleText}</span> : null}
+        {!hideText ? (
+          <span className={labelClass}>{visibleText}</span>
+        ) : null}
       </button>
       {recipePanelOpen && tool && tool.data?.action?.kind === 'recipe' && toolId ? (
         (() => {
