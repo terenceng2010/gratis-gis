@@ -44,6 +44,7 @@ import {
   Table2,
   Trash2,
   Type as TypeIcon,
+  Wand2,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -76,6 +77,7 @@ import { useConfirm } from '@/components/dialog-provider';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import { Container } from './themed-containers';
 import { ToolPicker } from './tool-picker';
+import { MAP_ICONS, MAP_ICON_CATEGORIES, renderIconSvg } from '../map/map-icons';
 
 /**
  * #22: summary of one theme item, served from the parent server
@@ -1388,6 +1390,13 @@ const PALETTE_TILES: Array<{
     Icon: MousePointerClick,
     hint: 'Link to another page or external URL',
     category: 'page',
+  },
+  {
+    kind: 'tool',
+    label: 'Tool',
+    Icon: Wand2,
+    hint: 'Run a Tool item (Select By Location, OSM Query, etc.)',
+    category: 'data',
   },
   {
     kind: 'divider',
@@ -2845,6 +2854,12 @@ function WidgetCard({
             {widget.config.label || 'Button'}
           </span>
         </div>
+      ) : widget.config.kind === 'tool' ? (
+        // #144: live preview for the Tool widget. Render in the
+        // shape the runtime will use so the author sees what
+        // they're going to ship -- toolbar variant is icon-only
+        // round; standalone is icon + label.
+        <ToolWidgetCanvasPreview config={widget.config} />
       ) : widget.config.kind === 'tabs' ? (
         // #362: tabs container live preview. Renders a real tab
         // strip + content area so authors see what the runtime will
@@ -3005,6 +3020,8 @@ function widgetPlaceholderText(
       return 'Paste an image URL in the right rail';
     case 'button':
       return 'Configure label + link in the right rail';
+    case 'tool':
+      return 'Pick a tool + icon in the right rail';
     case 'divider':
       return 'Horizontal rule';
     case 'embed':
@@ -3056,6 +3073,10 @@ function summarizeWidget(w: CustomWidget): string {
       return w.config.url ? 'image set' : 'no url';
     case 'button':
       return w.config.label || 'no label';
+    case 'tool':
+      return w.config.toolId
+        ? `→ ${w.config.toolId.slice(0, 6)}`
+        : 'pick a tool';
     case 'divider':
       return w.config.style ?? 'solid';
     case 'embed':
@@ -3728,6 +3749,14 @@ function WidgetConfigForm({
           onChangeConfig={onChangeConfig}
         />
       );
+    case 'tool':
+      return (
+        <ToolWidgetConfigForm
+          config={widget.config}
+          canEdit={canEdit}
+          onChangeConfig={onChangeConfig}
+        />
+      );
     case 'divider':
       return (
         <DividerWidgetConfig
@@ -4262,6 +4291,296 @@ function ButtonWidgetConfig({
           />
         </Field>
       )}
+    </div>
+  );
+}
+
+/**
+ * #144: Tool widget config form. Pick a tool, an icon, and the
+ * display variant. Icon belongs on the widget instance (NOT on
+ * the underlying Tool item) so the same tool can render with
+ * different icons / labels in different apps.
+ */
+function ToolWidgetConfigForm({
+  config,
+  canEdit,
+  onChangeConfig,
+}: {
+  config: {
+    kind: 'tool';
+    toolId?: string;
+    iconName?: string;
+    label?: string;
+    showLabel?: boolean;
+    display?: 'toolbar' | 'standalone';
+    variant?: 'primary' | 'secondary';
+  };
+  canEdit: boolean;
+  onChangeConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const display = config.display ?? 'toolbar';
+  return (
+    <div className="space-y-3">
+      <Field label="Tool">
+        <ToolPicker
+          selectedId={config.toolId ?? ''}
+          canEdit={canEdit}
+          onSelect={(id) => onChangeConfig({ toolId: id })}
+        />
+      </Field>
+      <Field label="Icon">
+        <ToolIconPicker
+          value={config.iconName ?? ''}
+          canEdit={canEdit}
+          onChange={(iconName) => onChangeConfig({ iconName })}
+        />
+      </Field>
+      <Field
+        label="Label (optional)"
+        hint="Defaults to the tool's title when blank."
+      >
+        <input
+          type="text"
+          value={config.label ?? ''}
+          disabled={!canEdit}
+          placeholder="(use tool title)"
+          onChange={(e) => onChangeConfig({ label: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm focus:border-ink-1 focus:outline-none"
+        />
+      </Field>
+      <Field label="Display">
+        <select
+          value={display}
+          disabled={!canEdit}
+          onChange={(e) => onChangeConfig({ display: e.target.value })}
+          className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+        >
+          <option value="toolbar">Toolbar (icon only)</option>
+          <option value="standalone">Standalone (icon + label)</option>
+        </select>
+      </Field>
+      {display === 'toolbar' ? (
+        <label className="flex items-center gap-2 text-xs text-ink-1">
+          <input
+            type="checkbox"
+            disabled={!canEdit}
+            checked={config.showLabel ?? false}
+            onChange={(e) => onChangeConfig({ showLabel: e.target.checked })}
+          />
+          Show label next to icon
+        </label>
+      ) : (
+        <Field label="Variant">
+          <select
+            value={config.variant ?? 'primary'}
+            disabled={!canEdit}
+            onChange={(e) => onChangeConfig({ variant: e.target.value })}
+            className="w-full rounded-md border border-border bg-surface-1 px-2 py-1 text-sm"
+          >
+            <option value="primary">Primary (filled)</option>
+            <option value="secondary">Secondary (outline)</option>
+          </select>
+        </Field>
+      )}
+    </div>
+  );
+}
+
+/**
+ * #144: lucide-icon picker for the Tool widget. Curated grid
+ * grouped by category (same set as the layer symbol picker), with
+ * an "(no icon)" option that falls through to the runtime's
+ * default wand glyph. Closes on outside click + Escape.
+ */
+function ToolIconPicker({
+  value,
+  canEdit,
+  onChange,
+}: {
+  value: string;
+  canEdit: boolean;
+  onChange: (iconName: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (
+        wrapperRef.current &&
+        e.target instanceof Node &&
+        !wrapperRef.current.contains(e.target)
+      ) {
+        setOpen(false);
+      }
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('mousedown', onDocClick);
+    window.addEventListener('keydown', onEsc);
+    return () => {
+      window.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('keydown', onEsc);
+    };
+  }, [open]);
+
+  const selectedLabel = value ? MAP_ICONS[value]?.label ?? value : 'No icon';
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        disabled={!canEdit}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-1 px-2 py-1 text-sm hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-ink-1">
+          {value && MAP_ICONS[value] ? (
+            <span
+              aria-hidden
+              dangerouslySetInnerHTML={{
+                __html: renderIconSvg(value) ?? '',
+              }}
+              className="[&_svg]:h-4 [&_svg]:w-4"
+            />
+          ) : (
+            <Wand2 className="h-4 w-4 text-muted" />
+          )}
+        </span>
+        <span className="flex-1 truncate text-left text-ink-1">
+          {selectedLabel}
+        </span>
+        <ChevronRight className="h-3 w-3 rotate-90 text-muted" />
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full z-30 mt-1 max-h-72 w-72 overflow-y-auto rounded-md border border-border bg-surface-1 p-2 shadow-raised">
+          <button
+            type="button"
+            onClick={() => {
+              onChange('');
+              setOpen(false);
+            }}
+            className={`mb-2 flex w-full items-center gap-2 rounded px-2 py-1 text-xs ${
+              !value ? 'bg-accent/10 text-accent' : 'text-ink-1 hover:bg-surface-2'
+            }`}
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            No icon (use default wand)
+          </button>
+          {MAP_ICON_CATEGORIES.map((cat) => {
+            const inCat = Object.entries(MAP_ICONS).filter(
+              ([, v]) => v.category === cat,
+            );
+            if (inCat.length === 0) return null;
+            return (
+              <div key={cat} className="mb-2">
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  {cat.replace(/-/g, ' ')}
+                </p>
+                <div className="grid grid-cols-6 gap-1">
+                  {inCat.map(([name, icon]) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => {
+                        onChange(name);
+                        setOpen(false);
+                      }}
+                      title={icon.label}
+                      aria-label={icon.label}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded ${
+                        value === name
+                          ? 'bg-accent/15 text-accent ring-1 ring-accent'
+                          : 'text-ink-1 hover:bg-surface-2'
+                      }`}
+                    >
+                      <span
+                        aria-hidden
+                        dangerouslySetInnerHTML={{
+                          __html: renderIconSvg(name) ?? '',
+                        }}
+                        className="[&_svg]:h-4 [&_svg]:w-4"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * #144: live designer-canvas preview for the Tool widget. Same
+ * visual treatment the runtime will produce, scaled to the
+ * widget's bounding box.
+ */
+function ToolWidgetCanvasPreview({
+  config,
+}: {
+  config: {
+    kind: 'tool';
+    toolId?: string;
+    iconName?: string;
+    label?: string;
+    showLabel?: boolean;
+    display?: 'toolbar' | 'standalone';
+    variant?: 'primary' | 'secondary';
+  };
+}) {
+  const display = config.display ?? 'toolbar';
+  const iconHtml = config.iconName ? renderIconSvg(config.iconName) : null;
+  const label = config.label?.trim() || 'Tool';
+  if (display === 'standalone') {
+    const v = config.variant ?? 'primary';
+    return (
+      <div className="flex flex-1 items-center justify-center p-2">
+        <span
+          className={`pointer-events-none inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium ${
+            v === 'primary'
+              ? 'bg-accent text-white'
+              : 'border border-border bg-surface-1 text-ink-1'
+          }`}
+        >
+          {iconHtml ? (
+            <span
+              aria-hidden
+              dangerouslySetInnerHTML={{ __html: iconHtml }}
+              className="[&_svg]:h-3.5 [&_svg]:w-3.5"
+            />
+          ) : (
+            <Wand2 className="h-3.5 w-3.5" />
+          )}
+          <span>{label}</span>
+        </span>
+      </div>
+    );
+  }
+  // toolbar variant: icon-only round button (showLabel adds text inline).
+  return (
+    <div className="flex flex-1 items-center justify-center p-2">
+      <span
+        className="pointer-events-none inline-flex h-8 items-center justify-center gap-1.5 rounded-full bg-accent/10 px-2 text-accent"
+        style={{ minWidth: '2rem' }}
+      >
+        {iconHtml ? (
+          <span
+            aria-hidden
+            dangerouslySetInnerHTML={{ __html: iconHtml }}
+            className="[&_svg]:h-4 [&_svg]:w-4"
+          />
+        ) : (
+          <Wand2 className="h-4 w-4" />
+        )}
+        {config.showLabel ? (
+          <span className="text-xs font-medium">{label}</span>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -6759,6 +7078,10 @@ function defaultLayoutForKind(kind: CustomWidgetKind): CustomLayout {
       return { col: 1, row: 1, colSpan: 32, rowSpan: 32 };
     case 'button':
       return { col: 1, row: 1, colSpan: 16, rowSpan: 8 };
+    case 'tool':
+      // Tool defaults to toolbar variant (icon-only round), same
+      // footprint as Search / Print / Bookmark.
+      return { col: 1, row: 1, colSpan: 8, rowSpan: 8 };
     case 'divider':
       return { col: 1, row: 1, colSpan: 96, rowSpan: 4 };
     case 'embed':
@@ -7461,6 +7784,17 @@ function stampWidget(kind: CustomWidgetKind, layout: CustomLayout): CustomWidget
           label: 'Button',
           variant: 'primary',
           linkKind: 'url',
+        },
+      };
+    case 'tool':
+      return {
+        id,
+        kind,
+        layout,
+        config: {
+          kind: 'tool',
+          display: 'toolbar',
+          showLabel: false,
         },
       };
     case 'divider':

@@ -37,6 +37,7 @@ import {
   Pentagon,
   Plus,
   Printer,
+  Wand2,
   Search as SearchIcon,
   Square as SquareIcon,
   Table2 as TableIcon,
@@ -101,6 +102,7 @@ import {
   type LayerMetadata,
 } from '../map/layer-metadata';
 import { StyleEditor } from '../map/style-editor';
+import { renderIconSvg } from '../map/map-icons';
 import { SearchBar } from '../map/search-bar';
 import { AppBarContext, Container } from './themed-containers';
 import {
@@ -1527,6 +1529,8 @@ function renderWidget(widget: CustomWidget): React.ReactNode {
       return <ImageWidgetRender widget={widget} />;
     case 'button':
       return <ButtonWidgetRender widget={widget} />;
+    case 'tool':
+      return <ToolWidgetRender widget={widget} />;
     case 'divider':
       return <DividerWidgetRender widget={widget} />;
     case 'embed':
@@ -4376,6 +4380,54 @@ function ButtonWidgetRender({ widget }: { widget: CustomWidget }) {
 }
 
 /**
+ * #144: first-class Tool widget.  Same underlying behavior as the
+ * legacy Button-bound-to-tool path, but with widget-instance-level
+ * icon + display variant + label so authors can drop the same
+ * Tool into different apps with different presentations.  Wraps
+ * the existing ToolButtonRender by computing the rendered className
+ * + iconHtml + hideText from the widget config.
+ */
+function ToolWidgetRender({ widget }: { widget: CustomWidget }) {
+  if (widget.config.kind !== 'tool') return null;
+  const {
+    toolId,
+    iconName,
+    label,
+    showLabel,
+    display,
+    variant,
+  } = widget.config;
+  const d = display ?? 'toolbar';
+  const v = variant ?? 'primary';
+  // Toolbar variant: round pill, icon-only by default with an
+  // optional inline label when showLabel is set. Background uses
+  // the accent token at low opacity so the icon reads as
+  // "interactive" against any container chrome.
+  // Standalone variant: same shape as the legacy Button-bound-to-
+  // tool rendering so visual identity stays consistent across the
+  // two surfaces.
+  const className =
+    d === 'toolbar'
+      ? `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-accent/10 text-accent hover:bg-accent/20`
+      : `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
+          v === 'primary'
+            ? 'bg-accent text-white hover:opacity-90'
+            : 'border border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+        }`;
+  const iconHtml = iconName ? renderIconSvg(iconName) : null;
+  const hideText = d === 'toolbar' && !showLabel;
+  return (
+    <ToolButtonRender
+      toolId={toolId}
+      text={label?.trim() || 'Tool'}
+      className={className}
+      {...(iconHtml ? { iconHtml } : {})}
+      hideText={hideText}
+    />
+  );
+}
+
+/**
  * #90: Tool-button render path.  Fetches the bound `tool` item by
  * id on mount, falls back to a disabled button if the tool was
  * deleted (or the user no longer has read access).  On click, runs
@@ -4387,10 +4439,22 @@ function ToolButtonRender({
   toolId,
   text,
   className,
+  iconHtml,
+  hideText,
 }: {
   toolId: string | undefined;
   text: string;
   className: string;
+  /** #144: optional pre-rendered icon SVG markup. When provided,
+   *  rendered alongside (or in place of) the text inside the
+   *  button. Pass null/undefined for the legacy text-only Button
+   *  rendering. */
+  iconHtml?: string | null;
+  /** #144: hide the text label entirely (icon-only toolbar
+   *  variant). The accessible name still resolves via title +
+   *  aria-label from the underlying button.  Default false
+   *  keeps the legacy Button rendering. */
+  hideText?: boolean;
 }) {
   type ToolItem = {
     id: string;
@@ -4556,9 +4620,17 @@ function ToolButtonRender({
             ? 'Tool no longer available'
             : tool?.title ?? 'Tool'
         }
+        aria-label={hideText ? visibleText : undefined}
         className={`${className} disabled:cursor-not-allowed disabled:opacity-50`}
       >
-        {visibleText}
+        {iconHtml ? (
+          <span
+            aria-hidden
+            dangerouslySetInnerHTML={{ __html: iconHtml }}
+            className="[&_svg]:h-4 [&_svg]:w-4"
+          />
+        ) : null}
+        {!hideText ? <span>{visibleText}</span> : null}
       </button>
       {recipePanelOpen && tool && tool.data?.action?.kind === 'recipe' && toolId ? (
         (() => {
@@ -6803,6 +6875,8 @@ export const KIND_ICON: Record<CustomWidgetKind, typeof MapIcon> = {
   // consistent.
   image: ImageIcon,
   button: ChevronRight,
+  // #144: first-class Tool widget.
+  tool: Wand2,
   divider: ChevronRight,
   embed: ChevronRight,
   // #361 part 2 mapcentric kinds.

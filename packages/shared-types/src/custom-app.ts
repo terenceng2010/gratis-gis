@@ -242,7 +242,14 @@ export type CustomWidgetKind =
   // sidebar they want.  This is the same composition model the
   // page-level grid uses; a container is just a sub-region of that
   // grid with its own chrome.
-  | 'container';
+  | 'container'
+  // #144: first-class Tool widget. Authors who built a Tool item
+  // drop this widget into the layout and pick which tool it
+  // invokes, what icon to show, etc. Distinct from Button-bound-
+  // to-a-tool (which still works for backward compat) so the
+  // mental model matches Search / Print / Layers / etc -- each
+  // tool surface is its own widget kind, not a Button binding.
+  | 'tool';
 
 // ---- Tool-mode display (#364) ----------------------------------
 
@@ -379,7 +386,8 @@ export type CustomWidgetConfig =
   | EditFeatureWidgetConfig
   | DeleteFeatureWidgetConfig
   | TabsWidgetConfig
-  | ContainerWidgetConfig;
+  | ContainerWidgetConfig
+  | ToolWidgetConfig;
 
 /**
  * Time-slider widget config (#87).  Sets the app-wide `at` state
@@ -839,6 +847,61 @@ export interface ButtonWidgetConfig {
   variant?: 'primary' | 'secondary';
   /** Open external links in a new tab. Ignored for page links. */
   openInNewTab?: boolean;
+}
+
+/**
+ * #144: first-class Tool widget. Authors drop this widget into a
+ * layout (toolbar, panel, container, page grid) and bind it to a
+ * Tool item. Cleaner mental model than the legacy
+ * Button-with-linkKind='tool' path: the icon + label + display
+ * variant all live on the widget instance, so the same Tool can
+ * appear with different icons in different apps without mutating
+ * the Tool item itself.
+ *
+ * Backward compat: ButtonWidgetConfig with linkKind='tool' keeps
+ * working. New authoring flows surface Tool as a first-class
+ * palette tile instead.
+ */
+export interface ToolWidgetConfig {
+  kind: 'tool';
+  /** Tool item id. The runtime fetches the referenced tool on
+   *  mount, falls back to a disabled state if the tool was
+   *  deleted or the user no longer has read access. */
+  toolId?: string;
+  /**
+   * Curated lucide icon name shown in toolbar contexts.  Empty
+   * string falls through to a generic Wand icon so the widget
+   * always has something to render.  Authors pick from the same
+   * curated subset used by the layer-symbol picker; the runtime
+   * reads MAP_ICONS to resolve.
+   */
+  iconName?: string;
+  /**
+   * Optional inline label.  When omitted, the runtime falls back
+   * to the bound tool's title.  Useful when the author wants a
+   * shorter inline name without renaming the tool itself.
+   */
+  label?: string;
+  /**
+   * Whether to show the label alongside the icon in toolbar
+   * contexts.  Default: false (icon-only) so the widget reads as
+   * part of the toolbar's visual language.  Authors can flip on
+   * for a more conventional "icon + text" button look.  In
+   * standalone variant the label is always shown.
+   */
+  showLabel?: boolean;
+  /**
+   * Visual variant.
+   *   - 'toolbar': icon-only round button, sized for inline use
+   *     in a Container with layout='horizontal'.
+   *   - 'standalone': full button with icon + label (mirrors the
+   *     legacy Button-bound-to-tool look).
+   * Default: 'toolbar'.
+   */
+  display?: 'toolbar' | 'standalone';
+  /** Variant for the standalone display.  Ignored when display
+   *  is 'toolbar'. */
+  variant?: 'primary' | 'secondary';
 }
 
 /**
