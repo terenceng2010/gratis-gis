@@ -181,7 +181,28 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
  *     the path that could be smuggled into a different handler.
  */
 function isAnonymousPostAllowed(suffix: string): boolean {
-  return suffix === 'feedback';
+  if (suffix === 'feedback') return true;
+  // Tool-run for publicly-shared Custom Web Apps embedding an OSM
+  // tool. portal-api's POST /api/tools/:id/run is @Public() and
+  // refuses any tool item whose access != 'public' (and any output
+  // sink that would touch private data layers, see
+  // recipe-runner.service.ts). The BFF allowlist entry is the gate
+  // that lets the request reach portal-api in the first place;
+  // without it the BFF 401s anonymous POSTs and the embedded tool
+  // appears broken to every signed-out visitor.
+  //
+  // Strict path shape: `tools/<uuid>/run` with no query smuggling.
+  // The 8-4-4-4-12 hex pattern is the same gate isUuidShape() uses
+  // server-side; defense-in-depth against a stray non-UUID segment
+  // reaching the tool runner.
+  if (
+    /^tools\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/run$/.test(
+      suffix,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 async function forward(req: NextRequest, pathSegments: string[]) {
