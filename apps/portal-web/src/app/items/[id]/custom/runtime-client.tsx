@@ -4399,23 +4399,35 @@ function ToolWidgetRender({ widget }: { widget: CustomWidget }) {
   } = widget.config;
   const d = display ?? 'toolbar';
   const v = variant ?? 'primary';
-  // Toolbar variant: round pill, icon-only by default with an
-  // optional inline label when showLabel is set. Background uses
-  // the tool item-type color (teal) so the widget reads as a Tool
-  // consistent with the tool item tile on the items list and the
-  // ItemTypeBadge used elsewhere; the accent token (blue) was a
-  // mismatch against the tool's visual identity.
-  // Standalone variant: same teal palette in a more prominent fill
-  // so the button reads as the primary action surface inside the
-  // user's app.
-  const className =
-    d === 'toolbar'
-      ? `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-teal-500/10 text-teal-700 hover:bg-teal-500/20`
-      : `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
-          v === 'primary'
-            ? 'bg-teal-500/90 text-white hover:bg-teal-500'
-            : 'border border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
-        }`;
+  // Detect app-bar context so the Tool widget can wear the SAME
+  // chrome as every other in-bar widget (Search, Print, Basemap,
+  // AttributeTable).  Without this, the Tool button stuck out as a
+  // teal pill on the green header while every neighbor was a flat
+  // cream-on-green icon link.  Mirrors the ToolWidgetSlot wrapper
+  // a few hundred lines above.
+  const inAppBar = useContext(AppBarContext);
+  // Three visual modes:
+  //  1. Toolbar variant inside an app-bar  -> flat header-ink icon
+  //     link, matching ToolWidgetSlot's in-bar treatment. The Tool
+  //     reads as a peer of Search / Print / Basemap.
+  //  2. Toolbar variant on the canvas      -> teal pill so the tool
+  //     identity reads against surface-1 / map chrome (the teal
+  //     matches the tool item-type tile on the items list and the
+  //     ItemTypeBadge).
+  //  3. Standalone variant                 -> primary button shape
+  //     with teal fill, secondary uses neutral surface-1 chrome.
+  let className: string;
+  if (d === 'toolbar') {
+    className = inAppBar
+      ? `inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors text-[hsl(var(--app-header-ink)/0.85)] hover:bg-[hsl(var(--app-header-ink)/0.12)] hover:text-[hsl(var(--app-header-ink))]`
+      : `inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-medium transition-colors bg-teal-500/10 text-teal-700 hover:bg-teal-500/20`;
+  } else {
+    className = `inline-flex h-9 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium transition-colors ${
+      v === 'primary'
+        ? 'bg-teal-500/90 text-white hover:bg-teal-500'
+        : 'border border-border bg-surface-1 text-ink-1 hover:bg-surface-2'
+    }`;
+  }
   const iconHtml = iconName ? renderIconSvg(iconName) : null;
   const hideText = d === 'toolbar' && !showLabel;
   return (
