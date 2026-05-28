@@ -21,7 +21,10 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import type { OsmRelationalQueryAction } from '@gratis-gis/shared-types';
+import type {
+  OsmRelationalQueryAction,
+  OsmTagFilter,
+} from '@gratis-gis/shared-types';
 
 interface Props {
   action: OsmRelationalQueryAction;
@@ -227,6 +230,21 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
                     canEdit={canEdit}
                     onChange={(distance) => setCondition(i, { distance })}
                   />
+                  <TagFilterRows
+                    filters={c.tagFilters ?? []}
+                    canEdit={canEdit}
+                    onChange={(tagFilters) => {
+                      // Drop the field entirely when the list is
+                      // empty so the action JSON stays clean.
+                      if (tagFilters.length === 0) {
+                        const next = { ...c };
+                        delete (next as { tagFilters?: unknown }).tagFilters;
+                        setCondition(i, next);
+                      } else {
+                        setCondition(i, { tagFilters });
+                      }
+                    }}
+                  />
                 </div>
                 {canEdit ? (
                   <button
@@ -424,6 +442,195 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
           parameter: <code>{action.aoiParameterRef || '(unset)'}</code>
         </p>
       </div>
+
+      <div className={sectionCls}>
+        <div className={sectionHeaderCls}>
+          <span>Advanced</span>
+        </div>
+        <p className="text-[11px] text-muted">
+          Cache + result-cap knobs. Defaults are fine for most
+          tools; touch these when you&apos;re working with a busy
+          AOI or a long-lived configuration.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className={labelCls}>
+              Max anchor results
+            </label>
+            <input
+              type="number"
+              disabled={!canEdit}
+              min={1}
+              max={50000}
+              value={
+                typeof action.anchorMaxResults === 'number'
+                  ? action.anchorMaxResults
+                  : ''
+              }
+              placeholder="50000 (engine default)"
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                const next = { ...action };
+                if (raw === '') {
+                  delete (next as { anchorMaxResults?: unknown })
+                    .anchorMaxResults;
+                  onChange(next);
+                  return;
+                }
+                const n = Number(raw);
+                if (Number.isFinite(n) && n > 0) {
+                  next.anchorMaxResults = Math.floor(n);
+                  onChange(next);
+                }
+              }}
+              className={inputCls}
+            />
+            <p className="mt-1 text-[10px] text-muted">
+              Cap on how many candidate anchors Overpass returns
+              before the AND / negation / bearing checks narrow
+              them.  Leave blank to use the engine default
+              (50,000).
+            </p>
+          </div>
+          <div>
+            <label className={labelCls}>
+              Cache TTL (minutes)
+            </label>
+            <input
+              type="number"
+              disabled={!canEdit}
+              min={0}
+              max={10080}
+              value={
+                typeof action.ttlMinutes === 'number'
+                  ? action.ttlMinutes
+                  : ''
+              }
+              placeholder="60 (engine default)"
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                const next = { ...action };
+                if (raw === '') {
+                  delete (next as { ttlMinutes?: unknown }).ttlMinutes;
+                  onChange(next);
+                  return;
+                }
+                const n = Number(raw);
+                if (Number.isFinite(n) && n >= 0) {
+                  next.ttlMinutes = Math.floor(n);
+                  onChange(next);
+                }
+              }}
+              className={inputCls}
+            />
+            <p className="mt-1 text-[10px] text-muted">
+              How long Overpass results stay cached before a
+              fresh call.  0 = always refetch; blank = engine
+              default (60 min).  Server clamps to a max of
+              7 days regardless.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Per-condition tag-filter editor: zero or more key / op / value
+ * rows that flow into the condition's `tagFilters` array.
+ * Mirrors the runtime OsmTagFilterRowsRuntime shape so the
+ * designer and the runtime share the same mental model
+ * (`=` exact, `~` case-insensitive substring, `~/./` regex).
+ */
+function TagFilterRows({
+  filters,
+  canEdit,
+  onChange,
+}: {
+  filters: OsmTagFilter[];
+  canEdit: boolean;
+  onChange: (next: OsmTagFilter[]) => void;
+}) {
+  function set(i: number, patch: Partial<OsmTagFilter>): void {
+    onChange(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  }
+  function add(): void {
+    onChange([...filters, { key: '', value: '' }]);
+  }
+  function remove(i: number): void {
+    onChange(filters.filter((_, j) => j !== i));
+  }
+  return (
+    <div className="space-y-1.5 border-l-2 border-border pl-2">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
+        Tag filters (optional)
+      </div>
+      {filters.length === 0 ? (
+        <p className="text-[10px] italic text-muted">
+          No tag filters. Add one to require e.g. <code>name~&quot;Lincoln&quot;</code>.
+        </p>
+      ) : (
+        filters.map((f, i) => (
+          <div key={i} className="flex gap-1">
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={f.key}
+              onChange={(e) => set(i, { key: e.target.value.trim() })}
+              placeholder="key"
+              className={`${inputCls} flex-1 font-mono text-xs`}
+            />
+            <select
+              disabled={!canEdit}
+              value={f.op ?? 'equals'}
+              onChange={(e) => {
+                const op = e.target.value as NonNullable<OsmTagFilter['op']>;
+                set(i, { op });
+              }}
+              aria-label="Match operator"
+              className={`${inputCls} w-14 font-mono text-xs`}
+            >
+              <option value="equals">=</option>
+              <option value="contains">~</option>
+              <option value="regex">~/./</option>
+            </select>
+            <input
+              type="text"
+              disabled={!canEdit}
+              value={f.value}
+              onChange={(e) => set(i, { value: e.target.value })}
+              placeholder={
+                f.op === 'contains'
+                  ? 'substring'
+                  : f.op === 'regex'
+                    ? 'regex'
+                    : 'value'
+              }
+              className={`${inputCls} flex-1 font-mono text-xs`}
+            />
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                aria-label="Remove tag filter"
+                className="rounded-md border border-border bg-surface-0 px-2 text-[11px] text-rose-700 hover:bg-rose-50"
+              >
+                ×
+              </button>
+            ) : null}
+          </div>
+        ))
+      )}
+      {canEdit ? (
+        <button
+          type="button"
+          onClick={add}
+          className="inline-flex items-center gap-1 rounded-md border border-dashed border-border bg-surface-2 px-2 py-0.5 text-[10px] text-ink-1 hover:bg-surface-1"
+        >
+          <Plus className="h-2.5 w-2.5" /> Add tag filter
+        </button>
+      ) : null}
     </div>
   );
 }
