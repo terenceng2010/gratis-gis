@@ -36,6 +36,17 @@ import type { OsmGeoJsonFeature } from '../osm/osm-to-geojson.js';
 import { getOsmPreset } from '../osm/preset-catalog.js';
 
 /**
+ * Narrow GeoJSON-geometry shape used by post-fetch spatial passes
+ * (#151 corridor filter, future polygon-tight filter).  Only the
+ * fields the PostGIS helper inserts are typed; the rest of the
+ * payload passes through unchanged.
+ */
+interface GeoJsonGeometryLike {
+  type: string;
+  coordinates: unknown;
+}
+
+/**
  * Per-parameter resolved value: the runtime-supplied input merged
  * with the parameter's binding-defined default.  The recipe runner
  * resolves every parameter exactly once at the top of a run, then
@@ -157,6 +168,11 @@ export interface ToolOsmRelationalResult {
       presetLabel: string;
       distanceMeters: number;
       candidateCount: number;
+      /** Per-condition supporting features.  Surfaced so the
+       *  bearing-arc viz on the client (#153 follow-up) can draw
+       *  fans rooted at the right condition's features without
+       *  re-classifying the flat list. */
+      supporting: OsmGeoJsonFeature[];
     }>;
     /** Supporting condition features that contributed to at least
      *  one surviving anchor.  De-duped by osm:id so a park near
@@ -166,6 +182,14 @@ export interface ToolOsmRelationalResult {
      *  max condition distance, for "show me the search radius"
      *  visualization.  Properties carry the anchor's id + radius. */
     buffers: OsmGeoJsonFeature[];
+    /** Bearings echo back so the client can render the matched
+     *  angular arcs as a viz layer.  Empty array when no bearing
+     *  predicates were configured. */
+    bearings: Array<{
+      conditionIndex: number;
+      bearingDegrees: number;
+      toleranceDegrees: number;
+    }>;
     attribution: string;
     /** True when any of the per-preset Overpass calls hit the
      *  per-query feature cap. */
@@ -572,6 +596,11 @@ export class RecipeRunnerService {
     // wins because that's the more specific intent.
     let bbox: [number, number, number, number] | null = null;
     let centerPoint: { lng: number; lat: number } | null = null;
+    // #151: when the AOI is an inline LineString / MultiLineString
+    // we keep the geometry around so we can run a PostGIS ST_DWithin
+    // post-pass against the actual line, dropping the corner over-
+    // fetches the rectangular bbox path would otherwise return.
+    let lineAoiGeom: GeoJsonGeometryLike | null = null;
     const distance = findDistanceParam(recipe.parameters, resolved);
     if (recipe.pointParameterRef) {
       const pointVal = resolved.get(recipe.pointParameterRef);
@@ -628,6 +657,15 @@ export class RecipeRunnerService {
         throw new BadRequestException(
           `Could not compute a bbox from AOI parameter '${recipe.aoiParameterRef}'.  v1 only supports inline-geojson AOIs (drawn on the map).  Layer / selection AOIs land in wave 2.`,
         );
+      }
+      // #151: capture line geometries for the corridor post-pass.
+      // Only inline-geojson lines qualify -- a layer-AOI line would
+      // need ACL-gated geometry resolution; that's a wave-2 lift.
+      if (aoiVal.value.kind === 'inline-geojson' && aoiVal.value.geojson) {
+        const g = aoiVal.value.geojson as GeoJsonGeometryLike;
+        if (g && (g.type === 'LineString' || g.type === 'MultiLineString')) {
+          lineAoiGeom = g;
+        }
       }
     }
 
@@ -686,6 +724,20 @@ export class RecipeRunnerService {
       }
     }
 
+    // #151 Corridor tight-filter: when the AOI is a LineString /
+    // MultiLineString, post-fetch ST_DWithin against the actual
+    // line geometry to drop the corner over-fetches the rectangular
+    // bbox path would otherwise return.  Skipped when no distance
+    // param is configured (degenerate corridor with zero width).
+    let features = result.features;
+    if (lineAoiGeom && distance && distance > 0) {
+      features = await this.filterByCorridor(
+        features,
+        lineAoiGeom,
+        distance,
+      );
+    }
+
     // #150 Nearest N: when the recipe carries a pointParameterRef,
     // post-process the Overpass result so the client gets features
     // sorted by distance to the center point with a
@@ -694,7 +746,6 @@ export class RecipeRunnerService {
     // closest -- without it every feature in the search radius
     // comes back (still sorted) which is useful for "list every
     // park within 0.5 mi" but not for "give me the 10 closest."
-    let features = result.features;
     if (centerPoint) {
       const annotated = features.map((f) => {
         const meters = approxDistanceMeters(centerPoint!, f.geometry);
@@ -888,6 +939,9 @@ export class RecipeRunnerService {
       conditions: action.conditions.map((c, i) => ({
         presetId: c.preset,
         distanceMeters: conditionDistancesMeters[i]!,
+        ...(c.tagFilters && c.tagFilters.length > 0
+          ? { tagFilters: c.tagFilters }
+          : {}),
       })),
       ...(action.negations && action.negations.length > 0
         ? {
@@ -971,13 +1025,53 @@ export class RecipeRunnerService {
           presetLabel: c.presetLabel,
           distanceMeters: c.distanceMeters,
           candidateCount: c.supportingCount,
+          supporting: c.supporting,
         })),
         supporting: result.supporting,
         buffers,
+        bearings: action.bearings ?? [],
         attribution: result.attribution,
         truncated: false,
       },
     };
+  }
+
+  /**
+   * #151 corridor tight-filter.  Takes the OSM features returned
+   * by Overpass (which only saw the line's rectangular bbox + a
+   * pad) and drops those that lie outside the strict line buffer.
+   * Single PostGIS query: ST_DWithin on geography casts so the
+   * threshold is true-meters regardless of latitude or feature
+   * geometry type (point / line / polygon).  Preserves input
+   * order; returns the subset that survives.
+   */
+  private async filterByCorridor(
+    features: OsmGeoJsonFeature[],
+    lineGeom: GeoJsonGeometryLike,
+    distanceMeters: number,
+  ): Promise<OsmGeoJsonFeature[]> {
+    if (features.length === 0) return features;
+    const rows = await this.prisma.$queryRaw<
+      Array<{ idx: number }>
+    >`
+      WITH features AS (
+        SELECT
+          (ord - 1)::int AS idx,
+          ST_GeomFromGeoJSON((elem -> 'geometry')::text) AS geom
+        FROM jsonb_array_elements(${JSON.stringify(features)}::jsonb)
+          WITH ORDINALITY t(elem, ord)
+      ),
+      corridor AS (
+        SELECT
+          ST_GeomFromGeoJSON(${JSON.stringify(lineGeom)}::text) AS geom
+      )
+      SELECT f.idx
+      FROM features f, corridor c
+      WHERE ST_DWithin(f.geom::geography, c.geom::geography, ${distanceMeters})
+      ORDER BY f.idx
+    `;
+    const keep = new Set(rows.map((r) => r.idx));
+    return features.filter((_, i) => keep.has(i));
   }
 
   /**

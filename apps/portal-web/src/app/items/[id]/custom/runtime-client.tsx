@@ -5244,6 +5244,15 @@ function applyRelationalResult(args: {
       presetLabel: string;
       distanceMeters: number;
       candidateCount: number;
+      /** Per-condition supporting features used by the
+       *  bearing-arc viz (#153 follow-up).  Optional so older
+       *  API responses still parse. */
+      supporting?: ReadonlyArray<{
+        type: 'Feature';
+        id: string;
+        properties: Record<string, unknown>;
+        geometry: unknown;
+      }>;
     }>;
     supporting: ReadonlyArray<{
       type: 'Feature';
@@ -5256,6 +5265,13 @@ function applyRelationalResult(args: {
       id: string;
       properties: Record<string, unknown>;
       geometry: unknown;
+    }>;
+    /** Bearing predicates echoed from the action (#153 follow-up).
+     *  Empty / missing when no bearings were configured. */
+    bearings?: ReadonlyArray<{
+      conditionIndex: number;
+      bearingDegrees: number;
+      toleranceDegrees: number;
     }>;
   };
 }): void {
@@ -5412,10 +5428,53 @@ function applyRelationalResult(args: {
     access: structuredClone(DEFAULT_LAYER_ACCESS),
     filter: null,
   };
+  // #153 follow-up: bearing arc viz layer.  For each bearing
+  // predicate, draw a translucent fan at each per-condition
+  // supporting feature pointed in the configured direction.
+  // Helps the user see WHY an anchor survived ("this watertower
+  // is NW of THIS railroad").  Built as a separate MapLayer so
+  // it can be toggled / restyled / removed independently.
+  const BEARING_COLOR = '#0ea5e9';
+  const arcFeatures = buildBearingArcs(output);
+  const bearingsLayer: MapLayer | null =
+    arcFeatures.length > 0
+      ? {
+          id: `osm-relational-bearings/${toolId}`,
+          title: `${toolTitle} bearing arcs`,
+          visible: true,
+          opacity: 1,
+          source: {
+            kind: 'geojson-inline',
+            geojson: {
+              type: 'FeatureCollection',
+              features: arcFeatures,
+            },
+          },
+          style: {
+            ...structuredClone(DEFAULT_LAYER_STYLE),
+            polygon: {
+              ...structuredClone(DEFAULT_LAYER_STYLE.polygon),
+              fillColor: BEARING_COLOR,
+              fillOpacity: 0.12,
+              strokeColor: BEARING_COLOR,
+              strokeWidth: 1,
+            },
+          },
+          renderer: structuredClone(DEFAULT_LAYER_RENDERER),
+          popup: structuredClone(DEFAULT_LAYER_POPUP),
+          interactions: structuredClone(DEFAULT_LAYER_INTERACTIONS),
+          labels: structuredClone(DEFAULT_LAYER_LABELS),
+          search: structuredClone(DEFAULT_LAYER_SEARCH),
+          scale: structuredClone(DEFAULT_LAYER_SCALE),
+          access: structuredClone(DEFAULT_LAYER_ACCESS),
+          filter: null,
+        }
+      : null;
+
   // Push in display-stacking order (top of list first under the
   // array[0]=top convention): anchor on top, supporting next,
-  // buffers on the bottom so the rings sit underneath the markers
-  // they describe.
+  // bearing arcs (when present) under those, buffers on the
+  // bottom so the rings sit underneath the markers they describe.
   for (const mapWidgetId of Object.keys(ctx.states)) {
     ctx.update(mapWidgetId, (cur) => {
       const prior = cur.mapData.layers ?? [];
@@ -5423,13 +5482,17 @@ function applyRelationalResult(args: {
         anchorLayer.id,
         supportingLayer.id,
         buffersLayer.id,
+        ...(bearingsLayer ? [bearingsLayer.id] : []),
       ]);
       const withoutPrior = prior.filter((l) => !drop.has(l.id));
+      const newLayers = bearingsLayer
+        ? [anchorLayer, supportingLayer, bearingsLayer, buffersLayer]
+        : [anchorLayer, supportingLayer, buffersLayer];
       return {
         ...cur,
         mapData: {
           ...cur.mapData,
-          layers: [anchorLayer, supportingLayer, buffersLayer, ...withoutPrior],
+          layers: [...newLayers, ...withoutPrior],
         },
       };
     });
@@ -5446,6 +5509,121 @@ function applyRelationalResult(args: {
       }
     }
   }
+}
+
+/**
+ * Build GeoJSON fan polygons for the bearing-arc viz layer
+ * (#153 follow-up).  For each bearing predicate in the result,
+ * walk the indicated condition's supporting features and emit one
+ * fan polygon per feature.  The fan is rooted at the supporting
+ * feature's representative point and opens in the configured
+ * compass direction at the condition's distance radius.
+ *
+ * Compass convention: 0=N, 90=E, 180=S, 270=W.  Vertex math
+ * converts each step's bearing into a (lng, lat) offset using
+ * the spherical approximation (1deg lat ~ 111 km; 1deg lng
+ * ~ 111 km * cos(lat)).  Fine for the visualization at the
+ * sub-kilometer radii relational tools typically use.
+ */
+function buildBearingArcs(output: {
+  conditions: ReadonlyArray<{
+    distanceMeters: number;
+    supporting?: ReadonlyArray<{
+      geometry: unknown;
+    }>;
+  }>;
+  bearings?: ReadonlyArray<{
+    conditionIndex: number;
+    bearingDegrees: number;
+    toleranceDegrees: number;
+  }>;
+}): GeoJSON.Feature[] {
+  const bearings = output.bearings ?? [];
+  if (bearings.length === 0) return [];
+  const arcs: GeoJSON.Feature[] = [];
+  const ARC_STEPS = 24; // resolution of the fan edge
+  for (const bp of bearings) {
+    const cond = output.conditions[bp.conditionIndex];
+    if (!cond || !cond.supporting || cond.supporting.length === 0) continue;
+    const radius = Math.max(1, cond.distanceMeters);
+    const tolerance = Math.max(0, Math.min(180, bp.toleranceDegrees));
+    const wanted = ((bp.bearingDegrees % 360) + 360) % 360;
+    for (const support of cond.supporting) {
+      const center = firstLeafCoord(support.geometry);
+      if (!center) continue;
+      const ring = buildFanRing(
+        center,
+        radius,
+        wanted - tolerance,
+        wanted + tolerance,
+        ARC_STEPS,
+      );
+      arcs.push({
+        type: 'Feature',
+        properties: {
+          bearingDegrees: wanted,
+          toleranceDegrees: tolerance,
+          radiusMeters: radius,
+        },
+        geometry: { type: 'Polygon', coordinates: [ring] },
+      });
+    }
+  }
+  return arcs;
+}
+
+/**
+ * Return the first leaf [lng, lat] from any GeoJSON geometry.
+ * Walks nested coordinate arrays.  Used as the representative
+ * point for a feature when only one is needed (bearing fan
+ * origins, etc.).
+ */
+function firstLeafCoord(geom: unknown): [number, number] | null {
+  if (!geom || typeof geom !== 'object') return null;
+  const g = geom as { coordinates?: unknown };
+  let cur: unknown = g.coordinates;
+  for (let i = 0; i < 6; i++) {
+    if (!Array.isArray(cur)) return null;
+    if (
+      cur.length >= 2 &&
+      typeof cur[0] === 'number' &&
+      typeof cur[1] === 'number'
+    ) {
+      return [cur[0] as number, cur[1] as number];
+    }
+    cur = cur[0];
+  }
+  return null;
+}
+
+/**
+ * Compute a closed polygon ring approximating a circular fan
+ * (wedge) rooted at `center`, opening between compass bearings
+ * `startDeg` and `endDeg` at radius `meters`.  The result is a
+ * fan polygon: [center, arc-step-1, arc-step-2, ..., center].
+ */
+function buildFanRing(
+  center: [number, number],
+  meters: number,
+  startDeg: number,
+  endDeg: number,
+  steps: number,
+): Array<[number, number]> {
+  const [lng0, lat0] = center;
+  const lat0Rad = (lat0 * Math.PI) / 180;
+  const cosLat = Math.cos(lat0Rad);
+  const latPerMeter = 1 / 111_000;
+  const lngPerMeter = 1 / (111_000 * Math.max(cosLat, 0.0001));
+  const ring: Array<[number, number]> = [[lng0, lat0]];
+  for (let i = 0; i <= steps; i++) {
+    const b = startDeg + ((endDeg - startDeg) * i) / steps;
+    const bRad = (b * Math.PI) / 180;
+    const dLat = meters * latPerMeter * Math.cos(bRad);
+    const dLng = meters * lngPerMeter * Math.sin(bRad);
+    ring.push([lng0 + dLng, lat0 + dLat]);
+  }
+  ring.push([lng0, lat0]);
+  return ring;
 }
 
 /**

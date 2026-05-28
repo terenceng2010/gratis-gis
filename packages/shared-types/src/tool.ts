@@ -638,10 +638,18 @@ export interface OsmRelationalQueryAction {
    * condition's preset lies within `condition.distance` of it.
    * Empty list = "every anchor inside the AOI" (degenerate; the
    * caller probably wants a plain OSM query instead).
+   *
+   * `tagFilters` optionally narrows the condition's feature set
+   * by additional tag clauses -- e.g. a leisure/park condition
+   * with `tagFilters: [{key: 'leisure', value: 'park'},
+   * {key: 'name', value: 'Lincoln', op: 'contains'}]` matches
+   * only parks named Lincoln.  Same shape and ops the
+   * OsmFeatureParameter and the runtime tag-filter UI use.
    */
   conditions: Array<{
     preset: string;
     distance: RelationalDistance;
+    tagFilters?: OsmTagFilter[];
   }>;
   /**
    * Reserved for the eventual OR / mixed-operator extension.  v1

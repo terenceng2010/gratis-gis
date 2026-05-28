@@ -73,7 +73,18 @@ export interface OsmReverseGeocodeResult {
  */
 export interface OsmRelationalResolveInput {
   anchorPresetId: string;
-  conditions: Array<{ presetId: string; distanceMeters: number }>;
+  conditions: Array<{
+    presetId: string;
+    distanceMeters: number;
+    /** Per-condition tag filters (e.g. `name~"Lincoln"`).  Passed
+     *  through to the Overpass QL builder; same shape and ops
+     *  the OsmFeatureParameter tag filters use. */
+    tagFilters?: Array<{
+      key: string;
+      value: string;
+      op?: 'equals' | 'contains' | 'regex';
+    }>;
+  }>;
   /**
    * Negation conditions (#153): drop anchors that have ANY feature
    * of a negation preset within the threshold.  Server-side via
@@ -394,7 +405,13 @@ export class OsmService {
           `resolveRelational: condition[${i}] preset '${c.presetId}' not found`,
         );
       }
-      return { preset: p, distanceMeters: c.distanceMeters };
+      return {
+        preset: p,
+        distanceMeters: c.distanceMeters,
+        ...(c.tagFilters && c.tagFilters.length > 0
+          ? { tagFilters: c.tagFilters }
+          : {}),
+      };
     });
     const negationPresets = negations.map((n, i) => {
       const p = byId.get(n.presetId);

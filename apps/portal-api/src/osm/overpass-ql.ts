@@ -264,8 +264,23 @@ export function buildReverseGeocodeOverpassQl(input: {
  */
 export interface RelationalOverpassQlInput {
   anchor: OsmPreset;
-  /** Per-condition: preset + distance threshold in meters. */
-  conditions: Array<{ preset: OsmPreset; distanceMeters: number }>;
+  /**
+   * Per-condition: preset + distance threshold in meters.
+   * Optional `tagFilters` add extra `key=value` selectors on
+   * top of the preset's own tag set (same shape OsmTagFilter
+   * uses elsewhere), so a leisure/park condition can narrow to
+   * "parks named Lincoln" by adding `{key:'name', value:'Lincoln',
+   * op:'contains'}`.
+   */
+  conditions: Array<{
+    preset: OsmPreset;
+    distanceMeters: number;
+    tagFilters?: Array<{
+      key: string;
+      value: string;
+      op?: 'equals' | 'contains' | 'regex';
+    }>;
+  }>;
   /**
    * Negation conditions (#153): preset + distance threshold in
    * meters.  An anchor is dropped if ANY feature of any
@@ -328,12 +343,18 @@ export function buildRelationalOverpassQl(
   // Emit the standard "(node|way|relation)<tag-block><filter>" trio
   // for a preset.  `filterBlock` is whatever bounding filter
   // applies (bbox for the anchor, `(around.set:distance)` for the
-  // narrowed sets).  Tag block comes from the preset's own tags;
-  // tag filters from the recipe aren't supported in v1 of the
-  // relational surface (the existing OsmFeatureParameter shape
-  // is the place those land for the simple preset query).
-  const stanza = (preset: OsmPreset, filterBlock: string): string => {
-    const tags = combinedTags(preset, undefined);
+  // narrowed sets).  Tag block comes from the preset's own tags
+  // plus any per-condition tag filters the recipe author wired.
+  const stanza = (
+    preset: OsmPreset,
+    filterBlock: string,
+    tagFilters?: Array<{
+      key: string;
+      value: string;
+      op?: 'equals' | 'contains' | 'regex';
+    }>,
+  ): string => {
+    const tags = combinedTags(preset, tagFilters);
     const lines: string[] = [];
     for (const geom of preset.geometries) {
       const keyword =
@@ -365,7 +386,7 @@ export function buildRelationalOverpassQl(
     const d = conditionDistances[i]!;
     lines.push(`// Condition ${i}: features within ${d}m of any anchor`);
     lines.push(`(`);
-    lines.push(stanza(c.preset, `(around.anchors:${d})`));
+    lines.push(stanza(c.preset, `(around.anchors:${d})`, c.tagFilters));
     lines.push(`)->.cond${i};`);
   }
   // Survivor selection: anchors within distance of at least one
@@ -421,7 +442,7 @@ export function buildRelationalOverpassQl(
     const d = conditionDistances[i]!;
     lines.push(`// Supporting features for condition ${i}`);
     lines.push(`(`);
-    lines.push(stanza(c.preset, `(around.survivors:${d})`));
+    lines.push(stanza(c.preset, `(around.survivors:${d})`, c.tagFilters));
     lines.push(`)->.supporting${i};`);
   }
   // Single output statement per labeled set so the caller can

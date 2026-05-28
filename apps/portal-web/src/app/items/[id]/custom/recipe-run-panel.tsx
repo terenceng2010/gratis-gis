@@ -150,6 +150,14 @@ export type RecipeRunResult =
           presetLabel: string;
           distanceMeters: number;
           candidateCount: number;
+          /** Per-condition supporting features used by the
+           *  bearing-arc viz (#153 follow-up). */
+          supporting: Array<{
+            type: 'Feature';
+            id: string;
+            properties: Record<string, unknown>;
+            geometry: unknown;
+          }>;
         }>;
         supporting: Array<{
           type: 'Feature';
@@ -162,6 +170,13 @@ export type RecipeRunResult =
           id: string;
           properties: Record<string, unknown>;
           geometry: unknown;
+        }>;
+        /** Bearing predicates echoed from the action so the
+         *  client can render arcs.  Empty when no bearings. */
+        bearings: Array<{
+          conditionIndex: number;
+          bearingDegrees: number;
+          toleranceDegrees: number;
         }>;
         attribution: string;
         truncated: boolean;
