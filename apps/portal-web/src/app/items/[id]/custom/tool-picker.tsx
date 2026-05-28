@@ -169,7 +169,11 @@ function CreateToolModal({
     setSaving(true);
     setError(null);
     try {
-      const action: RecipeAction = template.build();
+      // RecipeTemplate.build() returns `RecipeAction |
+      // OsmRelationalQueryAction` (#142): the picker just stamps
+      // whichever shape the template emits.  ToolItemData.action
+      // accepts the broader ToolAction union anyway.
+      const action = template.build();
       const data: ToolItemData = {
         schemaVersion: 1,
         action,

@@ -110,17 +110,28 @@ export function RecipeEditor({ recipe, canEdit, onChange }: Props) {
             anything afterward.
           </p>
           <div className="flex flex-wrap gap-2">
-            {RECIPE_TEMPLATES.map((tpl) => (
-              <button
-                key={tpl.id}
-                type="button"
-                onClick={() => onChange(tpl.build())}
-                className="rounded-md border border-border bg-surface-0 px-3 py-2 text-left text-xs hover:border-accent hover:bg-surface-1"
-              >
-                <div className="font-medium text-ink-0">{tpl.label}</div>
-                <div className="text-[10px] text-muted">{tpl.description}</div>
-              </button>
-            ))}
+            {RECIPE_TEMPLATES.flatMap((tpl) => {
+              // The recipe-editor authors a RecipeAction; stamping
+              // a relational-query template into it would round-trip
+              // through the wrong action shape.  Skip those here so
+              // only generic-recipe templates appear in this picker.
+              // The new-tool wizard's tool-picker shows all
+              // templates (it picks the right detail-page renderer
+              // by action.kind).
+              const stamped = tpl.build();
+              if (stamped.kind !== 'recipe') return [];
+              return [
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => onChange(stamped)}
+                  className="rounded-md border border-border bg-surface-0 px-3 py-2 text-left text-xs hover:border-accent hover:bg-surface-1"
+                >
+                  <div className="font-medium text-ink-0">{tpl.label}</div>
+                  <div className="text-[10px] text-muted">{tpl.description}</div>
+                </button>,
+              ];
+            })}
           </div>
         </div>
       ) : null}

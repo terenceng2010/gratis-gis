@@ -757,8 +757,13 @@ export interface RecipeTemplate {
   label: string;
   /** Short description shown under the label. */
   description: string;
-  /** Factory: returns a fresh RecipeAction the editor can adopt. */
-  build(): RecipeAction;
+  /**
+   * Factory: returns a fresh tool action the editor can adopt.
+   * Templates can produce either a `RecipeAction` (selection /
+   * osm-features-overlay) or an `OsmRelationalQueryAction` (#142).
+   * The detail page renders whatever shape the template emits.
+   */
+  build(): RecipeAction | OsmRelationalQueryAction;
 }
 
 /**
@@ -1156,6 +1161,52 @@ const REVERSE_GEOCODE_AT_POINT: RecipeTemplate = {
   },
 };
 
+/**
+ * Schools-near-park-and-liquor-store starter (#142).  Stamps out
+ * a working OsmRelationalQueryAction: find schools inside the
+ * runtime AOI that have at least one park AND at least one
+ * liquor store within half a mile.  The canonical walkability /
+ * urban-planning shape; users clone and re-preset to express any
+ * A-near-B-AND-C query.
+ *
+ * Today's detail page renders a JSON-edit fallback for the
+ * relational action shape since the visual builder is still
+ * queued.  Users can still run the stamped tool unchanged from
+ * any Custom Web App's Tool widget; the AOI parameter collects
+ * from a drawn polygon at runtime and the three result layers
+ * (anchor / supporting / buffers) appear on the host map.
+ */
+const RELATIONAL_SCHOOLS_PARK_LIQUOR: RecipeTemplate = {
+  id: 'osm-relational-school-park-liquor',
+  label: 'Schools near a park AND a liquor store',
+  description:
+    'Find schools inside your drawn area that are within half a mile of both a park and a liquor store. The canonical OSM relational starter; clone and change the presets to express any A-near-B-AND-C query.',
+  build(): OsmRelationalQueryAction {
+    return {
+      kind: 'osm-relational-query',
+      relationalVersion: 1,
+      anchorPreset: 'amenity/school',
+      conditions: [
+        { preset: 'leisure/park', distance: { value: 0.5, unit: 'mi' } },
+        { preset: 'shop/alcohol', distance: { value: 0.5, unit: 'mi' } },
+      ],
+      combinator: 'and',
+      parameters: [
+        {
+          kind: 'feature-source',
+          name: 'aoi',
+          label: 'Area of interest',
+          hint: 'Draw a polygon on the map; the search runs inside (and a small buffer beyond) it.',
+          required: true,
+          geometryType: 'polygon',
+          binding: { mode: 'runtime-draw' },
+        },
+      ],
+      aoiParameterRef: 'aoi',
+    };
+  },
+};
+
 export const RECIPE_TEMPLATES: RecipeTemplate[] = [
   SELECT_BY_LOCATION,
   FIND_OSM_NEAR,
@@ -1163,11 +1214,14 @@ export const RECIPE_TEMPLATES: RecipeTemplate[] = [
   FIND_OSM_NEAREST_N,
   FIND_OSM_ALONG_LINE,
   REVERSE_GEOCODE_AT_POINT,
+  RELATIONAL_SCHOOLS_PARK_LIQUOR,
 ];
 
 /** Convenience accessor for the canonical Select-By-Location
  *  template.  Useful for tests + the new-item wizard's "stamp out
- *  a working starter" path. */
+ *  a working starter" path. Returns the concrete RecipeAction
+ *  shape (not the widened union) because Select-By-Location is
+ *  always a recipe with selection output. */
 export function selectByLocationRecipe(): RecipeAction {
-  return SELECT_BY_LOCATION.build();
+  return SELECT_BY_LOCATION.build() as RecipeAction;
 }
