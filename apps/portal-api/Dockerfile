@@ -86,6 +86,21 @@ RUN pnpm -C apps/portal-api build
 # deploy` from the entrypoint at boot.
 RUN pnpm deploy --filter=@gratis-gis/portal-api /out
 
+# Build pmtiles from source so the embedded Go stdlib is current
+# (see the pmtiles section in the runtime stage below for the
+# rationale). golang:1.26-bookworm tracks the latest Go 1.26.x
+# patch, which carries the stdlib fixes for CVE-2026-39823/-39825/
+# -39826. Pinned to the same version constant the runtime stage
+# uses so a bump propagates atomically.
+FROM golang:1.26-bookworm AS pmtiles-build
+ARG PMTILES_VERSION=1.30.3
+# GOTOOLCHAIN=auto (the default) lets Go honour go-pmtiles' go.mod
+# directive and pull the matching toolchain if the image's Go is
+# older than declared. CGO=0 produces a static binary that runs on
+# any glibc; no need for the runtime image to carry libgo.
+ENV CGO_ENABLED=0
+RUN go install "github.com/protomaps/go-pmtiles@v${PMTILES_VERSION}"
+
 FROM base AS runtime
 WORKDIR /app
 # Runtime deps for GDAL, the Prisma engine, and TLS. No build chain.
@@ -129,24 +144,21 @@ RUN rm -rf /pnpm /usr/local/lib/node_modules/pnpm \
 # #179: pmtiles Go CLI for converting MBTiles / zipped XYZ tile
 # directories into PMTiles at upload time. Single static binary
 # (~10 MB), no transitive deps. Pinned to a known-good release;
-# bump explicitly. The architecture suffix is mapped from the
-# Docker BUILDPLATFORM (amd64 -> Linux_x86_64; arm64 ->
-# Linux_arm64) so a multi-arch build picks the right binary.
-ARG TARGETARCH=amd64
+# bump explicitly.
+#
+# We build it from source instead of grabbing the upstream release
+# tarball because the upstream binary at v1.30.3 is still compiled
+# with Go 1.26.1, which Trivy flags as HIGH for three Go stdlib
+# CVEs (CVE-2026-39823 html/template meta-tag escape, CVE-2026-39825
+# net/http ReverseProxy query forwarding, CVE-2026-39826 html/template
+# script-tag escape). None of those code paths are reachable from
+# pmtiles' CLI usage, but Trivy can't see that from the binary alone.
+# Rebuilding against the current `golang:1.26-bookworm` toolchain
+# embeds a patched stdlib version into the binary so the alerts
+# resolve at the source rather than via .trivyignore.
 ARG PMTILES_VERSION=1.30.3
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-      amd64) PMTILES_ARCH=Linux_x86_64 ;; \
-      arm64) PMTILES_ARCH=Linux_arm64 ;; \
-      *) echo "unsupported arch ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/pmtiles.tar.gz \
-      "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_${PMTILES_ARCH}.tar.gz"; \
-    tar -xzf /tmp/pmtiles.tar.gz -C /tmp pmtiles; \
-    mv /tmp/pmtiles /usr/local/bin/pmtiles; \
-    chmod +x /usr/local/bin/pmtiles; \
-    rm /tmp/pmtiles.tar.gz; \
-    /usr/local/bin/pmtiles version
+COPY --from=pmtiles-build /go/bin/go-pmtiles /usr/local/bin/pmtiles
+RUN /usr/local/bin/pmtiles version
 
 # Drop privileges. Postgres connections, file uploads, and GDAL all
 # work fine for a non-root user.
