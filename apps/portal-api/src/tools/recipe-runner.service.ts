@@ -538,6 +538,14 @@ export class RecipeRunnerService {
     }
     const resolved = resolveParameters(recipe.parameters, request.parameters);
 
+    // #152 reverse-geocode-at-point: skip the osm-feature
+    // parameter resolution entirely (the killer use case is "what
+    // is here?" with no preset filter) and dispatch to the dedicated
+    // resolveAtPoint path which uses Overpass is_in: + around:.
+    if (recipe.reverseGeocodeAtPoint) {
+      return this.runReverseGeocodeInternal(recipe, resolved, user);
+    }
+
     if (!recipe.sourceParameterRef) {
       throw new BadRequestException(
         'osm-features-overlay output requires recipe.sourceParameterRef pointing at an osm-feature parameter',
@@ -721,6 +729,69 @@ export class RecipeRunnerService {
   }
 
   /**
+   * Reverse-geocode-at-point internal (#152).  Resolves the point
+   * parameter, calls OsmService.resolveAtPoint which runs the
+   * Overpass `is_in: + around:` query, and returns the result
+   * under the standard osm-features-overlay output shape so the
+   * client renders it through the existing OSM layer-push path.
+   *
+   * The result is RANKED client-side (smallest polygon area first
+   * so the building outranks the city outranks the state); we
+   * just sort by feature.geometry size here as a server-side
+   * default that the client can override.  Features without a
+   * polygon stay at the end.
+   */
+  private async runReverseGeocodeInternal(
+    recipe: RecipeAction,
+    resolved: Map<string, ResolvedValue>,
+    user: AuthUser | null,
+  ): Promise<ToolOsmOverlayResult> {
+    if (!recipe.pointParameterRef) {
+      throw new BadRequestException(
+        'reverseGeocodeAtPoint requires recipe.pointParameterRef pointing at a point parameter',
+      );
+    }
+    const pointVal = resolved.get(recipe.pointParameterRef);
+    if (!pointVal || pointVal.kind !== 'point') {
+      throw new BadRequestException(
+        `Recipe pointParameterRef '${recipe.pointParameterRef}' must resolve to a point parameter`,
+      );
+    }
+    // Optional distance parameter sets the around-radius; defaults
+    // to 50m which is roughly "the building you clicked, the
+    // adjacent road, the immediately-adjacent POIs."
+    const distance = findDistanceParam(recipe.parameters, resolved);
+    const radius = distance && distance > 0 ? distance : 50;
+
+    const result = await this.osm.resolveAtPoint({
+      lng: pointVal.lng,
+      lat: pointVal.lat,
+      radiusMeters: radius,
+      ...(user?.orgId ? { orgId: user.orgId } : {}),
+    });
+
+    // Server-side rough rank: smaller geometries (buildings,
+    // points, short ways) before larger (admin polygons that
+    // contain the point).  Uses approximate area via the
+    // longitude*latitude span of the geometry's coordinates.
+    const ranked = result.features
+      .map((f) => ({ f, area: approxFeatureArea(f.geometry) }))
+      .sort((a, b) => a.area - b.area)
+      .map((x) => x.f);
+
+    return {
+      output: {
+        kind: 'osm-features-overlay',
+        features: ranked,
+        attribution: result.attribution,
+        featureCount: ranked.length,
+        truncated: false,
+        presetLabels: [],
+      },
+    };
+  }
+
+  /**
    * Relational-query output path (#142).  Runs the entire join in
    * a single Overpass round-trip using `around:<set>:<distance>`
    * chained predicates: Overpass's spatial index handles the
@@ -805,15 +876,27 @@ export class RecipeRunnerService {
 
     // Run the entire join in one Overpass round-trip via the
     // resolveRelational path.  Overpass's spatial index does the
-    // anchor-to-condition distance check natively; we get back
-    // the surviving anchors + supporting features already
-    // bucketed by which preset they match.
+    // anchor-to-condition distance check natively (including
+    // any negation set-differences); we get back the surviving
+    // anchors + supporting features already bucketed by which
+    // preset they match.
+    const negationDistancesMeters = (action.negations ?? []).map((n) =>
+      relationalDistanceToMeters(n.distance),
+    );
     const result = await this.osm.resolveRelational({
       anchorPresetId: action.anchorPreset,
       conditions: action.conditions.map((c, i) => ({
         presetId: c.preset,
         distanceMeters: conditionDistancesMeters[i]!,
       })),
+      ...(action.negations && action.negations.length > 0
+        ? {
+            negations: action.negations.map((n, i) => ({
+              presetId: n.preset,
+              distanceMeters: negationDistancesMeters[i]!,
+            })),
+          }
+        : {}),
       bbox: paddedBbox,
       ...(user?.orgId ? { orgId: user.orgId } : {}),
       ...(action.anchorMaxResults
@@ -825,15 +908,48 @@ export class RecipeRunnerService {
     // the cache.  Drop the variable so lint doesn't flag it.
     void ttlMs;
 
+    // Bearing post-pass (#153).  For each declared bearing
+    // predicate, walk the surviving anchors and keep only those
+    // that have AT LEAST ONE supporting feature in the indicated
+    // condition lying inside the angular arc from the supporting
+    // feature TO the anchor.  Compass bearings: 0=N, 90=E,
+    // 180=S, 270=W.  Tolerance widens the arc on either side.
+    let survivingAnchorFeatures = result.anchor.features;
+    if (action.bearings && action.bearings.length > 0) {
+      for (const bp of action.bearings) {
+        const cond = result.conditions[bp.conditionIndex];
+        if (!cond) continue;
+        const tolerance = Math.max(0, Math.min(180, bp.toleranceDegrees));
+        const wanted = ((bp.bearingDegrees % 360) + 360) % 360;
+        survivingAnchorFeatures = survivingAnchorFeatures.filter(
+          (anchor) => {
+            const ac = firstCoord(anchor.geometry);
+            if (!ac) return false;
+            for (const support of cond.supporting) {
+              const sc = firstCoord(support.geometry);
+              if (!sc) continue;
+              const b = bearingDegrees(
+                { lng: sc[0], lat: sc[1] },
+                { lng: ac[0], lat: ac[1] },
+              );
+              const delta = Math.abs(((b - wanted + 540) % 360) - 180);
+              if (delta <= tolerance) return true;
+            }
+            return false;
+          },
+        );
+      }
+    }
+
     // Buffers around each surviving anchor at the max condition
     // distance.  Server-side ST_Buffer over geography produces a
     // proper great-circle buffer; cast back to geometry for the
     // GeoJSON output.  Overpass doesn't generate buffer polygons,
     // so this PostGIS pass stays as the visualization layer.
     const buffers =
-      result.anchor.features.length > 0
+      survivingAnchorFeatures.length > 0
         ? await this.buildAnchorBuffers(
-            result.anchor.features,
+            survivingAnchorFeatures,
             maxDistanceMeters,
           )
         : [];
@@ -847,8 +963,8 @@ export class RecipeRunnerService {
         anchor: {
           preset: result.anchor.presetId,
           presetLabel: result.anchor.presetLabel,
-          features: result.anchor.features,
-          candidateCount: result.anchor.features.length,
+          features: survivingAnchorFeatures,
+          candidateCount: survivingAnchorFeatures.length,
         },
         conditions: result.conditions.map((c) => ({
           preset: c.presetId,
@@ -1570,6 +1686,78 @@ function approxDistanceMeters(
       Math.sin(dLng / 2) ** 2;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+}
+
+/**
+ * Crude bbox-area proxy for ranking GeoJSON geometries (#152).
+ * Walks the coordinate tree, tracks min/max lng/lat, returns
+ * (max_lng - min_lng) * (max_lat - min_lat) in degrees-squared.
+ * Not a real spherical area; just enough resolution to order
+ * "the building polygon at this point" before "the city polygon
+ * containing it" before "the state polygon containing that."
+ * Points get 0 so they always sort first.
+ */
+function approxFeatureArea(geom: unknown): number {
+  if (!geom || typeof geom !== 'object') return Number.POSITIVE_INFINITY;
+  const g = geom as { type?: string; coordinates?: unknown };
+  if (g.type === 'Point') return 0;
+  if (!Array.isArray(g.coordinates)) return Number.POSITIVE_INFINITY;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const stack: unknown[] = [g.coordinates];
+  while (stack.length > 0) {
+    const n = stack.pop();
+    if (!Array.isArray(n)) continue;
+    if (
+      n.length >= 2 &&
+      typeof n[0] === 'number' &&
+      typeof n[1] === 'number'
+    ) {
+      const x = n[0] as number;
+      const y = n[1] as number;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      continue;
+    }
+    for (const c of n) stack.push(c);
+  }
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return (maxX - minX) * (maxY - minY);
+}
+
+/**
+ * Compass bearing (#153) in degrees [0, 360) FROM `from` TO `to`,
+ * measured clockwise from north.  Uses the standard spherical
+ * great-circle formula -- accurate for any pair of WGS-84 lng/lat
+ * points.  0=N, 90=E, 180=S, 270=W; that's the convention every
+ * navigation tool ships.
+ */
+function bearingDegrees(
+  from: { lng: number; lat: number },
+  to: { lng: number; lat: number },
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const phi1 = toRad(from.lat);
+  const phi2 = toRad(to.lat);
+  const dLng = toRad(to.lng - from.lng);
+  const y = Math.sin(dLng) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+  const theta = Math.atan2(y, x);
+  return (toDeg(theta) + 360) % 360;
 }
 
 /**

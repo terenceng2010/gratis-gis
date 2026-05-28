@@ -5,7 +5,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EngineService } from '../engine/engine.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OverpassClient } from './overpass-client.js';
-import { buildOverpassQl, buildRelationalOverpassQl } from './overpass-ql.js';
+import {
+  buildOverpassQl,
+  buildRelationalOverpassQl,
+  buildReverseGeocodeOverpassQl,
+} from './overpass-ql.js';
 import {
   osmToGeoJson,
   type OsmGeoJsonFeature,
@@ -39,6 +43,30 @@ export interface OsmSourceResolveInput {
 }
 
 /**
+ * Input shape for the reverse-geocode resolver (#152).  Point +
+ * radius; no preset filter (we want everything at the point).
+ * The runtime caller ranks results client-side.
+ */
+export interface OsmReverseGeocodeInput {
+  lng: number;
+  lat: number;
+  /** Search radius in meters for the `around:` predicate.  v1
+   *  defaults to 50m when not supplied by the recipe -- big enough
+   *  to grab the adjacent building / road, small enough to keep
+   *  the Overpass payload tight. */
+  radiusMeters?: number;
+  endpoint?: string;
+  orgId?: string;
+  maxFeatures?: number;
+}
+
+export interface OsmReverseGeocodeResult {
+  features: OsmGeoJsonFeature[];
+  attribution: string;
+  featureCount: number;
+}
+
+/**
  * Input shape for the relational query resolver (#142).  Anchor +
  * conditions + AOI bbox.  No tag-filter knob in v1: relational
  * tools are "school near park," not "school near park named X."
@@ -46,6 +74,12 @@ export interface OsmSourceResolveInput {
 export interface OsmRelationalResolveInput {
   anchorPresetId: string;
   conditions: Array<{ presetId: string; distanceMeters: number }>;
+  /**
+   * Negation conditions (#153): drop anchors that have ANY feature
+   * of a negation preset within the threshold.  Server-side via
+   * Overpass set-difference; no extra round-trips.
+   */
+  negations?: Array<{ presetId: string; distanceMeters: number }>;
   bbox: [number, number, number, number];
   endpoint?: string;
   orgId?: string;
@@ -63,6 +97,12 @@ export interface OsmRelationalResolveResult {
     presetLabel: string;
     distanceMeters: number;
     supportingCount: number;
+    /** Per-condition supporting features.  Needed by the bearing
+     *  post-pass (#153) to evaluate "anchor lies NW of THIS
+     *  condition's supporting feature" without re-classifying
+     *  the flat list.  Same features also appear in the flat
+     *  `supporting` array (de-duped). */
+    supporting: OsmGeoJsonFeature[];
   }>;
   supporting: OsmGeoJsonFeature[];
   attribution: string;
@@ -225,6 +265,67 @@ export class OsmService {
   }
 
   /**
+   * Reverse-geocode at a point (#152).  Returns every feature at
+   * the point (containing admin boundaries, named places, building
+   * polygons via Overpass `is_in:`) plus every node/way/relation
+   * within `radiusMeters` of the point (`around:`).  Caller ranks
+   * the result client-side (typically smallest area first so the
+   * building outranks the city outranks the state).
+   *
+   * Endpoint resolution mirrors resolve() / resolveRelational():
+   * explicit override -> per-org setting -> env -> default.  No
+   * cache layer in v1: the result is point-keyed and short-lived;
+   * the same point twice probably means the user is exploring, in
+   * which case Overpass's own internal cache handles the repeat.
+   */
+  async resolveAtPoint(
+    input: OsmReverseGeocodeInput,
+  ): Promise<OsmReverseGeocodeResult> {
+    if (!Number.isFinite(input.lng) || !Number.isFinite(input.lat)) {
+      throw new Error('resolveAtPoint: lng/lat must be finite numbers');
+    }
+    let endpoint = input.endpoint;
+    if (!endpoint && input.orgId) {
+      try {
+        const org = await this.prisma.organization.findUnique({
+          where: { id: input.orgId },
+          select: { osmOverpassEndpoint: true },
+        });
+        if (org?.osmOverpassEndpoint) endpoint = org.osmOverpassEndpoint;
+      } catch (err) {
+        this.logger.warn(
+          `resolveAtPoint: per-org endpoint lookup failed (org ${input.orgId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    endpoint =
+      endpoint ??
+      process.env.GRATIS_GIS_OSM_OVERPASS_ENDPOINT ??
+      DEFAULT_ENDPOINT;
+    const radius = Math.max(1, Math.round(input.radiusMeters ?? 50));
+    const maxFeatures = input.maxFeatures ?? 5000;
+
+    const ql = buildReverseGeocodeOverpassQl({
+      lng: input.lng,
+      lat: input.lat,
+      radiusMeters: radius,
+      maxFeatures,
+      timeoutSeconds: 30,
+    });
+    this.logger.log(
+      `OSM resolveAtPoint: lng=${input.lng} lat=${input.lat} radius=${radius}m`,
+    );
+
+    const response = await this.client.run({ endpoint, ql });
+    const collection = osmToGeoJson(response);
+    return {
+      features: collection.features.slice(0, maxFeatures),
+      attribution: ATTRIBUTION,
+      featureCount: collection.features.length,
+    };
+  }
+
+  /**
    * Resolve a relational OSM query (#142) in a single Overpass
    * round-trip via the `around:<set>:<distance>` predicate.
    * Anchor + per-condition spatial filters + survivor selection +
@@ -270,10 +371,13 @@ export class OsmService {
 
     // Resolve preset definitions for the QL builder + the post-fetch
     // tag-based classifier that buckets each returned feature back
-    // into its source set.
+    // into its source set.  Includes the negation presets so the
+    // QL builder can emit their selector clauses.
+    const negations = input.negations ?? [];
     const allPresetIds = [
       input.anchorPresetId,
       ...input.conditions.map((c) => c.presetId),
+      ...negations.map((n) => n.presetId),
     ];
     const presets = await getOsmPresets(allPresetIds);
     const byId = new Map(presets.map((p) => [p.id, p]));
@@ -292,10 +396,20 @@ export class OsmService {
       }
       return { preset: p, distanceMeters: c.distanceMeters };
     });
+    const negationPresets = negations.map((n, i) => {
+      const p = byId.get(n.presetId);
+      if (!p) {
+        throw new Error(
+          `resolveRelational: negation[${i}] preset '${n.presetId}' not found`,
+        );
+      }
+      return { preset: p, distanceMeters: n.distanceMeters };
+    });
 
     const ql = buildRelationalOverpassQl({
       anchor: anchorPreset,
       conditions: conditionPresets,
+      ...(negationPresets.length > 0 ? { negations: negationPresets } : {}),
       bbox: input.bbox,
       maxFeatures,
       timeoutSeconds: 60,
@@ -347,6 +461,7 @@ export class OsmService {
         presetLabel: c.preset.label,
         distanceMeters: c.distanceMeters,
         supportingCount: supportingByCondition[i]!.length,
+        supporting: supportingByCondition[i]!,
       })),
       supporting: supportingByCondition.flat(),
       attribution: ATTRIBUTION,

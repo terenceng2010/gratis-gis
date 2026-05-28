@@ -496,6 +496,20 @@ export interface RecipeAction {
    */
   nearestLimitParameterRef?: string;
   /**
+   * Reverse-geocode-at-point mode (#152).  When set with a
+   * `pointParameterRef`, the recipe runner takes a completely
+   * different path: instead of building an Overpass query from
+   * preset selectors + bbox, it calls OsmService.resolveAtPoint
+   * which uses `is_in:` + `around:radius` to return every feature
+   * AT the point (admin boundaries, named places, building
+   * polygons) plus everything within the search radius.  The
+   * `sourceParameterRef` osm-feature parameter is ignored in this
+   * mode -- the whole point is "give me everything here, I'll
+   * pick what's relevant."  Output is the standard
+   * osm-features-overlay shape; the client renders + ranks.
+   */
+  reverseGeocodeAtPoint?: boolean;
+  /**
    * Hard cap on rows returned for `output.kind === 'selection'`. The
    * runtime warns the user when truncation occurs.  Mirrors the
    * features-page cap so big-data layers degrade gracefully rather
@@ -635,6 +649,45 @@ export interface OsmRelationalQueryAction {
    * so existing tools deserialise cleanly when OR ships.
    */
   combinator?: 'and';
+  /**
+   * Negation conditions (#153).  An anchor survives only if NO
+   * feature of any negation preset lies within `distance` of it.
+   * Implemented via Overpass set-difference on the survivor set,
+   * so the negation is enforced server-side in the same round-trip
+   * that runs the AND conjunctions.
+   *
+   * Killer use case: "school near park AND near liquor store AND
+   * NOT near a highway" -- the negation drops survivors that have
+   * a busy road within walking distance even though they pass the
+   * other criteria.
+   */
+  negations?: Array<{
+    preset: string;
+    distance: RelationalDistance;
+  }>;
+  /**
+   * Bearing predicates (#153).  An anchor survives only if AT
+   * LEAST ONE feature of the condition at `conditionIndex` lies
+   * in the angular arc `[bearingDegrees - toleranceDegrees,
+   * bearingDegrees + toleranceDegrees]` measured from the
+   * condition feature TO the anchor.  Bearings are
+   * compass-style: 0 = North, 90 = East, 180 = South, 270 = West.
+   *
+   * The detective use case: "watertower (anchor) roughly NW of a
+   * railroad (condition[0])" -> conditionIndex=0,
+   * bearingDegrees=315, toleranceDegrees=30.  Combine with the
+   * AND conjunction to dramatically narrow candidate locations
+   * from "watertowers near railroads" to "watertowers NW of
+   * nearby railroads."
+   *
+   * Evaluated client-side after the Overpass call; cheap haversine
+   * + atan2 math on the candidate pairs.
+   */
+  bearings?: Array<{
+    conditionIndex: number;
+    bearingDegrees: number;
+    toleranceDegrees: number;
+  }>;
   /**
    * Per-recipe Overpass cache TTL override in minutes.  Same
    * semantics as OsmFeatureParameter.ttlMinutes: 0 means
@@ -991,11 +1044,125 @@ const FIND_OSM_NEAREST_N: RecipeTemplate = {
   },
 };
 
+/**
+ * Corridor-along-a-line starter (#151).  Draw a line on the map
+ * (a planned route, a road segment, a trail), set a corridor
+ * width, pick a feature kind, get every matching feature within
+ * the corridor.  Canonical "every gas station along I-95 from
+ * Boston to NYC" / "every farm stand along this country road"
+ * workflow.
+ *
+ * v1 uses the LineString's bbox padded by the search radius as
+ * the Overpass query bound; that over-fetches corner features
+ * (anything in the rectangular bbox but not strictly inside the
+ * buffer polygon will still come back).  Tighter "actually
+ * inside the buffer" filtering is a follow-up that adds a PostGIS
+ * ST_Buffer + ST_DWithin post-pass; for typical short / medium
+ * lines the over-fetch is small and acceptable.
+ */
+const FIND_OSM_ALONG_LINE: RecipeTemplate = {
+  id: 'find-osm-along-line',
+  label: 'Find OSM features along a line',
+  description:
+    'Draw a line on the map (a route, a road, a trail); set a corridor width; pick a feature kind; matching features inside the corridor appear on the host map. Handy for "every gas station along this route" workflows.',
+  build(): RecipeAction {
+    return {
+      kind: 'recipe',
+      recipeVersion: 1,
+      parameters: [
+        {
+          kind: 'feature-source',
+          name: 'aoi',
+          label: 'Route or line',
+          hint: 'Draw a line on the map; the search runs inside (and a buffer beyond) it.',
+          required: true,
+          geometryType: 'line',
+          binding: { mode: 'runtime-draw' },
+        },
+        {
+          kind: 'osm-feature',
+          name: 'osm',
+          label: 'What to look for',
+          hint: 'Pick one or more kinds of OpenStreetMap feature.  Optional filters narrow it further.',
+          required: true,
+          binding: { mode: 'runtime-pick', allowCustomTagFilters: true },
+        },
+        {
+          kind: 'distance',
+          name: 'distance',
+          label: 'Corridor width',
+          hint: 'Pad the line by this distance on each side. 1 km by default; widen if you need a fatter corridor.',
+          unit: 'kilometers',
+          binding: { mode: 'runtime-input', defaultMeters: 1000 },
+        },
+      ],
+      pipeline: [],
+      output: { kind: 'osm-features-overlay' },
+      sourceParameterRef: 'osm',
+      aoiParameterRef: 'aoi',
+    };
+  },
+};
+
+/**
+ * Reverse-geocode-at-point starter (#152).  Drop a pin, get
+ * every OSM feature AT that point: containing admin polygons,
+ * named places, building footprints, plus everything within a
+ * small radius (POIs, roads, etc.).  Results are ranked by
+ * approximate bbox area so the building outranks the city
+ * outranks the state.
+ *
+ * The "drop pin -> what's actually here" workflow.  Useful both
+ * as casual exploration ("what's this place I clicked on") and
+ * as the verification step in the detective geolocation flow
+ * ("if my guess is right, what should be at this coordinate").
+ */
+const REVERSE_GEOCODE_AT_POINT: RecipeTemplate = {
+  id: 'osm-reverse-geocode-at-point',
+  label: 'What is at this point',
+  description:
+    'Drop a pin on the map and see every OpenStreetMap feature at that point: the building, the road, the named place, the city, the county, the state. Useful for "where am I?" exploration and for verifying a guessed geolocation.',
+  build(): RecipeAction {
+    return {
+      kind: 'recipe',
+      recipeVersion: 1,
+      parameters: [
+        {
+          kind: 'point',
+          name: 'point',
+          label: 'Drop a pin',
+          hint: 'Click on the map to set the point, or paste a lat / lng pair.',
+          required: true,
+          binding: { mode: 'runtime-pick' },
+        },
+        {
+          kind: 'distance',
+          name: 'distance',
+          label: 'Nearby radius',
+          hint: 'How far around the pin to include nearby features (buildings, POIs, roads).  Defaults to 50 m.',
+          unit: 'meters',
+          binding: { mode: 'runtime-input', defaultMeters: 50 },
+        },
+      ],
+      pipeline: [],
+      output: { kind: 'osm-features-overlay' },
+      // #152: reverseGeocodeAtPoint flips the runner into the
+      // is_in: + around: path -- no preset filter needed, no
+      // sourceParameterRef referenced.  The point parameter
+      // supplies the location; distance the surrounding radius.
+      reverseGeocodeAtPoint: true,
+      pointParameterRef: 'point',
+    };
+  },
+};
+
 export const RECIPE_TEMPLATES: RecipeTemplate[] = [
   SELECT_BY_LOCATION,
   FIND_OSM_NEAR,
   FIND_OSM_BY_NAME,
   FIND_OSM_NEAREST_N,
+  FIND_OSM_ALONG_LINE,
+  REVERSE_GEOCODE_AT_POINT,
 ];
 
 /** Convenience accessor for the canonical Select-By-Location

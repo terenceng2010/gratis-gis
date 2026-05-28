@@ -216,6 +216,46 @@ export function buildOverpassQl(input: OverpassQlInput): string {
 }
 
 /**
+ * Build the Overpass QL for a reverse-geocode at point (#152).
+ * Returns every feature at OR around `(lat, lng)` within
+ * `radiusMeters`, plus every enclosing area (admin boundaries,
+ * named places, building polygons that contain the point) via
+ * the `is_in` predicate.  No preset / tag filter -- the killer
+ * use case is "what is at this point?" and pre-filtering by
+ * preset would defeat the purpose.
+ *
+ * Output is one flat list of features the caller ranks
+ * client-side (typically: smallest area first so the building
+ * outranks the city outranks the state).
+ */
+export function buildReverseGeocodeOverpassQl(input: {
+  lng: number;
+  lat: number;
+  radiusMeters: number;
+  maxFeatures?: number;
+  timeoutSeconds?: number;
+}): string {
+  const { lng, lat } = input;
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+    throw new Error('buildReverseGeocodeOverpassQl: lng/lat must be finite numbers');
+  }
+  if (lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+    throw new Error('buildReverseGeocodeOverpassQl: lng/lat out of geographic range');
+  }
+  const radius = Math.max(1, Math.round(input.radiusMeters));
+  const timeout = input.timeoutSeconds ?? 30;
+  const maxsize = (input.maxFeatures ?? 5000) * 1024;
+  return [
+    `[out:json][timeout:${timeout}][maxsize:${maxsize}];`,
+    `(`,
+    `  is_in(${lat},${lng});`,
+    `  nwr(around:${radius},${lat},${lng});`,
+    `);`,
+    `out body geom tags;`,
+  ].join('\n');
+}
+
+/**
  * Input shape for the relational query builder (#142).  Anchor +
  * one or more conditions, each carrying a meters distance for the
  * Overpass `around:` predicate.  Bbox bounds the anchor scan; the
@@ -226,6 +266,14 @@ export interface RelationalOverpassQlInput {
   anchor: OsmPreset;
   /** Per-condition: preset + distance threshold in meters. */
   conditions: Array<{ preset: OsmPreset; distanceMeters: number }>;
+  /**
+   * Negation conditions (#153): preset + distance threshold in
+   * meters.  An anchor is dropped if ANY feature of any
+   * negation preset lies within the threshold.  Implemented via
+   * Overpass set-difference so the negation runs in the same
+   * round-trip.
+   */
+  negations?: Array<{ preset: OsmPreset; distanceMeters: number }>;
   bbox: [west: number, south: number, east: number, north: number];
   maxFeatures?: number;
   /** Per-query Overpass timeout in seconds; defaults to 60.  The
@@ -326,10 +374,45 @@ export function buildRelationalOverpassQl(
   const survivorFilter = input.conditions
     .map((_, i) => `(around.cond${i}:${conditionDistances[i]})`)
     .join('');
+  const preNegLabel = input.negations && input.negations.length > 0
+    ? '.survivorsPreNeg'
+    : '.survivors';
   lines.push(`// Surviving anchors: pass all condition distance checks`);
   lines.push(`(`);
   lines.push(stanza(input.anchor, survivorFilter));
-  lines.push(`)->.survivors;`);
+  lines.push(`)->${preNegLabel};`);
+
+  // Negation predicates (#153): for each negation preset, find
+  // candidate features within the distance threshold, then mark
+  // any survivor near them; subtract those from the survivor set
+  // via Overpass's set-difference operator.  This walks the
+  // negations sequentially so each one tightens the survivor
+  // set before the next runs.
+  if (input.negations && input.negations.length > 0) {
+    const negDistances = input.negations.map((n) =>
+      Math.max(1, Math.round(n.distanceMeters)),
+    );
+    for (let i = 0; i < input.negations.length; i++) {
+      const n = input.negations[i]!;
+      const d = negDistances[i]!;
+      lines.push(`// Negation ${i}: candidates within ${d}m of any survivor`);
+      lines.push(`(`);
+      lines.push(stanza(n.preset, `(around.survivorsPreNeg:${d})`));
+      lines.push(`)->.neg${i};`);
+      lines.push(`// Survivors near negation ${i} (will be removed)`);
+      lines.push(`(`);
+      lines.push(stanza(input.anchor, `(around.neg${i}:${d})`));
+      lines.push(`)->.survivorsNearNeg${i};`);
+    }
+    // Chain set-differences: start from survivorsPreNeg and
+    // subtract each survivorsNearNegN in sequence.
+    const diffParts = [`.survivorsPreNeg;`];
+    for (let i = 0; i < input.negations.length; i++) {
+      diffParts.push(`- .survivorsNearNeg${i};`);
+    }
+    lines.push(`// Final survivors after negation set-differences`);
+    lines.push(`(${diffParts.join(' ')})->.survivors;`);
+  }
   // Supporting features per condition: those near at least one
   // surviving anchor.  Re-narrows the prefilter sets to the truly
   // relevant ones the client will render.
