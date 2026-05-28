@@ -23,14 +23,17 @@
 import { useEffect, useState } from 'react';
 import { Save, Loader2 } from 'lucide-react';
 import {
+  emptyOsmRelationalQueryAction,
   emptyRecipeAction,
   emptyToolData,
+  type OsmRelationalQueryAction,
   type RecipeAction,
   type ToolAction,
   type ToolItemData,
 } from '@gratis-gis/shared-types';
 
 import { RecipeEditor } from './recipe-editor';
+import { OsmRelationalEditor } from './osm-relational-editor';
 
 interface Props {
   itemId: string;
@@ -72,6 +75,8 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
         };
       } else if (kind === 'recipe') {
         action = emptyRecipeAction();
+      } else if (kind === 'osm-relational-query') {
+        action = emptyOsmRelationalQueryAction();
       } else {
         action = { kind: 'open-url', url: '', newTab: true };
       }
@@ -164,6 +169,18 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
             }`}
           >
             Recipe
+          </button>
+          <button
+            type="button"
+            disabled={!canEdit}
+            onClick={() => switchKind('osm-relational-query')}
+            className={`px-3 py-1 ${
+              data.action.kind === 'osm-relational-query'
+                ? 'rounded bg-surface-1 text-ink-0 shadow-sm'
+                : 'text-muted'
+            }`}
+          >
+            OSM relational
           </button>
         </div>
       </div>
@@ -333,19 +350,15 @@ export function ToolDetail({ itemId, initial, canEdit }: Props) {
             </div>
           </div>
         </div>
-      ) : (
-        // OSM relational query (#142) is editable today only via
-        // the JSON-edit fallback in the action-kind picker above;
-        // the visual builder is queued.  Until that lands, show a
-        // small note so authors know they have a relational tool
-        // selected rather than a half-rendered form.
-        <div className="rounded-md border border-border bg-surface-2 p-3 text-xs text-muted">
-          OSM relational query selected.  Visual builder is on the
-          way; for now edit this tool&apos;s action JSON directly
-          (anchor preset, conditions, AOI parameter) until the
-          designer ships.
-        </div>
-      )}
+      ) : data.action.kind === 'osm-relational-query' ? (
+        <OsmRelationalEditor
+          action={data.action}
+          canEdit={canEdit}
+          onChange={(next: OsmRelationalQueryAction) =>
+            setData((d) => ({ ...d, action: next }))
+          }
+        />
+      ) : null}
 
       <div className="mt-4 border-t border-border pt-3">
         <label className={labelCls}>Hint (optional)</label>
