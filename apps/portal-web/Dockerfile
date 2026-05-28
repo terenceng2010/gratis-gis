@@ -71,6 +71,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl tini \
     && rm -rf /var/lib/apt/lists/*
 
+# Remove the globally-installed pnpm from the runtime image.
+# pnpm is only needed at build time (for `pnpm install` and the
+# per-package builds); the Next.js standalone output runs from node
+# directly. Stripping pnpm deletes the bundled tar, minimatch, glob,
+# and cross-spawn copies under
+# /usr/local/lib/node_modules/pnpm/dist/node_modules that Trivy
+# flags as HIGH CVEs (CVE-2025-69262/-69263 in pnpm itself, plus
+# CVE-2026-23745/-23950/-24842/-26960 in tar, CVE-2026-26996/-27903/
+# -27904 in minimatch, CVE-2025-64756 in glob, CVE-2024-21538 in
+# cross-spawn). Same pattern as the npm cleanup in the base stage.
+RUN rm -rf /pnpm /usr/local/lib/node_modules/pnpm \
+    /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/pnpm-cjs
+
 RUN groupadd -r app && useradd -r -g app -m -d /home/app app
 
 # Standalone output. Next's tracer roots at /repo (outputFileTracingRoot

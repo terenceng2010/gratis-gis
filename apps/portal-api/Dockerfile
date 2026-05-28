@@ -113,6 +113,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 
+# Remove the globally-installed pnpm from the runtime image.
+# pnpm is only needed at build time (for `pnpm install` and
+# `pnpm deploy`); the runtime invokes node and the Prisma CLI directly
+# from /app/node_modules/.bin. Stripping it deletes the bundled tar,
+# minimatch, glob, and cross-spawn copies under
+# /usr/local/lib/node_modules/pnpm/dist/node_modules that Trivy keeps
+# flagging as HIGH CVEs (CVE-2025-69262/-69263, CVE-2026-23745/-23950/
+# -24842/-26960 in tar, CVE-2026-26996/-27903/-27904 in minimatch,
+# CVE-2025-64756 in glob, CVE-2024-21538 in cross-spawn). Same pattern
+# as the npm cleanup in the base stage.
+RUN rm -rf /pnpm /usr/local/lib/node_modules/pnpm \
+    /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/pnpm-cjs
+
 # #179: pmtiles Go CLI for converting MBTiles / zipped XYZ tile
 # directories into PMTiles at upload time. Single static binary
 # (~10 MB), no transitive deps. Pinned to a known-good release;
@@ -120,7 +133,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Docker BUILDPLATFORM (amd64 -> Linux_x86_64; arm64 ->
 # Linux_arm64) so a multi-arch build picks the right binary.
 ARG TARGETARCH=amd64
-ARG PMTILES_VERSION=1.30.2
+ARG PMTILES_VERSION=1.30.3
 RUN set -eux; \
     case "${TARGETARCH}" in \
       amd64) PMTILES_ARCH=Linux_x86_64 ;; \
