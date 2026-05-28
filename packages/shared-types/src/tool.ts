@@ -260,6 +260,45 @@ export interface TextParameter {
 }
 
 /**
+ * Single lat/lon point parameter (#150 / #152).  Underpins tools
+ * that ask the user to "drop a pin": Nearest N, Reverse geocode,
+ * future bearing / route-from-point queries.  Coordinates are
+ * WGS-84 (EPSG:4326) decimal degrees; the runtime UI shows a
+ * "drop pin on map" button as the primary affordance and a
+ * lat/lon input pair as a fallback so a user with a coordinate
+ * in hand can paste it directly.
+ *
+ *   - `hardcoded`:    the tool is dedicated to one fixed point
+ *                     (e.g. "Find every coffee shop near our HQ").
+ *                     The runtime UI doesn't show a row; the
+ *                     baked-in point ships with the request.
+ *   - `runtime-pick`: the user drops a pin (or types coordinates)
+ *                     at runtime.  Optional defaults seed the
+ *                     initial value so a tool can preselect a
+ *                     sensible starting point (e.g. the map's
+ *                     current center) without forcing it.
+ */
+export interface PointParameter {
+  kind: 'point';
+  name: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+  binding:
+    | { mode: 'hardcoded'; lng: number; lat: number }
+    | {
+        mode: 'runtime-pick';
+        /** Optional preselect; the runtime UI seeds the inputs
+         *  with these so the user can click Run immediately if the
+         *  default is what they wanted.  Either both or neither
+         *  should be set; a half-default is treated as "no
+         *  default" by the runtime. */
+        defaultLng?: number;
+        defaultLat?: number;
+      };
+}
+
+/**
  * Tag filter on an OSM query.  v1 supports literal-equals matches
  * only; contains / regex are queued for wave 3 once we have a
  * frequency-weighted autocomplete catalog to make them useful.
@@ -350,7 +389,8 @@ export type ToolParameter =
   | DistanceParameter
   | NumberParameter
   | TextParameter
-  | OsmFeatureParameter;
+  | OsmFeatureParameter
+  | PointParameter;
 
 /**
  * What happens with the pipeline's output when the tool finishes.

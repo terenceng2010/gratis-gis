@@ -53,6 +53,13 @@ export type ResolvedValue =
       tagFilters?: OsmTagFilter[];
       /** #101: per-recipe TTL override in minutes (0 = always fresh). */
       ttlMinutes?: number;
+    }
+  | {
+      kind: 'point';
+      /** WGS-84 longitude, decimal degrees. */
+      lng: number;
+      /** WGS-84 latitude, decimal degrees. */
+      lat: number;
     };
 
 /**
@@ -975,7 +982,60 @@ function resolveOne(
       return resolveTextParam(param, provided);
     case 'osm-feature':
       return resolveOsmFeatureParam(param, provided);
+    case 'point':
+      return resolvePointParam(param, provided);
   }
+}
+
+/**
+ * Resolve a `point` runtime parameter into a normalised
+ * `{ kind: 'point'; lng, lat }` ResolvedValue.  Accepts the
+ * wire shape `{ kind: 'point-input', lng: number, lat: number }`
+ * from the runtime panel, or falls back to the parameter's
+ * hardcoded / default coordinates.  Returns undefined when the
+ * parameter is required-but-unsupplied so the caller can throw
+ * a consistent error.
+ */
+function resolvePointParam(
+  param: Extract<ToolParameter, { kind: 'point' }>,
+  provided: ToolRunInput | undefined,
+): ResolvedValue | undefined {
+  if (param.binding.mode === 'hardcoded') {
+    return {
+      kind: 'point',
+      lng: param.binding.lng,
+      lat: param.binding.lat,
+    };
+  }
+  // runtime-pick: prefer caller-supplied coordinates; fall back to
+  // the parameter's defaults if both are present (half-defaults
+  // count as "no default" -- see PointParameter JSDoc).
+  if (
+    provided &&
+    typeof provided === 'object' &&
+    'kind' in provided &&
+    (provided as { kind?: unknown }).kind === 'point-input'
+  ) {
+    const p = provided as unknown as {
+      kind: 'point-input';
+      lng?: unknown;
+      lat?: unknown;
+    };
+    if (typeof p.lng === 'number' && typeof p.lat === 'number') {
+      return { kind: 'point', lng: p.lng, lat: p.lat };
+    }
+  }
+  if (
+    typeof param.binding.defaultLng === 'number' &&
+    typeof param.binding.defaultLat === 'number'
+  ) {
+    return {
+      kind: 'point',
+      lng: param.binding.defaultLng,
+      lat: param.binding.defaultLat,
+    };
+  }
+  return undefined;
 }
 
 function resolveOsmFeatureParam(

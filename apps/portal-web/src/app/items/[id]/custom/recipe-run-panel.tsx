@@ -52,6 +52,7 @@ import type {
   OsmFeatureParameter,
   OsmRelationalQueryAction,
   OsmTagFilter,
+  PointParameter,
   PredicateParameter,
   RecipeAction,
   SpatialPredicate,
@@ -248,6 +249,24 @@ export function RecipeRunPanel({
 
   function finishDrawing(geometry: GeoJSON.Geometry) {
     if (!drawing) return;
+    // PointParameter (#150 / #152) consumes the drawn point as a
+    // bare lat/lon pair rather than the AOI's inline-geojson
+    // wrapper.  Detect by parameter kind so the same drawing
+    // overlay serves both flows without forking the UI.
+    const param = recipe.parameters.find((p) => p.name === drawing.paramName);
+    if (
+      param?.kind === 'point' &&
+      geometry.type === 'Point' &&
+      Array.isArray(geometry.coordinates) &&
+      geometry.coordinates.length >= 2
+    ) {
+      const [lng, lat] = geometry.coordinates as number[];
+      if (typeof lng === 'number' && typeof lat === 'number') {
+        patch(drawing.paramName, { kind: 'point-input', lng, lat });
+        setDrawing(null);
+        return;
+      }
+    }
     patch(drawing.paramName, { kind: 'inline-geojson', geojson: geometry });
     setDrawing(null);
   }
@@ -536,6 +555,17 @@ function ParamInputRow({
             | { kind: 'osm-feature-input'; presetIds: string[]; tagFilters?: OsmTagFilter[] }
             | undefined}
           onChange={onChange}
+        />
+      );
+    case 'point':
+      return (
+        <PointInput
+          parameter={parameter}
+          value={value as
+            | { kind: 'point-input'; lng: number; lat: number }
+            | undefined}
+          onChange={onChange}
+          {...(onStartDraw ? { onStartDraw } : {})}
         />
       );
   }
@@ -1075,6 +1105,96 @@ function OsmPresetMultiSelectRuntime({
   );
 }
 
+/**
+ * Runtime input for a PointParameter (#150 / #152).  Primary
+ * affordance is a "Drop pin on map" button that hands control to
+ * the existing MapDrawingOverlay; the user clicks the host map
+ * once and the resulting lat/lon flows back in via the
+ * `finishDrawing` handler.  Lat/lon text inputs are the fallback
+ * for users who already have coordinates in hand.
+ *
+ * Owns the `{ kind: 'point-input', lng, lat }` wire shape the
+ * backend recipe runner expects.
+ */
+function PointInput({
+  parameter,
+  value,
+  onChange,
+  onStartDraw,
+}: {
+  parameter: PointParameter;
+  value: { kind: 'point-input'; lng: number; lat: number } | undefined;
+  onChange: (next: { kind: 'point-input'; lng: number; lat: number }) => void;
+  onStartDraw?: (paramName: string, geometryType: DrawableGeometryType) => void;
+}) {
+  if (parameter.binding.mode !== 'runtime-pick') return null;
+  const lng = value?.lng;
+  const lat = value?.lat;
+  const hasPoint = typeof lng === 'number' && typeof lat === 'number';
+  function setLng(raw: string) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    onChange({ kind: 'point-input', lng: n, lat: lat ?? 0 });
+  }
+  function setLat(raw: string) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    onChange({ kind: 'point-input', lng: lng ?? 0, lat: n });
+  }
+  return (
+    <div className="space-y-2">
+      <Label parameter={parameter} />
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => onStartDraw?.(parameter.name, 'point')}
+          className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent/10 px-2 py-1 text-xs font-medium text-accent hover:bg-accent/20"
+        >
+          <Pencil className="h-3 w-3" />
+          {hasPoint ? 'Drop new pin' : 'Drop pin on map'}
+        </button>
+        {hasPoint ? (
+          <span className="self-center text-[11px] font-mono text-muted">
+            {lat!.toFixed(6)}, {lng!.toFixed(6)}
+          </span>
+        ) : (
+          <span className="self-center text-[11px] italic text-muted">
+            No location set
+          </span>
+        )}
+      </div>
+      <div className="flex gap-1.5">
+        <div className="flex-1">
+          <label className="block text-[10px] uppercase tracking-wide text-muted">
+            Latitude
+          </label>
+          <input
+            type="number"
+            step="any"
+            value={typeof lat === 'number' ? lat : ''}
+            onChange={(e) => setLat(e.target.value)}
+            placeholder="38.9072"
+            className={`${inputCls} font-mono text-xs`}
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-[10px] uppercase tracking-wide text-muted">
+            Longitude
+          </label>
+          <input
+            type="number"
+            step="any"
+            value={typeof lng === 'number' ? lng : ''}
+            onChange={(e) => setLng(e.target.value)}
+            placeholder="-77.0369"
+            className={`${inputCls} font-mono text-xs`}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OsmTagFilterRowsRuntime({
   filters,
   onChange,
@@ -1197,6 +1317,8 @@ function isInteractiveParam(p: ToolParameter): boolean {
       return p.binding.mode === 'runtime-input';
     case 'osm-feature':
       return p.binding.mode === 'runtime-pick';
+    case 'point':
+      return p.binding.mode === 'runtime-pick';
   }
 }
 
@@ -1272,6 +1394,24 @@ function seedValues(
         if (defaults.presetIds.length > 0 || ('tagFilters' in defaults && defaults.tagFilters)) {
           out[p.name] = defaults;
         }
+      }
+    } else if (p.kind === 'point') {
+      // Seed the runtime point picker with the author-supplied
+      // defaults so the user can click Run immediately if the
+      // preset starting point is what they wanted.  Half-defaults
+      // (lat but no lng, or vice versa) intentionally don't seed
+      // because the runtime UI's "Drop pin" flow expects a
+      // complete pair or nothing.
+      if (
+        p.binding.mode === 'runtime-pick' &&
+        typeof p.binding.defaultLng === 'number' &&
+        typeof p.binding.defaultLat === 'number'
+      ) {
+        out[p.name] = {
+          kind: 'point-input',
+          lng: p.binding.defaultLng,
+          lat: p.binding.defaultLat,
+        };
       }
     }
   }

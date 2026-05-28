@@ -1877,6 +1877,8 @@ function paramNameBase(kind: ToolParameter['kind']): string {
       return 'text';
     case 'osm-feature':
       return 'osm';
+    case 'point':
+      return 'point';
   }
 }
 
@@ -1923,6 +1925,14 @@ function paramSeed(kind: ToolParameter['kind'], name: string): ToolParameter {
         name,
         label: 'Text',
         binding: { mode: 'runtime-input' },
+      };
+    case 'point':
+      return {
+        kind: 'point',
+        name,
+        label: 'Location',
+        hint: 'Drop a pin on the map or paste latitude / longitude.',
+        binding: { mode: 'runtime-pick' },
       };
   }
 }
