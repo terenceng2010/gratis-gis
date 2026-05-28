@@ -550,45 +550,87 @@ export class RecipeRunnerService {
       );
     }
 
-    if (!recipe.aoiParameterRef) {
-      throw new BadRequestException(
-        'osm-features-overlay output requires recipe.aoiParameterRef pointing at the area-of-interest parameter',
-      );
-    }
-    const aoiVal = resolved.get(recipe.aoiParameterRef);
-    if (!aoiVal || aoiVal.kind !== 'feature-source') {
-      throw new BadRequestException(
-        `Recipe aoiParameterRef '${recipe.aoiParameterRef}' must resolve to a feature-source parameter`,
-      );
-    }
-    // Anonymous callers can only use inline-geojson AOIs (drawn on
-    // the map).  data_layer / derived_layer AOIs would read from a
-    // portal layer whose ACL we can't satisfy without an auth user;
-    // refuse the call rather than silently bypass the gate.
-    if (!user && aoiVal.value.kind !== 'inline-geojson') {
-      throw new UnauthorizedException(
-        'This tool requires sign-in: layer-based AOIs are not available to anonymous viewers. Draw an area on the map instead.',
-      );
-    }
-    // Compute the AOI's bbox.  v1 supports inline-geojson AOIs (the
-    // user drew on the map) directly.  data_layer / runtime-selection
-    // AOIs need a PostGIS ST_Envelope read; queued for wave 2 with
-    // the spatial-filter integration.
-    const bbox = await this.computeAoiBbox(aoiVal.value);
-    if (!bbox) {
-      throw new BadRequestException(
-        `Could not compute a bbox from AOI parameter '${recipe.aoiParameterRef}'.  v1 only supports inline-geojson AOIs (drawn on the map).  Layer / selection AOIs land in wave 2.`,
-      );
+    // Two AOI shapes are supported for osm-features-overlay:
+    //
+    //   1. aoiParameterRef -> FeatureSourceParameter (drawn polygon,
+    //      data_layer, derived_layer).  The classic "find things
+    //      inside this area" flow.
+    //   2. pointParameterRef -> PointParameter (#150).  The Nearest N
+    //      flow: derive bbox from point +- radius, then post-fetch
+    //      sort by distance to the point and (optionally) truncate
+    //      to the top N closest.
+    //
+    // The two refs are alternatives; if both are set the point ref
+    // wins because that's the more specific intent.
+    let bbox: [number, number, number, number] | null = null;
+    let centerPoint: { lng: number; lat: number } | null = null;
+    const distance = findDistanceParam(recipe.parameters, resolved);
+    if (recipe.pointParameterRef) {
+      const pointVal = resolved.get(recipe.pointParameterRef);
+      if (!pointVal || pointVal.kind !== 'point') {
+        throw new BadRequestException(
+          `Recipe pointParameterRef '${recipe.pointParameterRef}' must resolve to a point parameter`,
+        );
+      }
+      // The point itself doesn't require auth; it's just a lat/lng
+      // pair the runtime sends.  Public tools with a point AOI work
+      // for anonymous callers out of the box.
+      centerPoint = { lng: pointVal.lng, lat: pointVal.lat };
+      // Build a square bbox of (radius + small pad) around the
+      // point.  The padDegrees-around-bbox path below is what the
+      // FeatureSource AOI uses; we precompute the equivalent here.
+      // A NumberParameter could supply the radius too, but the
+      // recipe author is expected to wire a distance param for the
+      // search radius -- mirrors how FIND_OSM_NEAR is shaped.
+      if (!distance || distance <= 0) {
+        throw new BadRequestException(
+          'osm-features-overlay with pointParameterRef requires a distance parameter for the search radius',
+        );
+      }
+      const radDegrees = distance / 111_000;
+      bbox = [
+        pointVal.lng - radDegrees,
+        pointVal.lat - radDegrees,
+        pointVal.lng + radDegrees,
+        pointVal.lat + radDegrees,
+      ];
+    } else {
+      if (!recipe.aoiParameterRef) {
+        throw new BadRequestException(
+          'osm-features-overlay output requires either recipe.aoiParameterRef or recipe.pointParameterRef',
+        );
+      }
+      const aoiVal = resolved.get(recipe.aoiParameterRef);
+      if (!aoiVal || aoiVal.kind !== 'feature-source') {
+        throw new BadRequestException(
+          `Recipe aoiParameterRef '${recipe.aoiParameterRef}' must resolve to a feature-source parameter`,
+        );
+      }
+      // Anonymous callers can only use inline-geojson AOIs (drawn on
+      // the map).  data_layer / derived_layer AOIs would read from a
+      // portal layer whose ACL we can't satisfy without an auth user;
+      // refuse the call rather than silently bypass the gate.
+      if (!user && aoiVal.value.kind !== 'inline-geojson') {
+        throw new UnauthorizedException(
+          'This tool requires sign-in: layer-based AOIs are not available to anonymous viewers. Draw an area on the map instead.',
+        );
+      }
+      bbox = await this.computeAoiBbox(aoiVal.value);
+      if (!bbox) {
+        throw new BadRequestException(
+          `Could not compute a bbox from AOI parameter '${recipe.aoiParameterRef}'.  v1 only supports inline-geojson AOIs (drawn on the map).  Layer / selection AOIs land in wave 2.`,
+        );
+      }
     }
 
     // Optional distance buffer: when the recipe declares a distance
-    // parameter, pad the bbox by that amount before the Overpass
-    // call so features just outside the AOI but within distance are
-    // still returned.  The cheap conversion (meters → degrees at
-    // 1deg ≈ 111km) over-pads slightly at high latitudes; acceptable
-    // for the v1 "show me things near my parcel" use case.
-    const distance = findDistanceParam(recipe.parameters, resolved);
-    const padDegrees = distance ? distance / 111_000 : 0;
+    // parameter AND an AOI (not a point), pad the bbox by that
+    // amount before the Overpass call so features just outside the
+    // AOI but within distance are still returned.  Point-AOI tools
+    // already baked the radius into the bbox above, so don't pad
+    // again here.
+    const padDegrees =
+      !centerPoint && distance ? distance / 111_000 : 0;
     const paddedBbox: [number, number, number, number] = [
       bbox[0] - padDegrees,
       bbox[1] - padDegrees,
@@ -636,12 +678,42 @@ export class RecipeRunnerService {
       }
     }
 
+    // #150 Nearest N: when the recipe carries a pointParameterRef,
+    // post-process the Overpass result so the client gets features
+    // sorted by distance to the center point with a
+    // `distance_meters` property attached.  An optional
+    // `nearestLimitParameterRef` then truncates to the top N
+    // closest -- without it every feature in the search radius
+    // comes back (still sorted) which is useful for "list every
+    // park within 0.5 mi" but not for "give me the 10 closest."
+    let features = result.features;
+    if (centerPoint) {
+      const annotated = features.map((f) => {
+        const meters = approxDistanceMeters(centerPoint!, f.geometry);
+        const props = { ...(f.properties ?? {}), distance_meters: meters };
+        return { feature: f, meters, props };
+      });
+      annotated.sort((a, b) => a.meters - b.meters);
+      let n = annotated.length;
+      if (recipe.nearestLimitParameterRef) {
+        const limitVal = resolved.get(recipe.nearestLimitParameterRef);
+        if (limitVal && limitVal.kind === 'number') {
+          const clamped = Math.max(1, Math.min(500, Math.floor(limitVal.value)));
+          if (Number.isFinite(clamped)) n = Math.min(n, clamped);
+        }
+      }
+      features = annotated.slice(0, n).map((a) => ({
+        ...a.feature,
+        properties: a.props,
+      }));
+    }
+
     return {
       output: {
         kind: 'osm-features-overlay',
-        features: result.features,
+        features,
         attribution: result.attribution,
-        featureCount: result.featureCount,
+        featureCount: features.length,
         truncated: false, // wave 2 surface when Overpass actually hit the cap
         presetLabels,
       },
@@ -1466,6 +1538,63 @@ function bboxOfGeoJson(
     return null;
   }
   return [minX, minY, maxX, maxY];
+}
+
+/**
+ * Approximate great-circle distance in meters from a (lng, lat)
+ * center to a GeoJSON geometry's representative coordinate
+ * (#150).  Uses the haversine formula on a sphere with mean
+ * Earth radius.  Geometry-aware in the simplest way: for Point
+ * uses the point; for Line / Polygon types takes the first
+ * coordinate ring's first vertex.  Accuracy is fine for the
+ * "sort by distance" use case at sub-100m feature sizes against
+ * search radii of hundreds of meters or more; if we ever need
+ * proper edge distance for big polygons we move this to PostGIS
+ * `ST_Distance(geography)`.
+ */
+function approxDistanceMeters(
+  center: { lng: number; lat: number },
+  geom: unknown,
+): number {
+  const coord = firstCoord(geom);
+  if (!coord) return Infinity;
+  const [lng2, lat2] = coord;
+  const R = 6371000; // mean Earth radius in meters
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - center.lat);
+  const dLng = toRad(lng2 - center.lng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(center.lat)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * First coordinate pair from any GeoJSON geometry shape.  Walks
+ * nested coordinate arrays until it finds the deepest leaf pair.
+ * Returns null for malformed input.
+ */
+function firstCoord(geom: unknown): [number, number] | null {
+  if (!geom || typeof geom !== 'object') return null;
+  const g = geom as { type?: string; coordinates?: unknown };
+  if (!Array.isArray(g.coordinates)) return null;
+  let cur: unknown = g.coordinates;
+  // Drill into the first element until we hit a leaf [lng, lat].
+  for (let depth = 0; depth < 6; depth++) {
+    if (!Array.isArray(cur)) return null;
+    if (
+      cur.length >= 2 &&
+      typeof cur[0] === 'number' &&
+      typeof cur[1] === 'number'
+    ) {
+      return [cur[0] as number, cur[1] as number];
+    }
+    cur = cur[0];
+  }
+  return null;
 }
 
 /**

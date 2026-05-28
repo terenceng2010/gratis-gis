@@ -473,6 +473,29 @@ export interface RecipeAction {
    */
   aoiParameterRef?: string;
   /**
+   * Alternative AOI source for `osm-features-overlay` output:
+   * a `point` parameter (#150).  When set, the recipe runner
+   * derives the bbox from the resolved point + the distance
+   * parameter (point ± radius), and post-fetch sorts the result
+   * by distance to the point.  `aoiParameterRef` is ignored when
+   * `pointParameterRef` is present; the two are alternatives.
+   *
+   * The killer use case: "drop a pin, give me the N closest
+   * coffee shops, sorted by walking distance" -- the runner
+   * attaches a `distance_m` property to each output feature so
+   * popups can show "0.3 mi away" without a second fetch.
+   */
+  pointParameterRef?: string;
+  /**
+   * Optional NumberParameter ref bounded to integer in [1, 500].
+   * When `pointParameterRef` is set, results are truncated to the
+   * top N closest to the point.  Without this, every feature in
+   * the search radius comes back (still sorted by distance) which
+   * is the right shape for "list every park within 0.5 mi" --
+   * use the limit when you want "list the 10 closest parks."
+   */
+  nearestLimitParameterRef?: string;
+  /**
    * Hard cap on rows returned for `output.kind === 'selection'`. The
    * runtime warns the user when truncation occurs.  Mirrors the
    * features-page cap so big-data layers degrade gracefully rather
@@ -902,10 +925,77 @@ const FIND_OSM_BY_NAME: RecipeTemplate = {
   },
 };
 
+/**
+ * Nearest-N starter (#150).  Drop a pin, pick a feature kind,
+ * set a search radius + a count, get the N closest matching OSM
+ * features back sorted by distance with each feature carrying a
+ * `distance_meters` property for popup display.
+ *
+ * The canonical "what's near here" workflow: useful both as
+ * exploration ("coffee shops near my hotel") and as verification
+ * during the detective-style geolocation workflow ("if the video
+ * is here, what OSM landmarks should be visible nearby?").
+ */
+const FIND_OSM_NEAREST_N: RecipeTemplate = {
+  id: 'find-osm-nearest-n',
+  label: 'Find the N closest OSM features to a pin',
+  description:
+    "Drop a pin on the map, pick a feature kind (coffee shop, school, gas station, ...), set a search radius and a count, and get the N closest matching features sorted by distance. Each popup shows how far the feature is from the pin.",
+  build(): RecipeAction {
+    return {
+      kind: 'recipe',
+      recipeVersion: 1,
+      parameters: [
+        {
+          kind: 'point',
+          name: 'point',
+          label: 'Drop a pin',
+          hint: 'Click on the map to set the search center, or paste a lat / lng pair.',
+          required: true,
+          binding: { mode: 'runtime-pick' },
+        },
+        {
+          kind: 'osm-feature',
+          name: 'osm',
+          label: 'What to look for',
+          hint: 'Pick one or more kinds of OpenStreetMap feature.',
+          required: true,
+          binding: { mode: 'runtime-pick', allowCustomTagFilters: true },
+        },
+        {
+          kind: 'distance',
+          name: 'distance',
+          label: 'Search radius',
+          hint: 'How far to search around the pin.  Defaults to 1 mile; change units if you prefer kilometers, feet, etc.',
+          unit: 'miles',
+          binding: { mode: 'runtime-input', defaultMeters: 1609.344 },
+        },
+        {
+          kind: 'number',
+          name: 'nearestLimit',
+          label: 'How many results',
+          hint: 'Show the N closest matches.  10 by default; set higher for a denser list, lower for the bare-essentials view.',
+          required: false,
+          binding: { mode: 'runtime-input', defaultValue: 10, min: 1, max: 500 },
+        },
+      ],
+      pipeline: [],
+      output: { kind: 'osm-features-overlay' },
+      sourceParameterRef: 'osm',
+      // #150: pointParameterRef + nearestLimitParameterRef put the
+      // recipe runner into Nearest-N mode -- bbox is derived from
+      // the point and the result is sorted by distance + truncated.
+      pointParameterRef: 'point',
+      nearestLimitParameterRef: 'nearestLimit',
+    };
+  },
+};
+
 export const RECIPE_TEMPLATES: RecipeTemplate[] = [
   SELECT_BY_LOCATION,
   FIND_OSM_NEAR,
   FIND_OSM_BY_NAME,
+  FIND_OSM_NEAREST_N,
 ];
 
 /** Convenience accessor for the canonical Select-By-Location
