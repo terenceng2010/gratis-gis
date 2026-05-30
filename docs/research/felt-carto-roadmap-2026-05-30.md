@@ -20,10 +20,22 @@ the sequence.
 ## Strategic ordering
 
 Eight Felt/CARTO-derived items plus one cross-cutting concern
-(multi-language / i18n, #9). The eight unlock each other in a
+(multi-language / i18n, item 9). The eight unlock each other in a
 specific order; i18n runs as an independent third stream because
 its biggest cost is the one-time i18n-readiness pass that benefits
 from being done early, before too many more strings get hard-coded.
+
+GitHub issues filed for each item:
+
+- Item 1 — Drawings / redline primitive — [#154](https://github.com/palavido-dev/gratis-gis/issues/154)
+- Item 2 — Threaded comments — [#155](https://github.com/palavido-dev/gratis-gis/issues/155)
+- Item 3 — Live cursors / presence — [#156](https://github.com/palavido-dev/gratis-gis/issues/156)
+- Item 4 — Workflows-style visual DAG — [#157](https://github.com/palavido-dev/gratis-gis/issues/157)
+- Item 5 — PostGIS live-read connector — [#158](https://github.com/palavido-dev/gratis-gis/issues/158)
+- Item 6 — Print / PDF export — [#159](https://github.com/palavido-dev/gratis-gis/issues/159)
+- Item 7 — Smart upload (geocode + geomatch) — [#160](https://github.com/palavido-dev/gratis-gis/issues/160)
+- Item 8 — MCP server — [#161](https://github.com/palavido-dev/gratis-gis/issues/161)
+- Item 9 — Multi-language / i18n — [#162](https://github.com/palavido-dev/gratis-gis/issues/162)
 
 1. **Drawings primitive** is the wedge for the collaboration story and a
    strict prerequisite for feature-level comments and live cursors.
