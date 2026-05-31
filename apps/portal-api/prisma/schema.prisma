@@ -450,6 +450,9 @@ model Item {
   attachments FeatureAttachment[]
   snapshots   ItemDataSnapshot[]
   credential  ItemCredential?
+  /// #155: threaded comments scoped to this item. Cascade-deletes
+  /// every thread + reply when the item is permanently deleted.
+  commentThreads CommentThread[]
 
   @@index([orgId, access])
   @@index([ownerId])
@@ -1337,4 +1340,73 @@ model OsmQueryCache {
   /// recently" is a useful operator question.
   @@index([presetIds], map: "osm_query_cache_presets_idx", type: Gin)
   @@map("osm_query_cache")
+}
+
+/// Polymorphic parent kind for a CommentThread. Phase 1 ships
+/// `map` only; the additional kinds are reserved so feature- and
+/// drawing-anchored threads don't need a schema migration in
+/// Phase 2.
+enum CommentParentKind {
+  map
+  layer
+  feature
+  drawing
+}
+
+/// #155 Threaded comments on items. A thread is scoped to an
+/// item (`itemId`) and optionally anchored to a sub-entity
+/// (`parentKind` + `parentId`). The polymorphic anchoring lets a
+/// future Phase 2 attach threads to a specific feature on a
+/// layer or to a specific drawing feature without a schema
+/// change; today the controller only writes threads with
+/// `parentKind = 'map'` and `parentId = itemId`.
+///
+/// Resolved threads are kept (not deleted) so the conversation
+/// stays auditable. The Comments pane hides resolved threads by
+/// default with a "show resolved" toggle.
+model CommentThread {
+  id         String            @id @default(uuid()) @db.Uuid
+  itemId     String            @map("item_id") @db.Uuid
+  parentKind CommentParentKind @map("parent_kind")
+  /// For `parentKind = 'map'`, equals itemId. For 'layer', the
+  /// MapLayer.id within the map's data_json. For 'feature', the
+  /// feature id within the named layer (caller picks the
+  /// composite key encoding). For 'drawing', the
+  /// DrawingFeature.id within the map's drawings[]. Stored as a
+  /// string to accommodate all three forms.
+  parentId   String            @map("parent_id")
+  resolved   Boolean           @default(false)
+  resolvedBy String?           @map("resolved_by") @db.Uuid
+  resolvedAt DateTime?         @map("resolved_at")
+  /// User id that opened the thread (first comment's author).
+  /// Cheap lookup so the resolve gate can permit the thread
+  /// opener to close it without an extra join.
+  createdBy  String            @map("created_by") @db.Uuid
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+
+  item     Item      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  comments Comment[]
+
+  @@index([itemId, resolved])
+  @@index([parentKind, parentId])
+  @@map("comment_thread")
+}
+
+/// A single comment within a CommentThread. Markdown body,
+/// rendered client-side. `editedAt` is null until the author
+/// edits the comment; the body history is intentionally not
+/// preserved in Phase 1 (last-write-wins).
+model Comment {
+  id        String    @id @default(uuid()) @db.Uuid
+  threadId  String    @map("thread_id") @db.Uuid
+  authorId  String    @map("author_id") @db.Uuid
+  body      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  editedAt  DateTime? @map("edited_at")
+
+  thread CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("comment")
 }

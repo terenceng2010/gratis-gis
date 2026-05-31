@@ -14,6 +14,8 @@ import { WebMapJsonImportService } from './web-map-json-import.service.js';
 import { ItemBboxRefreshService } from './item-bbox-refresh.service.js';
 import { DrawingsController } from './drawings.controller.js';
 import { DrawingsService } from './drawings.service.js';
+import { CommentsController } from './comments.controller.js';
+import { CommentsService } from './comments.service.js';
 import { DataLayerTablesModule } from '../data-layer/tables.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { DerivedLayersModule } from '../derived-layers/derived-layers.module.js';
@@ -37,6 +39,7 @@ import { StorageModule } from '../storage/storage.module.js';
     ItemProxyController,
     ServiceProbeController,
     DrawingsController,
+    CommentsController,
   ],
   providers: [
     ItemsService,
@@ -48,6 +51,7 @@ import { StorageModule } from '../storage/storage.module.js';
     WebMapJsonImportService,
     ItemBboxRefreshService,
     DrawingsService,
+    CommentsService,
   ],
   exports: [
     ItemsService,
@@ -59,6 +63,7 @@ import { StorageModule } from '../storage/storage.module.js';
     WebMapJsonImportService,
     ItemBboxRefreshService,
     DrawingsService,
+    CommentsService,
   ],
 })
 export class ItemsModule {}

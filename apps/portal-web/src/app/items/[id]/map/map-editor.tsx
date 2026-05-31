@@ -41,8 +41,9 @@ import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
 import { SelectToolbar, type SelectToolMode } from './select-tool';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
-import { Layers as LayersIcon, PencilLine, Settings as SettingsIcon } from 'lucide-react';
+import { Layers as LayersIcon, MessageSquare, PencilLine, Settings as SettingsIcon } from 'lucide-react';
 import { MarkupPanel } from './markup-panel';
+import { CommentsPanel } from './comments-panel';
 import type { DrawingSet } from '@gratis-gis/shared-types';
 import {
   AccessMatrix,
@@ -362,6 +363,7 @@ export function MapEditor({
   // drawings on the canvas immediately. The panel manages writes
   // and pushes updates back through `setDrawings`.
   const [markupOpen, setMarkupOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const [drawings, setDrawings] = useState<DrawingSet[]>(
     (initial as MapData & { drawings?: DrawingSet[] }).drawings ?? [],
   );
@@ -935,6 +937,12 @@ export function MapEditor({
         active={markupOpen}
         onClick={() => setMarkupOpen((v) => !v)}
       />
+      <ToolbarIconToggle
+        Icon={MessageSquare}
+        label="Comments"
+        active={commentsOpen}
+        onClick={() => setCommentsOpen((v) => !v)}
+      />
       {canEdit ? (
         <ToolbarIconToggle
           Icon={ShieldCheck}
@@ -1167,6 +1175,16 @@ export function MapEditor({
             mapCenter={map.center}
             onDrawingsChange={setDrawings}
             initialDrawings={drawings}
+          />
+          {/* #155 Comments panel. Same floating-overlay model as
+              the Markup pane so viewers (not just editors) can
+              comment without the BuilderShell right-rail slot. */}
+          <CommentsPanel
+            itemId={itemId}
+            open={commentsOpen}
+            onClose={() => setCommentsOpen(false)}
+            currentUser={currentUser}
+            canEditItem={canEdit}
           />
         </div>
       </BuilderShell>

@@ -131,6 +131,12 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   if (/^items\/[^/]+\/drawings$/.test(suffix)) {
     return suffix;
   }
+  // #155 Threaded comments list on a public item. Same pattern
+  // as drawings above: the GET route is @Public() and the
+  // service gates non-public reads against canRead.
+  if (/^items\/[^/]+\/comments$/.test(suffix)) {
+    return suffix;
+  }
   // Anonymous service-proxy passthrough: a public viewer that
   // references an external service (ArcGIS / WMS / WFS / WMTS)
   // hits /items/:id/proxy/<sub-path>?... at runtime to fetch
