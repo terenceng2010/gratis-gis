@@ -12,6 +12,13 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Print this map, one click away
+A Print button in the map editor opens a chooser: create a new
+print layout pre-bound to this map, or pick an existing layout
+to print with. The Map, Legend, Scalebar, and North arrow auto-
+bind to the calling map so you skip the manual wiring. Higher-
+fidelity PDF rendering lands next.
+
 ## 2026-05-31 — Workflows: analysis as a connected graph
 The analysis engine now understands a workflow as a graph of
 connected steps, not just a straight line. One result can flow

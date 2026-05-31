@@ -41,10 +41,11 @@ import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
 import { SelectToolbar, type SelectToolMode } from './select-tool';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
-import { Layers as LayersIcon, MessageSquare, PencilLine, Settings as SettingsIcon } from 'lucide-react';
+import { Layers as LayersIcon, MessageSquare, PencilLine, Printer, Settings as SettingsIcon } from 'lucide-react';
 import { MarkupPanel } from './markup-panel';
 import { CommentsPanel } from './comments-panel';
 import { PresenceOverlay } from './presence-overlay';
+import { PrintThisMapDialog } from './print-this-map-dialog';
 import type { DrawingSet } from '@gratis-gis/shared-types';
 import type maplibregl from 'maplibre-gl';
 import {
@@ -366,6 +367,10 @@ export function MapEditor({
   // and pushes updates back through `setDrawings`.
   const [markupOpen, setMarkupOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
+  // #159: "Print this map" chooser. Opens a thin dialog that
+  // lets the author either pick an existing print template or
+  // create a new one pre-bound to this map.
+  const [printOpen, setPrintOpen] = useState(false);
   const [drawings, setDrawings] = useState<DrawingSet[]>(
     (initial as MapData & { drawings?: DrawingSet[] }).drawings ?? [],
   );
@@ -949,6 +954,12 @@ export function MapEditor({
         active={commentsOpen}
         onClick={() => setCommentsOpen((v) => !v)}
       />
+      <ToolbarIconToggle
+        Icon={Printer}
+        label="Print this map"
+        active={printOpen}
+        onClick={() => setPrintOpen((v) => !v)}
+      />
       {canEdit ? (
         <ToolbarIconToggle
           Icon={ShieldCheck}
@@ -1202,6 +1213,15 @@ export function MapEditor({
             mapId={itemId}
             currentUser={currentUser}
             mapLibre={mapLibre}
+          />
+          {/* #159 Print this map chooser. Opens to either
+              "use existing template" or "create new pre-bound
+              to this map". Print runs through the existing
+              print_template designer + Print tool widget. */}
+          <PrintThisMapDialog
+            open={printOpen}
+            onClose={() => setPrintOpen(false)}
+            mapId={itemId}
           />
         </div>
       </BuilderShell>

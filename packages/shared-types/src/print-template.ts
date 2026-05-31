@@ -349,6 +349,18 @@ export interface PrintTemplateData {
    *  page (separate from the item's own description so the template
    *  author can talk about layout intent specifically). */
   layoutNotes?: string;
+  /**
+   * #159: optional default map this template was authored against.
+   * Stamped when the user creates a template via the "Print this
+   * map" button on a map editor (the map id flows through as a
+   * query parameter to the new-item wizard, which writes it here).
+   * The designer's Map elements auto-bind to this id when present,
+   * letting an author preview the layout against the calling map
+   * without having to wire references manually. Pure UX hint;
+   * the print runtime in a Custom Web App still binds to the host
+   * widget's map at print time and is unaffected.
+   */
+  defaultMapId?: string;
 }
 
 /**

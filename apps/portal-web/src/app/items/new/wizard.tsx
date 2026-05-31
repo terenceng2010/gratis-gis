@@ -1218,7 +1218,18 @@ export function NewItemWizard({
       // canvas with a single Title parameter and a blank element
       // list.  Author lands on the designer ready to drop
       // elements onto the page.
-      data = DEFAULT_PRINT_TEMPLATE;
+      //
+      // #159: when the wizard was opened from a map's "Print
+      // this map" button, the calling map id flows through as
+      // a `?map=<uuid>` query param. Stamp it into the
+      // template's `defaultMapId` field so the designer's Map /
+      // Legend / Scalebar / North-arrow elements auto-bind to
+      // the right map without the author having to wire
+      // references manually.
+      const mapHint = searchParams?.get('map') ?? null;
+      data = mapHint
+        ? { ...DEFAULT_PRINT_TEMPLATE, defaultMapId: mapHint }
+        : DEFAULT_PRINT_TEMPLATE;
     } else if (type === 'tool') {
       // #90: seed an empty tool whose default action is "open URL"
       // with an empty URL.  Saves cleanly (the runtime treats an

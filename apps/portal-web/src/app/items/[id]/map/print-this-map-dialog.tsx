@@ -1,0 +1,170 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+'use client';
+
+/**
+ * #159 Phase 1: "Print this map" chooser dialog.
+ *
+ * Opens from the map editor toolbar and gives the author two
+ * paths to printing the current map:
+ *
+ *   1. **Use an existing print template** — picks any
+ *      print_template item the viewer can read. We forward the
+ *      caller's map id as a query param so the template's
+ *      designer opens already pointing at this map, which the
+ *      Map / Legend / Scalebar / North-arrow elements auto-bind
+ *      to. No need to wire references manually.
+ *
+ *   2. **Create a new template pre-bound to this map** — opens
+ *      the new-item wizard with `type=print_template` and the
+ *      map id pre-supplied. The wizard writes the id into the
+ *      template's `defaultMapId` field on create.
+ *
+ * Phase 2 will replace `window.print()` with a server-side
+ * Puppeteer pipeline for vector-quality PDFs; the chooser shape
+ * stays the same.
+ *
+ * Pre-existing `print_template` ships under #101 and includes
+ * the designer + parameters + smart auto-binding. This dialog
+ * is the missing UX bridge from a plain map to that designer.
+ */
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { Printer, Plus, X } from 'lucide-react';
+
+interface PrintTemplateSummary {
+  id: string;
+  title: string;
+  description?: string;
+}
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  /** UUID of the map the author triggered the print from. */
+  mapId: string;
+}
+
+export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
+  const [templates, setTemplates] = useState<PrintTemplateSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/portal/items?type=print_template&limit=50`,
+      );
+      if (!res.ok) throw new Error(`${res.status}`);
+      const json = (await res.json()) as {
+        items?: Array<{ id: string; title: string; description?: string }>;
+      };
+      setTemplates(
+        (json.items ?? []).map((it) => ({
+          id: it.id,
+          title: it.title,
+          ...(it.description ? { description: it.description } : {}),
+        })),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load templates');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) refresh();
+  }, [open, refresh]);
+
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-label="Print this map"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[80vh] w-[36rem] max-w-[90vw] flex-col rounded-md border border-border bg-surface-1 shadow-overlay"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Printer className="h-4 w-4 text-muted" />
+            <h2 className="text-sm font-semibold text-ink-1">
+              Print this map
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-muted hover:bg-surface-2 hover:text-ink-1"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto px-4 py-3">
+          <section className="mb-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              Start a new layout
+            </h3>
+            <Link
+              href={`/items/new?type=print_template&map=${encodeURIComponent(mapId)}`}
+              className="flex items-center gap-2 rounded border border-border bg-surface-1 px-3 py-2 text-sm text-ink-1 hover:bg-surface-2"
+            >
+              <Plus className="h-4 w-4 text-muted" />
+              Create a new print layout pre-bound to this map
+            </Link>
+            <p className="mt-1 text-[11px] text-muted">
+              Opens the print layout designer with this map already
+              wired up to the Map, Legend, Scalebar, and North arrow
+              elements.
+            </p>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              Use an existing layout
+            </h3>
+            {loading ? (
+              <p className="text-xs text-muted">Loading templates...</p>
+            ) : error ? (
+              <p role="alert" className="text-xs text-danger">
+                {error}
+              </p>
+            ) : templates.length === 0 ? (
+              <p className="text-xs text-muted">
+                No print layouts to choose from yet. Use "Create a new
+                print layout" above to make one.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {templates.map((t) => (
+                  <li key={t.id}>
+                    <Link
+                      href={`/items/${t.id}?map=${encodeURIComponent(mapId)}`}
+                      className="block rounded border border-border bg-surface-1 px-3 py-2 hover:bg-surface-2"
+                    >
+                      <p className="text-sm font-medium text-ink-1">
+                        {t.title}
+                      </p>
+                      {t.description ? (
+                        <p className="mt-0.5 line-clamp-2 text-[11px] text-muted">
+                          {t.description}
+                        </p>
+                      ) : null}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
