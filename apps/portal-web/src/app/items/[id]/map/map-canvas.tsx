@@ -13,11 +13,23 @@ import {
 } from 'react';
 import maplibregl from 'maplibre-gl';
 import type {
+  DrawingSet,
   MapData,
   MapLayer,
   MapLayerFilter,
   MapLayerFilterClause,
 } from '@gratis-gis/shared-types';
+
+/**
+ * Minimal projection of a `DrawingSet` the canvas needs to render
+ * its overlay. Keeps the canvas insulated from any future
+ * DrawingSet field churn (comments, anchored threads, etc.) that
+ * the panel cares about but the renderer does not.
+ */
+type DrawingSetForRender = Pick<
+  DrawingSet,
+  'id' | 'color' | 'visible' | 'features'
+>;
 import {
   ZOOM_MAX,
   ZOOM_MIN,
@@ -138,6 +150,21 @@ interface Props {
    */
   hideNavigationControl?: boolean;
   /**
+   * #154 Drawings overlay. Each `DrawingSet` carries its own
+   * color, visibility flag, and an array of pin features. The
+   * canvas adds a single GeoJSON source named `drawings:overlay`
+   * and a circle + symbol layer pair on top of all data layers
+   * so markup always reads above the underlying map. Visibility
+   * toggles flip the layer's `visibility` paint property without
+   * tearing the source down.
+   *
+   * Future drawing kinds (line, polygon, arrow, text) will land
+   * as additional MapLibre layers on the same source; the
+   * sanitizer in DrawingsService restricts the geometry types
+   * accepted server-side so v1 only ever paints points.
+   */
+  drawings?: DrawingSetForRender[];
+  /**
    * #87 -- bitemporal "as of" timestamp.  When set, every data-layer
    * source's MVT tile URL and editor-target GeoJSON fetch appends
    * `at=<ISO>` so MapLibre renders the engine's projection at that
@@ -230,6 +257,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     editClaimedLayerIds,
     onEditClaimedClick,
     hideNavigationControl = false,
+    drawings,
   }: Props,
   ref,
 ) {
@@ -793,6 +821,32 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     // the runtime scrubs back in time so MapLibre re-fetches tiles
     // tagged with the new `at` value.
   }, [map.layers, map.clipBoundaryId, iconsTick, asOfTime]);
+
+  // #154 Drawings overlay sync. Runs on every change to the
+  // `drawings` prop and keeps the canvas's `drawings:overlay`
+  // source + layers aligned with the panel's state. Idempotent:
+  // a no-op pass when drawings is empty or unchanged still
+  // results in a clean canvas.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const apply = () => {
+      if (!m.isStyleLoaded()) return;
+      syncDrawings(m, drawings ?? []);
+    };
+    if (!m.isStyleLoaded()) {
+      const once = () => {
+        if (!m.isStyleLoaded()) return;
+        m.off('styledata', once);
+        apply();
+      };
+      m.on('styledata', once);
+      return () => {
+        m.off('styledata', once);
+      };
+    }
+    apply();
+  }, [drawings]);
 
   // Live bbox-driven refetch for ArcGIS REST layers. Runs after
   // syncOverlays (same dep array, later in the file), so the sources
@@ -2121,6 +2175,124 @@ function toolCursor(mode: SelectToolMode): string {
   const def = TOOL_CURSORS[mode];
   const encoded = encodeURIComponent(def.svg).replace(/'/g, '%27');
   return `url("data:image/svg+xml;utf8,${encoded}") ${def.hx} ${def.hy}, crosshair`;
+}
+
+/**
+ * #154 Drawings overlay sync. Owns a single MapLibre GeoJSON
+ * source (`drawings:overlay`) and two layers on top of it:
+ *   - `drawings:fill` — the colored pin circle, sized constant
+ *     in pixels.
+ *   - `drawings:stroke` — a white halo so the pin reads against
+ *     any basemap.
+ *
+ * Color comes from each pin feature's properties (`color`), which
+ * are stamped per-pin at flatten time from the parent drawing
+ * set's color so a recolor doesn't require recomputing the source
+ * data. Visibility on a set hides its features by emitting a
+ * filter expression that drops features whose `setId` is in the
+ * hidden list.
+ *
+ * Idempotent: re-runs on every drawings prop change. Removes the
+ * source + layers when there is no markup so the renderer doesn't
+ * carry stale state across maps.
+ */
+const DRAWINGS_SOURCE_ID = 'drawings:overlay';
+const DRAWINGS_FILL_LAYER_ID = 'drawings:fill';
+const DRAWINGS_STROKE_LAYER_ID = 'drawings:stroke';
+
+function syncDrawings(
+  m: maplibregl.Map,
+  sets: DrawingSetForRender[],
+): void {
+  const features: GeoJSON.Feature[] = [];
+  const hiddenSetIds: string[] = [];
+  for (const set of sets) {
+    if (!set.visible) hiddenSetIds.push(set.id);
+    for (const f of set.features) {
+      if (!f.geometry) continue;
+      features.push({
+        type: 'Feature',
+        id: f.id,
+        geometry: f.geometry as GeoJSON.Geometry,
+        properties: {
+          setId: set.id,
+          color: f.style?.color ?? set.color,
+          kind: f.kind,
+          label: f.label ?? '',
+        },
+      });
+    }
+  }
+  const fc: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features,
+  };
+  const existing = m.getSource(DRAWINGS_SOURCE_ID) as
+    | maplibregl.GeoJSONSource
+    | undefined;
+  if (features.length === 0) {
+    // Tear down so a map cleared of all markup doesn't keep an
+    // empty source + layer pair hanging around in MapLibre's state.
+    if (m.getLayer(DRAWINGS_STROKE_LAYER_ID)) m.removeLayer(DRAWINGS_STROKE_LAYER_ID);
+    if (m.getLayer(DRAWINGS_FILL_LAYER_ID)) m.removeLayer(DRAWINGS_FILL_LAYER_ID);
+    if (m.getSource(DRAWINGS_SOURCE_ID)) m.removeSource(DRAWINGS_SOURCE_ID);
+    return;
+  }
+  if (existing) {
+    existing.setData(fc);
+  } else {
+    m.addSource(DRAWINGS_SOURCE_ID, {
+      type: 'geojson',
+      data: fc,
+    });
+  }
+  // Hide features whose set has been toggled off. MapLibre's
+  // `!in` only takes literals; we pass the array as the data
+  // expression directly per spec.
+  const visibilityFilter: unknown[] =
+    hiddenSetIds.length === 0
+      ? ['literal', true]
+      : ['!', ['in', ['get', 'setId'], ['literal', hiddenSetIds]]];
+  if (!m.getLayer(DRAWINGS_STROKE_LAYER_ID)) {
+    m.addLayer({
+      id: DRAWINGS_STROKE_LAYER_ID,
+      type: 'circle',
+      source: DRAWINGS_SOURCE_ID,
+      filter: ['all', ['==', ['geometry-type'], 'Point'], visibilityFilter as never],
+      paint: {
+        'circle-radius': 10,
+        'circle-color': '#ffffff',
+        'circle-stroke-color': '#111827',
+        'circle-stroke-width': 1.5,
+      },
+    });
+  } else {
+    m.setFilter(DRAWINGS_STROKE_LAYER_ID, [
+      'all',
+      ['==', ['geometry-type'], 'Point'],
+      visibilityFilter as never,
+    ]);
+  }
+  if (!m.getLayer(DRAWINGS_FILL_LAYER_ID)) {
+    m.addLayer({
+      id: DRAWINGS_FILL_LAYER_ID,
+      type: 'circle',
+      source: DRAWINGS_SOURCE_ID,
+      filter: ['all', ['==', ['geometry-type'], 'Point'], visibilityFilter as never],
+      paint: {
+        'circle-radius': 6,
+        'circle-color': ['get', 'color'],
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 1.5,
+      },
+    });
+  } else {
+    m.setFilter(DRAWINGS_FILL_LAYER_ID, [
+      'all',
+      ['==', ['geometry-type'], 'Point'],
+      visibilityFilter as never,
+    ]);
+  }
 }
 
 /**

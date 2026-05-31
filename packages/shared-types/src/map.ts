@@ -151,6 +151,27 @@ export interface MapData {
    */
   layers: MapLayer[];
   search: MapSearchConfig;
+  /**
+   * #154: per-author markup overlays. Each entry is a
+   * `DrawingSet` (see `./drawings.ts`); the type is intentionally
+   * imported and re-exported lazily to keep this file from growing
+   * a dependency on the drawings module's helpers. Absent or empty
+   * means "no markup on this map yet."
+   *
+   * Drawings are NOT data layers and do not appear in `layers`.
+   * They render as a final overlay above every data layer; the
+   * Markup pane in the editor is their authoring home.
+   */
+  drawings?: import('./drawings').DrawingSet[];
+  /**
+   * #154: opt-in flag that lets anonymous public viewers add
+   * their own drawing sets to this map. Off by default; admins
+   * turn it on per-map. Signed-in viewers can always add their
+   * own sets when they have view access regardless of this flag.
+   * The rate-limit + optional captcha gates apply to anonymous
+   * writes the same way they do for anonymous tool-run.
+   */
+  allowAnonymousDrawings?: boolean;
 }
 
 /**

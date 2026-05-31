@@ -41,7 +41,9 @@ import { AttributeTable } from './attribute-table';
 import { SearchBar } from './search-bar';
 import { SelectToolbar, type SelectToolMode } from './select-tool';
 import { BuilderShell } from '@/components/builder-shell/builder-shell';
-import { Layers as LayersIcon, Settings as SettingsIcon } from 'lucide-react';
+import { Layers as LayersIcon, PencilLine, Settings as SettingsIcon } from 'lucide-react';
+import { MarkupPanel } from './markup-panel';
+import type { DrawingSet } from '@gratis-gis/shared-types';
 import {
   AccessMatrix,
   unresolvedPrincipal,
@@ -84,6 +86,15 @@ interface Props {
    * load. An empty list collapses the picker to a disabled state.
    */
   geoBoundaries?: Array<{ id: string; title: string }>;
+  /**
+   * Current signed-in user. The Markup panel (#154) uses this to
+   * label new drawing sets ("Matt's markup 2026-05-30") and to
+   * decide which drawing sets the viewer can edit (their own,
+   * always; any, when `canEdit` is true). Pass null for a public
+   * anonymous viewer; the panel disables create / edit in that
+   * case.
+   */
+  currentUser?: { id: string; displayName: string } | null;
 }
 
 /**
@@ -143,6 +154,7 @@ export function MapEditor({
   basemaps = [],
   defaultExtentBoundary = null,
   geoBoundaries = [],
+  currentUser = null,
 }: Props) {
   // Hydrate older persisted maps. Each bump in the schema lands a new
   // migrator here; the goal is that any v2.x map still opens cleanly.
@@ -345,6 +357,14 @@ export function MapEditor({
 
   const [legendOpen, setLegendOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
+  // #154: Markup panel + per-map drawing sets. Hydrated from the
+  // initial map data so a fresh page-load renders existing
+  // drawings on the canvas immediately. The panel manages writes
+  // and pushes updates back through `setDrawings`.
+  const [markupOpen, setMarkupOpen] = useState(false);
+  const [drawings, setDrawings] = useState<DrawingSet[]>(
+    (initial as MapData & { drawings?: DrawingSet[] }).drawings ?? [],
+  );
   // Layer id chosen by the per-layer kebab's "Open attribute table"
   // action (#73). Cleared when the table closes so reopening from
   // the toolbar lands on the default-first-visible behavior.
@@ -909,6 +929,12 @@ export function MapEditor({
           setTableOpen((v) => !v);
         }}
       />
+      <ToolbarIconToggle
+        Icon={PencilLine}
+        label="Markup"
+        active={markupOpen}
+        onClick={() => setMarkupOpen((v) => !v)}
+      />
       {canEdit ? (
         <ToolbarIconToggle
           Icon={ShieldCheck}
@@ -1058,6 +1084,7 @@ export function MapEditor({
             selection={selection}
             selectTool={selectTool}
             onSelectionChange={setSelection}
+            drawings={drawings}
           />
           <SelectToolbar
             mode={selectTool}
@@ -1128,6 +1155,19 @@ export function MapEditor({
               {error}
             </p>
           ) : null}
+          {/* #154 Markup panel. Floating overlay so it's available
+              to viewers (not just editors) without competing for
+              the BuilderShell right-panel slot. */}
+          <MarkupPanel
+            mapId={itemId}
+            open={markupOpen}
+            onClose={() => setMarkupOpen(false)}
+            currentUser={currentUser}
+            canEditMap={canEdit}
+            mapCenter={map.center}
+            onDrawingsChange={setDrawings}
+            initialDrawings={drawings}
+          />
         </div>
       </BuilderShell>
 

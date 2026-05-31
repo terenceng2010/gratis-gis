@@ -121,6 +121,16 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   if (/^items\/[^/]+\/thumbnail\.svg$/.test(suffix)) {
     return suffix;
   }
+  // #154 Drawings list on a public map. portal-api's GET
+  // /api/items/:mapId/drawings is @Public() and gates anon reads
+  // to access='public' inside the service. Anonymous viewers
+  // load this from the markup panel; without the BFF passthrough
+  // the panel would 401 before reaching portal-api. Passthrough
+  // rather than rewrite because portal-api hosts a single route
+  // that branches on the optional bearer token.
+  if (/^items\/[^/]+\/drawings$/.test(suffix)) {
+    return suffix;
+  }
   // Anonymous service-proxy passthrough: a public viewer that
   // references an external service (ArcGIS / WMS / WFS / WMTS)
   // hits /items/:id/proxy/<sub-path>?... at runtime to fetch

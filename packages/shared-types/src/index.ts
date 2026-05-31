@@ -15,6 +15,7 @@ export * from './group';
 export * from './user';
 export * from './item';
 export * from './map';
+export * from './drawings';
 export * from './data-layer';
 export * from './length';
 export * from './derived-layer';

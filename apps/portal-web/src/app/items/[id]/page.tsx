@@ -196,17 +196,29 @@ export default async function ItemDetailPage(props: Props) {
   // before doing anything else; with it we pay one wall-clock unit
   // for both. Same for the bigger second batch below.
   let item: ItemWithShares;
-  let me: { id: string; orgId: string; orgRole: string };
+  let me: {
+    id: string;
+    orgId: string;
+    orgRole: string;
+    fullName?: string | null;
+    username?: string | null;
+  };
   try {
     [item, me] = await Promise.all([
       apiFetch<ItemWithShares>(`/api/items/${params.id}`),
       // /api/users/me serializes the full AuthUser plus profile
       // bits; orgId is always present even though older callers only
       // typed id+orgRole. Add it here so #296's view-side download
-      // gate can compare item.orgId.
-      apiFetch<{ id: string; orgId: string; orgRole: string }>(
-        '/api/users/me',
-      ),
+      // gate can compare item.orgId. fullName + username are
+      // optional fields the markup panel uses to label the
+      // viewer's own drawing sets.
+      apiFetch<{
+        id: string;
+        orgId: string;
+        orgRole: string;
+        fullName?: string | null;
+        username?: string | null;
+      }>('/api/users/me'),
     ]);
   } catch (err) {
     // apiFetch throws on non-2xx. 404 from the API means "not found
@@ -601,6 +613,15 @@ export default async function ItemDetailPage(props: Props) {
             id: g.id,
             title: g.title,
           }))}
+          currentUser={{
+            id: me.id,
+            displayName:
+              (me.fullName && me.fullName.trim().length > 0
+                ? me.fullName
+                : null) ??
+              me.username ??
+              'Reviewer',
+          }}
         />
       ) : item.type === 'map' && !isBuilderView ? (
         <section className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 p-4 shadow-card">
