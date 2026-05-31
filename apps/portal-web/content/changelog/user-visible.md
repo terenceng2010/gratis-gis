@@ -12,6 +12,38 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-30 — Plug your portal into AI assistants
+A small MCP server ships with the project so MCP-compatible
+desktop AI tools can read your items and layer features
+directly. List items, fetch metadata, read features as
+GeoJSON, all gated by your normal portal permissions.
+
+## 2026-05-30 — Smart CSV uploads
+Drop a CSV with latitude and longitude columns and get a
+mapped layer in one step. Sloppy column names like "LAT" or
+"x_coord" are auto-detected. Tab and semicolon delimiters,
+UTF-8 BOM, and European decimal commas all just work.
+
+## 2026-05-30 — See who else is on the map
+Avatar chips at the top of the map canvas show every viewer
+who currently has the map open. Each person's cursor renders
+as a colored arrow with their name so a teammate over a video
+call can point at something without giving you coordinates.
+
+## 2026-05-30 — Conversations on a map
+Threaded comments scoped to a map. Open a thread, reply,
+resolve when answered. Anyone who can view the map can join
+the conversation. Comment authors can edit their own posts
+for 15 minutes; map editors can clean up at any time.
+
+## 2026-05-30 — Map markup and redlining
+Anyone who can view a shared map can drop colored pins on it
+to flag issues, without needing edit permission. Each
+reviewer's markup gets its own distinct color so multiple
+people's notes don't blur together. The classic "manager
+opens the map, flags three parcels, ships the URL back to
+the team" workflow.
+
 ## 2026-05-24 — Query OpenStreetMap from your tools
 Build tools that ask OpenStreetMap for things in the real world.
 Pick "Gas stations" or "Restaurants" (or any of ~1,600 other
