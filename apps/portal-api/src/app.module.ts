@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { UsersModule } from './users/users.module.js';
 import { GroupsModule } from './groups/groups.module.js';
 import { ItemsModule } from './items/items.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { IngestModule } from './ingest/ingest.module.js';
 import { ImportJobsModule } from './import-jobs/import-jobs.module.js';
@@ -81,6 +82,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
     PolicyModule,
     ToolsModule,
     OsmModule,
+    RealtimeModule,
   ],
   controllers: [HealthController, PortalInfoController],
   providers: [

@@ -44,7 +44,9 @@ import { BuilderShell } from '@/components/builder-shell/builder-shell';
 import { Layers as LayersIcon, MessageSquare, PencilLine, Settings as SettingsIcon } from 'lucide-react';
 import { MarkupPanel } from './markup-panel';
 import { CommentsPanel } from './comments-panel';
+import { PresenceOverlay } from './presence-overlay';
 import type { DrawingSet } from '@gratis-gis/shared-types';
+import type maplibregl from 'maplibre-gl';
 import {
   AccessMatrix,
   unresolvedPrincipal,
@@ -367,6 +369,10 @@ export function MapEditor({
   const [drawings, setDrawings] = useState<DrawingSet[]>(
     (initial as MapData & { drawings?: DrawingSet[] }).drawings ?? [],
   );
+  // #156: MapLibre instance for presence cursor projection.
+  // MapCanvas fires `onMapReady` with the instance on mount and
+  // null on teardown.
+  const [mapLibre, setMapLibre] = useState<maplibregl.Map | null>(null);
   // Layer id chosen by the per-layer kebab's "Open attribute table"
   // action (#73). Cleared when the table closes so reopening from
   // the toolbar lands on the default-first-visible behavior.
@@ -1093,6 +1099,7 @@ export function MapEditor({
             selectTool={selectTool}
             onSelectionChange={setSelection}
             drawings={drawings}
+            onMapReady={setMapLibre}
           />
           <SelectToolbar
             mode={selectTool}
@@ -1185,6 +1192,16 @@ export function MapEditor({
             onClose={() => setCommentsOpen(false)}
             currentUser={currentUser}
             canEditItem={canEdit}
+          />
+          {/* #156 Live presence overlay. Renders avatar chips at
+              top-right of the canvas + per-viewer cursor markers
+              that track the map as it pans. Phase 1 uses HTTP
+              polling (2 second heartbeat); transport swaps to
+              WebSockets in Phase 1.5 without changing the UX. */}
+          <PresenceOverlay
+            mapId={itemId}
+            currentUser={currentUser}
+            mapLibre={mapLibre}
           />
         </div>
       </BuilderShell>
