@@ -516,6 +516,176 @@ export interface RecipeAction {
    * than freezing the browser.
    */
   selectionLimit?: number;
+  /**
+   * #157 Workflow graph (DAG) extension. Optional. When present,
+   * the recipe runner uses the graph as the execution plan instead
+   * of the linear `pipeline` field. The graph is converted to a
+   * topologically-ordered step list at execution time, which means
+   * a workflow that's actually a straight line (one node per
+   * pipeline step, edges chaining them in order) produces exactly
+   * the same observable behaviour as the legacy linear `pipeline`
+   * path. Branching node kinds (fork / join / union) land in
+   * Phase 2 alongside their per-node executor wiring.
+   *
+   * Backward compatibility: when `graph` is absent (the existing
+   * shape), the runner uses `pipeline` unchanged. Existing recipes
+   * keep running with no migration. A new recipe author can opt
+   * into the graph form by writing nodes + edges; the visual
+   * graph editor lands in Phase 3.
+   */
+  graph?: WorkflowGraph;
+}
+
+/**
+ * #157 Workflow graph (DAG). Nodes wrap individual `ToolStep`s and
+ * edges describe data flow between them. The graph is acyclic by
+ * construction: the executor refuses to run a graph whose
+ * topological sort fails (any cycle aborts before mutating any
+ * downstream state).
+ */
+export interface WorkflowGraph {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  /** Schema version for forward compat. v1 is single-input nodes
+   *  only; v2 adds multi-input join / union nodes. */
+  graphVersion: 1;
+}
+
+export interface WorkflowNode {
+  /** Stable graph-scoped id. Used as the edge source / target
+   *  reference and as the visual builder's node selection key. */
+  id: string;
+  /** The step this node executes. Reuses the existing pipeline
+   *  step vocabulary so any step that works in a linear pipeline
+   *  works in a graph node with no shape change. */
+  step: ToolStep;
+  /**
+   * Optional UI position for the visual graph editor. Pure
+   * ornament; the executor ignores it. Kept on the persisted
+   * graph so node positions survive a save / reload round trip.
+   */
+  position?: { x: number; y: number };
+  /**
+   * Optional human-readable label shown above the node in the
+   * graph editor. When absent, the editor falls back to a label
+   * derived from `step.kind`. Authors can rename for clarity
+   * ("Buffer by 200m for school search").
+   */
+  label?: string;
+}
+
+export interface WorkflowEdge {
+  /** id of the upstream node whose output flows into the
+   *  downstream node. */
+  source: string;
+  /** id of the downstream node consuming the upstream output. */
+  target: string;
+  /**
+   * For multi-input downstream nodes (joins, unions), which input
+   * port consumes this edge. Most nodes have a single implicit
+   * input port; v1 nodes ignore this field. v2 join / union nodes
+   * read `'left'` / `'right'` or named ports.
+   */
+  targetPort?: string;
+}
+
+/**
+ * Result of a topological sort of a WorkflowGraph. The `order`
+ * field is the array of node ids in execution order;
+ * `error` is set when the graph has a cycle or references a
+ * missing node, in which case `order` is undefined.
+ */
+export interface WorkflowGraphOrder {
+  order?: string[];
+  error?: 'cycle' | 'missing-node' | 'duplicate-node';
+  /** Optional human-readable detail for logging / UI display. */
+  detail?: string;
+}
+
+/**
+ * Topologically sort a workflow graph by Kahn's algorithm.
+ *
+ *   - Returns `{ order }` on success: an array of node ids such
+ *     that for every edge `source -> target`, `source` appears
+ *     before `target` in the order.
+ *   - Returns `{ error: 'cycle' }` when a cycle prevents the
+ *     algorithm from finishing.
+ *   - Returns `{ error: 'missing-node' }` when an edge points at
+ *     a node id not present in `graph.nodes`.
+ *   - Returns `{ error: 'duplicate-node' }` when two nodes share
+ *     an id.
+ *
+ * Pure helper with no I/O; safe to use from the runner, the
+ * visual graph editor (to flag a cycle before save), and from
+ * tests.
+ */
+export function topologicalSort(graph: WorkflowGraph): WorkflowGraphOrder {
+  // Detect duplicate node ids first.
+  const ids = new Set<string>();
+  for (const n of graph.nodes) {
+    if (ids.has(n.id)) {
+      return {
+        error: 'duplicate-node',
+        detail: `Duplicate node id "${n.id}"`,
+      };
+    }
+    ids.add(n.id);
+  }
+  // Build adjacency + in-degree.
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const n of graph.nodes) {
+    inDegree.set(n.id, 0);
+    adj.set(n.id, []);
+  }
+  for (const e of graph.edges) {
+    if (!ids.has(e.source) || !ids.has(e.target)) {
+      return {
+        error: 'missing-node',
+        detail: `Edge references unknown node "${ids.has(e.source) ? e.target : e.source}"`,
+      };
+    }
+    adj.get(e.source)!.push(e.target);
+    inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
+  }
+  // Kahn: pull nodes with in-degree 0 in insertion order so a
+  // graph that's already linear keeps its author-written order.
+  const queue: string[] = [];
+  for (const n of graph.nodes) {
+    if ((inDegree.get(n.id) ?? 0) === 0) queue.push(n.id);
+  }
+  const order: string[] = [];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    order.push(id);
+    for (const next of adj.get(id) ?? []) {
+      const d = (inDegree.get(next) ?? 0) - 1;
+      inDegree.set(next, d);
+      if (d === 0) queue.push(next);
+    }
+  }
+  if (order.length !== graph.nodes.length) {
+    return { error: 'cycle', detail: 'Graph contains a cycle' };
+  }
+  return { order };
+}
+
+/**
+ * Convert a legacy linear `pipeline: ToolStep[]` into a degenerate
+ * `WorkflowGraph` whose nodes execute in pipeline order. Used by
+ * the runner as a uniform-shape adapter so the executor has a
+ * single code path; also useful in the visual graph editor to
+ * import an existing linear recipe into the canvas.
+ */
+export function pipelineToGraph(pipeline: ToolStep[]): WorkflowGraph {
+  const nodes: WorkflowNode[] = pipeline.map((step, i) => ({
+    id: `n${i}`,
+    step,
+  }));
+  const edges: WorkflowEdge[] = nodes
+    .slice(0, -1)
+    .map((n, i) => ({ source: n.id, target: nodes[i + 1]!.id }));
+  return { nodes, edges, graphVersion: 1 };
 }
 
 /**

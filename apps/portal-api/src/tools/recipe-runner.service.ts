@@ -19,8 +19,12 @@ import type {
   ToolItemData,
   ToolParameter,
   ToolStep,
+  WorkflowGraph,
 } from '@gratis-gis/shared-types';
-import { DEFAULT_TOOL_SELECTION_LIMIT } from '@gratis-gis/shared-types';
+import {
+  DEFAULT_TOOL_SELECTION_LIMIT,
+  topologicalSort,
+} from '@gratis-gis/shared-types';
 
 import {
   dataLayerScope,
@@ -251,23 +255,30 @@ export class RecipeRunnerService {
       return this.runOsmRelationalInternal(action, request, user);
     }
     if (action.kind === 'recipe') {
-      if (action.output.kind === 'selection') {
+      // #157 Workflow graph: when the recipe carries a `graph`,
+      // topologically sort it down to a linear pipeline before the
+      // downstream runners see the action. Phase 1 ships single-
+      // input nodes only, so a topo sort always produces a valid
+      // linear sequence; branching multi-input nodes (join /
+      // union) land in Phase 2 with their own per-node executor.
+      const linearized = linearizeIfGraph(action, toolId);
+      if (linearized.output.kind === 'selection') {
         if (!user) {
           throw new UnauthorizedException(
             'This tool updates a layer selection and requires sign-in.',
           );
         }
-        return this.runSelectionInternal(user, toolId, action, request);
+        return this.runSelectionInternal(user, toolId, linearized, request);
       }
-      if (action.output.kind === 'osm-features-overlay') {
+      if (linearized.output.kind === 'osm-features-overlay') {
         // #103: thread the running user's orgId so OsmService can
         // look up the per-org Overpass endpoint override.  When
         // user is null, OsmService falls back to the env / default
         // Overpass endpoint -- anonymous viewers can still query.
-        return this.runOsmOverlayInternal(action, request, user);
+        return this.runOsmOverlayInternal(linearized, request, user);
       }
       throw new BadRequestException(
-        `Tool ${toolId} has an unsupported output sink: ${action.output.kind}`,
+        `Tool ${toolId} has an unsupported output sink: ${linearized.output.kind}`,
       );
     }
     // The union narrowed exhaustively above; this is dead code that
@@ -1900,5 +1911,39 @@ function relationalDistanceToMeters(distance: RelationalDistance): number {
     default:
       return v;
   }
+}
+
+/**
+ * #157 Phase 1: if the action carries a workflow graph, convert
+ * the graph to a topologically-ordered pipeline and return a new
+ * action with `pipeline` populated from that order. When no graph
+ * is present, the action is returned unchanged.
+ *
+ * Phase 1 ships single-input nodes only, so a topo sort always
+ * yields a valid linear sequence. Cycles, missing nodes, and
+ * duplicate ids surface as a BadRequestException so the author
+ * fixes their graph rather than getting a silent partial run.
+ *
+ * The `graph` field is stripped from the returned action so the
+ * downstream runners (which only know about `pipeline`) don't
+ * see a stale reference.
+ */
+function linearizeIfGraph(
+  action: RecipeAction,
+  toolId: string,
+): RecipeAction {
+  if (!action.graph) return action;
+  const graph: WorkflowGraph = action.graph;
+  const sorted = topologicalSort(graph);
+  if (sorted.error || !sorted.order) {
+    throw new BadRequestException(
+      `Tool ${toolId} has an invalid workflow graph: ` +
+        (sorted.detail ?? sorted.error ?? 'unknown error'),
+    );
+  }
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const pipeline: ToolStep[] = sorted.order.map((id) => byId.get(id)!.step);
+  const { graph: _omitted, ...rest } = action;
+  return { ...rest, pipeline };
 }
 

@@ -12,6 +12,13 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Workflows: analysis as a connected graph
+The analysis engine now understands a workflow as a graph of
+connected steps, not just a straight line. One result can flow
+into multiple downstream steps, and multiple results can
+converge. Existing tools keep running unchanged; new node
+kinds and the visual graph editor land in the next phase.
+
 ## 2026-05-30 — Plug your portal into AI assistants
 A small MCP server ships with the project so MCP-compatible
 desktop AI tools can read your items and layer features
