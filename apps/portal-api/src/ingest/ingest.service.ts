@@ -9,6 +9,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { detectCsvCoordinates } from './csv-smart-detect.js';
+
 /**
  * Opens an uploaded vector file with GDAL and returns a GeoJSON
  * FeatureCollection plus a simple field list.
@@ -54,6 +56,35 @@ export class IngestService {
       throw new BadRequestException(
         `File is too large. Current cap is ${this.maxBytes / 1024 / 1024} MB.`,
       );
+    }
+
+    // #160 Smart upload Phase 1: when the upload is a CSV / TSV,
+    // try detecting a (latitude, longitude) column pair before
+    // falling back to GDAL's CSV driver. GDAL's CSV driver only
+    // creates point geometry when the columns are named exactly
+    // `latitude` / `longitude` (or via X_POSSIBLE_NAMES env vars
+    // we don't set); a real-world CSV with "LAT" / "LNG" or
+    // "y_coord" / "x_coord" silently loads as an attribute-only
+    // table and produces an empty map. The smart-detect helper
+    // returns a Point FeatureCollection when it can identify the
+    // pair with high confidence; otherwise we fall through to
+    // the original GDAL path so non-CSV formats (and CSVs that
+    // are genuinely attribute-only) keep working unchanged.
+    if (looksLikeTabularText(originalName)) {
+      const detected = detectCsvCoordinates(buffer);
+      if (detected.kind === 'detected') {
+        this.log.log(
+          `Smart-detect found coords in ${originalName}: ` +
+            `lat="${detected.latColumn}", lng="${detected.lngColumn}", ` +
+            `features=${detected.geojson.features.length}`,
+        );
+        return {
+          geojson: detected.geojson,
+          fields: detected.fields,
+          driver: 'csv-smart-detect',
+          sourceSrs: 'EPSG:4326',
+        };
+      }
     }
 
     const gdal = await this.loadGdal();
@@ -682,6 +713,21 @@ export class IngestService {
  * The dot stripping is the load-bearing step against `..`-style
  * traversal; the basename strip + char filter handle the rest.
  */
+/**
+ * Tabular-text recognition for the #160 smart-detect fast path.
+ * Returns true for filenames whose extension reads as CSV/TSV-
+ * shaped text content. Non-CSV files skip the smart-detect pass
+ * and fall straight through to GDAL where they belong.
+ */
+function looksLikeTabularText(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower.endsWith('.csv') ||
+    lower.endsWith('.tsv') ||
+    lower.endsWith('.txt')
+  );
+}
+
 function safeFilename(name: string): string {
   const fileOnly = basename(name);
   let base = fileOnly.replace(/[^\w.-]/g, '_');
