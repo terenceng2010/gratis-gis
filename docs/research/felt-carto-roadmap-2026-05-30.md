@@ -506,75 +506,116 @@ bbox-aware query building. The PostGIS query itself is one line.
 
 ---
 
-## 6. Print / PDF export with layout
+## 6. Print / PDF export — enhancements on top of print_template
 
 ### Strategic value
 
-Both Felt and CARTO punt on this. QGIS Print Layout is the bar.
-Buyers ask for it on every call. We already have the thumbnail
-designer that bakes a server-side PNG from a map; the layout system
-is essentially the same primitives plus legend / scale bar / north
-arrow / title block.
+Both reference vendors punt on this. QGIS Print Layout is the bar.
+Buyers ask for it on every call.
 
-### Design
+**Important correction:** the original roadmap entry treated this
+as greenfield, but `print_template` is already a first-class item
+type (shipped under #101). It carries:
 
-Layout = a positioned set of elements on a page-size canvas:
+- Paper sizes (Letter / Legal / Tabloid / A3 / A4) + orientation +
+  margin.
+- A free-positioned-element canvas: Text, Image, Map, Legend,
+  Scalebar, North arrow, Line, Rectangle.
+- Parameters surfaced as a runtime form, with chip-based
+  token-segment bindings (no string-expression authoring required).
+- Smart auto-binding for map-derived elements (the active map's id
+  flows automatically into Map / Legend / Scalebar / North arrow).
+- Runtime integration via the Print tool widget in Custom Web Apps.
 
-- Map frame (one or more, each with its own viewport)
-- Title text
-- Legend (auto-generated from layers in the map frame)
-- Scale bar
-- North arrow
-- Attribution
-- Static text block
-- Image (logo)
+So the work for #159 is **enhancement**, not replacement, and it
+narrows substantially:
 
-Render path: a headless browser renders the layout HTML at the
-target page size, exports as PDF.
+- A direct "Print this map" affordance on a map item that
+  doesn't require building a Custom Web App first (today the
+  designer is per-template; printing a map requires wrapping it
+  in a Custom Web App with a Print widget). This is the
+  smallest-team killer wedge.
+- A higher-fidelity server-side render path (Puppeteer) that
+  produces a proper vector PDF instead of leaning on the
+  browser's `window.print()`. Closes the "the print preview
+  came out wrong" failure mode.
+- Per-map "default print template" pointer so a map can carry
+  the print layout it expects to be printed with.
 
-### Landing points
+### Existing primitive (what already ships)
 
-- New item type? Or a `layout` field on the `map` item? Initial
-  answer: new item type `print_layout` so a single map can have
-  multiple print layouts (portrait letter, landscape A3, tabloid
-  with legend on the right, etc.).
+The `print_template` item type (#101) carries everything you'd
+expect from a print designer:
+
+- Paper sizes: Letter, Legal, Tabloid, A3, A4 + orientation +
+  margin.
+- Free-positioned-element canvas: Text, Image, Map, Legend,
+  Scalebar, North arrow, Line, Rectangle.
+- Author-declared parameters surfaced as a runtime form, with
+  chip-based token-segment bindings (no string-expression
+  authoring required).
+- Smart auto-binding for map-derived elements: a print Map /
+  Legend / Scalebar / North arrow auto-resolves to the active
+  map widget at runtime.
+- Runtime integration via the Print tool widget in Custom Web
+  Apps, which today invokes `window.print()`.
+
+So the engine is largely there. The gap is the UX bridge from a
+plain map to the print designer, plus the higher-fidelity render
+path.
+
+### Landing points (enhancement on top of #101)
+
+- `apps/portal-web/src/app/items/[id]/map/` — add a Print button
+  on the map editor / viewer toolbar that opens a thin chooser:
+  "use an existing print_template, or start a new one pre-bound
+  to this map." Picks the template, opens
+  `apps/portal-web/src/app/items/[id]/print-template/` already
+  bound to the calling map.
 - `apps/portal-api/src/print/` (new) — Puppeteer-driven render
-  service. Same pattern as the thumbnail designer.
-- `apps/portal-web/src/app/items/[id]/print/` (new) — layout
-  designer UI, drag-and-drop element placement on a page-sized
-  canvas, live preview.
+  service. Headless browser, page-size set from the template's
+  PrintPaperSpec, vector PDF output. Replaces `window.print()`
+  on the render side.
+- `packages/shared-types/src/print-template.ts` — optional
+  `defaultMapId` on PrintTemplateData so a template that was
+  authored against a specific map remembers it.
 
-### Phases
+### Phases (revised)
 
-- **Phase 1 — single map frame + title + legend + scale bar + north
-  arrow + attribution.** US Letter, A4, A3, Tabloid. Portrait +
-  landscape.
-- **Phase 2 — multiple map frames** (overview + detail).
-- **Phase 3 — drawings included in print** (auto-respect visibility
-  toggles).
+- **Phase 1 — "Print this map" entry point.** A button on the
+  map item that opens the existing print designer pre-bound to
+  the calling map. Today an author must build a Custom Web App
+  wrapper just to print a map; Phase 1 removes that step.
+- **Phase 2 — server-side Puppeteer render path.** Replaces
+  `window.print()` for vector-fidelity PDFs. Same template
+  shape, same designer, just a better renderer.
+- **Phase 3 — drawings included in print** (auto-respect
+  visibility toggles). Depends on the drawings primitive.
 
 ### Dependencies
 
-Drawings (#1) for Phase 3, but Phases 1 and 2 are independent. Could
-reasonably interleave with the drawings work.
+Drawings (#1) for Phase 3. Phases 1 and 2 are independent and
+can interleave with other work.
 
 ### Effort
 
-Medium. The thumbnail designer is the prior art; new surface is the
-print-layout designer UI.
+Smaller than originally scoped. Phase 1 is a single button +
+chooser dialog + a thin server endpoint. Phase 2 is the
+Puppeteer pipeline. Phase 3 is a per-print-job drawings query
+that the existing renderer already knows how to overlay.
 
 ### Success criteria
 
-- A user can lay out a one-frame US Letter PDF with legend + scale +
-  title and export it.
-- The exported PDF is vector for text and lines, raster only for
-  basemap tiles.
+- Phase 1: an author on any map can click "Print" and land in
+  the print designer with the calling map already wired up.
+- Phase 2: the exported PDF is vector for text and lines, raster
+  only for basemap tiles.
 
 ### Open questions
 
-- Vector tiles in PDF (so layers stay vector)? Initial answer: yes
-  for layer geometry, no for basemap (basemap is rasterized to keep
-  the PDF size bounded).
+- Vector tiles in PDF (so layers stay vector)? Initial answer:
+  yes for layer geometry, no for basemap (basemap is rasterized
+  to keep the PDF size bounded).
 
 ---
 
