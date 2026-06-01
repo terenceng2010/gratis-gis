@@ -29,18 +29,27 @@
  */
 import { DEFAULT_LOCALE, type SupportedLocale, type CatalogShape } from './locales';
 import { en } from './messages/en';
+import { es } from './messages/es';
+import { fr } from './messages/fr';
+import { de } from './messages/de';
+import { ptBR } from './messages/pt-BR';
 
+/**
+ * #162 Phase 1.1: registry of every locale's catalog.
+ *
+ * The non-English catalogs ship as partial dictionaries: only the
+ * keys actively wired into the UI today are translated, and any
+ * other lookup falls back to the English catalog. That keeps the
+ * translation surface honest — a half-translated locale renders
+ * the English string for unwired keys rather than displaying the
+ * raw key as a placeholder.
+ */
 const CATALOGS: Record<SupportedLocale, Partial<CatalogShape>> = {
   en,
-  // Other locale catalogs are loaded lazily in Phase 1.1 once the
-  // translation platform is wired. For Phase 1.0 they fall back
-  // to the English catalog on lookup, which is the right Phase
-  // 1.0 default ("display in English when the translation isn't
-  // ready yet").
-  es: {},
-  'pt-BR': {},
-  fr: {},
-  de: {},
+  es,
+  'pt-BR': ptBR,
+  fr,
+  de,
 };
 
 /**

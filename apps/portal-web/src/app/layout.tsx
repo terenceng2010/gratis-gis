@@ -5,6 +5,7 @@ import { Inter } from 'next/font/google';
 import { AppShell } from '@/components/app-shell';
 import { SwRegistrar } from '@/components/sw-registrar';
 import { getPortalUrl } from '@/lib/portal-url';
+import { getServerLocale } from '@/lib/i18n/server';
 import { Providers } from './providers';
 import './globals.css';
 
@@ -82,11 +83,16 @@ export const viewport: Viewport = {
   themeColor: '#0f0f10',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // #162 Phase 1.1: read the negotiated locale (cookie -> Accept-
+  // Language -> default) and plumb it through to the client tree.
+  // <html lang> also picks up the locale so screen readers and
+  // browser auto-translation respect the user's choice.
+  const locale = await getServerLocale();
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang={locale} className={inter.variable}>
       <body className="font-sans antialiased">
-        <Providers>
+        <Providers locale={locale}>
           <AppShell>{children}</AppShell>
         </Providers>
         <SwRegistrar />

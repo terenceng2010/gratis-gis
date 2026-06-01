@@ -31,6 +31,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Printer, Plus, X } from 'lucide-react';
 
+import { useT } from '@/lib/i18n/locale-context';
+
 interface PrintTemplateSummary {
   id: string;
   title: string;
@@ -45,6 +47,7 @@ interface Props {
 }
 
 export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
+  const t = useT();
   const [templates, setTemplates] = useState<PrintTemplateSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +89,7 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
   return (
     <div
       role="dialog"
-      aria-label="Print this map"
+      aria-label={t('print.chooserTitle')}
       className="fixed inset-0 z-40 flex items-center justify-center bg-black/40"
       onClick={onClose}
     >
@@ -98,14 +101,14 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
           <div className="flex items-center gap-2">
             <Printer className="h-4 w-4 text-muted" />
             <h2 className="text-sm font-semibold text-ink-1">
-              Print this map
+              {t('print.chooserTitle')}
             </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
             className="rounded p-1 text-muted hover:bg-surface-2 hover:text-ink-1"
-            aria-label="Close"
+            aria-label={t('common.close')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -114,36 +117,33 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
         <div className="overflow-y-auto px-4 py-3">
           <section className="mb-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-              Start a new layout
+              {t('print.startSection')}
             </h3>
             <Link
               href={`/items/new?type=print_template&map=${encodeURIComponent(mapId)}`}
               className="flex items-center gap-2 rounded border border-border bg-surface-1 px-3 py-2 text-sm text-ink-1 hover:bg-surface-2"
             >
               <Plus className="h-4 w-4 text-muted" />
-              Create a new print layout pre-bound to this map
+              {t('print.startAction')}
             </Link>
             <p className="mt-1 text-[11px] text-muted">
-              Opens the print layout designer with this map already
-              wired up to the Map, Legend, Scalebar, and North arrow
-              elements.
+              {t('print.startHint')}
             </p>
           </section>
 
           <section>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-              Use an existing layout
+              {t('print.pickSection')}
             </h3>
             {loading ? (
-              <p className="text-xs text-muted">Loading templates...</p>
+              <p className="text-xs text-muted">{t('common.loading')}</p>
             ) : error ? (
               <p role="alert" className="text-xs text-danger">
                 {error}
               </p>
             ) : templates.length === 0 ? (
               <p className="text-xs text-muted">
-                No print layouts to choose from yet. Use "Create a new
-                print layout" above to make one.
+                {t('print.pickEmpty')}
               </p>
             ) : (
               <ul className="space-y-1">

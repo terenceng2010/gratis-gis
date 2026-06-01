@@ -47,10 +47,14 @@ export interface LocaleInfo {
 
 export const LOCALES: LocaleInfo[] = [
   { code: 'en', nativeName: 'English', englishName: 'English', completeness: 100 },
-  { code: 'es', nativeName: 'Español', englishName: 'Spanish', completeness: 0 },
-  { code: 'pt-BR', nativeName: 'Português (Brasil)', englishName: 'Portuguese (Brazil)', completeness: 0 },
-  { code: 'fr', nativeName: 'Français', englishName: 'French', completeness: 0 },
-  { code: 'de', nativeName: 'Deutsch', englishName: 'German', completeness: 0 },
+  // Phase 1.1 seed catalogs cover the keys actively wired into
+  // the UI today (nav.signOut, nav.profile, common.*, print.*),
+  // roughly 10% of the surface a fully-translated locale would
+  // cover.
+  { code: 'es', nativeName: 'Español', englishName: 'Spanish', completeness: 10 },
+  { code: 'pt-BR', nativeName: 'Português (Brasil)', englishName: 'Portuguese (Brazil)', completeness: 10 },
+  { code: 'fr', nativeName: 'Français', englishName: 'French', completeness: 10 },
+  { code: 'de', nativeName: 'Deutsch', englishName: 'German', completeness: 10 },
 ];
 
 /**
@@ -90,7 +94,21 @@ export function negotiateLocale(
   return DEFAULT_LOCALE;
 }
 
-/** Type of the English reference catalog. Used as the "everything
- *  else extends this" constraint so a non-English catalog can't
- *  declare keys that aren't defined upstream. */
-export type CatalogShape = typeof enCatalog;
+/** Recursively widen the English reference catalog so non-English
+ *  catalogs can provide their own translations (different string
+ *  literals) for any key without TypeScript rejecting the
+ *  mismatched literal types. The structure stays gated by enCatalog:
+ *  a non-English catalog can't declare a key the English catalog
+ *  doesn't already define. */
+type WidenLeaves<T> = T extends string
+  ? string
+  : T extends readonly (infer U)[]
+    ? WidenLeaves<U>[]
+    : T extends object
+      ? { [K in keyof T]: WidenLeaves<T[K]> }
+      : T;
+
+/** Type of the catalog every locale honors. Sourced from the
+ *  English catalog with string leaves so translations slot in
+ *  without literal-type conflicts. */
+export type CatalogShape = WidenLeaves<typeof enCatalog>;

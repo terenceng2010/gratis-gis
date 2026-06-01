@@ -12,6 +12,16 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-06-01 — Pick your portal language
+A language picker now lives in the user menu in the top-right.
+Five languages are available: English, Spanish, Portuguese
+(Brazil), French, and German. Your pick is remembered across
+sessions. The translation coverage is still small (the picker
+shows each language's completeness), so most of the UI still
+renders in English for now; the navigation menu and Print this
+map dialog are translated as a start, and contributions extend
+the rest as the catalogs fill in.
+
 ## 2026-06-01 — Live PostgreSQL: any projection, no raw SQL filtering
 Two upgrades to live PostgreSQL + PostGIS layers. First, tables in
 any spatial reference system PostGIS knows about now render

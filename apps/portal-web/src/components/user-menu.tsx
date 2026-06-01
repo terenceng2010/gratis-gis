@@ -7,6 +7,9 @@ import { signOut } from 'next-auth/react';
 import { LogOut, UserCircle } from 'lucide-react';
 import { EntityBadge } from '@gratis-gis/ui';
 
+import { useT } from '@/lib/i18n/locale-context';
+import { LocaleSwitcher } from './locale-switcher';
+
 interface Props {
   /** Stable id used for the fallback badge color. Email works when the DB id isn't available. */
   seed: string;
@@ -22,6 +25,7 @@ interface Props {
  * was a mistake. Keep this lean: Profile, Sign out, and room to grow.
  */
 export function UserMenu({ seed, displayName, orgName, avatarUrl }: Props) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -88,8 +92,11 @@ export function UserMenu({ seed, displayName, orgName, avatarUrl }: Props) {
               className="flex items-center gap-2 px-3 py-2 text-sm text-ink-1 hover:bg-surface-2"
             >
               <UserCircle className="h-4 w-4 text-muted" />
-              Profile
+              {t('nav.profile')}
             </Link>
+            <div className="border-t border-border px-3 py-2">
+              <LocaleSwitcher />
+            </div>
             {/* Sign out via NextAuth's client signOut() so the
                 session cookies are cleared by NextAuth's own
                 runtime (matching the exact name + attributes it
@@ -135,7 +142,7 @@ export function UserMenu({ seed, displayName, orgName, avatarUrl }: Props) {
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-danger/5"
             >
               <LogOut className="h-4 w-4" />
-              Sign out
+              {t('nav.signOut')}
             </button>
           </div>
         </div>
