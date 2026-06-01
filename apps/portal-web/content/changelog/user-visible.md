@@ -12,6 +12,15 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Multi-language foundation in place
+The plumbing for translating the portal into other languages
+just landed. Five locales are on the supported list (English,
+Spanish, Portuguese for Brazil, French, German); for now the
+non-English catalogs are empty and fall back to English, but
+the runtime, the Accept-Language negotiator, and the
+contributor guide are ready. Help us translate at
+CONTRIBUTING-TRANSLATIONS.md.
+
 ## 2026-05-31 — Point a map at a live PostgreSQL + PostGIS database
 A new connection type lets you register a live PostGIS database
 and render its tables on maps without copying the rows in. Every
