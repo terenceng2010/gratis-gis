@@ -323,6 +323,17 @@ services:
       BACKUP_DIR: /app/backups
       # Public URL for redirects + OG metadata.
       PUBLIC_URL: ${PUBLIC_URL:-https://gratisgis.org}
+      # #159 Phase 2: WebSocket endpoints of the chromium sidecars.
+      # Comma-separated; the render service picks one at random
+      # for load balancing. Token gates access so only the API can
+      # reach the browser endpoints (the sidecars are on the
+      # internal network but defense-in-depth).
+      CHROMIUM_WS_ENDPOINTS: ws://chromium-1:3000?token=${CHROMIUM_TOKEN:?CHROMIUM_TOKEN must be set in .env.prod},ws://chromium-2:3000?token=${CHROMIUM_TOKEN}
+      # Internal URL portal-api hands to the chromium sidecar so
+      # the browser navigates to the print-preview route from
+      # within the docker network rather than hairpin through
+      # the public domain.
+      PRINT_PREVIEW_BASE_URL: http://portal-web:3000
     volumes:
       - portal-api-backups:/app/backups
       - gg-staging:/var/lib/gg-staging
@@ -462,6 +473,39 @@ services:
       KEYCLOAK_CLIENT_SECRET_WEB: ${KEYCLOAK_CLIENT_SECRET:-}
     networks:
       - gratis-net
+
+  # #159 Phase 2: headless Chrome sidecars for server-side print
+  # rendering. Two replicas so concurrent print jobs don't queue.
+  # portal-api connects via WebSocket on chromium:3000; nothing is
+  # exposed to the public network. Each sidecar is capped at 1 GB
+  # RSS so a runaway render can't take the host down.
+  chromium-1:
+    image: ghcr.io/browserless/chromium:latest
+    container_name: gratis-gis-prod-chromium-1
+    restart: unless-stopped
+    networks:
+      - gratis-net
+    environment:
+      TOKEN: ${CHROMIUM_TOKEN:?CHROMIUM_TOKEN must be set in .env.prod}
+      CONCURRENT: "3"
+      TIMEOUT: "30000"
+    mem_limit: 1g
+    cap_add:
+      - SYS_ADMIN
+
+  chromium-2:
+    image: ghcr.io/browserless/chromium:latest
+    container_name: gratis-gis-prod-chromium-2
+    restart: unless-stopped
+    networks:
+      - gratis-net
+    environment:
+      TOKEN: ${CHROMIUM_TOKEN:?CHROMIUM_TOKEN must be set in .env.prod}
+      CONCURRENT: "3"
+      TIMEOUT: "30000"
+    mem_limit: 1g
+    cap_add:
+      - SYS_ADMIN
 
   caddy:
     image: caddy:2-alpine

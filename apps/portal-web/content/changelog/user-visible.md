@@ -12,6 +12,14 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Better-quality print PDFs
+The print pipeline now has a server-side render path. Instead of
+relying on the browser's print dialog, the portal renders the
+layout in a headless browser running on the server and returns a
+vector-fidelity PDF. Text stays selectable, lines stay vector,
+multi-page layouts come out clean. Phase 2.1 finishes wiring the
+existing print designer's layout elements into the new pipeline.
+
 ## 2026-05-31 — Multi-language foundation in place
 The plumbing for translating the portal into other languages
 just landed. Five locales are on the supported list (English,
