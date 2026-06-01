@@ -12,6 +12,15 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-06-01 — Clip and erase by another layer
+Two new analysis steps. Clip cookie-cutters your features by
+another layer so only the parts inside survive (handy for "this
+dataset, but only inside this district"). Erase is the inverse,
+so you get only the parts outside (handy for "everything except
+this exclusion zone"). Attributes pass through unchanged on
+both. Add either from the toolbox in the derived-layer
+builder under "Compare with another layer."
+
 ## 2026-06-01 — Print PDFs match the map you're looking at
 The printed PDF now paints layers with the same colors and labels
 as the on-screen map: unique-value renderers, class-breaks, time-

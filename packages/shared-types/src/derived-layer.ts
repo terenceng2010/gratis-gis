@@ -669,7 +669,61 @@ export type ToolStep =
   | AggregateStep
   | SpatialJoinStep
   | SpatialFilterStep
+  | ClipStep
+  | EraseStep
   | ContourStep;
+
+/**
+ * #157 Phase 2: binary spatial overlay step. Clip the upstream
+ * features to the geometric intersection with a second data_layer:
+ * only the parts of upstream that fall inside the other layer
+ * survive, and the output geometry is the clipped piece. Rows that
+ * have no overlap at all are dropped.
+ *
+ * Attributes pass through unchanged from the upstream side; the
+ * other layer's attributes are NOT joined (use spatial-join for
+ * that). This keeps the operation cookie-cutter-simple: same rows
+ * minus the rows that miss, with geometries trimmed to fit.
+ *
+ * Implemented as ST_Intersection(upstream.geom, ST_Union(other.geom))
+ * filtered to upstream rows that ST_Intersects the other layer's
+ * union. Empty-result rows are dropped post-intersection so a
+ * row whose geometry happens to lie entirely on a shared boundary
+ * (zero-area intersection) doesn't survive.
+ */
+export interface ClipStep {
+  tool: 'clip';
+  params: {
+    otherSource: {
+      kind: 'data_layer';
+      itemId: string;
+      layerKey?: string;
+    };
+  };
+}
+
+/**
+ * #157 Phase 2: binary spatial overlay step. The inverse of clip:
+ * keep only the parts of upstream features that fall OUTSIDE the
+ * second data_layer. Useful for "find areas more than X miles from
+ * any park" by feeding a buffered parks layer in as otherSource,
+ * or "every parcel except those owned by the city" via a city-
+ * owned-parcels mask.
+ *
+ * Implemented as ST_Difference(upstream.geom, ST_Union(other.geom)).
+ * Rows whose entire geometry is consumed by the difference (i.e.
+ * fully covered by the other layer) drop out of the result.
+ */
+export interface EraseStep {
+  tool: 'erase';
+  params: {
+    otherSource: {
+      kind: 'data_layer';
+      itemId: string;
+      layerKey?: string;
+    };
+  };
+}
 
 /**
  * The recipe persisted in `item.data` when `type = 'derived_layer'`.
@@ -855,6 +909,19 @@ export const DEFAULT_SPATIAL_FILTER_STEP: SpatialFilterStep = {
     predicate: { kind: 'fixed', value: 'intersects' },
   },
 };
+
+export const DEFAULT_CLIP_STEP: ClipStep = {
+  tool: 'clip',
+  params: {
+    otherSource: { kind: 'data_layer', itemId: '' },
+  },
+};
+export const DEFAULT_ERASE_STEP: EraseStep = {
+  tool: 'erase',
+  params: {
+    otherSource: { kind: 'data_layer', itemId: '' },
+  },
+};
 export const DEFAULT_AGGREGATE_STEP: AggregateStep = {
   tool: 'aggregate',
   // No groupBy + a count(*) aggregation: equivalent to the legacy
@@ -892,6 +959,8 @@ export const DEFAULT_STEPS: Record<ToolStep['tool'], ToolStep> = {
   aggregate: DEFAULT_AGGREGATE_STEP,
   'spatial-join': DEFAULT_SPATIAL_JOIN_STEP,
   'spatial-filter': DEFAULT_SPATIAL_FILTER_STEP,
+  clip: DEFAULT_CLIP_STEP,
+  erase: DEFAULT_ERASE_STEP,
   contour: DEFAULT_CONTOUR_STEP,
 };
 

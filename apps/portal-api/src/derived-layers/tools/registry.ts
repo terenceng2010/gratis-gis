@@ -8,10 +8,12 @@ import { bufferGenerator } from './buffer.js';
 import { calculateFieldGenerator } from './calculate-field.js';
 import { calculateGeometryGenerator } from './calculate-geometry.js';
 import { centroidGenerator } from './centroid.js';
+import { clipGenerator } from './clip.js';
 import { contourGenerator } from './contour.js';
 import { convexHullGenerator } from './convex-hull.js';
 import { densifyGenerator } from './densify.js';
 import { dissolveGenerator } from './dissolve.js';
+import { eraseGenerator } from './erase.js';
 import { filterGenerator } from './filter.js';
 import { fishnetGenerator } from './fishnet.js';
 import { nearestNeighborGenerator } from './nearest-neighbor.js';
@@ -71,6 +73,8 @@ const REGISTRY: Map<string, ToolGenerator<unknown>> = new Map([
     spatialFilterGenerator.kind,
     spatialFilterGenerator as ToolGenerator<unknown>,
   ],
+  [clipGenerator.kind, clipGenerator as ToolGenerator<unknown>],
+  [eraseGenerator.kind, eraseGenerator as ToolGenerator<unknown>],
   [contourGenerator.kind, contourGenerator as ToolGenerator<unknown>],
 ]);
 

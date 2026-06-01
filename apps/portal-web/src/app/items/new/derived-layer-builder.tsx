@@ -904,6 +904,8 @@ const TOOL_LABELS: Record<ToolStep['tool'], string> = {
   aggregate: 'Group by + aggregate',
   'spatial-join': 'Spatial join (from another layer)',
   'spatial-filter': 'Spatial filter (by another layer)',
+  clip: 'Clip by another layer',
+  erase: 'Erase by another layer',
   contour: 'Contour from points',
 };
 
@@ -933,6 +935,10 @@ const TOOL_DESCRIPTIONS: Record<ToolStep['tool'], string> = {
     "Join attributes (or a count) from another data layer onto each upstream row using a spatial predicate: within / intersects / nearest.",
   'spatial-filter':
     'Keep upstream rows whose geometry satisfies a predicate (intersects / within / contains / touches / near) against another layer.',
+  clip:
+    'Cookie-cutter the upstream features by another layer: only the parts that fall inside the other layer survive. Attributes pass through unchanged.',
+  erase:
+    'The inverse of clip: keep only the parts of upstream features that fall outside another layer. Useful for "everything except this mask" workflows.',
   contour:
     'Interpolate contour lines from a point layer with a numeric field (elevation, water level, sample reading). Output is line features tagged with the contour level.',
 };
@@ -997,7 +1003,7 @@ const TOOL_GROUPS: ToolGroup[] = [
     label: 'Compare with another layer',
     description:
       'Decorate or filter the upstream rows using a second data layer.',
-    tools: ['spatial-join', 'spatial-filter'],
+    tools: ['spatial-join', 'spatial-filter', 'clip', 'erase'],
   },
 ];
 
@@ -1229,6 +1235,20 @@ function StepCard({
         <SpatialFilterStepEditor
           params={step.params}
           onChange={(params) => onChange({ tool: 'spatial-filter', params })}
+        />
+      ) : step.tool === 'clip' ? (
+        <OtherLayerOnlyStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'clip', params })}
+          label="Clip by layer"
+          hint="The layer whose footprint to clip the upstream features to. Only the parts of upstream that fall inside this layer survive."
+        />
+      ) : step.tool === 'erase' ? (
+        <OtherLayerOnlyStepEditor
+          params={step.params}
+          onChange={(params) => onChange({ tool: 'erase', params })}
+          label="Erase by layer"
+          hint="The layer whose footprint to remove from the upstream features. Only the parts of upstream that fall outside this layer survive."
         />
       ) : step.tool === 'contour' ? (
         <ContourStepEditor
@@ -3199,6 +3219,42 @@ function SpatialJoinStepEditor({
           .
         </span>
       </label>
+    </div>
+  );
+}
+
+/**
+ * Shared editor for "one-input + one-data-layer" steps. Both clip
+ * and erase have the same params shape: just an otherSource that
+ * picks a data_layer. The label / hint are passed in so the
+ * caller controls the wording per tool.
+ */
+function OtherLayerOnlyStepEditor({
+  params,
+  onChange,
+  label,
+  hint,
+}: {
+  params: {
+    otherSource: { kind: 'data_layer'; itemId: string; layerKey?: string };
+  };
+  onChange: (next: typeof params) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <div className="space-y-3">
+      <DataLayerPicker
+        itemId={params.otherSource.itemId}
+        layerKey={params.otherSource.layerKey}
+        onChange={(next) =>
+          onChange({
+            otherSource: { kind: 'data_layer', ...next },
+          })
+        }
+        label={label}
+        hint={hint}
+      />
     </div>
   );
 }
