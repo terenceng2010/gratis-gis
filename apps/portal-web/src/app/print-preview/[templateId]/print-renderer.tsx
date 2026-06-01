@@ -149,10 +149,10 @@ function ElementBlock({
       body = <LegendBody element={element} ctx={ctx} />;
       break;
     case 'scalebar':
-      body = <ScalebarBody element={element} />;
+      body = <ScalebarBody element={element} ctx={ctx} />;
       break;
     case 'north-arrow':
-      body = <NorthArrowBody element={element} />;
+      body = <NorthArrowBody element={element} ctx={ctx} />;
       break;
     case 'line':
       body = <LineBody element={element} />;
@@ -379,8 +379,49 @@ function LegendSwatch({ layer }: { layer: MapLayer }) {
   );
 }
 
-function ScalebarBody({ element }: { element: PrintScalebarElement }) {
-  const unitLabel = element.units === 'metric' ? 'km' : 'mi';
+function ScalebarBody({
+  element,
+  ctx,
+}: {
+  element: PrintScalebarElement;
+  ctx: RenderContext;
+}) {
+  // Compute the bar's ground length using the standard
+  // web-mercator pixels-per-meter at the bound map's center
+  // latitude + zoom. Falls back to a 50px-wide "?" bar when
+  // no map data is bound (template authoring with no map).
+  // The bar segment width is fixed at 80px on paper; we pick
+  // the largest nice round number that fits within that width.
+  const lat = ctx.mapData?.center?.[1] ?? 0;
+  const zoom = ctx.mapData?.zoom ?? 0;
+  const segPx = 80;
+  // Web-mercator meters per pixel at this latitude/zoom.
+  const mpp =
+    (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  const segMeters = mpp * segPx;
+  // Convert to nice round number in the right units.
+  const metric = element.units === 'metric';
+  let displayValue: number;
+  let unitLabel: string;
+  if (metric) {
+    if (segMeters >= 1000) {
+      displayValue = roundNice(segMeters / 1000);
+      unitLabel = 'km';
+    } else {
+      displayValue = roundNice(segMeters);
+      unitLabel = 'm';
+    }
+  } else {
+    // Imperial: switch between feet and miles at ~1000 ft.
+    const feet = segMeters * 3.28084;
+    if (feet >= 1000) {
+      displayValue = roundNice(feet / 5280);
+      unitLabel = 'mi';
+    } else {
+      displayValue = roundNice(feet);
+      unitLabel = 'ft';
+    }
+  }
   return (
     <div
       style={{
@@ -402,17 +443,51 @@ function ScalebarBody({ element }: { element: PrintScalebarElement }) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px' }}>
         <span>0</span>
-        <span>{unitLabel}</span>
+        <span>
+          {displayValue.toLocaleString()} {unitLabel}
+        </span>
       </div>
     </div>
   );
 }
 
-function NorthArrowBody(_: { element: PrintNorthArrowElement }) {
+/**
+ * Round to the largest "nice" number ≤ value, using a
+ * 1 / 2 / 5 / 10 progression at the value's order of magnitude.
+ * Keeps scalebar labels readable (250, 500, 1000 rather than
+ * 487.32).
+ */
+function roundNice(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(value)));
+  const mantissa = value / pow;
+  let nice: number;
+  if (mantissa >= 5) nice = 5;
+  else if (mantissa >= 2) nice = 2;
+  else nice = 1;
+  return nice * pow;
+}
+
+function NorthArrowBody({
+  element: _element,
+  ctx,
+}: {
+  element: PrintNorthArrowElement;
+  ctx: RenderContext;
+}) {
+  // Rotate by minus the map bearing so the arrow always points
+  // to true north regardless of which way the map is oriented
+  // (a bearing of 90 means the map is rotated 90° east; the
+  // arrow rotates -90° to keep N up relative to the world).
+  const bearing = ctx.mapData?.bearing ?? 0;
   return (
     <svg
       viewBox="0 0 100 100"
-      style={{ width: '100%', height: '100%' }}
+      style={{
+        width: '100%',
+        height: '100%',
+        transform: `rotate(${-bearing}deg)`,
+      }}
       stroke="#111"
       strokeWidth={2}
       fill="none"

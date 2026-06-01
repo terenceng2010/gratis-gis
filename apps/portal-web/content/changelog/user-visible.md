@@ -12,6 +12,14 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Print scalebar + north arrow read the actual map
+The scalebar on a print layout now computes its bar length from
+the bound map's center latitude and zoom and labels itself with
+a real distance (m / km / ft / mi) rather than a placeholder.
+The north arrow rotates to keep north up regardless of how the
+map is oriented. ArcGIS REST and live PostGIS data layers now
+paint into the print PDF too, alongside data-layer sources.
+
 ## 2026-05-31 — Sharper print maps + real layer-bound legend
 The print pipeline now renders maps inline rather than via an
 embedded frame, so vector layer data paints as path primitives
