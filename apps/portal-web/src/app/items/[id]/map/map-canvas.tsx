@@ -973,6 +973,15 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
           bbox,
         };
         if (pg.whereClause) body.whereClause = pg.whereClause;
+        // #158 Phase 1.5: send the structured layer filter so the
+        // server can narrow the SELECT to matching rows instead of
+        // streaming the bbox-wide result and filtering it in
+        // MapLibre. The MapLibre filter expression still runs as a
+        // belt-and-braces client check (combineFilter at addLayer
+        // time), but the over-the-wire payload is smaller.
+        if (layer.filter && layer.filter.clauses.length > 0) {
+          body.filter = layer.filter;
+        }
         fetch(`/api/portal/postgis-live/${pg.serviceItemId}/features`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },

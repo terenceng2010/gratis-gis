@@ -12,6 +12,16 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-06-01 — Live PostgreSQL: any projection, no raw SQL filtering
+Two upgrades to live PostgreSQL + PostGIS layers. First, tables in
+any spatial reference system PostGIS knows about now render
+without needing to be in WGS84: the portal reprojects on the
+server with the GiST index still in play. Second, the layer
+filter you already use on any other map layer (column / operator
+/ value rows) is now translated to safe parameterized SQL on the
+PostgreSQL side, so the database only sends back the rows that
+match. The raw SQL escape hatch is still there for power users.
+
 ## 2026-06-01 — Clip and erase by another layer
 Two new analysis steps. Clip cookie-cutters your features by
 another layer so only the parts inside survive (handy for "this

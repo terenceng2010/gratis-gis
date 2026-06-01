@@ -171,6 +171,9 @@ export function MapSnapshot({
                   tableName: src.tableName,
                   bbox,
                   ...(src.whereClause ? { whereClause: src.whereClause } : {}),
+                  ...(layer.filter && layer.filter.clauses.length > 0
+                    ? { filter: layer.filter }
+                    : {}),
                 }),
               },
             )

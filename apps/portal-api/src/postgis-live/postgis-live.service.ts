@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import type {
+  MapLayerFilter,
+  MapLayerFilterClause,
   PostgisLiveLayerSnapshot,
   PostgisLiveService,
 } from '@gratis-gis/shared-types';
@@ -182,6 +184,16 @@ export class PostgisLiveService_ {
       tableName: string;
       bbox?: [number, number, number, number];
       whereClause?: string;
+      /**
+       * #158 Phase 1.5: structured MapLayer.filter, compiled to a
+       * parameterized SQL fragment server-side. Lets the visual
+       * filter editor narrow the row set at the database instead
+       * of pulling the bbox-wide result back to the browser and
+       * filtering in MapLibre. The free-form `whereClause` field
+       * stays as the power-user escape hatch and is ANDed in
+       * alongside.
+       */
+      filter?: MapLayerFilter | null;
       limit?: number;
     },
   ): Promise<{
@@ -199,12 +211,6 @@ export class PostgisLiveService_ {
         `Table "${args.tableName}" is not registered on this service`,
       );
     }
-    if (layer.srid !== 4326) {
-      throw new BadRequestException(
-        `Live read of "${args.tableName}" needs SRID 4326. ` +
-          `Server-side reprojection lands in Phase 1.5.`,
-      );
-    }
     const [schema, table] = splitTableName(args.tableName);
     if (!IDENTIFIER_RE.test(schema) || !IDENTIFIER_RE.test(table)) {
       throw new BadRequestException(
@@ -215,6 +221,14 @@ export class PostgisLiveService_ {
     if (!IDENTIFIER_RE.test(geomCol)) {
       throw new BadRequestException('Invalid geometry column');
     }
+    // #158 Phase 1.5: when the table's geometry column is in a
+    // non-WGS84 SRID, we reproject the bbox into that SRID on the
+    // WHERE side (so the GiST index still bites) and reproject
+    // the geometry to 4326 on the SELECT side (so the wire format
+    // stays WGS84 GeoJSON). Tables already in 4326 take the
+    // unchanged fast path.
+    const srcSrid = layer.srid;
+    const needsReproject = srcSrid !== 4326;
     const where: string[] = [];
     const params: unknown[] = [];
     if (args.bbox) {
@@ -228,10 +242,13 @@ export class PostgisLiveService_ {
         throw new BadRequestException('bbox out of WGS84 range');
       }
       params.push(minLng, minLat, maxLng, maxLat);
-      where.push(
-        `${quoteIdent(geomCol)} && ST_MakeEnvelope($${params.length - 3}, ` +
-          `$${params.length - 2}, $${params.length - 1}, $${params.length}, 4326)`,
-      );
+      const envelope =
+        `ST_MakeEnvelope($${params.length - 3}, $${params.length - 2}, ` +
+        `$${params.length - 1}, $${params.length}, 4326)`;
+      const envelopeInSrcSrid = needsReproject
+        ? `ST_Transform(${envelope}, ${srcSrid})`
+        : envelope;
+      where.push(`${quoteIdent(geomCol)} && ${envelopeInSrcSrid}`);
     }
     if (args.whereClause && args.whereClause.trim().length > 0) {
       const clause = args.whereClause.trim();
@@ -245,15 +262,32 @@ export class PostgisLiveService_ {
       }
       where.push(`(${clause})`);
     }
+    // #158 Phase 1.5: structured filter -> parameterized SQL.
+    // Each clause goes through compileFilterClause, which only
+    // ever emits placeholder `$N` references for values (never
+    // inlines them) and validates field names against the layer's
+    // column inventory so a clause can't reference a column we
+    // don't know about.
+    if (args.filter) {
+      const allowed = new Set(layer.columns.map((c) => c.name));
+      const compiled = compileFilter(args.filter, allowed, params.length);
+      if (compiled) {
+        where.push(`(${compiled.sql})`);
+        params.push(...compiled.params);
+      }
+    }
     const limit = Math.min(args.limit ?? MAX_FEATURES_PER_REQUEST, MAX_FEATURES_PER_REQUEST);
     const attributeCols = layer.columns
       .filter((c) => IDENTIFIER_RE.test(c.name))
       .map((c) => `'${c.name}', ${quoteIdent(c.name)}`)
       .join(', ');
+    const geomExpr = needsReproject
+      ? `ST_Transform(${quoteIdent(geomCol)}, 4326)`
+      : quoteIdent(geomCol);
     const sql =
       `SELECT json_build_object(
          'type', 'Feature',
-         'geometry', ST_AsGeoJSON(${quoteIdent(geomCol)})::json,
+         'geometry', ST_AsGeoJSON(${geomExpr})::json,
          'properties', json_build_object(${attributeCols || "'_', NULL"})
        ) AS feature
        FROM ${quoteIdent(schema)}.${quoteIdent(table)}` +
@@ -411,4 +445,102 @@ function splitTableName(name: string): [string, string] {
 
 function isFiniteIn(n: unknown, min: number, max: number): boolean {
   return typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max;
+}
+
+/**
+ * #158 Phase 1.5: compile a MapLayerFilter into a parameterized
+ * SQL fragment.
+ *
+ *   - `clauses` are ANDed or ORed by `combinator` ('all' / 'any').
+ *   - Field names get quoted-identifier treatment after a strict
+ *     identifier-regex check AND a membership check against the
+ *     `allowed` column inventory: a clause referencing a column
+ *     the layer doesn't expose is rejected. This is the column-
+ *     existence guarantee that keeps an author from snooping into
+ *     a sibling table by typo.
+ *   - User-supplied values ALWAYS go through `$N` placeholders.
+ *     The function never inlines string values into the SQL.
+ *   - Numeric comparison ops cast the placeholder via `::numeric`
+ *     so a string column compared with `> 5` still compiles.
+ *   - Returns null when no clauses are present (filter exists but
+ *     is empty), so the caller can skip the AND seamlessly.
+ *
+ * `paramOffset` is the count of params already in the outer
+ * query so placeholders pick up after those. Returns the SQL +
+ * the params to append to the outer query's param array.
+ */
+export function compileFilter(
+  filter: MapLayerFilter,
+  allowed: Set<string>,
+  paramOffset: number,
+): { sql: string; params: unknown[] } | null {
+  if (!filter || !Array.isArray(filter.clauses) || filter.clauses.length === 0) {
+    return null;
+  }
+  const params: unknown[] = [];
+  const fragments: string[] = [];
+  for (const clause of filter.clauses) {
+    const compiled = compileFilterClause(clause, allowed, paramOffset + params.length);
+    if (!compiled) continue;
+    fragments.push(`(${compiled.sql})`);
+    params.push(...compiled.params);
+  }
+  if (fragments.length === 0) return null;
+  const join = filter.combinator === 'any' ? ' OR ' : ' AND ';
+  return { sql: fragments.join(join), params };
+}
+
+function compileFilterClause(
+  clause: MapLayerFilterClause,
+  allowed: Set<string>,
+  paramOffset: number,
+): { sql: string; params: unknown[] } | null {
+  if (!clause.field || !IDENTIFIER_RE.test(clause.field)) return null;
+  if (!allowed.has(clause.field)) {
+    throw new BadRequestException(
+      `Filter field "${clause.field}" is not a known column on this layer`,
+    );
+  }
+  const col = quoteIdent(clause.field);
+  const params: unknown[] = [];
+  switch (clause.op) {
+    case 'is-null':
+      return { sql: `${col} IS NULL`, params };
+    case 'is-not-null':
+      return { sql: `${col} IS NOT NULL`, params };
+    case '==':
+    case '!=': {
+      params.push(clause.value);
+      const ph = `$${paramOffset + params.length}`;
+      const sqlOp = clause.op === '==' ? '=' : '<>';
+      return { sql: `${col} ${sqlOp} ${ph}`, params };
+    }
+    case '>':
+    case '>=':
+    case '<':
+    case '<=': {
+      const n = Number(clause.value);
+      if (!Number.isFinite(n)) return null;
+      params.push(n);
+      const ph = `$${paramOffset + params.length}`;
+      // Cast the column to numeric so a JSONB / text column whose
+      // values parse as numbers still compares correctly. PostGIS
+      // tables typically have native typed columns where this is
+      // a no-op.
+      return { sql: `(${col})::numeric ${clause.op} ${ph}::numeric`, params };
+    }
+    case 'contains': {
+      // ILIKE with %-escaped value; client-supplied %s + _s are
+      // escaped so the user can't broaden the match accidentally.
+      const escaped = clause.value
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
+      params.push(`%${escaped}%`);
+      const ph = `$${paramOffset + params.length}`;
+      return { sql: `(${col})::text ILIKE ${ph}`, params };
+    }
+    default:
+      return null;
+  }
 }

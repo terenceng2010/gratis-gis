@@ -64,7 +64,11 @@ describe('clipGenerator', () => {
   });
 
   it('reports zero outward reach', () => {
-    expect(clipGenerator.outwardReachMeters()).toBe(0);
+    expect(
+      clipGenerator.outwardReachMeters({
+        otherSource: { kind: 'data_layer', itemId: 'x' },
+      }),
+    ).toBe(0);
   });
 
   it('extracts the right itemId as a dependency', () => {
@@ -76,9 +80,11 @@ describe('clipGenerator', () => {
   });
 
   it('emits a SQL fragment that intersects upstream with right_union', () => {
-    const frag = clipGenerator.toSql('source', {
-      otherSource: { kind: 'data_layer', itemId: 'right-id' },
-    });
+    const frag = clipGenerator.toSql(
+      'source',
+      { otherSource: { kind: 'data_layer', itemId: 'right-id' } },
+      0,
+    );
     expect(frag.sql).toContain('right_rows AS');
     expect(frag.sql).toContain('right_union');
     expect(frag.sql).toContain('ST_Intersection(l.geom, ru.geom)');

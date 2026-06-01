@@ -13,11 +13,13 @@ import {
   IsArray,
   IsInt,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import type { MapLayerFilter } from '@gratis-gis/shared-types';
 
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth-sync.service.js';
@@ -50,6 +52,14 @@ class ReadFeaturesDto {
   @IsArray()
   bbox?: [number, number, number, number];
   @IsOptional() @IsString() @MaxLength(2000) whereClause?: string;
+  /**
+   * #158 Phase 1.5: structured MapLayer.filter to compile into a
+   * parameterized SQL fragment. The service does shape validation
+   * + column-existence checks; the class-validator decorator here
+   * just gates a shallow "is this an object" check so a malformed
+   * payload still 400s cleanly.
+   */
+  @IsOptional() @IsObject() filter?: MapLayerFilter;
   @IsOptional() @IsInt() limit?: number;
 }
 
@@ -178,6 +188,7 @@ export class PostgisLiveController {
       tableName: dto.tableName,
       ...(dto.bbox ? { bbox: dto.bbox } : {}),
       ...(dto.whereClause ? { whereClause: dto.whereClause } : {}),
+      ...(dto.filter ? { filter: dto.filter } : {}),
       ...(dto.limit !== undefined ? { limit: dto.limit } : {}),
     });
   }

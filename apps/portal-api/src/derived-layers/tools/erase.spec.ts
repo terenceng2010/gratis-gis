@@ -46,13 +46,19 @@ describe('eraseGenerator', () => {
   });
 
   it('reports zero outward reach', () => {
-    expect(eraseGenerator.outwardReachMeters()).toBe(0);
+    expect(
+      eraseGenerator.outwardReachMeters({
+        otherSource: { kind: 'data_layer', itemId: 'x' },
+      }),
+    ).toBe(0);
   });
 
   it('emits a SQL fragment that differences upstream against right_union', () => {
-    const frag = eraseGenerator.toSql('source', {
-      otherSource: { kind: 'data_layer', itemId: 'right-id' },
-    });
+    const frag = eraseGenerator.toSql(
+      'source',
+      { otherSource: { kind: 'data_layer', itemId: 'right-id' } },
+      0,
+    );
     expect(frag.sql).toContain('right_rows AS');
     expect(frag.sql).toContain('right_union');
     expect(frag.sql).toContain('ST_Difference(l.geom, ru.geom)');
