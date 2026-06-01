@@ -57,11 +57,15 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
         `/api/portal/items?type=print_template&limit=50`,
       );
       if (!res.ok) throw new Error(`${res.status}`);
-      const json = (await res.json()) as {
-        items?: Array<{ id: string; title: string; description?: string }>;
-      };
+      // /api/portal/items returns a bare array (no { items } wrapper).
+      // Stay defensive in case the endpoint shape ever changes: accept
+      // either the array directly or a wrapped { items: [] }.
+      const json = (await res.json()) as
+        | Array<{ id: string; title: string; description?: string }>
+        | { items?: Array<{ id: string; title: string; description?: string }> };
+      const rows = Array.isArray(json) ? json : (json.items ?? []);
       setTemplates(
-        (json.items ?? []).map((it) => ({
+        rows.map((it) => ({
           id: it.id,
           title: it.title,
           ...(it.description ? { description: it.description } : {}),
