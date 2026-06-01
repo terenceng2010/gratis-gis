@@ -43,18 +43,58 @@ export interface LocaleInfo {
    * fill the rest in.
    */
   completeness: number;
+  /**
+   * #162 Phase 1.1: when true, the catalog is a machine-translated
+   * seed waiting on native-speaker review. The locale picker shows
+   * a small "MT" badge so a user knows what to expect and how to
+   * help. Flips to false once a native speaker has signed off in a
+   * review pass (catalog files carry the review marker explicitly).
+   */
+  machineTranslated: boolean;
 }
 
 export const LOCALES: LocaleInfo[] = [
-  { code: 'en', nativeName: 'English', englishName: 'English', completeness: 100 },
-  // Phase 1.1 seed catalogs cover the keys actively wired into
-  // the UI today (nav.signOut, nav.profile, common.*, print.*),
-  // roughly 10% of the surface a fully-translated locale would
-  // cover.
-  { code: 'es', nativeName: 'Español', englishName: 'Spanish', completeness: 10 },
-  { code: 'pt-BR', nativeName: 'Português (Brasil)', englishName: 'Portuguese (Brazil)', completeness: 10 },
-  { code: 'fr', nativeName: 'Français', englishName: 'French', completeness: 10 },
-  { code: 'de', nativeName: 'Deutsch', englishName: 'German', completeness: 10 },
+  {
+    code: 'en',
+    nativeName: 'English',
+    englishName: 'English',
+    completeness: 100,
+    machineTranslated: false,
+  },
+  // Phase 1.1 ships machine-translated seed catalogs covering
+  // every key the English reference catalog defines. They render
+  // a usable non-English UI today and ask for native-speaker
+  // review (the locale picker tags them with an "MT" badge and
+  // links to the contributor guide). `completeness: 80` reflects
+  // "every key translated, accuracy not yet validated."
+  {
+    code: 'es',
+    nativeName: 'Español',
+    englishName: 'Spanish',
+    completeness: 80,
+    machineTranslated: true,
+  },
+  {
+    code: 'pt-BR',
+    nativeName: 'Português (Brasil)',
+    englishName: 'Portuguese (Brazil)',
+    completeness: 80,
+    machineTranslated: true,
+  },
+  {
+    code: 'fr',
+    nativeName: 'Français',
+    englishName: 'French',
+    completeness: 80,
+    machineTranslated: true,
+  },
+  {
+    code: 'de',
+    nativeName: 'Deutsch',
+    englishName: 'German',
+    completeness: 80,
+    machineTranslated: true,
+  },
 ];
 
 /**

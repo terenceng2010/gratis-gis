@@ -12,6 +12,15 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-06-01 — Spanish, Portuguese, French, German seed translations
+The four non-English catalogs are now seeded across every
+already-wired UI key, so the menu items, dialogs, and other
+strings the portal currently translates render in your chosen
+language. The seed is a machine-translated pass and the locale
+picker tags it "(MT)" so you know to expect rough edges; native
+speakers, please open a pull request fixing anything that
+sounds wrong (the picker now links to the contributor guide).
+
 ## 2026-06-01 — Pick your portal language
 A language picker now lives in the user menu in the top-right.
 Five languages are available: English, Spanish, Portuguese

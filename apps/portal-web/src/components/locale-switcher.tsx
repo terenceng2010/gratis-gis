@@ -6,13 +6,14 @@
  *
  * Small dropdown that POSTs to /api/locale to set the gg_locale
  * cookie, then reloads the page so the server-rendered tree picks
- * up the new locale. Renders each option in its native script so a
- * viewer who can't read the portal's current locale still
- * recognizes their own language.
+ * up the new locale on the next request. Renders each option in
+ * its native script so a viewer who can't read the portal's
+ * current locale still recognizes their own language.
  *
- * Drops the per-locale completeness percentage next to languages
- * below 100 so users know they'll see mostly-English while the
- * community translation catches up.
+ * Marks machine-translated locales with an "(MT)" suffix so users
+ * know the seed needs native-speaker review, and links to the
+ * contributor guide so a native speaker who notices a wrong
+ * translation can find the recipe for fixing it.
  */
 import { useState, type ChangeEvent } from 'react';
 
@@ -46,22 +47,36 @@ export function LocaleSwitcher() {
     }
   }
 
+  const activeLocale = LOCALES.find((l) => l.code === current);
+
   return (
-    <label className="inline-flex items-center gap-2 text-xs text-ink-1">
-      <span className="text-muted">{t('common.language')}</span>
-      <select
-        value={current}
-        disabled={pending}
-        onChange={onChange}
-        className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs text-ink-0 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50"
-      >
-        {LOCALES.map((l) => (
-          <option key={l.code} value={l.code}>
-            {l.nativeName}
-            {l.completeness < 100 ? ` (${l.completeness}%)` : ''}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="flex flex-col gap-1">
+      <label className="inline-flex items-center gap-2 text-xs text-ink-1">
+        <span className="text-muted">{t('common.language')}</span>
+        <select
+          value={current}
+          disabled={pending}
+          onChange={onChange}
+          className="rounded-md border border-border bg-surface-1 px-2 py-1 text-xs text-ink-0 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50"
+        >
+          {LOCALES.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.nativeName}
+              {l.machineTranslated ? ' (MT)' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      {activeLocale?.machineTranslated ? (
+        <a
+          href="https://github.com/palavido-dev/gratis-gis/blob/main/CONTRIBUTING-TRANSLATIONS.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[10px] text-muted underline hover:text-ink-1"
+        >
+          Machine-translated. Help us improve it.
+        </a>
+      ) : null}
+    </div>
   );
 }

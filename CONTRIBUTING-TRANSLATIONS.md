@@ -1,67 +1,81 @@
 # Translating GratisGIS
 
 Thanks for helping translate GratisGIS into a new language. This
-file is the operator and contributor guide for the i18n surface.
+file is the contributor guide for the i18n surface. The fastest
+way to help today: pick a locale below, open the matching catalog
+file, fix anything that reads wrong to a native speaker, and open
+a pull request.
 
-## What's here right now
-
-Phase 1 of the i18n work ships the infrastructure pieces:
+## Where the translations live
 
 - The supported-locale list at
   `apps/portal-web/src/lib/i18n/locales.ts`.
 - The English reference catalog at
   `apps/portal-web/src/lib/i18n/messages/en.ts`.
+- Per-locale catalogs in the same `messages/` folder:
+  `es.ts`, `pt-BR.ts`, `fr.ts`, `de.ts`.
 - A vanilla `t(key, params?, locale?)` runtime at
   `apps/portal-web/src/lib/i18n/index.ts` that handles catalog
   lookup, `{name}` placeholders, and ICU-style plural cases.
-- Accept-Language negotiation in the same module.
-
-The Phase 1 catalog is intentionally small: just the strings on
-the most prominent surfaces a brand-new visitor sees first.
-Phase 1.1 will sweep the rest of the UI's hard-coded strings
-into the catalog (every component import a `t()` call); Phase 1.2
-swaps the lookup runtime for `next-intl` and sets up the
-self-hosted translation platform.
 
 ## Currently supported locales
 
 | Code | Native name | Status |
 |---|---|---|
 | `en` | English | Reference catalog, 100% |
-| `es` | Español | Empty (falls back to English) |
-| `pt-BR` | Português (Brasil) | Empty (falls back to English) |
-| `fr` | Français | Empty (falls back to English) |
-| `de` | Deutsch | Empty (falls back to English) |
+| `es` | Español | Machine-translated seed; native review wanted |
+| `pt-BR` | Português (Brasil) | Machine-translated seed; native review wanted |
+| `fr` | Français | Machine-translated seed; native review wanted |
+| `de` | Deutsch | Machine-translated seed; native review wanted |
 
-A missing translation in a non-English catalog falls back to the
-English value automatically, so a partial catalog never breaks
-the UI.
+Phase 1.1 seeded all four non-English catalogs with a
+machine-translation pass so the UI is already usable in every
+supported language today. The seed is good enough to read but
+will have wording that sounds robotic, formality mismatches, and
+the occasional outright mistranslation. That's where native
+speakers come in.
 
-## Adding a translation by hand (Phase 1)
+The locale picker in the user menu shows an "(MT)" tag next to
+locales that are still on the MT seed and links back to this
+guide. Once a locale has had a real native review pass, the next
+PR can flip its `machineTranslated` flag to `false` in
+`locales.ts` and the tag goes away.
 
-1. Open `apps/portal-web/src/lib/i18n/messages/en.ts` to see the
-   key structure and which strings need translating.
-2. Create a sibling file like
-   `apps/portal-web/src/lib/i18n/messages/es.ts`, copy the
-   English structure, and translate each value.
-3. Edit `apps/portal-web/src/lib/i18n/index.ts` to import your
-   catalog and register it in the `CATALOGS` record next to `en`.
-4. Open a pull request. Mention which strings you've covered
-   and which still fall back to English. Anything you don't
-   translate keeps showing the English value at runtime — no
-   half-done states.
+## Reviewing a machine-translated locale (the easy path)
 
-## Adding a new locale
+1. Switch your portal to the locale you want to review (user menu
+   in the top-right -> language picker).
+2. Click around. Note anything that sounds wrong: too formal, too
+   casual, awkward word order, mistranslated jargon, wrong word
+   for a GIS concept, etc.
+3. Open the matching catalog file under
+   `apps/portal-web/src/lib/i18n/messages/`.
+4. Fix the problem strings. Keep the keys exactly as they are;
+   change only the values.
+5. Open a pull request titled "i18n: <locale> review pass" with
+   a short note about what you changed.
+
+A partial review is fine. Fixing five strings is better than
+fixing zero. We'll merge incremental improvement PRs as they come
+in.
+
+## Adding a brand-new locale
 
 1. Add the BCP-47 code to `SupportedLocale` in `locales.ts`.
-2. Add an entry to `LOCALES` with the native + English names
-   and starting completeness of 0.
+2. Add a `LOCALES` entry with the native + English names. Set
+   `completeness: 0` and `machineTranslated: false` (you're
+   shipping a human translation from the start).
 3. Extend the `negotiateLocale` helper so the Accept-Language
    matcher picks up the new locale's primary subtag.
-4. Add the locale to the `CATALOGS` record in `index.ts` with
-   an empty object — English fall-through covers everything
-   until you start translating.
-5. Add your translations following the section above.
+4. Create a sibling messages file, e.g.
+   `apps/portal-web/src/lib/i18n/messages/it.ts` (Italian), copy
+   the structure of an existing catalog, and translate each
+   value.
+5. Wire your catalog into the `CATALOGS` record in `index.ts`.
+6. Open a pull request.
+
+Anything you don't translate keeps showing the English value at
+runtime, so partial first-pass catalogs are fine.
 
 ## Conventions
 
@@ -75,28 +89,38 @@ the UI.
   cardinal categories (Russian's `few` / `many`, Arabic's
   `zero` / `two` / `few` / `many`) work when you supply the
   right case bodies, but the case picker is English-only in
-  Phase 1.0. Phase 1.1 swaps to `Intl.PluralRules` per-locale
-  so a translator can use the full cardinal vocabulary their
-  language requires.
+  Phase 1.1. A later phase will swap to `Intl.PluralRules`
+  per-locale so a translator can use the full cardinal
+  vocabulary their language requires.
 - **Don't translate proper nouns** like product names,
   organization names, "GratisGIS", or "PostGIS".
-- **Keep the tone** consistent with the rest of the locale's
-  catalog. Match the formality level of similar open-source GIS
-  projects in that language community.
+- **Match the source's tone.** The English catalog is friendly
+  but not chatty: button labels are imperative ("Save," not
+  "Save it"), section headers are short noun phrases. Try to
+  stay in the same register.
+- **Match the source's formality.** Most of the catalog uses a
+  neutral-formal voice. Pick the formality convention that
+  matches professional GIS tools in your locale (formal "Sie"
+  in German, formal "vous" in French, etc.) and stay consistent.
 
-## Phase 1.2 will swap to `next-intl` and Weblate
+## Flipping a locale off the MT seed
 
-The roadmap calls for the runtime to switch to `next-intl` and
-the contribution platform to switch to a self-hosted Weblate
-instance once the mechanical i18n-readiness sweep is done. Your
-hand-translated catalogs from Phase 1 will be imported into
-Weblate at that point; the contribution flow becomes a web UI
-instead of pull requests.
+Once a locale has had a real native review pass and the
+maintainer is comfortable that it reads correctly:
 
-If you'd rather wait for Weblate before contributing, that's
-also fine — the English fallback keeps the UI usable in every
-locale today.
+1. In `locales.ts`, set the locale's `machineTranslated` flag
+   to `false`.
+2. Bump its `completeness` to reflect how much of the catalog
+   you've reviewed (100 once every key has been touched, lower
+   if some namespaces still need attention).
+3. In the catalog file itself, remove the "Machine-translated
+   seed" preamble and replace it with a brief credit line for
+   the reviewer if they want one.
+
+The locale picker stops showing the "(MT)" tag and the
+"Help us improve it" link once the flag is off.
 
 ## Questions
 
-Open an issue with the `i18n` label.
+Open an issue with the `i18n` label, or comment on an open i18n
+PR.
