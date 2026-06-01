@@ -12,6 +12,14 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Print PDFs render the real layout
+The server-side print path now reads the print template's actual
+layout: title text and parameter bindings, image elements, lines
+and rectangles, scalebars and north arrows all render at the
+right paper size, with the right fonts and colors, in the right
+positions. Map frames embed the calling map; the layer-bound
+legend lands next.
+
 ## 2026-05-31 — Better-quality print PDFs
 The print pipeline now has a server-side render path. Instead of
 relying on the browser's print dialog, the portal renders the
