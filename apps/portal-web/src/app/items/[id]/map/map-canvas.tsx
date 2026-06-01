@@ -924,6 +924,86 @@ export const MapCanvas = forwardRef<MapCanvasHandle, Props>(function MapCanvas(
     };
   }, [map.layers, iconsTick]);
 
+  // #158: bbox-driven refetch for postgis-live layers. Same
+  // shape as the arcgis-rest effect above: filter visible layers
+  // by source.kind, abort any in-flight fetches on camera move,
+  // POST the new bbox to the portal-api endpoint, hand the
+  // returned FeatureCollection to MapLibre's source.setData.
+  // The server caps each response at 5000 features so a
+  // dense table at low zoom degrades gracefully rather than
+  // burning the browser.
+  const postgisControllers = useRef<Record<string, AbortController>>({});
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const pgLayers = map.layers.filter(
+      (l) => l.visible && l.source.kind === 'postgis-live',
+    );
+    for (const id of Object.keys(postgisControllers.current)) {
+      if (!pgLayers.some((l) => l.id === id)) {
+        postgisControllers.current[id]?.abort();
+        delete postgisControllers.current[id];
+      }
+    }
+    if (pgLayers.length === 0) return;
+    const refetchAll = () => {
+      const b = m.getBounds();
+      const bbox: [number, number, number, number] = [
+        b.getWest(),
+        b.getSouth(),
+        b.getEast(),
+        b.getNorth(),
+      ];
+      for (const layer of pgLayers) {
+        const src = m.getSource(`gg:${layer.id}`) as
+          | maplibregl.GeoJSONSource
+          | undefined;
+        if (!src) continue;
+        postgisControllers.current[layer.id]?.abort();
+        const controller = new AbortController();
+        postgisControllers.current[layer.id] = controller;
+        const pg = layer.source as {
+          kind: 'postgis-live';
+          serviceItemId: string;
+          tableName: string;
+          whereClause?: string;
+        };
+        const body: Record<string, unknown> = {
+          tableName: pg.tableName,
+          bbox,
+        };
+        if (pg.whereClause) body.whereClause = pg.whereClause;
+        fetch(`/api/portal/postgis-live/${pg.serviceItemId}/features`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error(`${r.status}: ${r.statusText}`);
+            return r.json();
+          })
+          .then((data: { type: string; features: unknown[] }) => {
+            if (controller.signal.aborted) return;
+            src.setData(data as GeoJSON.FeatureCollection);
+          })
+          .catch((err) => {
+            if ((err as Error)?.name === 'AbortError') return;
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[postgis-live] ${layer.title}:`,
+              (err as Error).message,
+            );
+          });
+      }
+    };
+    refetchAll();
+    m.on('moveend', refetchAll);
+    return () => {
+      m.off('moveend', refetchAll);
+    };
+  }, [map.layers, iconsTick]);
+
   // Live bbox-driven refetch for portal data-layer sources. Mirrors
   // the arcgis-rest effect above. The default `sourceData()` for
   // data-layer returns the unscoped /geojson URL, which is fine
@@ -3289,6 +3369,13 @@ function sourceData(
     // resolves; this keeps syncOverlays synchronous (no awaits in
     // the hot path) and lets MapLibre add the source immediately
     // so downstream paint / hover / click layers attach.
+    return { type: 'FeatureCollection', features: [] };
+  }
+  if (layer.source.kind === 'postgis-live') {
+    // #158: same pattern as arcgis-rest. The camera-driven effect
+    // (postgisLiveControllers below) issues a POST against the
+    // portal-api postgis-live/:serviceItemId/features endpoint on
+    // every moveend and replaces the source data.
     return { type: 'FeatureCollection', features: [] };
   }
   return null;

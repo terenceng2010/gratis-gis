@@ -94,6 +94,7 @@ import {
   type ServiceProbeResult,
 } from '@/lib/service-probe';
 import { DataCollectionBuilder } from './data-collection-builder';
+import { PostgisConnectionBuilder } from './postgis-connection-builder';
 import { BasemapConfigSection } from '../_components/basemap-config-section';
 import {
   DataLayerBuilder,
@@ -122,7 +123,7 @@ interface TypeOption {
    * web_app + a template tag at submit time so the storage model
    * stays collapsed while the picker keeps Esri-friendly names.
    */
-  value: ItemType | 'viewer' | 'custom';
+  value: ItemType | 'viewer' | 'custom' | 'postgis_connection';
   label: string;
   desc: string;
   Icon: LucideIcon;
@@ -192,6 +193,18 @@ const TYPE_GROUPS: TypeGroup[] = [
         value: 'service',
         label: 'Connected service',
         desc: 'Live pointer at an external service. Paste a URL; we recognize ArcGIS REST, WMS, WFS, and WMTS.',
+        Icon: Plug,
+      },
+      {
+        // #158 PostGIS live-read. UI-only wizard value; the
+        // backend creates a normal `service` item with
+        // `protocol: 'postgis_live'` via the single-shot
+        // /postgis-live/create endpoint. The builder handles its
+        // own save + redirect; the wizard's generic save flow is
+        // skipped when this type is selected.
+        value: 'postgis_connection',
+        label: 'PostgreSQL + PostGIS (live)',
+        desc: 'Connect to a live PostgreSQL + PostGIS database. Maps read tables on demand by bounding box; no data is copied into the portal.',
         Icon: Plug,
       },
       {
@@ -420,8 +433,13 @@ export function NewItemWizard({
   // template='viewer' at submit time. It isn't a persisted ItemType
   // (the picker stays an Esri-friendly noun while the storage stays
   // collapsed under web_app templates).
+  // #158 adds 'postgis_connection' as a UI-only pseudo-type. The
+  // resulting item is a normal `service` with protocol='postgis_live';
+  // the pseudo-type just routes the wizard to the PostgisConnectionBuilder
+  // pane and skips the generic Create button (the builder owns its own
+  // save flow because /postgis-live/create is a single shot).
   const [type, setType] = useState<
-    ItemType | 'viewer' | 'custom' | null
+    ItemType | 'viewer' | 'custom' | 'postgis_connection' | null
   >(queryType);
 
   // Metadata persists across back/forward between steps so the user
@@ -444,7 +462,9 @@ export function NewItemWizard({
   const resolvedTypeForThumbnail: ItemType =
     type === 'viewer' || type === 'custom'
       ? 'web_app'
-      : (type ?? 'file');
+      : type === 'postgis_connection'
+        ? 'service'
+        : (type ?? 'file');
   const [thumbnailDesign, setThumbnailDesign] = useState<ThumbnailDesign>(() =>
     defaultThumbnailDesign(resolvedTypeForThumbnail),
   );
@@ -632,7 +652,7 @@ export function NewItemWizard({
   const [, startTransition] = useTransition();
 
   const pickType = useCallback(
-    (t: ItemType | 'viewer' | 'custom') => {
+    (t: ItemType | 'viewer' | 'custom' | 'postgis_connection') => {
       setType(t);
       setStep('details');
       setError(null);
@@ -1332,6 +1352,14 @@ export function NewItemWizard({
     // template='editor' though, so swap the type here at the
     // payload-build boundary. Keeps the user-facing word stable
     // while we collapse the storage model.
+    // #158: postgis_connection never reaches this submit path
+    // (the PostgisConnectionBuilder owns its own save flow), but
+    // we still need to narrow it out of the union so TS is happy.
+    if (type === 'postgis_connection') {
+      throw new Error(
+        'postgis_connection items save via PostgisConnectionBuilder, not the wizard submit path',
+      );
+    }
     const payloadType: ItemType =
       type === 'editor' ||
       type === 'viewer' ||
@@ -1955,6 +1983,14 @@ export function NewItemWizard({
         />
       ) : null}
 
+      {type === 'postgis_connection' ? (
+        <PostgisConnectionBuilder
+          title={title}
+          description={description}
+          canSave={title.trim().length > 0}
+        />
+      ) : null}
+
       {type === 'file' ? (
         <FileItemUploader value={fileItemUpload} onChange={setFileItemUpload} />
       ) : null}
@@ -2033,19 +2069,27 @@ export function NewItemWizard({
         >
           Back
         </button>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={submitting}
-          className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
-        >
-          {submitting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Sparkles className="h-4 w-4" />
-          )}
-          Create item
-        </button>
+        {/* #158: postgis_connection uses its own dedicated Save
+            button inside PostgisConnectionBuilder because the
+            backend path is a single-shot /postgis-live/create
+            (which does test + create + credential + probe) rather
+            than the generic items POST. Hide the wizard's
+            generic Create button to avoid double-save UX. */}
+        {type !== 'postgis_connection' ? (
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitting}
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground shadow-card hover:opacity-90 disabled:opacity-50"
+          >
+            {submitting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            Create item
+          </button>
+        ) : null}
       </div>
     </div>
   );

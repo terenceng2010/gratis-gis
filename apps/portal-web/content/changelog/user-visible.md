@@ -12,6 +12,14 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Point a map at a live PostgreSQL + PostGIS database
+A new connection type lets you register a live PostGIS database
+and render its tables on maps without copying the rows in. Every
+viewport move issues a bounding-box SELECT directly against your
+database; the GiST index does the spatial work. The password is
+stored encrypted and never reaches the browser. Bring your own
+warehouse, no data migration needed.
+
 ## 2026-05-31 — Print this map, one click away
 A Print button in the map editor opens a chooser: create a new
 print layout pre-bound to this map, or pick an existing layout

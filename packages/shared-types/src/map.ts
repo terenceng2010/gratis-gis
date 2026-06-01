@@ -542,6 +542,31 @@ export type MapLayerSource =
       proxyUrl?: string;
     }
   /**
+   * #158 Live PostgreSQL + PostGIS read. References a service
+   * item (`type='service'`, `protocol='postgis_live'`) by id and
+   * a schema-qualified table name. The viewer issues bbox-filtered
+   * GeoJSON fetches against the portal-api endpoint
+   * `/items/:serviceId/postgis-live/features?layer=schema.table&bbox=...`,
+   * which connects with the stored encrypted credential and returns
+   * a FeatureCollection. No row of feature data ever lives in the
+   * portal database itself.
+   */
+  | {
+      kind: 'postgis-live';
+      /** Service item id (`type='service'`, `protocol='postgis_live'`)
+       *  whose connection credentials this layer borrows. */
+      serviceItemId: string;
+      /** Schema-qualified table name, e.g. "public.parcels". The
+       *  probe step writes this in the wizard; authors don't type
+       *  raw SQL. */
+      tableName: string;
+      /** Optional WHERE clause appended to every SELECT. Server-
+       *  side validation refuses statement terminators and `;` so
+       *  this can't smuggle in a second statement. Empty / unset
+       *  means no filter. */
+      whereClause?: string;
+    }
+  /**
    * Group "layer" -- a UI-only grouping marker. Group layers do not
    * render anything to the map; the canvas filters them out. The
    * layer panel renders them as expandable headers and stacks every

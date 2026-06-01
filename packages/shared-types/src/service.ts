@@ -43,7 +43,8 @@ export type ServiceProtocol =
   | 'arcgis_geocode'
   | 'wms'
   | 'wfs'
-  | 'wmts';
+  | 'wmts'
+  | 'postgis_live';
 
 /**
  * Per-layer snapshot captured at probe time. The required fields
@@ -197,6 +198,90 @@ export interface WmtsService extends ServiceDataBase {
   defaultTileMatrixSet?: string;
 }
 
+/**
+ * #158 PostGIS live-read service. Unlike the HTTP-based protocols
+ * above, this one points at a live PostgreSQL + PostGIS database
+ * the portal connects to directly. Map layers backed by a
+ * `postgis_live` service issue bbox-filtered SELECTs against the
+ * registered tables on every viewport move; no data is ever
+ * copied into the portal database. Felt and CARTO both gate
+ * this kind of live read to their Enterprise tiers; ours ships
+ * to OSS self-hosters whose warehouse is very often PostGIS
+ * already.
+ *
+ * Authentication: the role's password is stored encrypted in the
+ * ItemCredential row keyed on the service item id (same shape
+ * arcgis_service uses for token storage). The browser never sees
+ * the password; the portal-api connects via pg's pool with the
+ * decrypted credential and the server-side query path returns
+ * GeoJSON.
+ *
+ * The `url` field in ServiceDataBase is overloaded for this
+ * protocol: rather than an HTTP URL, it holds a sanitized
+ * connection-string-shaped identifier
+ * (`postgis://host:port/db?schema=public`) so the existing
+ * detail-page UI can still show "where this service points" in
+ * one line.
+ */
+export interface PostgisLiveService extends ServiceDataBase {
+  protocol: 'postgis_live';
+  /** Database host (DNS name or IP). */
+  host: string;
+  /** Database port. Defaults to 5432 in the wizard. */
+  port: number;
+  /** Database name. */
+  database: string;
+  /** PostgreSQL role / username. The role's password is stored
+   *  on the ItemCredential row, never in this data blob. */
+  role: string;
+  /** Optional default schema for the probe + UI. Tables in other
+   *  schemas are still reachable; this just defaults the picker. */
+  defaultSchema?: string;
+  /** Per-request statement_timeout in milliseconds. Defaults to
+   *  10_000 (10 seconds) on the server side when omitted. Bounds
+   *  a runaway query so a viewport scroll can't tie up the
+   *  database. */
+  statementTimeoutMs?: number;
+}
+
+/**
+ * Per-table layer snapshot for `postgis_live`. ServiceLayerSnapshot
+ * already carries name + title + bbox; PostGIS rows additionally
+ * record the column shape so the layer picker can show what's
+ * available and the renderer can build the right SELECT. Kept
+ * separate from ServiceLayerSnapshot because every PG table has
+ * its own column list and the existing snapshot shape would bloat
+ * if every protocol crammed their extras in.
+ */
+export interface PostgisLiveLayerSnapshot {
+  /** schema-qualified table name, e.g. "public.parcels". */
+  name: string;
+  /** Display label. Falls back to `name` when the author doesn't
+   *  override. */
+  title: string;
+  /** Geometry column name. The probe picks the first column of
+   *  type geometry / geography when there's a single candidate;
+   *  multi-geometry tables surface as a chooser in the wizard. */
+  geometryColumn: string;
+  /** Geometry kind as PostGIS reports it (Point / LineString /
+   *  Polygon / MultiPoint / MultiLineString / MultiPolygon /
+   *  GeometryCollection / Geometry). Drives default styling. */
+  geometryKind: string;
+  /** SRID of the geometry column. 4326 (WGS84) is the only fully-
+   *  supported value in Phase 1; other SRIDs surface a warning
+   *  in the wizard and Phase 1.5 ships server-side reprojection. */
+  srid: number;
+  /** Cached bbox in WGS84 lng/lat when known. The probe runs
+   *  `ST_Extent` once at registration time; viewers refresh
+   *  on demand from the detail page. */
+  bbox?: [number, number, number, number];
+  /** Non-geometry columns the layer exposes as attributes.
+   *  Type names are PostgreSQL canonical (text, int4, float8,
+   *  timestamp, etc.); the runtime maps these to the simple
+   *  string / number / boolean / date palette. */
+  columns: Array<{ name: string; type: string }>;
+}
+
 /** The full discriminated union. Consumers exhaustively switch on
  *  `protocol`. */
 export type ServiceData =
@@ -206,7 +291,8 @@ export type ServiceData =
   | ArcgisGeocodeService
   | WmsService
   | WfsService
-  | WmtsService;
+  | WmtsService
+  | PostgisLiveService;
 
 /**
  * Default scaffolds keyed by protocol. The wizard picks one of these
@@ -266,6 +352,20 @@ export const DEFAULT_SERVICE: Record<ServiceProtocol, ServiceData> = {
     protocolVersion: '1.0.0',
     layers: [],
   },
+  postgis_live: {
+    version: 1,
+    protocol: 'postgis_live',
+    url: '', // the wizard fills this with postgis://host:port/db?schema=...
+    host: '',
+    port: 5432,
+    database: '',
+    role: '',
+    layers: [],
+    // requiresAuth is always true for postgis_live (no anonymous PG
+    // role pattern); the wizard stamps it on save.
+    requiresAuth: true,
+    statementTimeoutMs: 10_000,
+  },
 };
 
 /** Human-friendly label for a protocol value. Used in the wizard's
@@ -285,6 +385,8 @@ export function serviceProtocolLabel(p: ServiceProtocol): string {
       return 'WMS';
     case 'wfs':
       return 'WFS';
+    case 'postgis_live':
+      return 'PostgreSQL + PostGIS (live)';
     case 'wmts':
       return 'WMTS';
     default:

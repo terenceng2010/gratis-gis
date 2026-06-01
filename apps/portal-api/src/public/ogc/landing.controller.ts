@@ -107,6 +107,12 @@ export class OgcLandingController {
         // for the bounded interpretation: we don't reproject beyond
         // axis-order swap in v1.
         'http://www.opengis.net/spec/ogcapi-features-2/1.0/conf/crs',
+        // OGC API - Features Part 3 (sortby).  features.controller
+        // already accepts the `sortby` query param and honours
+        // `-fieldname` for descending order; advertising the class
+        // lets clients trust the behaviour. CQL2-Text filtering
+        // (features-filter) is a separate follow-up.
+        'http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/sorting',
         // OGC API - Styles Part 1
         'http://www.opengis.net/spec/ogcapi-styles-1/1.0/conf/core',
         'http://www.opengis.net/spec/ogcapi-styles-1/1.0/conf/mapbox-styles',

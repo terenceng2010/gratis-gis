@@ -288,6 +288,14 @@ export async function discoverLayerMetadata(
             : new Set<GeometryFamily>(),
         loading: false,
       };
+    } else if (layer.source.kind === 'postgis-live') {
+      // #158 postgis-live layers fetch features via the bbox-
+      // driven effect on the map canvas; the metadata loader
+      // can't materialize a full sample (the table may be
+      // millions of rows). Return an empty default — the user
+      // sees fields show up once the canvas hits the first
+      // viewport-bound features endpoint.
+      return { ...EMPTY, loading: false };
     } else {
       const url =
         layer.source.kind === 'geojson-url'
