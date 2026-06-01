@@ -23,6 +23,7 @@
  * even when nobody's heartbeat has fired in the meantime.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type maplibregl from 'maplibre-gl';
 
 interface PresenceMember {
@@ -65,6 +66,7 @@ export function PresenceOverlay({
   mapId,
   currentUser,
   mapLibre,
+  chipsContainer,
 }: Props) {
   const [members, setMembers] = useState<PresenceMember[]>([]);
   const [connectionId, setConnectionId] = useState<string | null>(null);
@@ -210,28 +212,56 @@ export function PresenceOverlay({
           </span>
         </div>
       ))}
-      {/* Avatar strip. Floats top-right inside the canvas area;
-          shows everyone in the room including the local viewer
-          so the user can confirm they're connected. */}
-      {currentUser && members.length > 0 ? (
-        <div className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1">
-          {members.map((m) => (
-            <div
-              key={m.connectionId}
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-white text-[10px] font-semibold text-white shadow"
-              style={{ backgroundColor: m.color }}
-              title={
-                m.connectionId === connectionId
-                  ? `${m.displayName} (you)`
-                  : m.displayName
-              }
-            >
-              {initials(m.displayName)}
-            </div>
-          ))}
-        </div>
+      {/* Avatar strip. When the parent supplies chipsContainer
+          (the BuilderShell toolbar's left side, next to the
+          canvas pane toggles + Save button), we portal into it so
+          the chips sit in the toolbar instead of floating over
+          the canvas where they used to overlap the MapLibre zoom
+          + compass controls. With no container, we fall back to
+          the canvas-overlay rendering for callers that don't have
+          a toolbar slot (preview surfaces, embedded readers). */}
+      {currentUser && members.length > 0 ? renderChipStrip(
+        chipsContainer,
+        members,
+        connectionId,
       ) : null}
     </>
+  );
+}
+
+function renderChipStrip(
+  container: HTMLElement | null | undefined,
+  members: PresenceMember[],
+  connectionId: string | null,
+) {
+  const strip = (
+    <div className="flex items-center gap-1">
+      {members.map((m) => (
+        <div
+          key={m.connectionId}
+          className="flex h-6 w-6 items-center justify-center rounded-full border border-white text-[10px] font-semibold text-white shadow"
+          style={{ backgroundColor: m.color }}
+          title={
+            m.connectionId === connectionId
+              ? `${m.displayName} (you)`
+              : m.displayName
+          }
+        >
+          {initials(m.displayName)}
+        </div>
+      ))}
+    </div>
+  );
+  if (container) {
+    return createPortal(strip, container);
+  }
+  // Fallback: canvas overlay (the pre-portal behavior). The
+  // pointer-events-none + absolute positioning is preserved so
+  // legacy callers don't regress.
+  return (
+    <div className="pointer-events-none absolute right-2 top-2 z-20">
+      {strip}
+    </div>
   );
 }
 

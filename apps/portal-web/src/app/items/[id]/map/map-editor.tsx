@@ -378,6 +378,12 @@ export function MapEditor({
   // MapCanvas fires `onMapReady` with the instance on mount and
   // null on teardown.
   const [mapLibre, setMapLibre] = useState<maplibregl.Map | null>(null);
+  // #156 follow-up: portal target for the live-presence avatar
+  // chips. PresenceOverlay createPortal()'s the chip strip into
+  // this node so it lands in the toolbar rather than floating
+  // over the canvas. State (not ref) so PresenceOverlay re-renders
+  // once the slot mounts.
+  const [presenceChipsSlot, setPresenceChipsSlot] = useState<HTMLDivElement | null>(null);
   // Layer id chosen by the per-layer kebab's "Open attribute table"
   // action (#73). Cleared when the table closes so reopening from
   // the toolbar lands on the default-first-visible behavior.
@@ -973,6 +979,13 @@ export function MapEditor({
 
   const toolbarRight = (
     <>
+      {/* #156 follow-up: live presence avatar chips portal target.
+          Sits at the leading edge of the toolbar's right side so
+          the chips appear next to the Save / canvas toggles
+          instead of floating over the canvas where they used to
+          overlap MapLibre's zoom + compass controls. The empty
+          container is harmless when nobody else is on the map. */}
+      <div ref={setPresenceChipsSlot} className="flex items-center" />
       {canvasTogglePill}
       {canEdit ? (
         <>
@@ -1213,6 +1226,7 @@ export function MapEditor({
             mapId={itemId}
             currentUser={currentUser}
             mapLibre={mapLibre}
+            chipsContainer={presenceChipsSlot}
           />
           {/* #159 Print this map chooser. Opens to either
               "use existing template" or "create new pre-bound
