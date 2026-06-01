@@ -32,6 +32,8 @@
  */
 import type {
   DynamicTokenId,
+  MapData,
+  MapLayer,
   PrintElement,
   PrintImageElement,
   PrintLegendElement,
@@ -46,6 +48,8 @@ import type {
   PrintTextSegment,
 } from '@gratis-gis/shared-types';
 import { resolvePaperInches } from '@gratis-gis/shared-types';
+
+import { MapSnapshot } from './map-snapshot';
 
 const DESIGN_DPI = 96;
 
@@ -67,6 +71,7 @@ const DYNAMIC_RESOLVERS: Record<
 
 interface RenderContext {
   mapId: string;
+  mapData: MapData | null;
   parameterValues: Record<string, string>;
   parameters: PrintTemplateParameter[];
   userDisplayName: string;
@@ -75,6 +80,10 @@ interface RenderContext {
 interface Props {
   template: PrintTemplateData;
   mapId: string;
+  /** Resolved MapData blob from the bound map item. Phase 2.2:
+   *  flows through from the load-job endpoint so the MapSnapshot
+   *  inline renderer + the layer-bound legend can read it. */
+  mapData: MapData | null;
   parameterValues: Record<string, string>;
   userDisplayName: string;
 }
@@ -82,6 +91,7 @@ interface Props {
 export function PrintRenderer({
   template,
   mapId,
+  mapData,
   parameterValues,
   userDisplayName,
 }: Props): JSX.Element {
@@ -95,6 +105,7 @@ export function PrintRenderer({
   };
   const ctx: RenderContext = {
     mapId,
+    mapData,
     parameterValues,
     parameters: template.parameters,
     userDisplayName,
@@ -132,10 +143,10 @@ function ElementBlock({
       body = <ImageBody element={element} />;
       break;
     case 'map':
-      body = <MapBody element={element} mapId={ctx.mapId} />;
+      body = <MapBody element={element} ctx={ctx} />;
       break;
     case 'legend':
-      body = <LegendBody element={element} />;
+      body = <LegendBody element={element} ctx={ctx} />;
       break;
     case 'scalebar':
       body = <ScalebarBody element={element} />;
@@ -235,10 +246,10 @@ function ImageBody({ element }: { element: PrintImageElement }) {
 
 function MapBody({
   element,
-  mapId,
+  ctx,
 }: {
   element: PrintMapElement;
-  mapId: string;
+  ctx: RenderContext;
 }) {
   const border: React.CSSProperties = element.border
     ? {
@@ -246,22 +257,32 @@ function MapBody({
         boxSizing: 'border-box',
       }
     : {};
+  if (!ctx.mapData) {
+    return (
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          background: '#f8fafc',
+          ...border,
+        }}
+      />
+    );
+  }
   return (
-    <iframe
-      title={`Map ${mapId}`}
-      src={`/items/${mapId}?view=embed&hideChrome=1`}
-      style={{
-        width: '100%',
-        height: '100%',
-        border: 'none',
-        background: '#f8fafc',
-        ...border,
-      }}
-    />
+    <div style={{ width: '100%', height: '100%', ...border }}>
+      <MapSnapshot mapData={ctx.mapData} basemapUrl={null} />
+    </div>
   );
 }
 
-function LegendBody({ element }: { element: PrintLegendElement }) {
+function LegendBody({
+  element,
+  ctx,
+}: {
+  element: PrintLegendElement;
+  ctx: RenderContext;
+}) {
   const style: React.CSSProperties = {
     width: '100%',
     height: '100%',
@@ -274,19 +295,87 @@ function LegendBody({ element }: { element: PrintLegendElement }) {
     fontFamily: 'Arial, sans-serif',
     fontSize: '10px',
     color: '#1f2937',
+    overflow: 'hidden',
   };
+  const layers: MapLayer[] = (ctx.mapData?.layers ?? []).filter(
+    (l) => l.visible && l.source.kind !== 'group',
+  );
   return (
     <div style={style}>
       <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px' }}>
         {element.title ?? 'Legend'}
       </div>
-      {/* Phase 2.2 wires the actual layer list from the bound map.
-          Phase 2.1 prints a single hint so the slot doesn't look
-          empty in the captured PDF. */}
-      <div style={{ color: '#6b7280' }}>
-        (Layer-bound legend lands in the next phase)
-      </div>
+      {layers.length === 0 ? (
+        <div style={{ color: '#6b7280' }}>No visible layers</div>
+      ) : (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+          {layers.map((layer) => (
+            <li
+              key={layer.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                marginBottom: '3px',
+              }}
+            >
+              <LegendSwatch layer={layer} />
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {layer.title}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
+  );
+}
+
+function LegendSwatch({ layer }: { layer: MapLayer }) {
+  // Pick a tiny visual that matches what the layer paints:
+  // colored circle for points, line for line, filled rect for
+  // polygon. Falls back to the polygon family when the source
+  // doesn't declare a geometry.
+  const point = layer.style?.point;
+  const line = layer.style?.line;
+  const polygon = layer.style?.polygon;
+  if (point && polygon?.fillOpacity === undefined && !line) {
+    return (
+      <span
+        style={{
+          width: '10px',
+          height: '10px',
+          borderRadius: '50%',
+          background: point.color ?? '#6366f1',
+          border: `${point.strokeWidth ?? 1}px solid ${point.strokeColor ?? '#fff'}`,
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+  if (line && !polygon) {
+    return (
+      <span
+        style={{
+          width: '14px',
+          height: '3px',
+          background: line.color ?? '#4338ca',
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      style={{
+        width: '12px',
+        height: '10px',
+        background: polygon?.fillColor ?? point?.color ?? '#6366f1',
+        opacity: polygon?.fillOpacity ?? 0.75,
+        border: `${polygon?.strokeWidth ?? 1}px solid ${polygon?.strokeColor ?? '#4338ca'}`,
+        flexShrink: 0,
+      }}
+    />
   );
 }
 

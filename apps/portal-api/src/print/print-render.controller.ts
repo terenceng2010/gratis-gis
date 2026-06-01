@@ -81,4 +81,25 @@ export class PrintRenderController {
     }
     return claims;
   }
+
+  /**
+   * #159 Phase 2.2 internal load endpoint. Validates the render
+   * token AND resolves the template + map items with the user's
+   * permissions, returning the full bundle the print-preview
+   * route needs. Lets the preview render private maps (not just
+   * publicly-shared ones) because portal-api does the permission
+   * resolution server-side rather than relying on the chromium
+   * sidecar to forward a Bearer token. @Public() because the
+   * sidecar still can't carry a Bearer; authorization is via
+   * the single-use token.
+   */
+  @Public()
+  @Post('internal/load-job')
+  async loadJob(@Body() dto: ConsumeTokenDto) {
+    const bundle = await this.svc.loadJobByToken(dto.token);
+    if (!bundle) {
+      throw new BadRequestException('Render token is missing or expired');
+    }
+    return bundle;
+  }
 }

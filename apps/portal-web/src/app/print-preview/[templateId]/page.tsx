@@ -1,20 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * #159 Phase 2.1 print-preview route.
+ * #159 Phase 2.1 + 2.2 print-preview route.
  *
- * The chromium sidecar navigates here from inside the docker
- * network. The page validates the render token, fetches the
- * print_template + map item, then mounts the PrintRenderer at
- * the template's paper dimensions. Puppeteer page.pdf captures
- * the result as a vector PDF.
+ * Phase 2.1: render real layout elements.
+ * Phase 2.2: support private templates + maps (portal-api
+ *            does permission resolution server-side, not via a
+ *            Bearer-token-carrying chromium sidecar). Inline
+ *            MapLibre snapshot replaces the iframe. Legend
+ *            reads the bound map's actual layers.
  *
- * Phase 2.2 will swap the Map element's iframe-based render for
- * an inline MapLibre snapshot so the captured PDF has higher-
- * fidelity map output (current iframe-in-PDF can rasterize).
+ * Flow:
+ *   1. Chromium navigates here with ?renderToken=...
+ *   2. We POST to /api/print/internal/load-job which validates
+ *      the token AND returns the resolved template + map items
+ *      under the original requesting user's permissions.
+ *   3. We mount PrintRenderer at the template's paper size.
+ *   4. The inline MapSnapshot client component sets
+ *      body[data-map-ready="true"] once tiles + layers settle.
+ *   5. Puppeteer's page.pdf captures the rendered HTML.
  */
 import { notFound } from 'next/navigation';
 import { Buffer } from 'node:buffer';
-import type { PrintTemplateData } from '@gratis-gis/shared-types';
+import type {
+  MapData,
+  PrintTemplateData,
+} from '@gratis-gis/shared-types';
 import { resolvePaperInches } from '@gratis-gis/shared-types';
 
 import { PrintRenderer } from './print-renderer';
@@ -31,6 +41,15 @@ interface Props {
   };
 }
 
+interface JobBundle {
+  userId: string;
+  userDisplayName: string;
+  templateId: string;
+  mapId: string;
+  template: { id: string; title: string; type: string; data: PrintTemplateData };
+  map: { id: string; title: string; type: string; data: MapData };
+}
+
 export default async function PrintPreviewPage({
   params,
   searchParams,
@@ -40,11 +59,11 @@ export default async function PrintPreviewPage({
 
   if (!templateId || !mapId || !renderToken) notFound();
 
-  // 1. Validate the render token against portal-api. The
-  //    consume-render-token endpoint is @Public + gated by the
-  //    token itself; the chromium sidecar doesn't carry a Bearer.
-  const consumeRes = await fetch(
-    `${PRIVATE_API_BASE}/api/print/consume-render-token`,
+  // Single-shot validate + load. Returns the template + map
+  // items resolved with the originating user's permissions, so
+  // private maps render too (Phase 2.2 unblock).
+  const res = await fetch(
+    `${PRIVATE_API_BASE}/api/print/internal/load-job`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -52,18 +71,19 @@ export default async function PrintPreviewPage({
       cache: 'no-store',
     },
   );
-  if (!consumeRes.ok) notFound();
-  const claims = (await consumeRes.json()) as {
-    userId: string;
-    templateId: string;
-    mapId: string;
-  };
-  if (claims.templateId !== templateId || claims.mapId !== mapId) {
+  if (!res.ok) notFound();
+  const bundle = (await res.json()) as JobBundle;
+  if (
+    bundle.templateId !== templateId ||
+    bundle.mapId !== mapId ||
+    bundle.template.type !== 'print_template' ||
+    bundle.map.type !== 'map'
+  ) {
     notFound();
   }
 
-  // 2. Decode parameter values blob. Soft-fail on malformed
-  //    input so the renderer falls back to declared defaults.
+  // Decode parameter values blob. Soft-fail on malformed input
+  // so the renderer falls back to declared defaults.
   let parameterValues: Record<string, string> = {};
   if (p) {
     try {
@@ -74,31 +94,7 @@ export default async function PrintPreviewPage({
     }
   }
 
-  // 3. Fetch the template + map item from portal-api. We use the
-  //    /api/public/items/:id route for the template + map so the
-  //    chromium sidecar (which has no Bearer) can still read them
-  //    when shared as public. For private items the operator
-  //    must arrange portal-web to forward an internal service
-  //    token; Phase 2.2 lands that path. Phase 2.1 ships the
-  //    common case (publicly shared map + template).
-  const [tmplRes, mapRes] = await Promise.all([
-    fetch(`${PRIVATE_API_BASE}/api/public/items/${templateId}`, {
-      cache: 'no-store',
-    }),
-    fetch(`${PRIVATE_API_BASE}/api/public/items/${mapId}`, {
-      cache: 'no-store',
-    }),
-  ]);
-  if (!tmplRes.ok || !mapRes.ok) notFound();
-  const tmplItem = (await tmplRes.json()) as {
-    id: string;
-    title: string;
-    type: string;
-    data: PrintTemplateData;
-  };
-  if (tmplItem.type !== 'print_template') notFound();
-
-  const inches = resolvePaperInches(tmplItem.data.paper);
+  const inches = resolvePaperInches(bundle.template.data.paper);
 
   return (
     <html lang="en">
@@ -112,10 +108,11 @@ export default async function PrintPreviewPage({
       </head>
       <body>
         <PrintRenderer
-          template={tmplItem.data}
-          mapId={mapId}
+          template={bundle.template.data}
+          mapId={bundle.mapId}
+          mapData={bundle.map.data}
           parameterValues={parameterValues}
-          userDisplayName={claims.userId}
+          userDisplayName={bundle.userDisplayName}
         />
       </body>
     </html>

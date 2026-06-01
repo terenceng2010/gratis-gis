@@ -12,6 +12,15 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-05-31 — Sharper print maps + real layer-bound legend
+The print pipeline now renders maps inline rather than via an
+embedded frame, so vector layer data paints as path primitives
+in the PDF instead of an embedded raster. Layer-bound legend
+elements show the bound map's actual visible layers, with a
+swatch per layer that matches the layer's style. Private maps
+and private templates render too (previously the preview only
+worked for publicly-shared items).
+
 ## 2026-05-31 — Print PDFs render the real layout
 The server-side print path now reads the print template's actual
 layout: title text and parameter bindings, image elements, lines
