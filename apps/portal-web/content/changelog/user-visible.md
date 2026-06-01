@@ -12,6 +12,15 @@ release note ("Refactored the X service") doesn't belong here.
 
 <!-- entries below this line are surfaced on the public landing page -->
 
+## 2026-06-01 — Print PDFs match the map you're looking at
+The printed PDF now paints layers with the same colors and labels
+as the on-screen map: unique-value renderers, class-breaks, time-
+bins, and text labels all carry through, not just the simple
+fill / outline colors. The bound map's own basemap renders in the
+PDF too (raster, PMTiles, and Cloud-Optimized GeoTIFF), instead
+of vanilla OpenStreetMap. When the print Map element has a fixed
+scale set, the PDF honors that scale.
+
 ## 2026-05-31 — Print scalebar + north arrow read the actual map
 The scalebar on a print layout now computes its bar length from
 the bound map's center latitude and zoom and labels itself with

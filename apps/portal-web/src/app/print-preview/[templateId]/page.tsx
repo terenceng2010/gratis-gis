@@ -22,6 +22,7 @@
 import { notFound } from 'next/navigation';
 import { Buffer } from 'node:buffer';
 import type {
+  BasemapData,
   MapData,
   PrintTemplateData,
 } from '@gratis-gis/shared-types';
@@ -48,6 +49,12 @@ interface JobBundle {
   mapId: string;
   template: { id: string; title: string; type: string; data: PrintTemplateData };
   map: { id: string; title: string; type: string; data: MapData };
+  /** Phase 2.4: the resolved basemap blob for `map.data.basemap`,
+   *  fetched server-side under the originating user's permissions.
+   *  Null when the map has no basemap set or the basemap is no
+   *  longer visible to the user; MapSnapshot falls back to a
+   *  vanilla OSM raster in those cases. */
+  basemap: BasemapData | null;
 }
 
 export default async function PrintPreviewPage({
@@ -111,6 +118,7 @@ export default async function PrintPreviewPage({
           template={bundle.template.data}
           mapId={bundle.mapId}
           mapData={bundle.map.data}
+          basemapData={bundle.basemap}
           parameterValues={parameterValues}
           userDisplayName={bundle.userDisplayName}
         />

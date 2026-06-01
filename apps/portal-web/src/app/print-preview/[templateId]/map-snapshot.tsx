@@ -2,72 +2,116 @@
 'use client';
 
 /**
- * #159 Phase 2.2 inline MapLibre snapshot for the print Map
- * element. Replaces the Phase 2.1 iframe so the captured PDF
- * gets a fully-vector(-ish) map render instead of an embedded
- * raster.
+ * #159 Phase 2.2 / 2.4 inline MapLibre snapshot for the print Map
+ * element. Replaces the Phase 2.1 iframe so the captured PDF gets
+ * a vector(-ish) map render instead of an embedded raster.
  *
- * Loads MapLibre on mount, points it at the map item's data
- * blob, and signals readiness by setting `document.body.dataset.
- * mapReady = "true"` once every layer has loaded. The Puppeteer
- * pipeline waits on this flag (via page.waitForSelector
- * `body[data-map-ready="true"]`) before calling page.pdf so the
- * captured PDF contains the fully-tiled map, not an empty
- * canvas.
+ * Phase 2.4 expansions:
+ *   - per-layer renderer parity (unique-values / class-breaks /
+ *     time-bins / labels) via the shared snapshot-paint module
+ *   - basemap fidelity: the bound map's own basemap renders
+ *     instead of the OSM raster default; pmtiles + cog basemap
+ *     URLs work via the same protocol registration the canvas uses
+ *   - scaleOverride: the print Map element's optional scale
+ *     denominator overrides the bound map's persisted zoom
  *
- * Basemap raster tiles still rasterize (PDF can't carry slippy
- * tile vector data), but vector data layers paint as path
- * primitives.
+ * Loads MapLibre on mount, points it at the map item's data blob,
+ * and signals readiness by setting `document.body.dataset.mapReady`
+ * once every layer has loaded. The Puppeteer pipeline waits on this
+ * flag (via `page.waitForSelector body[data-map-ready="true"]`)
+ * before calling page.pdf.
+ *
+ * Basemap raster tiles still rasterize (PDF can't carry slippy tile
+ * vector data), but vector data layers paint as path primitives.
  */
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { MapData, MapLayer } from '@gratis-gis/shared-types';
+import type { MapData } from '@gratis-gis/shared-types';
+// Side-effect import: registers the pmtiles:// + cog:// MapLibre
+// protocols globally so pmtiles- or cog-backed basemaps render
+// through the same handler the canvas uses.
+import { basemapDataToStyle } from '@/lib/custom-basemap';
+import type { BasemapData } from '@gratis-gis/shared-types';
+
+import {
+  addLabelLayer,
+  addPaintForLayer,
+  scaleToZoom,
+} from './snapshot-paint';
 
 interface Props {
   mapData: MapData;
-  basemapUrl: string | null;
+  /** Resolved basemap blob for `mapData.basemap` (when set). Null
+   *  drops back to the OSM raster fallback. */
+  basemapData: BasemapData | null;
+  /** Optional scale denominator from the print Map element. When
+   *  set, the snapshot computes zoom from this scale rather than
+   *  reading `mapData.zoom`. */
+  scaleOverride?: number;
 }
 
-export function MapSnapshot({ mapData, basemapUrl }: Props) {
+export function MapSnapshot({
+  mapData,
+  basemapData,
+  scaleOverride,
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // Resolve the map style from the basemap blob. When unset we
+    // keep the OSM raster fallback so a brand-new map's preview
+    // still renders.
+    const customStyle = basemapData ? basemapDataToStyle(basemapData) : null;
+    const styleArg: maplibregl.StyleSpecification | string = customStyle
+      ? customStyle.kind === 'url'
+        ? customStyle.url
+        : (customStyle.style as maplibregl.StyleSpecification)
+      : ({
+          version: 8,
+          sources: {
+            raster: {
+              type: 'raster',
+              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              tileSize: 256,
+              attribution: '(c) OpenStreetMap contributors',
+            },
+          },
+          layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
+        } as maplibregl.StyleSpecification);
+
+    // scaleOverride wins over the map's persisted zoom when set.
+    // The conversion uses the bound map's center latitude so it's
+    // accurate for the print viewport regardless of where the map
+    // is centered.
+    const lat = mapData.center?.[1] ?? 0;
+    const zoom =
+      scaleOverride && scaleOverride > 0
+        ? scaleToZoom(scaleOverride, lat)
+        : mapData.zoom;
+
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: basemapUrl ?? {
-        version: 8,
-        sources: {
-          raster: {
-            type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-            attribution: '(c) OpenStreetMap contributors',
-          },
-        },
-        layers: [{ id: 'raster-layer', type: 'raster', source: 'raster' }],
-      },
+      style: styleArg,
       center: mapData.center,
-      zoom: mapData.zoom,
+      zoom,
       bearing: mapData.bearing ?? 0,
       pitch: mapData.pitch ?? 0,
       interactive: false,
       attributionControl: false,
-      // MapLibre needs `preserveDrawingBuffer: true` so the
-      // canvas content is sampled by headless capture; the
-      // option lives on the canvasContextAttributes bag rather
-      // than top-level options in current versions.
+      // MapLibre needs `preserveDrawingBuffer: true` so the canvas
+      // content is sampled by headless capture; the option lives
+      // on the canvasContextAttributes bag.
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
-    // Add data-layer sources via the existing portal endpoint. We
-    // do this on style.load so MapLibre is ready to accept the
-    // overlay layers.
+
     map.on('load', async () => {
-      // Per-source-kind handlers. Each one adds a GeoJSON source
-      // and the matching circle/line/fill layers via the shared
-      // helper. arcgis-rest + postgis-live both kick off a bbox
-      // fetch against the current viewport.
+      // Per-source-kind handlers. Each adds a GeoJSON source and
+      // the matching paint layers via the shared addPaintForLayer
+      // helper. arcgis-rest + postgis-live kick off a bbox fetch
+      // against the current viewport.
       const bounds = map.getBounds();
       const bbox: [number, number, number, number] = [
         bounds.getWest(),
@@ -78,20 +122,16 @@ export function MapSnapshot({ mapData, basemapUrl }: Props) {
       const tasks: Array<Promise<void>> = [];
       for (const layer of mapData.layers ?? []) {
         if (!layer.visible) continue;
+        const sourceId = `pg:${layer.id}`;
         if (layer.source.kind === 'data-layer') {
           const url = layer.source.layerKey
             ? `/api/portal/items/${layer.source.itemId}/layers/${encodeURIComponent(layer.source.layerKey)}/geojson`
             : `/api/portal/items/${layer.source.itemId}/geojson`;
-          addGeoJsonSourceFromUrl(map, layer.id, url, layer);
+          addGeoJsonSourceFromUrl(map, sourceId, url);
+          addPaintForLayer(map, sourceId, layer.id, layer);
+          addLabelLayer(map, sourceId, layer.id, layer);
         } else if (layer.source.kind === 'arcgis-rest') {
-          // ArcGIS REST queries return GeoJSON when f=geojson; bbox
-          // is encoded as the geometry parameter.
-          const src = layer.source as {
-            kind: 'arcgis-rest';
-            url: string;
-            layerId: number;
-            proxyUrl?: string;
-          };
+          const src = layer.source;
           const params = new URLSearchParams({
             where: '1=1',
             geometry: bbox.join(','),
@@ -111,20 +151,16 @@ export function MapSnapshot({ mapData, basemapUrl }: Props) {
               .then((data) => {
                 addGeoJsonSourceFromData(
                   map,
-                  layer.id,
+                  sourceId,
                   data as GeoJSON.FeatureCollection,
-                  layer,
                 );
+                addPaintForLayer(map, sourceId, layer.id, layer);
+                addLabelLayer(map, sourceId, layer.id, layer);
               })
               .catch(() => undefined),
           );
         } else if (layer.source.kind === 'postgis-live') {
-          const src = layer.source as {
-            kind: 'postgis-live';
-            serviceItemId: string;
-            tableName: string;
-            whereClause?: string;
-          };
+          const src = layer.source;
           tasks.push(
             fetch(
               `/api/portal/postgis-live/${src.serviceItemId}/features`,
@@ -142,18 +178,24 @@ export function MapSnapshot({ mapData, basemapUrl }: Props) {
               .then((data) => {
                 addGeoJsonSourceFromData(
                   map,
-                  layer.id,
+                  sourceId,
                   data as GeoJSON.FeatureCollection,
-                  layer,
                 );
+                addPaintForLayer(map, sourceId, layer.id, layer);
+                addLabelLayer(map, sourceId, layer.id, layer);
               })
               .catch(() => undefined),
           );
         }
+        // geojson-url / geojson-inline / group fall through:
+        //   - group is a UI-only grouping marker, not a real source
+        //   - geojson-url + geojson-inline don't appear on saved maps
+        //     in practice; the editor turns inline GeoJSON into a
+        //     data_layer on save
       }
       await Promise.all(tasks);
       // Signal readiness once tiles + data sources have idled.
-      // The Puppeteer waitForSelector picks this up.
+      // Puppeteer waitForSelector picks this up.
       const markReady = () => {
         document.body.dataset.mapReady = 'true';
       };
@@ -166,7 +208,7 @@ export function MapSnapshot({ mapData, basemapUrl }: Props) {
     return () => {
       map.remove();
     };
-  }, [mapData, basemapUrl]);
+  }, [mapData, basemapData, scaleOverride]);
 
   return (
     <div
@@ -180,85 +222,26 @@ export function MapSnapshot({ mapData, basemapUrl }: Props) {
   );
 }
 
-/**
- * Add a GeoJSON-from-URL source + the matching circle / line /
- * fill layers. Shared between every source kind that ends up
- * with a remote URL (today: data-layer; arcgis-rest + postgis-
- * live take the data path because they POST a bbox-filtered
- * payload rather than handing MapLibre a static URL).
- */
 function addGeoJsonSourceFromUrl(
   map: maplibregl.Map,
-  layerId: string,
+  sourceId: string,
   url: string,
-  layer: MapLayer,
 ): void {
   try {
-    map.addSource(`pg:${layerId}`, { type: 'geojson', data: url });
-    addPaintLayers(map, layerId, layer);
+    map.addSource(sourceId, { type: 'geojson', data: url });
   } catch {
-    /* HMR re-add — ignore */
+    /* HMR re-add - ignore */
   }
 }
 
-/**
- * Same as the URL variant, but accepts an already-fetched
- * FeatureCollection. Used for sources that POST a bbox payload
- * to portal-api and need the response data plugged into the
- * source directly (arcgis-rest, postgis-live).
- */
 function addGeoJsonSourceFromData(
   map: maplibregl.Map,
-  layerId: string,
+  sourceId: string,
   data: GeoJSON.FeatureCollection,
-  layer: MapLayer,
 ): void {
   try {
-    map.addSource(`pg:${layerId}`, { type: 'geojson', data });
-    addPaintLayers(map, layerId, layer);
+    map.addSource(sourceId, { type: 'geojson', data });
   } catch {
-    /* HMR re-add — ignore */
+    /* HMR re-add - ignore */
   }
-}
-
-function addPaintLayers(
-  map: maplibregl.Map,
-  layerId: string,
-  layer: MapLayer,
-): void {
-  map.addLayer({
-    id: `pg:${layerId}:fill`,
-    type: 'fill',
-    source: `pg:${layerId}`,
-    filter: ['==', ['geometry-type'], 'Polygon'],
-    paint: {
-      'fill-color': layer.style?.polygon?.fillColor ?? '#6366f1',
-      'fill-opacity': layer.style?.polygon?.fillOpacity ?? 0.25,
-    },
-  });
-  map.addLayer({
-    id: `pg:${layerId}:line`,
-    type: 'line',
-    source: `pg:${layerId}`,
-    filter: ['any',
-      ['==', ['geometry-type'], 'LineString'],
-      ['==', ['geometry-type'], 'Polygon'],
-    ],
-    paint: {
-      'line-color': layer.style?.line?.color ?? '#4338ca',
-      'line-width': layer.style?.line?.width ?? 1.5,
-    },
-  });
-  map.addLayer({
-    id: `pg:${layerId}:circle`,
-    type: 'circle',
-    source: `pg:${layerId}`,
-    filter: ['==', ['geometry-type'], 'Point'],
-    paint: {
-      'circle-color': layer.style?.point?.color ?? '#6366f1',
-      'circle-radius': layer.style?.point?.radius ?? 5,
-      'circle-stroke-color': layer.style?.point?.strokeColor ?? '#ffffff',
-      'circle-stroke-width': layer.style?.point?.strokeWidth ?? 1.5,
-    },
-  });
 }

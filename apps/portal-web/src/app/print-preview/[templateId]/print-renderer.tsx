@@ -48,6 +48,7 @@ import type {
   PrintTextSegment,
 } from '@gratis-gis/shared-types';
 import { resolvePaperInches } from '@gratis-gis/shared-types';
+import type { BasemapData } from '@gratis-gis/shared-types';
 
 import { MapSnapshot } from './map-snapshot';
 
@@ -72,6 +73,11 @@ const DYNAMIC_RESOLVERS: Record<
 interface RenderContext {
   mapId: string;
   mapData: MapData | null;
+  /** Resolved basemap blob for `mapData.basemap`. Null when the
+   *  bound map has no basemap, or when the bundle didn't include
+   *  one (e.g. the basemap item is no longer visible). The
+   *  MapSnapshot falls back to OSM raster in that case. */
+  basemapData: BasemapData | null;
   parameterValues: Record<string, string>;
   parameters: PrintTemplateParameter[];
   userDisplayName: string;
@@ -84,6 +90,10 @@ interface Props {
    *  flows through from the load-job endpoint so the MapSnapshot
    *  inline renderer + the layer-bound legend can read it. */
   mapData: MapData | null;
+  /** Phase 2.4: resolved basemap blob, threaded through the same
+   *  load-job endpoint so the print PDF uses the bound map's own
+   *  basemap rather than vanilla OSM. */
+  basemapData: BasemapData | null;
   parameterValues: Record<string, string>;
   userDisplayName: string;
 }
@@ -92,6 +102,7 @@ export function PrintRenderer({
   template,
   mapId,
   mapData,
+  basemapData,
   parameterValues,
   userDisplayName,
 }: Props): JSX.Element {
@@ -106,6 +117,7 @@ export function PrintRenderer({
   const ctx: RenderContext = {
     mapId,
     mapData,
+    basemapData,
     parameterValues,
     parameters: template.parameters,
     userDisplayName,
@@ -271,7 +283,14 @@ function MapBody({
   }
   return (
     <div style={{ width: '100%', height: '100%', ...border }}>
-      <MapSnapshot mapData={ctx.mapData} basemapUrl={null} />
+      <MapSnapshot
+        mapData={ctx.mapData}
+        basemapData={ctx.basemapData}
+        {...(typeof element.scaleOverride === 'number' &&
+        element.scaleOverride > 0
+          ? { scaleOverride: element.scaleOverride }
+          : {})}
+      />
     </div>
   );
 }

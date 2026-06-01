@@ -9,6 +9,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import puppeteer from 'puppeteer-core';
 import {
   resolvePaperInches,
+  type BasemapData,
+  type MapData,
   type PrintPaperSpec,
 } from '@gratis-gis/shared-types';
 
@@ -24,6 +26,15 @@ export interface RenderJobBundle {
   parameterValues: Record<string, string>;
   template: { id: string; title: string; type: string; data: unknown };
   map: { id: string; title: string; type: string; data: unknown };
+  /**
+   * #159 Phase 2.4: the resolved basemap blob for `map.data.basemap`,
+   * fetched server-side under the originating user's permissions
+   * via the items service. Null when the bound map has no basemap
+   * set, or when the basemap is no longer visible to the user. The
+   * snapshot renderer falls back to a vanilla OSM raster in those
+   * cases so the print still produces a sensible page.
+   */
+  basemap: BasemapData | null;
 }
 
 /**
@@ -109,6 +120,24 @@ export class PrintRenderService {
       this.items.get(authUser, claims.templateId),
       this.items.get(authUser, claims.mapId),
     ]);
+    // Phase 2.4: resolve the bound map's basemap so the snapshot
+    // renders against the right tiles. We skip the fetch when the
+    // map has no basemap set (legacy / unconfigured) and swallow
+    // a permission failure as null so a basemap the user can't
+    // read drops back to the OSM raster fallback rather than
+    // failing the whole render.
+    let basemap: BasemapData | null = null;
+    const basemapId = (map.data as MapData | null)?.basemap ?? '';
+    if (basemapId) {
+      try {
+        const basemapItem = await this.items.get(authUser, basemapId);
+        if (basemapItem.type === 'basemap') {
+          basemap = (basemapItem.data ?? null) as BasemapData | null;
+        }
+      } catch {
+        basemap = null;
+      }
+    }
     const userDisplayName =
       (user.fullName && user.fullName.trim().length > 0
         ? user.fullName
@@ -133,6 +162,7 @@ export class PrintRenderService {
         type: map.type,
         data: map.data,
       },
+      basemap,
     };
   }
 
