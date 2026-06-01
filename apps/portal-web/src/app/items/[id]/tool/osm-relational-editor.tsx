@@ -174,41 +174,43 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
     <div className="space-y-4">
       <div className={sectionCls}>
         <div className={sectionHeaderCls}>
-          <span>Anchor</span>
+          <span>What to find</span>
         </div>
         <p className="text-[11px] text-muted">
-          The feature kind you&apos;re trying to find. Every surviving
-          result will be one of these.
+          Pick the kind of feature you want as a result. Every match
+          will be one of these. Example: schools, gas stations,
+          breweries.
         </p>
         <PresetPickerSingle
           value={action.anchorPreset}
           catalog={catalog}
           canEdit={canEdit}
           onChange={setAnchor}
-          placeholder="Search OSM presets, e.g. school, gas station..."
+          placeholder="Search feature types, e.g. school, gas station..."
         />
       </div>
 
       <div className={sectionCls}>
         <div className={sectionHeaderCls}>
-          <span>Conditions (AND)</span>
+          <span>Must be near</span>
           <button
             type="button"
             disabled={!canEdit}
             onClick={addCondition}
             className={sectionAddBtnCls}
           >
-            <Plus className="h-3 w-3" /> Add condition
+            <Plus className="h-3 w-3" /> Add &quot;must be near&quot;
           </button>
         </div>
         <p className="text-[11px] text-muted">
-          The anchor must have AT LEAST ONE feature of every condition
-          within the specified distance to survive.
+          A result only counts if it has at least one of each of these
+          nearby. Example: keep only schools that have BOTH a park
+          within 0.5 mi AND a library within 1 mi.
         </p>
         {action.conditions.length === 0 ? (
           <p className="text-[11px] italic text-muted">
-            No conditions yet. Add one to define what the anchor must
-            be near.
+            None yet. Add one to require the result to be near
+            something else.
           </p>
         ) : (
           <div className="space-y-2">
@@ -223,7 +225,7 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
                     catalog={catalog}
                     canEdit={canEdit}
                     onChange={(presetId) => setCondition(i, { preset: presetId })}
-                    placeholder="Condition preset"
+                    placeholder="Search feature types, e.g. park, library..."
                   />
                   <DistanceRow
                     value={c.distance}
@@ -264,24 +266,23 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
 
       <div className={sectionCls}>
         <div className={sectionHeaderCls}>
-          <span>Negations (AND NOT)</span>
+          <span>Must NOT be near</span>
           <button
             type="button"
             disabled={!canEdit}
             onClick={addNegation}
             className={sectionAddBtnCls}
           >
-            <Plus className="h-3 w-3" /> Add negation
+            <Plus className="h-3 w-3" /> Add &quot;must not be near&quot;
           </button>
         </div>
         <p className="text-[11px] text-muted">
-          Drop anchors that have any feature of these presets within
-          the specified distance. Useful for &quot;school near park
-          but NOT near a highway.&quot;
+          Optional. Drop any result that has one of these nearby.
+          Example: schools near a park but NOT near a highway.
         </p>
         {(action.negations?.length ?? 0) === 0 ? (
           <p className="text-[11px] italic text-muted">
-            No negations. Optional.
+            None. Optional.
           </p>
         ) : (
           <div className="space-y-2">
@@ -296,7 +297,7 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
                     catalog={catalog}
                     canEdit={canEdit}
                     onChange={(presetId) => setNegation(i, { preset: presetId })}
-                    placeholder="Negation preset"
+                    placeholder="Search feature types, e.g. highway..."
                   />
                   <DistanceRow
                     value={n.distance}
@@ -322,7 +323,7 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
 
       <div className={sectionCls}>
         <div className={sectionHeaderCls}>
-          <span>Bearings (angular constraints)</span>
+          <span>Direction</span>
           <button
             type="button"
             disabled={!canEdit || action.conditions.length === 0}
@@ -330,21 +331,23 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
             className={sectionAddBtnCls}
             title={
               action.conditions.length === 0
-                ? 'Add a condition first; bearings reference a condition.'
+                ? 'Add a "Must be near" rule first; direction rules reference one.'
                 : undefined
             }
           >
-            <Plus className="h-3 w-3" /> Add bearing
+            <Plus className="h-3 w-3" /> Add direction rule
           </button>
         </div>
         <p className="text-[11px] text-muted">
-          Optional: require the anchor to lie in a specific compass
-          direction from at least one condition feature. 0=N, 90=E,
-          180=S, 270=W. Tolerance widens the arc on either side.
+          Optional. Require the result to lie in a specific compass
+          direction from one of the &quot;Must be near&quot; features.
+          0 = North, 90 = East, 180 = South, 270 = West. Tolerance
+          widens the arc on either side, so 45° tolerance means
+          &quot;within 45° of the target bearing in either direction.&quot;
         </p>
         {(action.bearings?.length ?? 0) === 0 ? (
           <p className="text-[11px] italic text-muted">
-            No bearings. Optional.
+            None. Optional.
           </p>
         ) : (
           <div className="space-y-2">
@@ -356,7 +359,7 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
                 <div className="flex-1 grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[10px] uppercase tracking-wide text-muted">
-                      Condition
+                      Relative to
                     </label>
                     <select
                       disabled={!canEdit}
@@ -650,7 +653,10 @@ function DistanceRow({
   onChange: (next: { value: number; unit: 'm' | 'km' | 'ft' | 'mi' }) => void;
 }) {
   return (
-    <div className="flex gap-1.5">
+    <div className="flex items-center gap-1.5">
+      <span className="shrink-0 text-[11px] font-medium text-ink-1">
+        Within
+      </span>
       <input
         type="number"
         step="any"
@@ -661,7 +667,8 @@ function DistanceRow({
           const n = Number(e.target.value);
           if (Number.isFinite(n)) onChange({ ...value, value: n });
         }}
-        className={`${inputCls} flex-1`}
+        aria-label="Distance value"
+        className={`${inputCls} w-24`}
       />
       <select
         disabled={!canEdit}
@@ -672,13 +679,17 @@ function DistanceRow({
             unit: e.target.value as 'm' | 'km' | 'ft' | 'mi',
           })
         }
-        className={`${inputCls} w-24`}
+        aria-label="Distance unit"
+        className={`${inputCls} w-28`}
       >
-        <option value="m">m</option>
-        <option value="km">km</option>
-        <option value="ft">ft</option>
-        <option value="mi">mi</option>
+        <option value="mi">miles</option>
+        <option value="ft">feet</option>
+        <option value="km">kilometers</option>
+        <option value="m">meters</option>
       </select>
+      <span className="text-[11px] text-muted">
+        of the result
+      </span>
     </div>
   );
 }
