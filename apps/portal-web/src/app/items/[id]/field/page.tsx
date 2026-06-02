@@ -232,13 +232,17 @@ export default async function FieldRuntimePage(props: Props) {
     // Without this gate, the picker shows every map data-layer
     // regardless of editability and the worker can attempt an Add
     // that the API would reject anyway.
-    if (sublayer.editingEnabled === false) continue;
-    // Per-map override: even if the underlying data_layer is
-    // editable, a map can mark its inclusion of this layer as
-    // reference-only via the layer-settings "Editable in field
-    // deployments" toggle. Hide from the Add picker when that's
-    // set.
-    if (ref.mapLayerEditable === false) continue;
+    // Editability gate (data_layer + per-map). The layer always
+    // makes it into editableLayers so the LayerVisibilityPanel can
+    // look up its geometry type and surface a toggle row in the
+    // layer list. The `addable` flag carries the gate forward to
+    // the Add picker, which filters on it. Without this split, a
+    // reference-only data-layer source (parcels included on a
+    // building-inventory map) would vanish from the layer-toggle
+    // list because the panel falls back to "isTable" when it
+    // can't find a matching entry.
+    const addable =
+      sublayer.editingEnabled !== false && ref.mapLayerEditable !== false;
     const binding = dc.formBindings?.[sublayer.id];
     // Phase C: enumerate child layers within the same data_layer
     // item that reference this layer via parentFkColumn. Used by
@@ -273,6 +277,7 @@ export default async function FieldRuntimePage(props: Props) {
       // assume 'all-rows' which permits edits subject to the user's
       // share grant.
       editingPolicy: sublayer.editingPolicy ?? 'all-rows',
+      addable,
       ...(binding ? { boundFormItemId: binding.formItemId } : {}),
       ...(childLayers.length > 0 ? { childLayers } : {}),
     });

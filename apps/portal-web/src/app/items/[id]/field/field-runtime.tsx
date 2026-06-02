@@ -121,6 +121,17 @@ export interface EditableLayer {
   geometryType: LayerGeometryType;
   fields: FeatureField[];
   editingPolicy: 'all-rows' | 'own-rows-only';
+  /**
+   * Whether the runtime should offer this layer as an Add target.
+   * Defaults to true. When false (the data_layer's sublayer.
+   * editingEnabled is false, OR the map's per-layer "Editable in
+   * field deployments" toggle is off), the layer is still kept in
+   * editableLayers so the layer-visibility panel can find its
+   * geometry type and surface a toggle row, but the Add picker
+   * skips it. Lets a map include a layer for context without
+   * inviting field collectors to author records into it.
+   */
+  addable?: boolean;
   /** Optional explicit form binding from the data_collection's
    *  formBindings map. When absent, an auto-form is generated. */
   boundFormItemId?: string;
@@ -2664,6 +2675,14 @@ function buildTemplates(
     // an Add option alongside spatial layers, which the user can't
     // actually use because Add starts with a map gesture.
     if (layer.geometryType === null) continue;
+    // Skip layers explicitly marked as non-addable. Default-true so
+    // legacy callers without the field don't lose their Add buttons.
+    // The map-level "Editable in field deployments" toggle is the
+    // primary writer; the data_layer's sublayer.editingEnabled
+    // false is the upstream ACL. Either source can mark a layer
+    // reference-only without dropping it from the layer-visibility
+    // panel (geometry-type lookup still finds the entry there).
+    if (layer.addable === false) continue;
     // Find the corresponding MapLayer so we can read its renderer.
     // Match on dataLayerId + layerKey. Multiple MapLayers could
     // reference the same v3 sublayer (rare but possible if the
