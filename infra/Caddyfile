@@ -76,6 +76,15 @@ www.{$PORTAL_DOMAIN} {
     handle /api/geocode/* {
         reverse_proxy portal-web:3000
     }
+    # #162 Phase 1.1: portal-web owns the locale-switch route too.
+    # POST /api/locale sets the gg_locale cookie; the reading half
+    # is server components reading next/headers cookies(), which
+    # are already inside portal-web. Falling through to portal-api
+    # would 404 (NestJS has no such route) and the LocaleSwitcher
+    # would silently revert to English.
+    handle /api/locale {
+        reverse_proxy portal-web:3000
+    }
     # portal-api runs as N replicas (deploy.replicas in
     # docker-compose.prod.yml). `dynamic a` re-resolves the DNS A
     # record every 30s and round-robins across every IP that comes
