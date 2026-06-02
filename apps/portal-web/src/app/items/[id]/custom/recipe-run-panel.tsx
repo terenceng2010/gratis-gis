@@ -187,6 +187,17 @@ interface Props {
   toolId: string;
   toolTitle: string;
   /**
+   * Optional descriptive text shown when the tool has no runtime
+   * inputs. Prefer the tool's `hint` (a short blurb authored on
+   * the Tool item, set via the action editor or the item header);
+   * fall back to the Tool item's `description` field. When both
+   * are empty, the panel shows a generic "Click Run" placeholder.
+   * Lets a tool that "just runs" still tell the user what it
+   * actually does before they commit.
+   */
+  toolHint?: string;
+  toolDescription?: string;
+  /**
    * The tool's action.  The panel only reads `.parameters` from
    * here, so it accepts either a RecipeAction (selection or
    * osm-features-overlay output) or an OsmRelationalQueryAction
@@ -214,6 +225,8 @@ interface Props {
 export function RecipeRunPanel({
   toolId,
   toolTitle,
+  toolHint,
+  toolDescription,
   recipe,
   hostLayers,
   hostBbox,
@@ -392,9 +405,21 @@ export function RecipeRunPanel({
 
         <div className="space-y-3">
           {visibleParams.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border bg-surface-2 px-3 py-3 text-[11px] text-muted">
-              This tool has no runtime inputs.  Click Run to execute.
-            </p>
+            <div className="rounded-md border border-dashed border-border bg-surface-2 px-3 py-3 text-[11px] text-ink-1">
+              {/* Prefer the action's hint, then the tool item's
+                  description, then a generic placeholder. Lets a
+                  tool that runs without runtime inputs still tell
+                  the user what it will do before they hit Run. */}
+              {toolHint && toolHint.trim().length > 0 ? (
+                <p className="whitespace-pre-wrap">{toolHint}</p>
+              ) : toolDescription && toolDescription.trim().length > 0 ? (
+                <p className="whitespace-pre-wrap">{toolDescription}</p>
+              ) : (
+                <p className="text-muted">
+                  This tool has no runtime inputs. Click Run to execute.
+                </p>
+              )}
+            </div>
           ) : (
             visibleParams.map((p) => (
               <ParamInputRow

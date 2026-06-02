@@ -70,6 +70,45 @@ export function OsmRelationalEditor({ action, canEdit, onChange }: Props) {
     };
   }, []);
 
+  // Self-heal a relational action that was saved without an AOI
+  // parameter. The Phase 1 editor described the AOI as "defaulted
+  // to a drawn polygon" but never actually wrote the parameter,
+  // so older tools 400 at run time because the runner can't find
+  // any feature-source to drive the search area. When we detect
+  // an empty aoiParameterRef + no feature-source parameter and
+  // the user has edit access, stamp in a draw-polygon parameter
+  // and point the action at it. The author just needs to save
+  // afterward.
+  useEffect(() => {
+    if (!canEdit) return;
+    const hasAoiRef =
+      typeof action.aoiParameterRef === 'string' &&
+      action.aoiParameterRef.trim().length > 0;
+    const hasFeatureSource = (action.parameters ?? []).some(
+      (p) => p.kind === 'feature-source',
+    );
+    if (hasAoiRef || hasFeatureSource) return;
+    onChange({
+      ...action,
+      parameters: [
+        ...(action.parameters ?? []),
+        {
+          kind: 'feature-source',
+          name: 'aoi',
+          label: 'Area of interest',
+          hint: 'Draw the area to search inside.',
+          required: true,
+          binding: { mode: 'runtime-draw' },
+        },
+      ],
+      aoiParameterRef: 'aoi',
+    });
+    // Only re-run when canEdit flips or the action reference
+    // identity changes; auto-stamping on every keystroke would
+    // race with manual edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canEdit, action.aoiParameterRef, action.parameters?.length]);
+
   function setAnchor(presetId: string): void {
     onChange({ ...action, anchorPreset: presetId });
   }

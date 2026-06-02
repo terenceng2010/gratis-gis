@@ -4698,6 +4698,9 @@ function ToolButtonRender({
             <RecipeRunPanel
               toolId={toolId}
               toolTitle={tool.title}
+              {...(typeof (tool.data as { hint?: unknown }).hint === 'string'
+                ? { toolHint: (tool.data as { hint: string }).hint }
+                : {})}
               recipe={
                 tool.data.action as
                   | RecipeAction
