@@ -979,11 +979,24 @@ export class RecipeRunnerService {
       // Re-throw as a BadRequestException with a clear,
       // action-oriented message the dialog can surface as-is.
       const msg = err instanceof Error ? err.message : String(err);
-      if (
-        /timed out|timeout|too many requests|429|504/i.test(msg)
-      ) {
+      // Overpass surfaces "too expensive" failures three ways:
+      //   1. Quietly timing out at 30 s (timeout / 504 / cancelled).
+      //   2. Returning HTTP 429 when our IP has hit the per-mirror
+      //      query rate / quota limit.
+      //   3. Returning HTTP 400 with an XHTML "request rejected"
+      //      page when the QL planner blows its memory ceiling
+      //      (multiple distance conditions + a wide AOI is the
+      //      canonical trigger).
+      // All three read to the user as "your query is too big for
+      // Overpass to finish in one go." Re-raise as a 400 with one
+      // unified, action-oriented message instead of a 500.
+      const looksOverloaded =
+        /timed out|timeout|too many requests|429|504|Overpass rejected|rejected the query/i.test(
+          msg,
+        );
+      if (looksOverloaded) {
         throw new BadRequestException(
-          'The OSM query was too large to finish in 30 seconds. Try a smaller area of interest, tighter distance conditions, or fewer conditions, then run again.',
+          'The OSM query was too large or complex for Overpass to finish. Try a smaller area of interest, fewer "Must NOT be near" rules, tighter distances, or run the query in pieces.',
         );
       }
       throw err;
