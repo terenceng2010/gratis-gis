@@ -51,6 +51,50 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
   const [templates, setTemplates] = useState<PrintTemplateSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #159 Phase 2 follow-up: rendering state when the user has picked
+  // a template and we're waiting on the server-side render. Tracked
+  // by template id so multiple clicks queue cleanly and the picker
+  // shows progress on the right row only.
+  const [renderingId, setRenderingId] = useState<string | null>(null);
+
+  const renderWithTemplate = useCallback(
+    async (templateId: string, title: string) => {
+      setRenderingId(templateId);
+      setError(null);
+      try {
+        const res = await fetch('/api/portal/print/render', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ templateId, mapId }),
+        });
+        if (!res.ok) {
+          throw new Error(
+            `Render failed: ${res.status} ${res.statusText}`,
+          );
+        }
+        // Stream the PDF into a blob and trigger a browser-side
+        // download with a filename derived from the template's
+        // title. The server already sets content-disposition, but
+        // browsers honor the anchor's `download` attribute over
+        // the response header when the URL is a blob URL.
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${sanitizeFilename(title)}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        onClose();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to render');
+      } finally {
+        setRenderingId(null);
+      }
+    },
+    [mapId, onClose],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -147,21 +191,28 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
               </p>
             ) : (
               <ul className="space-y-1">
-                {templates.map((t) => (
-                  <li key={t.id}>
-                    <Link
-                      href={`/items/${t.id}?map=${encodeURIComponent(mapId)}`}
-                      className="block rounded border border-border bg-surface-1 px-3 py-2 hover:bg-surface-2"
+                {templates.map((tmpl) => (
+                  <li key={tmpl.id}>
+                    <button
+                      type="button"
+                      disabled={renderingId !== null}
+                      onClick={() => renderWithTemplate(tmpl.id, tmpl.title)}
+                      className="block w-full rounded border border-border bg-surface-1 px-3 py-2 text-left hover:bg-surface-2 disabled:opacity-50"
                     >
-                      <p className="text-sm font-medium text-ink-1">
-                        {t.title}
+                      <p className="flex items-center gap-2 text-sm font-medium text-ink-1">
+                        {tmpl.title}
+                        {renderingId === tmpl.id ? (
+                          <span className="text-[11px] font-normal text-muted">
+                            {t('common.loading')}
+                          </span>
+                        ) : null}
                       </p>
-                      {t.description ? (
+                      {tmpl.description ? (
                         <p className="mt-0.5 line-clamp-2 text-[11px] text-muted">
-                          {t.description}
+                          {tmpl.description}
                         </p>
                       ) : null}
-                    </Link>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -171,4 +222,18 @@ export function PrintThisMapDialog({ open, onClose, mapId }: Props) {
       </div>
     </div>
   );
+}
+
+/**
+ * Strip filesystem-unsafe characters out of a template title so it
+ * can be used as the PDF's downloaded filename. Keeps the result
+ * readable (no mass `_` substitution) while removing the few chars
+ * that trip downloads on Windows + macOS.
+ */
+function sanitizeFilename(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.length > 0 ? cleaned : 'map-print';
 }
