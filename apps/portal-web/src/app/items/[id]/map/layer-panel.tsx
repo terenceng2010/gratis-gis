@@ -1223,6 +1223,29 @@ function LayerRow({
                       })
                     }
                   />
+                  {/* Per-map editability override for the field PWA.
+                      The underlying data_layer's `editingEnabled`
+                      flag still governs whether the layer is
+                      editable at all; this toggle narrows further
+                      so a single map can include a layer for
+                      reference without offering it in the field
+                      Add picker. Only shown for data-layer
+                      sources where field editing is possible. */}
+                  {layer.source.kind === 'data-layer' ? (
+                    <Toggle
+                      Icon={Pencil}
+                      label="Editable in field deployments"
+                      checked={layer.interactions.editingEnabled !== false}
+                      onChange={(v) =>
+                        onPatch({
+                          interactions: {
+                            ...layer.interactions,
+                            editingEnabled: v,
+                          },
+                        })
+                      }
+                    />
+                  ) : null}
                 </div>
                 <SearchConfig
                   value={layer.search}

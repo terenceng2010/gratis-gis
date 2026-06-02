@@ -128,13 +128,28 @@ export default async function FieldRuntimePage(props: Props) {
   // backs a `data-layer` source. v1/v2 single-table layers have
   // source.itemId only; v3 layers carry an extra layerKey identifying
   // a sublayer within the data_layer item.
-  type LayerRef = { dataLayerId: string; layerKey?: string };
+  type LayerRef = {
+    dataLayerId: string;
+    layerKey?: string;
+    /**
+     * Per-map-layer override of the data_layer's `editingEnabled`
+     * flag. When the map's layer-settings panel marks a layer as
+     * "not editable in field deployments", we skip it from the
+     * Add picker even if the underlying data_layer would
+     * otherwise permit edits. Lets the WV parcels map include
+     * parcels for reference while only offering the building-
+     * inventory sublayer as an Add target. Defaults to true
+     * (editable) so existing maps keep their current behavior.
+     */
+    mapLayerEditable: boolean;
+  };
   const dataLayerRefs: LayerRef[] = [];
   const seenRefKeys = new Set<string>();
   for (const ml of mapData.layers ?? []) {
     if (ml.source?.kind !== 'data-layer') continue;
     const ref: LayerRef = {
       dataLayerId: ml.source.itemId,
+      mapLayerEditable: ml.interactions?.editingEnabled !== false,
     };
     if (ml.source.layerKey) ref.layerKey = ml.source.layerKey;
     const key = `${ref.dataLayerId}:${ref.layerKey ?? ''}`;
@@ -195,6 +210,12 @@ export default async function FieldRuntimePage(props: Props) {
     // regardless of editability and the worker can attempt an Add
     // that the API would reject anyway.
     if (sublayer.editingEnabled === false) continue;
+    // Per-map override: even if the underlying data_layer is
+    // editable, a map can mark its inclusion of this layer as
+    // reference-only via the layer-settings "Editable in field
+    // deployments" toggle. Hide from the Add picker when that's
+    // set.
+    if (ref.mapLayerEditable === false) continue;
     const binding = dc.formBindings?.[sublayer.id];
     // Phase C: enumerate child layers within the same data_layer
     // item that reference this layer via parentFkColumn. Used by
