@@ -96,14 +96,35 @@ export default async function FieldRuntimePage(props: Props) {
   // server-side so the page falls back to "not found" rather than
   // a sign-in redirect we can't recover from in a PWA context.
   const isAnonymous = !(await hasSession());
-  const fetchItem = <T,>(path: string): Promise<T> =>
-    isAnonymous
-      ? publicApiFetch<T>(path.replace('/api/items/', '/api/public/items/'))
-      : apiFetch<T>(path);
-  const fetchItemList = <T,>(path: string): Promise<T> =>
-    isAnonymous
-      ? publicApiFetch<T>(path.replace('/api/items', '/api/public/items'))
-      : apiFetch<T>(path);
+  // Stale-cookie defense: when a viewer carries a NextAuth cookie
+  // whose Keycloak accessToken has been invalidated (typical after
+  // a Keycloak realm reset), hasSession() still returns true but
+  // portal-api will 401 the request. Fall back to the public
+  // surface in that case so a public-shared data_collection still
+  // renders. A genuinely-private item 404s on the public route,
+  // which the caller's existing 404 handling catches.
+  const fetchItem = async <T,>(path: string): Promise<T> => {
+    const publicPath = path.replace('/api/items/', '/api/public/items/');
+    if (isAnonymous) return publicApiFetch<T>(publicPath);
+    try {
+      return await apiFetch<T>(path);
+    } catch (err) {
+      const status = (err as Error & { status?: number })?.status;
+      if (status === 401) return publicApiFetch<T>(publicPath);
+      throw err;
+    }
+  };
+  const fetchItemList = async <T,>(path: string): Promise<T> => {
+    const publicPath = path.replace('/api/items', '/api/public/items');
+    if (isAnonymous) return publicApiFetch<T>(publicPath);
+    try {
+      return await apiFetch<T>(path);
+    } catch (err) {
+      const status = (err as Error & { status?: number })?.status;
+      if (status === 401) return publicApiFetch<T>(publicPath);
+      throw err;
+    }
+  };
 
   let dcItem: Item<DataCollectionData>;
   let me: { id: string; orgRole: string } = { id: '', orgRole: '' };
@@ -115,9 +136,18 @@ export default async function FieldRuntimePage(props: Props) {
       // Only authenticated viewers have a /me; anonymous public
       // viewers carry an empty currentUserId, which the runtime
       // treats as "no Add affordance, read-only view of the map."
-      me = await apiFetch<{ id: string; orgRole: string }>(
-        '/api/users/me',
-      );
+      // Stale-cookie defense: if the call 401s (the NextAuth
+      // cookie is signed correctly but its Keycloak access token
+      // has been invalidated, typical after a realm reset),
+      // degrade to the anonymous path so the page still renders.
+      try {
+        me = await apiFetch<{ id: string; orgRole: string }>(
+          '/api/users/me',
+        );
+      } catch (err) {
+        const status = (err as Error & { status?: number })?.status;
+        if (status !== 401) throw err;
+      }
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
