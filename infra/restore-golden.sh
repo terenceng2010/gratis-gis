@@ -53,6 +53,22 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+# Mutex with snapshot-golden.sh. When the 04:00 UTC systemd timer
+# fires while an operator is part-way through a manual snapshot,
+# the restore reads the half-written postgres-app.dump, errors
+# after the DROP DATABASE, and leaves the live stack with an
+# empty `gratisgis` schema. Better to skip this run (the next
+# tick is 24h out; nobody dies) than to race.
+LOCK_FILE="${GOLDEN_LOCK_FILE:-/var/lock/gratisgis-golden-state.lock}"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "WARN: another golden-state operation is in progress (lock=$LOCK_FILE)." >&2
+  echo "      Skipping this reset run. Will retry on the next tick." >&2
+  exit 0
+fi
+# Lock auto-releases on fd 9 close (process exit).
+
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"

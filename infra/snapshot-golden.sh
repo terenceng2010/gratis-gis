@@ -48,6 +48,24 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+# Mutex with restore-golden.sh.  Both scripts stop services and
+# touch /var/lib/gratis-gis-golden; running them concurrently
+# (e.g. a manual snapshot during the 04:00 UTC reset window)
+# corrupts the dumps half-mid-write AND can leave the live
+# postgres database in a dropped + empty state because
+# restore-golden.sh's pg_restore reads the in-progress dump and
+# errors out after the DROP. Fail fast rather than racing.
+LOCK_FILE="${GOLDEN_LOCK_FILE:-/var/lock/gratisgis-golden-state.lock}"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "FATAL: another golden-state operation is in progress (lock=$LOCK_FILE)." >&2
+  echo "       Check pgrep -af 'snapshot-golden|restore-golden' or" >&2
+  echo "       tail /var/log/gg-reset-demo.log to find it." >&2
+  exit 1
+fi
+# The lock auto-releases when fd 9 closes (process exit).
+
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
