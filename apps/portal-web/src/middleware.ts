@@ -89,10 +89,22 @@ export default withAuth(
           `^\\/items\\/${uuid}\\/custom\\/run(?:\\/|$)`,
           'i',
         );
+        // /items/:id/field is the data_collection PWA runtime. The
+        // page renders against publicApiFetch / hasSession() so an
+        // anonymous visitor on a public-shared data_collection
+        // sees the read-only Add-disabled view; private items 401
+        // server-side and the page falls back to the error
+        // boundary. Same anonymous-public model as the viewer +
+        // responses + custom routes above.
+        const fieldRe = new RegExp(
+          `^\\/items\\/${uuid}\\/field(?:\\/|$)`,
+          'i',
+        );
         if (
           viewerRe.test(req.nextUrl.pathname) ||
           responsesRe.test(req.nextUrl.pathname) ||
-          customRe.test(req.nextUrl.pathname)
+          customRe.test(req.nextUrl.pathname) ||
+          fieldRe.test(req.nextUrl.pathname)
         ) {
           return true;
         }

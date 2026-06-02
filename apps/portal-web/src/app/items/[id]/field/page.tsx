@@ -10,7 +10,7 @@ import type {
 } from '@gratis-gis/shared-types';
 import type { FormSchema } from '@gratis-gis/form-schema';
 import type { CustomBasemap } from '@/lib/custom-basemap';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, hasSession, publicApiFetch } from '@/lib/api';
 import { FieldRuntime, type EditableLayer } from './field-runtime';
 
 interface Props {
@@ -89,13 +89,36 @@ function basemapItemToCustomBasemap(
  */
 export default async function FieldRuntimePage(props: Props) {
   const params = await props.params;
+  // Anonymous-public access mirrors viewer/run + custom/run +
+  // responses: a public-shared data_collection renders for visitors
+  // without a session, the runtime hides Add affordances (anonymous
+  // can't author features), and a private data_collection 404s
+  // server-side so the page falls back to "not found" rather than
+  // a sign-in redirect we can't recover from in a PWA context.
+  const isAnonymous = !(await hasSession());
+  const fetchItem = <T,>(path: string): Promise<T> =>
+    isAnonymous
+      ? publicApiFetch<T>(path.replace('/api/items/', '/api/public/items/'))
+      : apiFetch<T>(path);
+  const fetchItemList = <T,>(path: string): Promise<T> =>
+    isAnonymous
+      ? publicApiFetch<T>(path.replace('/api/items', '/api/public/items'))
+      : apiFetch<T>(path);
+
   let dcItem: Item<DataCollectionData>;
-  let me: { id: string; orgRole: string };
+  let me: { id: string; orgRole: string } = { id: '', orgRole: '' };
   try {
-    [dcItem, me] = await Promise.all([
-      apiFetch<Item<DataCollectionData>>(`/api/items/${params.id}`),
-      apiFetch<{ id: string; orgRole: string }>('/api/users/me'),
-    ]);
+    dcItem = await fetchItem<Item<DataCollectionData>>(
+      `/api/items/${params.id}`,
+    );
+    if (!isAnonymous) {
+      // Only authenticated viewers have a /me; anonymous public
+      // viewers carry an empty currentUserId, which the runtime
+      // treats as "no Add affordance, read-only view of the map."
+      me = await apiFetch<{ id: string; orgRole: string }>(
+        '/api/users/me',
+      );
+    }
   } catch (err) {
     if (err instanceof Error && err.message.includes('404')) notFound();
     throw err;
@@ -114,8 +137,8 @@ export default async function FieldRuntimePage(props: Props) {
   // soft-deleted = 404 (a deployment without a map has nothing for
   // collectors to do).
   const [mapItem, basemapItems] = await Promise.all([
-    apiFetch<Item<MapData>>(`/api/items/${dc.mapId}`).catch(() => null),
-    apiFetch<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
+    fetchItem<Item<MapData>>(`/api/items/${dc.mapId}`).catch(() => null),
+    fetchItemList<Array<Item<BasemapData>>>('/api/items?type=basemap').catch(
       () => [] as Array<Item<BasemapData>>,
     ),
   ]);
@@ -167,7 +190,7 @@ export default async function FieldRuntimePage(props: Props) {
   // surface a "couldn't load this layer" hint per missing entry.
   const dataLayerItems = await Promise.all(
     uniqueDataLayerIds.map((id) =>
-      apiFetch<Item<DataLayerData>>(`/api/items/${id}`).catch(() => null),
+      fetchItem<Item<DataLayerData>>(`/api/items/${id}`).catch(() => null),
     ),
   );
   const dataLayerById = new Map<string, Item<DataLayerData>>();
@@ -303,7 +326,7 @@ export default async function FieldRuntimePage(props: Props) {
   }
   const pickListItems = await Promise.all(
     Array.from(pickListIds).map((id) =>
-      apiFetch<Item<PickListData>>(`/api/items/${id}`).catch(() => null),
+      fetchItem<Item<PickListData>>(`/api/items/${id}`).catch(() => null),
     ),
   );
   const pickLists: Record<string, PickListData> = {};
@@ -324,7 +347,7 @@ export default async function FieldRuntimePage(props: Props) {
   );
   const boundFormItems = await Promise.all(
     boundFormIds.map((id) =>
-      apiFetch<Item<FormSchema>>(`/api/items/${id}`).catch(() => null),
+      fetchItem<Item<FormSchema>>(`/api/items/${id}`).catch(() => null),
     ),
   );
   const boundForms: Record<string, FormSchema> = {};
