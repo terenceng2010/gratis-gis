@@ -945,29 +945,49 @@ export class RecipeRunnerService {
     const negationDistancesMeters = (action.negations ?? []).map((n) =>
       relationalDistanceToMeters(n.distance),
     );
-    const result = await this.osm.resolveRelational({
-      anchorPresetId: action.anchorPreset,
-      conditions: action.conditions.map((c, i) => ({
-        presetId: c.preset,
-        distanceMeters: conditionDistancesMeters[i]!,
-        ...(c.tagFilters && c.tagFilters.length > 0
-          ? { tagFilters: c.tagFilters }
+    let result;
+    try {
+      result = await this.osm.resolveRelational({
+        anchorPresetId: action.anchorPreset,
+        conditions: action.conditions.map((c, i) => ({
+          presetId: c.preset,
+          distanceMeters: conditionDistancesMeters[i]!,
+          ...(c.tagFilters && c.tagFilters.length > 0
+            ? { tagFilters: c.tagFilters }
+            : {}),
+        })),
+        ...(action.negations && action.negations.length > 0
+          ? {
+              negations: action.negations.map((n, i) => ({
+                presetId: n.preset,
+                distanceMeters: negationDistancesMeters[i]!,
+              })),
+            }
           : {}),
-      })),
-      ...(action.negations && action.negations.length > 0
-        ? {
-            negations: action.negations.map((n, i) => ({
-              presetId: n.preset,
-              distanceMeters: negationDistancesMeters[i]!,
-            })),
-          }
-        : {}),
-      bbox: paddedBbox,
-      ...(user?.orgId ? { orgId: user.orgId } : {}),
-      ...(action.anchorMaxResults
-        ? { maxFeatures: action.anchorMaxResults }
-        : {}),
-    });
+        bbox: paddedBbox,
+        ...(user?.orgId ? { orgId: user.orgId } : {}),
+        ...(action.anchorMaxResults
+          ? { maxFeatures: action.anchorMaxResults }
+          : {}),
+      });
+    } catch (err) {
+      // Relational queries over large bboxes with multiple
+      // conditions blow past Overpass's 30 s server timeout
+      // routinely. The default uncaught path bubbles to a 500
+      // which reads as "the server broke," but the real meaning
+      // is "your AOI + filters are too expensive to run in 30 s."
+      // Re-throw as a BadRequestException with a clear,
+      // action-oriented message the dialog can surface as-is.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        /timed out|timeout|too many requests|429|504/i.test(msg)
+      ) {
+        throw new BadRequestException(
+          'The OSM query was too large to finish in 30 seconds. Try a smaller area of interest, tighter distance conditions, or fewer conditions, then run again.',
+        );
+      }
+      throw err;
+    }
     // TTL override is plumbed for parity with the per-preset
     // resolve(), but relational queries don't currently consult
     // the cache.  Drop the variable so lint doesn't flag it.
