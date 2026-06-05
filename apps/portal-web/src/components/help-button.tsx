@@ -8,16 +8,19 @@
  * dragging the whole drawer into the chrome's bundle.
  */
 import { HelpCircle } from 'lucide-react';
+
+import { useT } from '@/lib/i18n/locale-context';
 import { useHelpDrawer } from './help-drawer';
 
 export function HelpButton() {
+  const t = useT();
   const { open } = useHelpDrawer();
   return (
     <button
       type="button"
       onClick={open}
-      title="Help (press ? anywhere)"
-      aria-label="Open help"
+      title={t('help.buttonTitle')}
+      aria-label={t('help.openLabel')}
       className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-surface-2"
     >
       <HelpCircle className="h-4 w-4" />

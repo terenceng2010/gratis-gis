@@ -23,6 +23,8 @@ import {
   X as CloseIcon,
 } from 'lucide-react';
 
+import { useT } from '@/lib/i18n/locale-context';
+
 import { TopBarSearch } from './top-bar-search';
 import { HelpButton } from './help-button';
 import { UserMenu } from './user-menu';
@@ -74,6 +76,7 @@ export function AppShellChrome({
   children: ReactNode;
 }) {
   const pathname = usePathname() ?? '';
+  const t = useT();
 
   // Field-runtime path: render bare. Same predicate as the
   // server-side check used to use; kept here so a future widening
@@ -167,7 +170,7 @@ export function AppShellChrome({
             <HelpButton />
             <button
               className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-surface-2"
-              aria-label="Notifications"
+              aria-label={t('shell.notificationsLabel')}
             >
               <Bell className="h-4 w-4" />
             </button>
@@ -209,23 +212,24 @@ function NavList({
   // so we don't have to repeat the conditional spread at every
   // call site below.
   const cb = onNavigate;
+  const t = useT();
   return (
     <nav className="mt-4 flex flex-col gap-0.5 text-sm">
       <NavLink href="/" icon={<LayoutGrid className="h-4 w-4" />} onNavigate={cb}>
-        Overview
+        {t('nav.overview')}
       </NavLink>
       <NavLink href="/items" icon={<MapIcon className="h-4 w-4" />} onNavigate={cb}>
-        Items
+        {t('nav.items')}
       </NavLink>
       <NavLink
         href="/items?folders=open"
         icon={<FolderIcon className="h-4 w-4" />}
         onNavigate={cb}
       >
-        Folders
+        {t('nav.folders')}
       </NavLink>
       <NavLink href="/groups" icon={<Users className="h-4 w-4" />} onNavigate={cb}>
-        Groups
+        {t('nav.groups')}
       </NavLink>
       {/* The /field landing is intentionally hidden from the
           sidebar.  The route stays valid so a mobile user who
@@ -239,54 +243,54 @@ function NavList({
         icon={<Trash2 className="h-4 w-4" />}
         onNavigate={cb}
       >
-        Recently deleted
+        {t('nav.recentlyDeleted')}
       </NavLink>
       {orgRole === 'admin' ? (
         <>
           <p className="mt-4 px-2 text-[10px] font-medium uppercase tracking-wide text-muted">
-            Admin
+            {t('nav.admin')}
           </p>
           <NavLink
             href="/admin/users"
             icon={<Shield className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Users
+            {t('nav.users')}
           </NavLink>
           <NavLink
             href="/admin/branding"
             icon={<Paintbrush className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Landing page
+            {t('nav.landingPage')}
           </NavLink>
           <NavLink
             href="/admin/backup"
             icon={<Archive className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Backup
+            {t('nav.backup')}
           </NavLink>
           <NavLink
             href="/admin/housekeeping"
             icon={<Sparkles className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Housekeeping
+            {t('nav.housekeeping')}
           </NavLink>
           <NavLink
             href="/admin/notifications"
             icon={<Bell className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Notifications
+            {t('nav.notifications')}
           </NavLink>
           <NavLink
             href="/admin/field-queues"
             icon={<ClipboardList className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Field queues
+            {t('nav.fieldQueues')}
           </NavLink>
           {/* Migrations sits at the bottom of Admin on purpose: it is
               a real first-class admin task but a one-shot tool, not
@@ -298,7 +302,7 @@ function NavList({
             icon={<ArrowRightLeft className="h-4 w-4" />}
             onNavigate={cb}
           >
-            Migrations
+            {t('nav.migrations')}
           </NavLink>
         </>
       ) : null}
@@ -324,6 +328,7 @@ function MobileNavTrigger({
 }: {
   orgRole: AppShellMe['orgRole'] | null;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   // Track when the component has mounted so the portal target
   // (document.body) is available.  Without this guard the SSR
@@ -379,7 +384,7 @@ function MobileNavTrigger({
             className="fixed inset-0 z-50 md:hidden"
             role="dialog"
             aria-modal="true"
-            aria-label="Navigation"
+            aria-label={t('shell.navigation')}
           >
             {/* Backdrop. Click to dismiss. */}
             <div
@@ -402,7 +407,7 @@ function MobileNavTrigger({
                 <button
                   type="button"
                   onClick={() => setOpen(false)}
-                  aria-label="Close navigation"
+                  aria-label={t('shell.closeNavigation')}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2"
                 >
                   <CloseIcon className="h-4 w-4" />
@@ -420,7 +425,7 @@ function MobileNavTrigger({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Open navigation"
+        aria-label={t('shell.openNavigation')}
         className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-1 hover:bg-surface-2 md:hidden"
       >
         <MenuIcon className="h-5 w-5" />

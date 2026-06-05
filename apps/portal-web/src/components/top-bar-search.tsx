@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Search } from 'lucide-react';
 
+import { useT } from '@/lib/i18n/locale-context';
+
 /**
  * Top-bar global search. Lives in the app shell so every page has
  * the same search affordance.
@@ -29,6 +31,7 @@ import { Search } from 'lucide-react';
  * every keystroke, so the user can keep typing freely.
  */
 export function TopBarSearch() {
+  const t = useT();
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -106,8 +109,8 @@ export function TopBarSearch() {
         type="search"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Search items..."
-        aria-label="Search items"
+        placeholder={t('search.placeholder')}
+        aria-label={t('search.label')}
         className="h-9 w-full rounded-md border border-border bg-surface-1 pl-9 pr-3 text-sm text-ink-1 placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
       />
     </form>
