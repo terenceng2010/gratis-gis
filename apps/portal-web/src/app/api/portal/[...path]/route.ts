@@ -74,6 +74,8 @@ function isLongRunningIngestPath(suffix: string): boolean {
  *   - items/:id                          -> public/items/:id
  *   - items/:id/layers/:layer/geojson    -> public/items/:id/layers/:layer/geojson
  *   - items/:id/layers/:layer/features   -> public/items/:id/layers/:layer/features
+ *   - items/:id/layers/:layer/features-search
+ *                                        -> public/items/:id/layers/:layer/features-search
  *   - items/:id/layers/:layer/tile/:z/:x/:y.mvt
  *                                        -> public/items/:id/layers/:layer/tile/:z/:x/:y.mvt
  *   - items/:id/proxy/...                -> public/items/:id/proxy/...
@@ -90,7 +92,11 @@ function publicRewriteForAnonymousGet(suffix: string): string | null {
   if (/^items\/[^/]+$/.test(suffix)) {
     return `public/${suffix}`;
   }
-  if (/^items\/[^/]+\/layers\/[^/]+\/(geojson|features)$/.test(suffix)) {
+  if (
+    /^items\/[^/]+\/layers\/[^/]+\/(geojson|features|features-search)$/.test(
+      suffix,
+    )
+  ) {
     return `public/${suffix}`;
   }
   // MVT tile path for v3 data_layer items. The custom + viewer

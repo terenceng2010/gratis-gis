@@ -341,6 +341,67 @@ export class PublicController {
   }
 
   /**
+   * Anonymous attribute search for a layer of a public data_layer
+   * item. Mirrors the auth'd
+   * /api/items/:id/layers/:layerId/features-search but gated to
+   * `access='public'`.
+   *
+   * Why this is needed: the viewer / custom-app search widget builds
+   * its request against the portal's native path, so an anonymous
+   * visitor of a publicly-shared map hits this. Without it the search
+   * 401s at the BFF and the widget shows "No matches" even though the
+   * layer is marked searchable and the tiles + popups render fine
+   * (those have public mirrors; this was the missing one). Returns the
+   * same { results, truncated } shape the auth'd endpoint returns so
+   * the client uses one parser either way.
+   */
+  @Public()
+  @Get('items/:id/layers/:layerId/features-search')
+  async layerFeaturesSearch(
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('q') q?: string,
+    @Query('fields') fields?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!isUuidShape(itemId)) throw new NotFoundException('Item not found');
+    const item = await this.prisma.item.findFirst({
+      where: {
+        id: itemId,
+        type: 'data_layer',
+        access: 'public',
+        deletedAt: null,
+      },
+      select: { id: true, data: true },
+    });
+    if (!item) throw new NotFoundException('Item not found');
+    const layer = pickV3Layer(item.data, layerId);
+    if (!layer) throw new NotFoundException('Layer not found');
+
+    const text = (q ?? '').trim();
+    if (text.length === 0) return { results: [], truncated: false };
+
+    const opts: { q: string; fields?: string[]; limit?: number } = { q: text };
+    if (fields) {
+      // Whitelist requested fields against the layer's public schema so
+      // an arbitrary attribute key can't be probed via attrs->>'..'.
+      const allowed = new Set(layer.fields.map((f) => f.name));
+      const wanted = fields
+        .split(',')
+        .map((f) => f.trim())
+        .filter((f) => f.length > 0 && allowed.has(f));
+      if (wanted.length > 0) opts.fields = wanted;
+    }
+    if (limit) {
+      const n = Number(limit);
+      if (Number.isFinite(n) && n > 0) {
+        opts.limit = Math.min(Math.max(Math.floor(n), 1), 50);
+      }
+    }
+    return this.v3.searchFeatures(itemId, layerId, opts);
+  }
+
+  /**
    * Anonymous MVT tile for a layer of a public data_layer item.
    * Mirrors the auth'd /api/items/:id/layers/:layerId/tile/:z/:x/:y
    * .mvt endpoint but gated to `access='public'`.
