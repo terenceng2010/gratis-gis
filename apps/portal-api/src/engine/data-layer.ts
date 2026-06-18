@@ -890,6 +890,165 @@ export class DataLayerEngine {
   }
 
   /**
+   * Attribute search for the map / app search bar.
+   *
+   * Unlike pageFeatures (which the attribute table uses and which is
+   * bbox-bounded and geometry-stripped), this reaches features
+   * anywhere in the layer, not just the current viewport: the whole
+   * point of searching a parcels layer by owner name is to find a
+   * parcel that is NOT on screen. To make picking a result useful it
+   * returns a representative interior point (for the fly-to marker)
+   * and the feature's envelope (for a bbox zoom) per hit, computed in
+   * the same query so the caller needs no second round-trip.
+   *
+   * Matching is two-layered:
+   *   1. `attrs::text ILIKE '%q%'` is the heavy predicate. It is
+   *      backed by the partial GIN trigram index
+   *      `observation_attrs_trgm`, so it stays fast on a 1.4M-row
+   *      layer instead of sequentially scanning every current
+   *      observation in the scope. Without that index this is the
+   *      slow path the table's own search docs warn about.
+   *   2. When the caller passes `fields` (the layer author's
+   *      configured searchable attributes) the broad match is
+   *      narrowed to `attrs->>'field' ILIKE '%q%'` over just those
+   *      fields, so a hit buried in an unrelated column (a legal
+   *      description, a note) doesn't surface. The trigram prefilter
+   *      already shrank the candidate set, so this refinement is
+   *      cheap.
+   *
+   * Geo-limit and boundary-clip are applied exactly as pageFeatures
+   * applies them, so a user with a clipped view can't pull a feature
+   * outside their clip into the search results.
+   */
+  async searchFeatures(args: {
+    itemId: string;
+    layerId: string;
+    q: string;
+    fields?: string[];
+    limit: number;
+    geoLimit?: GeoJsonGeometry;
+    boundaryClip?: GeoJsonGeometry;
+  }): Promise<{
+    results: Array<{
+      id: string;
+      properties: Record<string, unknown>;
+      point: [number, number] | null;
+      bbox: [number, number, number, number] | null;
+    }>;
+    truncated: boolean;
+  }> {
+    validateGeoJson(args.geoLimit);
+    validateGeoJson(args.boundaryClip);
+    const q = args.q.trim();
+    if (q.length === 0) return { results: [], truncated: false };
+    const scope = this.scope(args.itemId, args.layerId);
+    const limit = Math.min(Math.max(args.limit | 0, 1), 50);
+    const fetchN = limit + 1;
+
+    // Same pattern-escape as pageFeatures: SQL meta-characters must
+    // not turn into wildcards. ILIKE pattern is %escaped%.
+    const escaped = q
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_');
+    const pattern = `%${escaped}%`;
+
+    const filters: Prisma.Sql[] = [];
+    filters.push(Prisma.sql`AND attrs::text ILIKE ${pattern}`);
+    const fields = (args.fields ?? []).filter((f) => f.length > 0);
+    if (fields.length > 0) {
+      // Each field name is a bound parameter to `->>`, so an arbitrary
+      // attribute key can't be smuggled into the SQL text. The caller
+      // also whitelists field names against the layer schema.
+      const perField = fields.map(
+        (f) => Prisma.sql`(attrs->>${f}) ILIKE ${pattern}`,
+      );
+      filters.push(Prisma.sql`AND (${Prisma.join(perField, ' OR ')})`);
+    }
+    if (args.geoLimit !== undefined) {
+      const json = JSON.stringify(args.geoLimit);
+      filters.push(
+        Prisma.sql`AND (geom IS NULL OR ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326)))`,
+      );
+    }
+    if (args.boundaryClip !== undefined) {
+      const json = JSON.stringify(args.boundaryClip);
+      filters.push(
+        Prisma.sql`AND geom IS NOT NULL AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(${json}::text), 4326))`,
+      );
+    }
+    const filterExtras = Prisma.join(filters, ' ');
+
+    interface Row {
+      entity: string;
+      attrs: Record<string, unknown> | null;
+      px: number | null;
+      py: number | null;
+      minx: number | null;
+      miny: number | null;
+      maxx: number | null;
+      maxy: number | null;
+    }
+    // DISTINCT ON (entity) collapses the log to current truth per
+    // feature; the inner ORDER BY (entity, valid_from DESC, tx_time
+    // DESC) is what DISTINCT ON requires to pick the latest row.
+    // ST_PointOnSurface (not centroid) guarantees a point that lands
+    // inside the geometry even for concave parcels, which makes the
+    // dropped pin sit on the parcel rather than off in a notch. Table
+    // layers (geom NULL) yield null point + bbox and the client shows
+    // the hit without a fly-to.
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT DISTINCT ON (entity)
+        entity,
+        attrs,
+        CASE WHEN geom IS NOT NULL THEN ST_X(ST_PointOnSurface(geom)) END AS px,
+        CASE WHEN geom IS NOT NULL THEN ST_Y(ST_PointOnSurface(geom)) END AS py,
+        CASE WHEN geom IS NOT NULL THEN ST_XMin(geom) END AS minx,
+        CASE WHEN geom IS NOT NULL THEN ST_YMin(geom) END AS miny,
+        CASE WHEN geom IS NOT NULL THEN ST_XMax(geom) END AS maxx,
+        CASE WHEN geom IS NOT NULL THEN ST_YMax(geom) END AS maxy
+      FROM observation
+      WHERE scope = ${scope}
+        AND valid_to IS NULL
+        AND kind <> 'delete'
+        ${filterExtras}
+      ORDER BY entity, valid_from DESC, tx_time DESC
+      LIMIT ${fetchN}
+    `;
+
+    const truncated = rows.length > limit;
+    const kept = truncated ? rows.slice(0, limit) : rows;
+    return {
+      results: kept.map((r) => {
+        const point: [number, number] | null =
+          r.px !== null &&
+          r.py !== null &&
+          Number.isFinite(Number(r.px)) &&
+          Number.isFinite(Number(r.py))
+            ? [Number(r.px), Number(r.py)]
+            : null;
+        const bbox: [number, number, number, number] | null =
+          r.minx !== null &&
+          r.miny !== null &&
+          r.maxx !== null &&
+          r.maxy !== null
+            ? [Number(r.minx), Number(r.miny), Number(r.maxx), Number(r.maxy)]
+            : null;
+        return {
+          id: r.entity,
+          properties: {
+            ...(r.attrs ?? {}),
+            _global_id: r.entity,
+          },
+          point,
+          bbox,
+        };
+      }),
+      truncated,
+    };
+  }
+
+  /**
    * #30: union bbox of the named features in WGS84.  Used by the
    * AttributeTable's "Zoom to selected" affordance in server-paged
    * mode: /features-page strips geometry to keep the payload small,

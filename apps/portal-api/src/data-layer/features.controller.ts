@@ -464,6 +464,79 @@ export class DataLayerFeaturesController {
   }
 
   /**
+   * Attribute search for the map / app search bar.
+   *
+   * Distinct from /features-page (which the attribute table uses):
+   * that one is bbox-bounded and strips geometry, so it can't find an
+   * off-screen feature or tell the caller where it is. This searches
+   * the whole layer and returns a representative point + envelope per
+   * hit so picking a result can fly to and highlight it.
+   *
+   * `q`: the free-text query. Empty returns an empty result set.
+   * `fields`: comma-separated attribute names to scope the match to
+   *   (the layer author's configured searchable fields). Each is
+   *   whitelisted against the layer schema before it reaches the
+   *   engine, so an arbitrary key can't be injected. Omitted means
+   *   match across every attribute.
+   * `limit`: hard cap, defaulted and clamped engine-side.
+   * `clip`: optional geo_boundary item id, same layer-author content
+   *   clip the other reads honor.
+   *
+   * Read access, plus the share's geo-limit, are enforced by
+   * assertV3Layer + the engine filters, identical to /features-page.
+   * Like that sibling read this does not apply the editor-only
+   * own-rows constraint: row-scoping governs who can edit a row, not
+   * whether a reader can find it.
+   */
+  @Get('features-search')
+  async featuresSearch(
+    @CurrentUser() user: AuthUser,
+    @Param('id') itemId: string,
+    @Param('layerId') layerId: string,
+    @Query('q') q?: string,
+    @Query('fields') fields?: string,
+    @Query('limit') limit?: string,
+    @Query('clip') clip?: string,
+  ) {
+    const { geoLimit, layer } = await this.assertV3Layer(
+      user,
+      itemId,
+      layerId,
+      'read',
+    );
+    const text = (q ?? '').trim();
+    if (text.length === 0) return { results: [], truncated: false };
+
+    const opts: {
+      q: string;
+      fields?: string[];
+      limit?: number;
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+    } = { q: text };
+
+    if (fields) {
+      const wanted = fields
+        .split(',')
+        .map((f) => f.trim())
+        .filter((f) => f.length > 0 && schemaHasField(layer, f));
+      if (wanted.length > 0) opts.fields = wanted;
+    }
+    if (limit) {
+      const n = Number(limit);
+      if (Number.isFinite(n) && n > 0) {
+        opts.limit = Math.min(Math.max(Math.floor(n), 1), 50);
+      }
+    }
+    if (geoLimit) opts.geoLimit = geoLimit;
+    if (clip) {
+      const geom = await this.resolveBoundaryGeometry(clip);
+      if (geom) opts.boundaryClip = geom;
+    }
+    return this.v3.searchFeatures(itemId, layerId, opts);
+  }
+
+  /**
    * #30: union bbox of the named features.  Powers the
    * AttributeTable's "Zoom to selected" button in server-paged
    * mode (where /features-page strips geometry from the response,

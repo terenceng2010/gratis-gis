@@ -276,6 +276,39 @@ export class DataLayerFeaturesService {
   }
 
   /**
+   * Attribute search for the map / app search bar. Thin wrapper over
+   * the engine's searchFeatures: reaches features anywhere in the
+   * layer (not just the viewport) and returns a representative point
+   * + envelope per hit so the caller can fly to and highlight an
+   * off-screen result.
+   */
+  async searchFeatures(
+    itemId: string,
+    layerId: string,
+    args: {
+      q: string;
+      fields?: string[];
+      limit?: number;
+      geoLimit?: unknown;
+      boundaryClip?: unknown;
+    },
+  ) {
+    return this.dataLayer.searchFeatures({
+      itemId,
+      layerId,
+      q: args.q,
+      ...(args.fields !== undefined ? { fields: args.fields } : {}),
+      limit: args.limit ?? 8,
+      ...(args.geoLimit !== undefined
+        ? { geoLimit: args.geoLimit as GeoJsonGeometry }
+        : {}),
+      ...(args.boundaryClip !== undefined
+        ? { boundaryClip: args.boundaryClip as GeoJsonGeometry }
+        : {}),
+    });
+  }
+
+  /**
    * #30: union bbox of a set of feature ids.  Powers "Zoom to
    * selected" in the attribute table when running against a v3
    * layer in server-paged mode (where /features-page strips

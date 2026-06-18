@@ -136,6 +136,119 @@ describe('dataLayerScope', () => {
   });
 });
 
+describe('DataLayerEngine.searchFeatures', () => {
+  const makeAdapter = (prisma: PrismaService) =>
+    new DataLayerEngine(
+      makeFakeEngine().fake,
+      prisma,
+      makeFakeLensPolicy(),
+      makeTileCache(),
+    );
+
+  it('returns empty without querying when the query is blank', async () => {
+    let queried = false;
+    const spyPrisma = {
+      async $queryRaw() {
+        queried = true;
+        return [];
+      },
+    } as unknown as PrismaService;
+    const adapter = makeAdapter(spyPrisma);
+
+    const out = await adapter.searchFeatures({
+      itemId: ITEM_ID,
+      layerId: LAYER_ID,
+      q: '   ',
+      limit: 8,
+    });
+
+    expect(out).toEqual({ results: [], truncated: false });
+    expect(queried).toBe(false);
+  });
+
+  it('maps rows to id + properties + interior point + bbox', async () => {
+    const prisma = makeFakePrisma();
+    prisma.setRows([
+      {
+        entity: '33333333-3333-7333-8333-333333333333',
+        attrs: { FULLOWNERNAME: 'CARLSON CHRISTAL' },
+        px: -79.9,
+        py: 38.8,
+        minx: -80,
+        miny: 38.7,
+        maxx: -79.8,
+        maxy: 38.9,
+      },
+    ] as unknown as FakeFeatureRow[]);
+    const adapter = makeAdapter(prisma.fake);
+
+    const out = await adapter.searchFeatures({
+      itemId: ITEM_ID,
+      layerId: LAYER_ID,
+      q: 'CARLSON',
+      fields: ['FULLOWNERNAME'],
+      limit: 8,
+    });
+
+    expect(out.truncated).toBe(false);
+    expect(out.results).toHaveLength(1);
+    const hit = out.results[0]!;
+    expect(hit.id).toBe('33333333-3333-7333-8333-333333333333');
+    expect(hit.properties.FULLOWNERNAME).toBe('CARLSON CHRISTAL');
+    // The entity is surfaced as _global_id so callers can key off it.
+    expect(hit.properties._global_id).toBe(hit.id);
+    expect(hit.point).toEqual([-79.9, 38.8]);
+    expect(hit.bbox).toEqual([-80, 38.7, -79.8, 38.9]);
+  });
+
+  it('flags truncation when more than `limit` rows come back', async () => {
+    const prisma = makeFakePrisma();
+    prisma.setRows([
+      { entity: 'a', attrs: {}, px: 1, py: 1, minx: 1, miny: 1, maxx: 1, maxy: 1 },
+      { entity: 'b', attrs: {}, px: 2, py: 2, minx: 2, miny: 2, maxx: 2, maxy: 2 },
+      { entity: 'c', attrs: {}, px: 3, py: 3, minx: 3, miny: 3, maxx: 3, maxy: 3 },
+    ] as unknown as FakeFeatureRow[]);
+    const adapter = makeAdapter(prisma.fake);
+
+    const out = await adapter.searchFeatures({
+      itemId: ITEM_ID,
+      layerId: LAYER_ID,
+      q: 'x',
+      limit: 2,
+    });
+
+    expect(out.truncated).toBe(true);
+    expect(out.results).toHaveLength(2);
+  });
+
+  it('returns null point + bbox for geometryless (table) rows', async () => {
+    const prisma = makeFakePrisma();
+    prisma.setRows([
+      {
+        entity: '44444444-4444-7444-8444-444444444444',
+        attrs: { name: 'no-geom' },
+        px: null,
+        py: null,
+        minx: null,
+        miny: null,
+        maxx: null,
+        maxy: null,
+      },
+    ] as unknown as FakeFeatureRow[]);
+    const adapter = makeAdapter(prisma.fake);
+
+    const out = await adapter.searchFeatures({
+      itemId: ITEM_ID,
+      layerId: LAYER_ID,
+      q: 'no-geom',
+      limit: 8,
+    });
+
+    expect(out.results[0]!.point).toBeNull();
+    expect(out.results[0]!.bbox).toBeNull();
+  });
+});
+
 describe('DataLayerEngine.writeFeatureCreate', () => {
   it('writes a kind=create observation with a fresh entity id', async () => {
     const engine = makeFakeEngine();

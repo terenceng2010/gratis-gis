@@ -269,6 +269,132 @@ export async function searchArcgisLayers(
 }
 
 /**
+ * Search portal-hosted v3 data layers (`source.kind === 'data-layer'`)
+ * by hitting the dedicated /features-search endpoint.
+ *
+ * This is the data-layer analogue of searchArcgisLayers(): both reach
+ * features the local-cache searchLayers() can't, because the relevant
+ * features aren't in memory. v3 data layers stream as vector tiles and
+ * are never loaded as a full FeatureCollection client-side, so without
+ * this path attribute search over a v3 layer finds nothing even though
+ * the layer is marked searchable. The owner parcel a user types is
+ * almost never on screen when they start typing, which is exactly why
+ * the search runs server-side over the whole layer.
+ *
+ * The endpoint already enforces read access + the share's geo-limit and
+ * returns a representative point + envelope per hit, so the result can
+ * fly the camera and drop a marker. Per-layer failures are logged and
+ * swallowed: one slow or misconfigured layer shouldn't sink search for
+ * the rest of the map.
+ */
+export async function searchV3Layers(
+  query: string,
+  layers: MapLayer[],
+  signal?: AbortSignal,
+): Promise<SearchResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const tasks = layers
+    .filter(
+      (l) =>
+        l.source.kind === 'data-layer' &&
+        // Only v3 multi-layer sublayers carry a layerKey and back the
+        // per-sublayer endpoints. v1/v2 single-table items omit it and
+        // aren't served by /features-search.
+        (l.source as { layerKey?: string }).layerKey !== undefined &&
+        l.search?.enabled &&
+        l.search.fields.filter((f) => f.length > 0).length > 0 &&
+        // Same matrix-enforcement gate as the other search paths.
+        (l.effective === undefined || l.effective.query !== false),
+    )
+    .map(async (layer) => {
+      const src = layer.source as {
+        kind: 'data-layer';
+        itemId: string;
+        layerKey?: string;
+      };
+      const fields = layer.search!.fields.filter((f) => f.length > 0);
+      const params = new URLSearchParams({
+        q,
+        fields: fields.join(','),
+        limit: String(MAX_ATTRIBUTE_HITS_PER_LAYER),
+      });
+      const url = `/api/portal/items/${encodeURIComponent(
+        src.itemId,
+      )}/layers/${encodeURIComponent(src.layerKey!)}/features-search?${params.toString()}`;
+      const init: RequestInit = { headers: { Accept: 'application/json' } };
+      if (signal) init.signal = signal;
+      try {
+        const res = await fetch(url, init);
+        if (!res.ok) {
+          // eslint-disable-next-line no-console
+          console.warn(`[search] ${layer.title}: HTTP ${res.status}`);
+          return [] as SearchResult[];
+        }
+        const body = (await res.json()) as {
+          results: Array<{
+            id: string;
+            properties: Record<string, unknown>;
+            point: [number, number] | null;
+            bbox: [number, number, number, number] | null;
+          }>;
+        };
+        return body.results.map((row): SearchResult => {
+          const props = row.properties ?? {};
+          const label = layer.search!.labelTemplate
+            ? renderTemplate(layer.search!.labelTemplate, props)
+            : firstNonEmpty(fields.map((ff) => props[ff])) ?? '(unnamed)';
+          // The canvas highlight does a best-effort property match, so
+          // carry the attrs on a minimal feature. Geometry is null when
+          // the layer has none (table layer); the fly-to uses bbox /
+          // center directly, not this feature's geometry.
+          const feature: GeoJSON.Feature = {
+            type: 'Feature',
+            properties: props,
+            // An empty GeometryCollection stands in when the layer has
+            // no geometry (table layer): the highlight matches on
+            // properties and the fly-to uses bbox / center, so the
+            // feature geometry is never read for v3 hits. GeoJSON.Feature
+            // requires a non-null geometry, hence the empty collection
+            // rather than null.
+            geometry: row.point
+              ? { type: 'Point', coordinates: row.point }
+              : { type: 'GeometryCollection', geometries: [] },
+          };
+          return {
+            kind: 'feature',
+            layerId: layer.id,
+            layerTitle: layer.title,
+            label,
+            subtitle:
+              fields
+                .map((ff) => {
+                  const val = props[ff];
+                  return val ? `${ff}: ${val}` : null;
+                })
+                .filter(Boolean)
+                .join(' · ') || null,
+            bbox: row.bbox,
+            center: row.point,
+            feature,
+          };
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          return [] as SearchResult[];
+        }
+        // eslint-disable-next-line no-console
+        console.warn(`[search] ${layer.title}:`, (err as Error).message);
+        return [] as SearchResult[];
+      }
+    });
+
+  const perLayer = await Promise.all(tasks);
+  return perLayer.flat();
+}
+
+/**
  * Ask a portal-hosted geocoding_service item (#74) for candidates.
  * Same shape as `geocode()`: returns `kind: 'place'` results with
  * label + center coordinates. The runtime hits

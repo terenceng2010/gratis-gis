@@ -9,6 +9,7 @@ import {
   geocodeViaItem,
   searchArcgisLayers,
   searchLayers,
+  searchV3Layers,
   type SearchResult,
 } from './search-sources';
 
@@ -74,6 +75,8 @@ export function SearchBar({
   const [geocodeLoading, setGeocodeLoading] = useState(false);
   const [arcgisResults, setArcgisResults] = useState<SearchResult[]>([]);
   const [arcgisLoading, setArcgisLoading] = useState(false);
+  const [v3Results, setV3Results] = useState<SearchResult[]>([]);
+  const [v3Loading, setV3Loading] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -150,9 +153,41 @@ export function SearchBar({
     };
   }, [query, layers]);
 
+  // Debounced v3 data-layer attribute search. Mirrors the ArcGIS
+  // path: runs only when at least one visible layer is a v3
+  // data_layer sublayer and searchable, hits the server so it can
+  // find features outside the viewport (v3 layers stream as tiles and
+  // are never fully cached client-side, so searchLayers can't see
+  // them), and is debounced so a 1.4M-row layer isn't queried on
+  // every keystroke.
+  useEffect(() => {
+    const q = query.trim();
+    const v3Layers = layers.filter(
+      (l) =>
+        l.source.kind === 'data-layer' &&
+        l.search?.enabled &&
+        (l.search?.fields?.length ?? 0) > 0,
+    );
+    if (q.length < 2 || v3Layers.length === 0) {
+      setV3Results([]);
+      return;
+    }
+    const controller = new AbortController();
+    setV3Loading(true);
+    const handle = setTimeout(() => {
+      searchV3Layers(q, v3Layers, controller.signal)
+        .then((rows) => setV3Results(rows))
+        .finally(() => setV3Loading(false));
+    }, 300);
+    return () => {
+      controller.abort();
+      clearTimeout(handle);
+    };
+  }, [query, layers]);
+
   const all: SearchResult[] = useMemo(
-    () => [...layerResults, ...arcgisResults, ...geocodeResults],
-    [layerResults, arcgisResults, geocodeResults],
+    () => [...layerResults, ...arcgisResults, ...v3Results, ...geocodeResults],
+    [layerResults, arcgisResults, v3Results, geocodeResults],
   );
 
   useEffect(() => {
@@ -225,7 +260,7 @@ export function SearchBar({
           aria-autocomplete="list"
           className="h-10 w-full bg-transparent pl-9 pr-9 text-sm focus:outline-none"
         />
-        {geocodeLoading || arcgisLoading ? (
+        {geocodeLoading || arcgisLoading || v3Loading ? (
           <Loader2 className="pointer-events-none absolute right-8 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted" />
         ) : null}
         {query ? (
@@ -249,7 +284,9 @@ export function SearchBar({
           role="listbox"
           className="max-h-80 overflow-y-auto border-t border-border"
         >
-          {layerResults.length > 0 || arcgisResults.length > 0 ? (
+          {layerResults.length > 0 ||
+          arcgisResults.length > 0 ||
+          v3Results.length > 0 ? (
             <Section title="In this map">
               {layerResults.map((r, i) => (
                 <ResultRow
@@ -266,6 +303,18 @@ export function SearchBar({
               {arcgisResults.map((r, i) => (
                 <ResultRow
                   key={`a-${i}`}
+                  result={r}
+                  highlighted={all.indexOf(r) === highlight}
+                  onHover={() => setHighlight(all.indexOf(r))}
+                  onClick={() => {
+                    onPick(r);
+                    setOpen(false);
+                  }}
+                />
+              ))}
+              {v3Results.map((r, i) => (
+                <ResultRow
+                  key={`v-${i}`}
                   result={r}
                   highlighted={all.indexOf(r) === highlight}
                   onHover={() => setHighlight(all.indexOf(r))}
@@ -304,7 +353,10 @@ export function SearchBar({
             ) : null
           ) : null}
 
-          {!geocodingEnabled && layerResults.length === 0 ? (
+          {!geocodingEnabled &&
+          layerResults.length === 0 &&
+          arcgisResults.length === 0 &&
+          v3Results.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted">
               {anyLayerSearchable
                 ? 'No attribute matches. Geocoding is turned off for this map.'
